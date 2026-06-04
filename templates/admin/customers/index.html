@@ -2,7 +2,7 @@
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
     action_button, icon_plus, icon_users, icon_user, icon_building,
-    animation_styles
+    animation_styles, filter_select
 %}
 
 {% block title %}Customers - Admin{% endblock %}
@@ -93,166 +93,239 @@
         </div>
     </section>
 
-    {# ── Advanced Filters ── #}
-    {% call card(color="amber", padding=False) %}
-        <form id="customers-filters" data-table-filters="customers" method="get" action="/admin/customers">
-            <div class="p-4">
-                <div class="flex flex-col gap-4 lg:flex-row lg:items-end">
-                    <div class="flex-1">
-                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Search</label>
+    {# ── Folded Filters ── #}
+    <div class="relative z-40">
+    {% call card(color="amber", padding=False, allow_overflow=True) %}
+        <form
+            id="customers-filters"
+            data-table-filters="customers"
+            method="get"
+            action="/admin/customers"
+            hx-get="/admin/customers"
+            hx-target="#customers-table"
+            hx-push-url="true"
+            hx-sync="this:replace"
+        >
+            <input type="hidden" name="page" value="{{ page or 1 }}" data-page-input />
+            <div class="relative overflow-visible bg-gradient-to-br from-amber-50 via-white to-orange-50/80 p-4 dark:[background-image:none] dark:bg-slate-950 sm:p-5">
+                <div class="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-gradient-to-br from-amber-400/15 to-orange-400/10 blur-2xl dark:hidden"></div>
+                <div class="pointer-events-none absolute -bottom-10 left-8 h-24 w-24 rounded-full bg-gradient-to-tr from-orange-300/10 to-transparent blur-2xl dark:hidden"></div>
+                <div class="relative">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div class="min-w-0 flex-1">
+                        <label class="sr-only" for="customers-search">Search customers</label>
                         <div class="relative">
-                            <svg class="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                            <input type="text" name="search" value="{{ search or '' }}"
-                                   placeholder="Search by name, email, phone..."
-                                   class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-10 pr-4 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500 dark:focus:ring-amber-500" />
+                            <svg class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                            <input
+                                id="customers-search"
+                                type="text"
+                                name="search"
+                                value="{{ search or '' }}"
+                                placeholder="Search by name, email, phone, account, PPPoE..."
+                                hx-get="/admin/customers"
+                                hx-trigger="input changed delay:350ms, search"
+                                hx-target="#customers-table"
+                                hx-push-url="true"
+                                hx-include="#customers-filters"
+                                hx-sync="#customers-filters:replace"
+                                class="block w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-amber-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-amber-400 dark:focus:ring-amber-500/20"
+                            />
                         </div>
                     </div>
-                    <div class="w-full sm:w-44">
-                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Type</label>
-                        <select name="customer_type"
-                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
-                            <option value="">All Types</option>
-                            <option value="person" {% if customer_type in ['person', 'individual'] %}selected{% endif %}>Individual</option>
-                            <option value="business" {% if customer_type == 'business' %}selected{% endif %}>Business</option>
-                        </select>
+                    <div class="flex flex-col gap-2 sm:flex-none sm:flex-row sm:items-center sm:justify-end">
+                        <div class="relative">
+                            <button
+                                type="button"
+                                @click="actionsOpen = !actionsOpen"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800 sm:w-auto"
+                            >
+                                <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2m4-2a8 8 0 11-16 0 8 8 0 0116 0z"/></svg>
+                                Actions
+                                <span x-show="activeFilterCount > 0" x-cloak class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-text="targetCount()"></span>
+                                <svg class="h-4 w-4 text-slate-400 transition-transform" :class="{ 'rotate-180': actionsOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                            </button>
+                            <div
+                                x-show="actionsOpen"
+                                x-transition
+                                x-cloak
+                                @click.away="actionsOpen = false"
+                                class="absolute right-0 z-[80] mt-2 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/10 dark:border-slate-700 dark:bg-slate-950"
+                            >
+                                <div class="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                                    <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Current Scope</p>
+                                    <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white" x-text="targetSummary()"></p>
+                                </div>
+                                <div class="p-2">
+                                    <button
+                                        type="button"
+                                        @click="openBulkUpdateModal()"
+                                        class="flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    >
+                                        <span>
+                                            <span class="block text-sm font-semibold text-slate-900 dark:text-white">Update</span>
+                                            <span class="block text-xs text-slate-500 dark:text-slate-400">Modify supported fields for the current customer scope.</span>
+                                        </span>
+                                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="openSendMessageModal()"
+                                        class="flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    >
+                                        <span>
+                                            <span class="block text-sm font-semibold text-slate-900 dark:text-white">Send message</span>
+                                            <span class="block text-xs text-slate-500 dark:text-slate-400">Queue a template-based notification for the current customer scope.</span>
+                                        </span>
+                                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            @click="filtersOpen = !filtersOpen"
+                            class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800 sm:w-auto"
+                        >
+                            <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2l-6 7v5l-4 2v-7L3 6V4z"/></svg>
+                            Filters
+                            <span x-show="activeFilterCount > 0" x-cloak class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Active</span>
+                            <svg class="h-4 w-4 text-slate-400 transition-transform" :class="{ 'rotate-180': filtersOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
                     </div>
-                    <div class="w-full sm:w-40">
-                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Status</label>
-                        <select name="status"
-                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
-                            <option value="">All Status</option>
-                            <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
-                            <option value="blocked" {% if status == 'blocked' %}selected{% endif %}>Blocked</option>
-                            <option value="suspended" {% if status == 'suspended' %}selected{% endif %}>Suspended</option>
-                            <option value="disabled" {% if status == 'disabled' %}selected{% endif %}>Disabled</option>
-                            <option value="new" {% if status == 'new' %}selected{% endif %}>New</option>
-                            <option value="canceled" {% if status == 'canceled' %}selected{% endif %}>Canceled</option>
-                            <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Inactive</option>
-                        </select>
+                </div>
+
+                <div x-show="isSearching || searchErrorMessage" x-cloak class="mt-4 space-y-2">
+                    <div
+                        x-show="isSearching"
+                        x-transition.opacity
+                        class="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
+                        aria-live="polite"
+                    >
+                        <svg class="h-4 w-4 animate-spin text-amber-600 dark:text-amber-300" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                            <path class="opacity-90" fill="currentColor" d="M12 2a10 10 0 0 1 10 10h-3A7 7 0 0 0 12 5V2z"></path>
+                        </svg>
+                        <span x-text="loadingMessage"></span>
                     </div>
-                    <div class="w-full sm:w-44">
-                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">NAS Device</label>
-                        <select name="nas_id"
-                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
-                            <option value="">All NAS</option>
+                    <div
+                        x-show="searchErrorMessage"
+                        x-transition.opacity
+                        class="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200"
+                        role="alert"
+                        aria-live="assertive"
+                    >
+                        <svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-rose-600 dark:text-rose-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86l-7.24 12.5A1 1 0 0 0 3.91 18h16.18a1 1 0 0 0 .86-1.64l-7.24-12.5a1 1 0 0 0-1.72 0z"/>
+                        </svg>
+                        <span x-text="searchErrorMessage"></span>
+                    </div>
+                </div>
+
+                <div class="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 text-sm dark:border-slate-800 lg:flex-row lg:items-center lg:justify-between">
+                    <div class="text-slate-600 dark:text-slate-300">
+                        <span class="font-semibold text-slate-900 dark:text-white" x-text="targetCount()"></span>
+                        <span x-text="selectedIds.length > 0 ? 'selected customers in scope' : 'customers in the current filtered result'"></span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <span x-show="searchQuery" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Search: ${searchQuery}`"></span>
+                        <span x-show="currentCustomerType" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Type: ${customerTypeLabel()}`"></span>
+                        <span x-show="currentStatus" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800" x-text="`Status: ${titleCase(currentStatus)}`"></span>
+                        <span x-show="currentNasId" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800">NAS filtered</span>
+                        <span x-show="currentPopSiteId" x-cloak class="rounded-full bg-slate-100 px-2.5 py-1 font-medium dark:bg-slate-800">Location filtered</span>
+                        <a x-show="activeFilterCount > 0" x-cloak href="/admin/customers" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">Clear filters</a>
+                    </div>
+                </div>
+                </div>
+            </div>
+
+            <div
+                x-show="filtersOpen"
+                x-transition:enter="transition ease-out duration-200"
+                x-transition:enter-start="opacity-0 -translate-y-1"
+                x-transition:enter-end="opacity-100 translate-y-0"
+                x-transition:leave="transition ease-in duration-150"
+                x-transition:leave-start="opacity-100 translate-y-0"
+                x-transition:leave-end="opacity-0 -translate-y-1"
+                x-cloak
+                class="border-t border-slate-100 px-4 pb-4 dark:border-slate-800 sm:px-5 sm:pb-5"
+            >
+                <div class="rounded-xl border border-slate-200 bg-white/70 p-4 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-950 dark:backdrop-blur-none">
+                    {% set live_filter_attrs = {
+                        "data-live-filter": "true",
+                        "hx-get": "/admin/customers",
+                        "hx-trigger": "change",
+                        "hx-target": "#customers-table",
+                        "hx-push-url": "true",
+                        "hx-include": "#customers-filters",
+                        "hx-sync": "#customers-filters:replace"
+                    } %}
+                    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                        <div class="xl:col-span-2">
+                            {% set customer_type_options = [
+                                {"value": "", "label": "All Types"},
+                                {"value": "person", "label": "Individual"},
+                                {"value": "business", "label": "Business"}
+                            ] %}
+                            {{ filter_select("customer_type", customer_type_options, value=("person" if customer_type in ['person', 'individual'] else customer_type or ""), label="Type", color="amber", attrs=live_filter_attrs) }}
+                        </div>
+                        <div>
+                            {% set status_options = [
+                                {"value": "", "label": "All Status"},
+                                {"value": "active", "label": "Active"},
+                                {"value": "blocked", "label": "Blocked"},
+                                {"value": "suspended", "label": "Suspended"},
+                                {"value": "disabled", "label": "Disabled"},
+                                {"value": "new", "label": "New"},
+                                {"value": "canceled", "label": "Canceled"},
+                                {"value": "inactive", "label": "Inactive"}
+                            ] %}
+                            {{ filter_select("status", status_options, value=status or "", label="Status", color="amber", attrs=live_filter_attrs) }}
+                        </div>
+                        <div>
+                            {% set ns = namespace(options=[{"value": "", "label": "All NAS"}]) %}
                             {% for nas in nas_options %}
-                            <option value="{{ nas.id }}" {% if nas_id == nas.id|string %}selected{% endif %}>{{ nas.name }}</option>
+                                {% set _ = ns.options.append({"value": nas.id|string, "label": nas.name}) %}
                             {% endfor %}
-                        </select>
-                    </div>
-                    <div class="w-full sm:w-40">
-                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Location</label>
-                        <select name="pop_site_id"
-                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
-                            <option value="">All Locations</option>
+                            {{ filter_select("nas_id", ns.options, value=nas_id or "", label="NAS Device", color="amber", attrs=live_filter_attrs) }}
+                        </div>
+                        <div>
+                            {% set pop_options = namespace(options=[{"value": "", "label": "All Locations"}]) %}
                             {% for pop in pop_site_options %}
-                            <option value="{{ pop.id }}" {% if pop_site_id == pop.id|string %}selected{% endif %}>{{ pop.name }}</option>
+                                {% set _ = pop_options.options.append({"value": pop.id|string, "label": pop.name}) %}
                             {% endfor %}
-                        </select>
+                            {{ filter_select("pop_site_id", pop_options.options, value=pop_site_id or "", label="Location", color="amber", attrs=live_filter_attrs) }}
+                        </div>
+                        <div>
+                            {% set per_page_options = [
+                                {"value": "10", "label": "10 rows"},
+                                {"value": "25", "label": "25 rows"},
+                                {"value": "50", "label": "50 rows"},
+                                {"value": "100", "label": "100 rows"}
+                            ] %}
+                            {{ filter_select("per_page", per_page_options, value=per_page|string, label="Show", color="amber", attrs=live_filter_attrs) }}
+                        </div>
                     </div>
-                    <div class="w-full sm:w-32">
-                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Show</label>
-                        <select name="per_page"
-                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
-                            <option value="10" {% if per_page == 10 %}selected{% endif %}>10 rows</option>
-                            <option value="25" {% if per_page == 25 %}selected{% endif %}>25 rows</option>
-                            <option value="50" {% if per_page == 50 %}selected{% endif %}>50 rows</option>
-                            <option value="100" {% if per_page == 100 %}selected{% endif %}>100 rows</option>
-                        </select>
-                    </div>
-                    <div class="w-full sm:w-auto">
-                        <button type="submit"
-                                class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 sm:w-auto">
-                            Apply
+                    <div class="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-end dark:border-slate-600/80">
+                        <a href="/admin/customers" class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                            Clear Filters
+                        </a>
+                        <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">
+                            Apply Filters
                         </button>
                     </div>
                 </div>
             </div>
-
-            {% if search or customer_type or status %}
-            <div class="flex flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-3 dark:border-slate-700">
-                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Active filters:</span>
-                {% if search %}
-                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                    Search: {{ search }}
-                    <a href="/admin/customers?customer_type={{ customer_type or '' }}&per_page={{ per_page }}" class="ml-0.5 text-amber-600 hover:text-amber-800 dark:text-amber-400">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </a>
-                </span>
-                {% endif %}
-                {% if customer_type %}
-                {% set ct_color = 'blue' if customer_type == 'person' else 'purple' %}
-                <span class="inline-flex items-center gap-1 rounded-full bg-{{ ct_color }}-50 px-2.5 py-1 text-xs font-medium text-{{ ct_color }}-700 dark:bg-{{ ct_color }}-900/30 dark:text-{{ ct_color }}-300">
-                    {{ 'Individuals' if customer_type == 'person' else 'Businesses' }}
-                    <a href="/admin/customers?search={{ search or '' }}&per_page={{ per_page }}" class="ml-0.5 text-{{ ct_color }}-600 hover:text-{{ ct_color }}-800 dark:text-{{ ct_color }}-400">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </a>
-                </span>
-                {% endif %}
-                {% if status %}
-                <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
-                    Status: {{ status | title }}
-                    <a href="/admin/customers?search={{ search or '' }}&customer_type={{ customer_type or '' }}&per_page={{ per_page }}" class="ml-0.5 text-slate-500 hover:text-slate-700 dark:text-slate-400">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </a>
-                </span>
-                {% endif %}
-                <a href="/admin/customers" class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Clear all</a>
-            </div>
-            {% endif %}
         </form>
     {% endcall %}
+    </div>
 
     {# ── Customers Table ── #}
     <div id="customers-table">
         {% include "admin/customers/_table.html" %}
     </div>
 
-    {# ── Bulk Actions Floating Bar ── #}
-    <div x-show="selectedIds.length > 0"
-         x-transition:enter="transition ease-out duration-200"
-         x-transition:enter-start="opacity-0 translate-y-4"
-         x-transition:enter-end="opacity-100 translate-y-0"
-         x-transition:leave="transition ease-in duration-150"
-         x-transition:leave-start="opacity-100 translate-y-0"
-         x-transition:leave-end="opacity-0 translate-y-4"
-         x-cloak
-         class="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
-        <div class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white/95 px-6 py-3 shadow-2xl shadow-slate-900/20 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/95">
-            <div class="flex items-center gap-2">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                    <span class="text-sm font-bold" x-text="selectedIds.length"></span>
-                </div>
-                <span class="text-sm font-medium text-slate-600 dark:text-slate-300">selected</span>
-            </div>
-            <div class="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
-            <div class="flex items-center gap-2">
-                <button @click="showBulkStatusModal()"
-                        class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    Change Status
-                </button>
-                <button @click="showBulkExportModal()"
-                        class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                    Export
-                </button>
-                <button @click="showBulkDeleteModal()"
-                        class="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    Delete
-                </button>
-            </div>
-            <div class="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
-            <button @click="clearSelection()"
-                    class="text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
-                Clear
-            </button>
-        </div>
-    </div>
-
-    {# ── Bulk Status Modal ── #}
-    <div x-show="bulkStatusModal"
+    {# ── Bulk Update Modal ── #}
+    <div x-show="bulkUpdateModal"
          x-transition:enter="transition ease-out duration-200"
          x-transition:enter-start="opacity-0"
          x-transition:enter-end="opacity-100"
@@ -260,61 +333,154 @@
          x-transition:leave-start="opacity-100"
          x-transition:leave-end="opacity-0"
          x-cloak
-         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm"
-         @click.self="bulkStatusModal = false">
-        <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 p-4 backdrop-blur-sm"
+         @click.self="bulkUpdateModal = false">
+        <div class="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800"
              x-transition:enter="transition ease-out duration-200"
              x-transition:enter-start="opacity-0 scale-95"
              x-transition:enter-end="opacity-100 scale-100">
-            <div class="flex items-center gap-3 mb-4">
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-                <div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change Status</h3>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">Update status for <span x-text="selectedIds.length"></span> selected customers</p>
-                </div>
-            </div>
-            <div class="space-y-3 mb-6">
-                <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-green-300 hover:bg-green-50 dark:border-slate-700 dark:hover:border-green-500/50 dark:hover:bg-green-900/10"
-                       :class="{ 'border-green-500 bg-green-50 dark:border-green-500 dark:bg-green-900/20': bulkStatus === 'active' }">
-                    <input type="radio" name="bulk_status" value="active" x-model="bulkStatus" class="h-4 w-4 border-slate-300 text-green-600 focus:ring-green-500">
-                    <div class="flex-1">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">Activate</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Set all selected customers to active status</p>
+            <div class="mb-5 flex items-start justify-between gap-4">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                     </div>
-                    <span class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                        <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span> Active
-                    </span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-4 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-slate-500/50 dark:hover:bg-slate-700/30"
-                       :class="{ 'border-slate-500 bg-slate-50 dark:border-slate-500 dark:bg-slate-700/50': bulkStatus === 'inactive' }">
-                    <input type="radio" name="bulk_status" value="inactive" x-model="bulkStatus" class="h-4 w-4 border-slate-300 text-slate-600 focus:ring-slate-500">
-                    <div class="flex-1">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">Deactivate</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Set all selected customers to inactive status</p>
+                    <div>
+                        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Bulk Update</h3>
+                        <p class="text-sm text-slate-500 dark:text-slate-400" x-text="targetSummary()"></p>
                     </div>
-                    <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
-                        <span class="h-1.5 w-1.5 rounded-full bg-slate-500"></span> Inactive
-                    </span>
+                </div>
+                <button @click="bulkUpdateModal = false" class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="mb-5 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+                Select only the fields you want to change. Unchecked fields will be left untouched.
+            </div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.accountStateEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Account State</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Activate or deactivate all customers in scope.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.accountStateEnabled" x-cloak class="mt-3">
+                        <select x-model="bulkUpdateForm.accountState" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.preferredContactMethodEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Preferred Contact Method</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Set the communication preference used for follow-up.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.preferredContactMethodEnabled" x-cloak class="mt-3">
+                        <select x-model="bulkUpdateForm.preferredContactMethod" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <option value="">Clear preference</option>
+                            <option value="email">Email</option>
+                            <option value="phone">Phone</option>
+                            <option value="sms">SMS</option>
+                            <option value="push">Push</option>
+                        </select>
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.billingEnabledEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Billing Enabled</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Turn billing on or off for all matched customers.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.billingEnabledEnabled" x-cloak class="mt-3">
+                        <select x-model="bulkUpdateForm.billingEnabled" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.paymentMethodEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Payment Method</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Apply one payment method value across the scope.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.paymentMethodEnabled" x-cloak class="mt-3">
+                        <input x-model="bulkUpdateForm.paymentMethod" type="text" placeholder="bank_transfer, cash, card..." class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.billingDayEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Billing Day</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Set a billing day of the month for every matched customer.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.billingDayEnabled" x-cloak class="mt-3">
+                        <input x-model="bulkUpdateForm.billingDay" type="number" min="1" max="31" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.paymentDueDaysEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Payment Due Days</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Set invoice due-days across the current scope.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.paymentDueDaysEnabled" x-cloak class="mt-3">
+                        <input x-model="bulkUpdateForm.paymentDueDays" type="number" min="0" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.gracePeriodDaysEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Grace Period Days</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Set grace period days for every matched customer.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.gracePeriodDaysEnabled" x-cloak class="mt-3">
+                        <input x-model="bulkUpdateForm.gracePeriodDays" type="number" min="0" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    </div>
+                </label>
+                <label class="rounded-xl border border-slate-200 p-4 transition hover:border-amber-200 hover:bg-amber-50/50 dark:border-slate-700 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10 md:col-span-2">
+                    <div class="flex items-center gap-3">
+                        <input type="checkbox" x-model="bulkUpdateForm.notesEnabled" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">Replace Notes</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Replace the notes field for every customer in the current scope.</p>
+                        </div>
+                    </div>
+                    <div x-show="bulkUpdateForm.notesEnabled" x-cloak class="mt-3">
+                        <textarea x-model="bulkUpdateForm.notes" rows="3" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white"></textarea>
+                    </div>
                 </label>
             </div>
-            <div class="flex items-center justify-end gap-3">
-                <button @click="bulkStatusModal = false" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                <button @click="applyBulkStatus()" :disabled="!bulkStatus"
-                        class="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <span x-show="!bulkLoading">Apply Changes</span>
+            <div class="mt-6 flex items-center justify-end gap-3">
+                <button @click="resetBulkUpdateForm(); bulkUpdateModal = false" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
+                <button @click="applyBulkUpdate()" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!hasBulkUpdateChanges() || bulkLoading">
+                    <span x-show="!bulkLoading">Apply Updates</span>
                     <span x-show="bulkLoading" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                        Processing...
+                        Updating...
                     </span>
                 </button>
             </div>
         </div>
     </div>
 
-    {# ── Bulk Delete Modal ── #}
-    <div x-show="bulkDeleteModal"
+    {# ── Send Message Modal ── #}
+    <div x-show="sendMessageModal"
          x-transition:enter="transition ease-out duration-200"
          x-transition:enter-start="opacity-0"
          x-transition:enter-end="opacity-100"
@@ -322,33 +488,82 @@
          x-transition:leave-start="opacity-100"
          x-transition:leave-end="opacity-0"
          x-cloak
-         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm"
-         @click.self="bulkDeleteModal = false">
-        <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center gap-3 mb-4">
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 p-4 backdrop-blur-sm"
+         @click.self="sendMessageModal = false">
+        <div class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+            <div class="mb-5 flex items-start justify-between gap-4">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 </div>
                 <div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm Deletion</h3>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">This action cannot be undone</p>
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Send Message</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400" x-text="targetSummary()"></p>
+                </div>
+                <button @click="sendMessageModal = false" class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="space-y-4">
+                <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm dark:border-slate-700 dark:bg-slate-900/60">
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Channel</label>
+                            <select x-model="sendMessageForm.channel" @change="syncTemplateForChannel()" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                                <template x-for="channel in availableNotificationChannels" :key="channel.id">
+                                    <option :value="channel.id" x-text="channel.label"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Template</label>
+                            <select x-model="sendMessageForm.templateId" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                                <option value="">Select a template</option>
+                                <template x-for="template in templatesForSelectedChannel()" :key="template.id">
+                                    <option :value="template.id" x-text="template.name"></option>
+                                </template>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-950">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Channel Readiness</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedChannelMeta().label"></p>
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400" x-text="selectedChannelMeta().message"></p>
+                            </div>
+                            <span class="rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide" :class="selectedChannelMeta().ready ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'" x-text="selectedChannelMeta().ready ? 'Ready' : 'Needs setup'"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-900">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Selected Template</p>
+                    <template x-if="selectedTemplate()">
+                        <div class="mt-2 space-y-2">
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedTemplate().name"></p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400" x-text="selectedTemplate().code"></p>
+                            <p class="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-show="selectedTemplate().subject" x-text="selectedTemplate().subject"></p>
+                        </div>
+                    </template>
+                    <template x-if="!selectedTemplate()">
+                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Choose a template to queue the message for this customer scope.</p>
+                    </template>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+                    <div class="text-slate-500 dark:text-slate-400">
+                        Manage templates from
+                        <a href="/admin/notifications/templates" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">Notification Templates</a>
+                        or review channel readiness in
+                        <a href="/admin/notifications/setup" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">Bulk Notification Setup</a>.
+                    </div>
                 </div>
             </div>
-            <div class="rounded-xl bg-red-50 p-4 mb-6 dark:bg-red-900/20">
-                <p class="text-sm text-red-700 dark:text-red-300">
-                    You are about to delete <span class="font-semibold" x-text="selectedIds.length"></span> customers.
-                    Only inactive customers without active subscribers can be deleted.
-                    Others will be skipped.
-                </p>
-            </div>
-            <div class="flex items-center justify-end gap-3">
-                <button @click="bulkDeleteModal = false" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                <button @click="applyBulkDelete()"
-                        class="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700">
-                    <span x-show="!bulkLoading">Delete Customers</span>
+            <div class="mt-6 flex items-center justify-end gap-3">
+                <button @click="resetSendMessageForm(); sendMessageModal = false" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
+                <button @click="queueBulkMessage()" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || bulkLoading">
+                    <span x-show="!bulkLoading">Queue Message</span>
                     <span x-show="bulkLoading" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                        Deleting...
+                        Queueing...
                     </span>
                 </button>
             </div>
@@ -359,13 +574,58 @@
 <script>
 function customersPage() {
     return {
+        filtersOpen: false,
+        actionsOpen: false,
         selectedIds: [],
-        bulkStatusModal: false,
-        bulkDeleteModal: false,
-        bulkStatus: '',
+        filteredTotal: {{ total or 0 }},
+        activeFilterCount: {{ active_filter_count or 0 }},
+        searchQuery: {{ (search or '') | tojson }},
+        currentCustomerType: {{ (('person' if customer_type in ['person', 'individual'] else customer_type) or '') | tojson }},
+        currentStatus: {{ (status or '') | tojson }},
+        currentNasId: {{ (nas_id or '') | tojson }},
+        currentPopSiteId: {{ (pop_site_id or '') | tojson }},
+        isSearching: false,
+        searchErrorMessage: '',
+        loadingMessage: 'Searching customers...',
+        pendingSearchRequests: 0,
+        availableNotificationChannels: {{ bulk_notification_channels | tojson }},
+        notificationTemplates: {{ bulk_notification_templates | tojson }},
+        bulkUpdateModal: false,
+        sendMessageModal: false,
         bulkLoading: false,
+        bulkUpdateForm: {
+            accountStateEnabled: false,
+            accountState: 'active',
+            preferredContactMethodEnabled: false,
+            preferredContactMethod: '',
+            billingEnabledEnabled: false,
+            billingEnabled: 'true',
+            paymentMethodEnabled: false,
+            paymentMethod: '',
+            billingDayEnabled: false,
+            billingDay: '',
+            paymentDueDaysEnabled: false,
+            paymentDueDays: '',
+            gracePeriodDaysEnabled: false,
+            gracePeriodDays: '',
+            notesEnabled: false,
+            notes: ''
+        },
+        sendMessageForm: {
+            channel: 'email',
+            templateId: ''
+        },
 
         init() {
+            const firstChannel = this.availableNotificationChannels[0];
+            if (firstChannel) {
+                this.sendMessageForm.channel = firstChannel.id;
+            }
+            this.syncTemplateForChannel();
+            this.syncFiltersFromForm();
+            this.syncTableState();
+            this.bindLiveFilters();
+
             document.addEventListener('customer-selected', (e) => {
                 const { id, checked, type } = e.detail;
                 if (checked) {
@@ -389,8 +649,171 @@ function customersPage() {
             document.body.addEventListener('htmx:afterSwap', (e) => {
                 if (e.detail.target.id === 'customers-table') {
                     this.clearSelection();
+                    this.syncTableState();
                 }
             });
+
+            document.body.addEventListener('htmx:configRequest', (e) => {
+                const source = e.detail.elt;
+                if (!source || !source.closest || !source.closest('#customers-filters')) {
+                    return;
+                }
+
+                if (source.id === 'customers-search' || source.matches('[data-live-filter]')) {
+                    e.detail.parameters.page = '1';
+                    this.resetToFirstPage();
+                }
+            });
+
+            document.body.addEventListener('htmx:beforeRequest', (e) => {
+                if (!this.isCustomersTableRequest(e)) {
+                    return;
+                }
+                this.handleSearchRequestStart(e);
+            });
+
+            document.body.addEventListener('htmx:afterRequest', (e) => {
+                if (!this.isCustomersTableRequest(e)) {
+                    return;
+                }
+                this.handleSearchRequestFinish();
+            });
+
+            document.body.addEventListener('htmx:responseError', (e) => {
+                if (!this.isCustomersTableRequest(e)) {
+                    return;
+                }
+                this.handleSearchRequestError(e);
+            });
+
+            document.body.addEventListener('htmx:sendError', (e) => {
+                if (!this.isCustomersTableRequest(e)) {
+                    return;
+                }
+                this.handleSearchRequestError(e, 'network');
+            });
+
+            document.body.addEventListener('htmx:timeout', (e) => {
+                if (!this.isCustomersTableRequest(e)) {
+                    return;
+                }
+                this.handleSearchRequestError(e, 'timeout');
+            });
+
+            document.body.addEventListener('htmx:sendAbort', (e) => {
+                if (!this.isCustomersTableRequest(e)) {
+                    return;
+                }
+                this.handleSearchRequestAbort();
+            });
+        },
+
+        bindLiveFilters() {
+            const form = document.getElementById('customers-filters');
+            if (!form) return;
+
+            const searchInput = document.getElementById('customers-search');
+            if (searchInput) {
+                searchInput.addEventListener('input', () => {
+                    this.resetToFirstPage();
+                    this.syncFiltersFromForm();
+                });
+            }
+
+            form.querySelectorAll('select[name]').forEach((input) => {
+                input.addEventListener('change', () => {
+                    this.resetToFirstPage();
+                    this.syncFiltersFromForm();
+                });
+            });
+
+            form.addEventListener('submit', () => {
+                this.syncFiltersFromForm();
+            });
+        },
+
+        resetToFirstPage() {
+            const pageInput = document.querySelector('[data-page-input]');
+            if (pageInput) {
+                pageInput.value = '1';
+            }
+        },
+
+        isCustomersTableRequest(event) {
+            const detail = event && event.detail ? event.detail : null;
+            if (!detail || !detail.target) {
+                return false;
+            }
+            return detail.target.id === 'customers-table';
+        },
+
+        handleSearchRequestStart(event) {
+            this.pendingSearchRequests += 1;
+            this.isSearching = true;
+            this.searchErrorMessage = '';
+
+            const source = event && event.detail ? event.detail.elt : null;
+            if (source && (source.id === 'customers-search' || source.name === 'search')) {
+                this.loadingMessage = 'Searching customers...';
+                return;
+            }
+
+            this.loadingMessage = 'Updating customer results...';
+        },
+
+        handleSearchRequestFinish() {
+            this.pendingSearchRequests = Math.max(0, this.pendingSearchRequests - 1);
+            this.isSearching = this.pendingSearchRequests > 0;
+        },
+
+        handleSearchRequestError(event, type = 'response') {
+            if (type === 'timeout') {
+                this.searchErrorMessage = 'The search is taking too long. Please try again.';
+                return;
+            }
+
+            if (type === 'network') {
+                this.searchErrorMessage = 'The search could not reach the server. Please try again.';
+                return;
+            }
+
+            const status = event && event.detail && event.detail.xhr ? event.detail.xhr.status : 0;
+            if (status >= 500) {
+                this.searchErrorMessage = 'The search failed on the server. Please try again.';
+                return;
+            }
+
+            this.searchErrorMessage = 'The search could not be completed. Please try again.';
+        },
+
+        handleSearchRequestAbort() {
+            if (this.pendingSearchRequests > 0) {
+                this.isSearching = true;
+                return;
+            }
+            this.isSearching = false;
+        },
+
+        syncTableState() {
+            const stateSource = document.querySelector('#customers-table [data-filtered-total]');
+            if (!stateSource) return;
+
+            this.filteredTotal = Number(stateSource.dataset.filteredTotal || 0);
+
+            const pageInput = document.querySelector('[data-page-input]');
+            if (pageInput && stateSource.dataset.currentPage) {
+                pageInput.value = stateSource.dataset.currentPage;
+            }
+        },
+
+        syncFiltersFromForm() {
+            const filters = this.currentFilters();
+            this.searchQuery = filters.search;
+            this.currentCustomerType = filters.customer_type;
+            this.currentStatus = filters.status;
+            this.currentNasId = filters.nas_id;
+            this.currentPopSiteId = filters.pop_site_id;
+            this.activeFilterCount = this.countActiveFilters(filters);
         },
 
         clearSelection() {
@@ -402,80 +825,253 @@ function customersPage() {
             if (selectAll) selectAll.checked = false;
         },
 
-        showBulkStatusModal() {
-            this.bulkStatus = '';
-            this.bulkStatusModal = true;
+        currentFilters() {
+            const form = document.getElementById('customers-filters');
+            if (!form) {
+                return {
+                    search: '',
+                    customer_type: '',
+                    status: '',
+                    nas_id: '',
+                    pop_site_id: ''
+                };
+            }
+            const data = new FormData(form);
+            return {
+                search: (data.get('search') || '').toString(),
+                customer_type: (data.get('customer_type') || '').toString(),
+                status: (data.get('status') || '').toString(),
+                nas_id: (data.get('nas_id') || '').toString(),
+                pop_site_id: (data.get('pop_site_id') || '').toString()
+            };
         },
 
-        showBulkDeleteModal() {
-            this.bulkDeleteModal = true;
+        countActiveFilters(filters) {
+            return ['search', 'customer_type', 'status', 'nas_id', 'pop_site_id']
+                .reduce((count, key) => count + (filters[key] ? 1 : 0), 0);
         },
 
-        showBulkExportModal() {
-            this.exportCustomers();
+        titleCase(value) {
+            return String(value || '')
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, (letter) => letter.toUpperCase());
         },
 
-        async applyBulkStatus() {
-            if (!this.bulkStatus || this.selectedIds.length === 0) return;
+        customerTypeLabel() {
+            if (this.currentCustomerType === 'person' || this.currentCustomerType === 'individual') {
+                return 'Individual';
+            }
+            if (this.currentCustomerType === 'business') {
+                return 'Business';
+            }
+            return '';
+        },
 
-            this.bulkLoading = true;
-            try {
-                const response = await fetch('/admin/customers/bulk/status', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest'
-                    },
-                    body: JSON.stringify({
-                        customer_ids: this.selectedIds,
-                        status: this.bulkStatus
-                    })
-                });
+        buildScopePayload(extra = {}) {
+            return {
+                customer_ids: this.selectedIds,
+                filters: this.currentFilters(),
+                ...extra
+            };
+        },
 
-                if (response.ok) {
-                    htmx.trigger('#customers-table', 'htmx:load');
-                    location.reload();
-                } else {
-                    alert('Failed to update status. Please try again.');
-                }
-            } catch (error) {
-                console.error('Bulk status update failed:', error);
-                alert('An error occurred. Please try again.');
-            } finally {
-                this.bulkLoading = false;
-                this.bulkStatusModal = false;
-                this.clearSelection();
+        targetCount() {
+            return this.selectedIds.length > 0 ? this.selectedIds.length : this.filteredTotal;
+        },
+
+        targetSummary() {
+            if (this.selectedIds.length > 0) {
+                return `${this.selectedIds.length} selected customer${this.selectedIds.length === 1 ? '' : 's'}`;
+            }
+            return `All ${this.filteredTotal} customers in the current filtered result`;
+        },
+
+        ensureTargetScope() {
+            if (this.targetCount() > 0) return true;
+            alert('There are no customers in the current scope.');
+            return false;
+        },
+
+        resetBulkUpdateForm() {
+            this.bulkUpdateForm = {
+                accountStateEnabled: false,
+                accountState: 'active',
+                preferredContactMethodEnabled: false,
+                preferredContactMethod: '',
+                billingEnabledEnabled: false,
+                billingEnabled: 'true',
+                paymentMethodEnabled: false,
+                paymentMethod: '',
+                billingDayEnabled: false,
+                billingDay: '',
+                paymentDueDaysEnabled: false,
+                paymentDueDays: '',
+                gracePeriodDaysEnabled: false,
+                gracePeriodDays: '',
+                notesEnabled: false,
+                notes: ''
+            };
+        },
+
+        hasBulkUpdateChanges() {
+            return this.bulkUpdateForm.accountStateEnabled
+                || this.bulkUpdateForm.preferredContactMethodEnabled
+                || this.bulkUpdateForm.billingEnabledEnabled
+                || this.bulkUpdateForm.paymentMethodEnabled
+                || this.bulkUpdateForm.billingDayEnabled
+                || this.bulkUpdateForm.paymentDueDaysEnabled
+                || this.bulkUpdateForm.gracePeriodDaysEnabled
+                || this.bulkUpdateForm.notesEnabled;
+        },
+
+        buildBulkUpdatePayload() {
+            const updates = {};
+            if (this.bulkUpdateForm.accountStateEnabled) {
+                updates.account_state = this.bulkUpdateForm.accountState;
+            }
+            if (this.bulkUpdateForm.preferredContactMethodEnabled) {
+                updates.preferred_contact_method = this.bulkUpdateForm.preferredContactMethod;
+            }
+            if (this.bulkUpdateForm.billingEnabledEnabled) {
+                updates.billing_enabled = this.bulkUpdateForm.billingEnabled;
+            }
+            if (this.bulkUpdateForm.paymentMethodEnabled) {
+                updates.payment_method = this.bulkUpdateForm.paymentMethod;
+            }
+            if (this.bulkUpdateForm.billingDayEnabled) {
+                updates.billing_day = this.bulkUpdateForm.billingDay;
+            }
+            if (this.bulkUpdateForm.paymentDueDaysEnabled) {
+                updates.payment_due_days = this.bulkUpdateForm.paymentDueDays;
+            }
+            if (this.bulkUpdateForm.gracePeriodDaysEnabled) {
+                updates.grace_period_days = this.bulkUpdateForm.gracePeriodDays;
+            }
+            if (this.bulkUpdateForm.notesEnabled) {
+                updates.notes = this.bulkUpdateForm.notes;
+            }
+            return updates;
+        },
+
+        openBulkUpdateModal() {
+            if (!this.ensureTargetScope()) return;
+            this.actionsOpen = false;
+            this.resetBulkUpdateForm();
+            this.bulkUpdateModal = true;
+        },
+
+        openSendMessageModal() {
+            if (!this.ensureTargetScope()) return;
+            this.actionsOpen = false;
+            this.resetSendMessageForm();
+            this.sendMessageModal = true;
+        },
+
+        resetSendMessageForm() {
+            const firstChannel = this.availableNotificationChannels[0];
+            this.sendMessageForm = {
+                channel: firstChannel ? firstChannel.id : 'email',
+                templateId: ''
+            };
+            this.syncTemplateForChannel();
+        },
+
+        templatesForSelectedChannel() {
+            return this.notificationTemplates.filter(
+                (template) => template.channel === this.sendMessageForm.channel
+            );
+        },
+
+        selectedTemplate() {
+            return this.notificationTemplates.find(
+                (template) => template.id === this.sendMessageForm.templateId
+            );
+        },
+
+        selectedChannelMeta() {
+            return this.availableNotificationChannels.find(
+                (channel) => channel.id === this.sendMessageForm.channel
+            ) || {
+                id: this.sendMessageForm.channel,
+                label: this.sendMessageForm.channel,
+                ready: false,
+                message: 'Channel setup information is unavailable.'
+            };
+        },
+
+        syncTemplateForChannel() {
+            const matching = this.templatesForSelectedChannel();
+            if (!matching.find((template) => template.id === this.sendMessageForm.templateId)) {
+                this.sendMessageForm.templateId = matching[0] ? matching[0].id : '';
             }
         },
 
-        async applyBulkDelete() {
-            if (this.selectedIds.length === 0) return;
+        async applyBulkUpdate() {
+            if (!this.hasBulkUpdateChanges()) return;
 
             this.bulkLoading = true;
             try {
-                const response = await fetch('/admin/customers/bulk/delete', {
+                const response = await fetch('/admin/customers/bulk/update', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Requested-With': 'XMLHttpRequest'
                     },
-                    body: JSON.stringify({
-                        customer_ids: this.selectedIds
-                    })
+                    body: JSON.stringify(
+                        this.buildScopePayload({
+                            updates: this.buildBulkUpdatePayload()
+                        })
+                    )
                 });
 
                 if (response.ok) {
+                    this.bulkUpdateModal = false;
                     location.reload();
                 } else {
-                    alert('Failed to delete customers. Please try again.');
+                    const error = await response.json().catch(() => ({}));
+                    alert(error.detail || 'Failed to update customers. Please try again.');
                 }
             } catch (error) {
-                console.error('Bulk delete failed:', error);
+                console.error('Bulk update failed:', error);
                 alert('An error occurred. Please try again.');
             } finally {
                 this.bulkLoading = false;
-                this.bulkDeleteModal = false;
-                this.clearSelection();
+            }
+        },
+
+        async queueBulkMessage() {
+            if (!this.sendMessageForm.templateId) return;
+
+            this.bulkLoading = true;
+            try {
+                const response = await fetch('/admin/customers/bulk/send-message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify(
+                        this.buildScopePayload({
+                            channel: this.sendMessageForm.channel,
+                            template_id: this.sendMessageForm.templateId
+                        })
+                    )
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    this.sendMessageModal = false;
+                    this.clearSelection();
+                    alert(`Queued ${result.queued_count || 0} notification(s).${result.suppressed_count ? ` ${result.suppressed_count} were suppressed by customer preferences.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                } else {
+                    const error = await response.json().catch(() => ({}));
+                    alert(error.detail || 'Failed to queue the message. Please try again.');
+                }
+            } catch (error) {
+                console.error('Bulk send failed:', error);
+                alert('An error occurred. Please try again.');
+            } finally {
+                this.bulkLoading = false;
             }
         },
 

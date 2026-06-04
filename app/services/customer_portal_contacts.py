@@ -5,10 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber, SubscriberContact
+from app.services.customer_identity_normalization import (
+    normalize_email_identifier,
+    normalize_phone_identifier,
+)
+from app.services.customer_identity_resolution import (
+    rebuild_identity_index_for_subscriber,
+)
 from app.services.customer_portal_context import (
     resolve_allowed_subscriber_ids,
     resolve_customer_account,
@@ -68,9 +75,9 @@ def normalize_contact_form(
         normalized_type = "general"
     return ContactForm(
         full_name=_clean(full_name),
-        phone=_clean(phone),
-        email=_clean(email.lower() if email else None),
-        whatsapp=_clean(whatsapp),
+        phone=normalize_phone_identifier(phone),
+        email=normalize_email_identifier(email),
+        whatsapp=normalize_phone_identifier(whatsapp),
         facebook=_clean(facebook),
         instagram=_clean(instagram),
         x_handle=_clean(x_handle),
@@ -146,39 +153,61 @@ def duplicate_warnings(
     warnings: list[str] = []
     subscriber_uuid = UUID(str(subscriber_id))
     exclude_uuid = UUID(str(exclude_contact_id)) if exclude_contact_id else None
+    normalized_email = normalize_email_identifier(email)
+    normalized_phone = normalize_phone_identifier(phone)
 
-    if email:
-        existing_subscriber = db.scalar(
+    if normalized_email:
+        subscriber_rows = db.scalars(
             select(Subscriber).where(
                 Subscriber.id != subscriber_uuid,
-                func.lower(Subscriber.email) == email.lower(),
+                Subscriber.email.is_not(None),
             )
-        )
-        if existing_subscriber:
+        ).all()
+        if any(
+            normalize_email_identifier(item.email) == normalized_email
+            for item in subscriber_rows
+        ):
             warnings.append("This email is already used by another subscriber account.")
-        contact_query = select(SubscriberContact).where(
-            func.lower(SubscriberContact.email) == email.lower()
-        )
-        if exclude_uuid:
-            contact_query = contact_query.where(SubscriberContact.id != exclude_uuid)
-        if db.scalar(contact_query):
+        contact_rows = db.scalars(
+            select(SubscriberContact).where(SubscriberContact.email.is_not(None))
+        ).all()
+        if any(
+            contact.id != exclude_uuid
+            and normalize_email_identifier(contact.email) == normalized_email
+            for contact in contact_rows
+        ):
             warnings.append("This email is already used by another linked contact.")
 
-    if phone:
-        existing_phone_subscriber = db.scalar(
+    if normalized_phone:
+        subscriber_rows = db.scalars(
             select(Subscriber).where(
                 Subscriber.id != subscriber_uuid,
-                Subscriber.phone == phone,
+                Subscriber.phone.is_not(None),
             )
-        )
-        if existing_phone_subscriber:
+        ).all()
+        if any(
+            normalize_phone_identifier(item.phone) == normalized_phone
+            for item in subscriber_rows
+        ):
             warnings.append(
                 "This phone number is already used by another subscriber account."
             )
-        phone_query = select(SubscriberContact).where(SubscriberContact.phone == phone)
-        if exclude_uuid:
-            phone_query = phone_query.where(SubscriberContact.id != exclude_uuid)
-        if db.scalar(phone_query):
+        contact_rows = db.scalars(
+            select(SubscriberContact).where(
+                or_(
+                    SubscriberContact.phone.is_not(None),
+                    SubscriberContact.whatsapp.is_not(None),
+                )
+            )
+        ).all()
+        if any(
+            contact.id != exclude_uuid
+            and (
+                normalize_phone_identifier(contact.phone) == normalized_phone
+                or normalize_phone_identifier(contact.whatsapp) == normalized_phone
+            )
+            for contact in contact_rows
+        ):
             warnings.append(
                 "This phone number is already used by another linked contact."
             )
@@ -250,6 +279,8 @@ def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
         notes=form.notes,
     )
     db.add(contact)
+    db.flush()
+    rebuild_identity_index_for_subscriber(db, contact.subscriber_id)
     db.commit()
     return warnings
 
@@ -296,6 +327,7 @@ def update_contact(
     contact.receives_notifications = form.receives_notifications
     contact.is_billing_contact = form.is_billing_contact
     contact.notes = form.notes
+    rebuild_identity_index_for_subscriber(db, contact.subscriber_id)
     db.commit()
     return warnings
 
@@ -317,5 +349,8 @@ def delete_contact(db: Session, customer: dict, contact_id: str) -> None:
     if not contact:
         raise ValueError("Contact not found.")
 
+    subscriber_id = contact.subscriber_id
     db.delete(contact)
+    db.flush()
+    rebuild_identity_index_for_subscriber(db, subscriber_id)
     db.commit()

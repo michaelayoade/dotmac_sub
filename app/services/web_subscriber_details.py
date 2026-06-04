@@ -5,12 +5,12 @@ import math
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import String, cast, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.billing import CreditNoteStatus, InvoiceStatus
-from app.models.catalog import ContractTerm, OfferStatus, SubscriptionStatus
+from app.models.billing import CreditNoteStatus, Invoice, InvoiceStatus, Payment
+from app.models.catalog import ContractTerm, OfferStatus, Subscription, SubscriptionStatus
 from app.models.network import (
     CPEDevice,
     FdhCabinet,
@@ -18,20 +18,29 @@ from app.models.network import (
     OntAssignment,
 )
 from app.models.network_monitoring import SpeedTestResult
+from app.models.provisioning import ServiceOrder
 from app.models.subscriber import (
     Address,
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
 )
+from app.models.support import Ticket
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
-from app.services.audit_helpers import extract_changes, format_changes
+from app.services.audit_helpers import (
+    extract_changes,
+    format_changes,
+    humanize_action,
+    humanize_entity,
+    list_audit_events_for_entities,
+    load_audit_actor_subscribers,
+    resolve_actor_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +55,17 @@ def _format_attachment_size(size_bytes: object) -> str:
     if size < 1024 * 1024:
         return f"{size / 1024:.1f} KB"
     return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _timeline_time(value: datetime | None) -> str:
+    return value.strftime("%b %d, %Y %H:%M") if value else "Just now"
+
+
+def _timeline_sort_key(entry: dict[str, object]) -> datetime:
+    timestamp = entry.get("timestamp")
+    if isinstance(timestamp, datetime):
+        return timestamp
+    return datetime.min.replace(tzinfo=UTC)
 
 
 def _haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -663,45 +683,65 @@ def _build_speedtest_snapshot(
 
 def build_subscriber_timeline(db: Session, subscriber_id):
     """Build audit timeline for subscriber detail page."""
-    audit_events = audit_service.audit_events.list(
-        db=db,
-        actor_id=None,
-        actor_type=None,
-        action=None,
-        entity_type="subscriber",
-        entity_id=str(subscriber_id),
-        request_id=None,
-        is_success=None,
-        status_code=None,
-        is_active=None,
-        order_by="occurred_at",
-        order_dir="desc",
-        limit=10,
-        offset=0,
+    subscriber_id_str = str(subscriber_id)
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber_id)
+        .order_by(
+            func.coalesce(
+                Subscription.updated_at,
+                Subscription.start_at,
+                Subscription.created_at,
+            ).desc()
+        )
+        .limit(8)
+        .all()
     )
-    actor_ids = {
-        str(event.actor_id)
-        for event in audit_events
-        if getattr(event, "actor_id", None)
-    }
-    people = {}
-    if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Subscriber)
-            .filter(Subscriber.id.in_(actor_ids))
-            .all()
-        }
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.account_id == subscriber_id)
+        .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
+        .limit(8)
+        .all()
+    )
+    payments = (
+        db.query(Payment)
+        .filter(Payment.account_id == subscriber_id)
+        .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
+        .limit(8)
+        .all()
+    )
+    service_orders = (
+        db.query(ServiceOrder)
+        .filter(ServiceOrder.subscriber_id == subscriber_id)
+        .order_by(func.coalesce(ServiceOrder.updated_at, ServiceOrder.created_at).desc())
+        .limit(8)
+        .all()
+    )
+    tickets = (
+        db.query(Ticket)
+        .filter(
+            or_(
+                Ticket.subscriber_id == subscriber_id,
+                Ticket.customer_account_id == subscriber_id,
+                Ticket.customer_person_id == subscriber_id,
+            )
+        )
+        .order_by(func.coalesce(Ticket.updated_at, Ticket.created_at).desc())
+        .limit(8)
+        .all()
+    )
+    entity_refs = [("subscriber", subscriber_id_str)]
+    entity_refs.extend(("subscription", str(subscription.id)) for subscription in subscriptions)
+    entity_refs.extend(("invoice", str(invoice.id)) for invoice in invoices)
+    entity_refs.extend(("payment", str(payment.id)) for payment in payments)
+    entity_refs.extend(("service_order", str(order.id)) for order in service_orders)
+    entity_refs.extend(("support_ticket", str(ticket.id)) for ticket in tickets)
+    audit_events = list_audit_events_for_entities(db, entity_refs, limit=20)
+    people = load_audit_actor_subscribers(db, audit_events)
     timeline = []
     for event in audit_events:
-        actor = (
-            people.get(str(event.actor_id))
-            if getattr(event, "actor_id", None)
-            else None
-        )
-        actor_name = (
-            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
-        )
+        actor_name = resolve_actor_name(event, people)
         metadata = getattr(event, "metadata_", None) or {}
         comment_text = str(metadata.get("comment") or "").strip()
         is_todo = bool(metadata.get("is_todo"))
@@ -737,17 +777,17 @@ def build_subscriber_timeline(db: Session, subscriber_id):
             {
                 "id": str(event.id),
                 "type": "audit",
-                "title": (event.action or "Activity").replace("_", " ").title(),
+                "title": (
+                    f"{humanize_entity(getattr(event, 'entity_type', None))} "
+                    f"{humanize_action(getattr(event, 'action', None))}"
+                ),
                 "detail": detail,
                 "is_comment": bool(comment_text),
                 "is_todo": is_todo,
                 "is_completed": is_completed,
                 "attachments": attachments,
-                "time": (
-                    event.occurred_at.strftime("%b %d, %Y %H:%M")
-                    if event.occurred_at
-                    else "Just now"
-                ),
+                "time": _timeline_time(getattr(event, "occurred_at", None)),
+                "timestamp": getattr(event, "occurred_at", None),
             }
         )
     # Also include domain events from event_store (lifecycle events like
@@ -790,18 +830,15 @@ def build_subscriber_timeline(db: Session, subscriber_id):
                     "is_todo": False,
                     "is_completed": False,
                     "attachments": [],
-                    "time": (
-                        event.created_at.strftime("%b %d, %Y %H:%M")
-                        if event.created_at
-                        else "Just now"
-                    ),
+                    "time": _timeline_time(getattr(event, "created_at", None)),
+                    "timestamp": getattr(event, "created_at", None),
                 }
             )
     except Exception:
         logger.debug("Could not load domain events for timeline", exc_info=True)
 
     # Sort combined timeline by time (newest first) and limit
-    timeline.sort(key=lambda e: e.get("time", ""), reverse=True)
+    timeline.sort(key=_timeline_sort_key, reverse=True)
     return timeline[:30]
 
 

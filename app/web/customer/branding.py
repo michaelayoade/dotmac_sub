@@ -1,6 +1,7 @@
 """Shared branding context for customer portal templates."""
 
 import logging
+from decimal import Decimal, InvalidOperation
 from threading import Lock
 from time import monotonic
 from typing import TypedDict
@@ -30,6 +31,18 @@ _branding_cache: _BrandingCache = {
     "favicon": "",
 }
 _branding_cache_lock = Lock()
+
+
+def _format_currency_amount(value: object) -> str:
+    """Format portal currency amounts with grouped thousands and two decimals."""
+    if value in (None, ""):
+        amount = Decimal("0")
+    else:
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return str(value)
+    return f"{amount:,.2f}"
 
 
 def _get_cached_branding() -> tuple[dict, str, str] | None:
@@ -120,7 +133,9 @@ def customer_branding_context(request: Request) -> dict[str, object]:
 
 def get_customer_templates() -> Jinja2Templates:
     """Return Jinja2Templates configured with customer branding context."""
-    return Jinja2Templates(
+    templates = Jinja2Templates(
         directory="templates",
         context_processors=[customer_branding_context],
     )
+    templates.env.filters["currency_amount"] = _format_currency_amount
+    return templates

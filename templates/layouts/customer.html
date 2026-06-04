@@ -13,7 +13,7 @@
 {% set unread_notifications_count = unread_notifications_count if unread_notifications_count is defined else recent_notifications_total %}
 {% set has_recent_notifications = has_recent_notifications if has_recent_notifications is defined else False %}
 <div class="min-h-screen flex flex-col font-body">
-    {% if customer and customer.username and customer.username.startswith('impersonate:') %}
+    {% if customer and customer.is_impersonation %}
     <div class="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
         <div class="mx-auto max-w-7xl px-4 py-2.5 sm:px-6 lg:px-8 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div class="flex items-center gap-2">
@@ -112,9 +112,8 @@
                        class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'contacts' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                         Contacts
                     </a>
-
                     <!-- More dropdown for less-used items -->
-                    <div x-data="{ open: false }" class="relative">
+                    <div x-data="{ open: false }" class="relative z-50">
                         <button x-on:click="open = !open"
                                 class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['installations', 'service-orders', 'work-orders'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                             More
@@ -268,7 +267,7 @@
                     </button>
 
                     <!-- User dropdown with avatar -->
-                    <div x-data="{ open: false }" class="relative">
+                    <div x-data="{ open: false }" class="relative z-50">
                         <button x-on:click="open = !open"
                                 aria-label="Open user menu"
                                 :aria-expanded="open.toString()"
@@ -294,7 +293,7 @@
                              x-cloak
                              id="customer-user-menu"
                              role="menu"
-                             class="absolute right-0 mt-2 w-64 origin-top-right rounded-2xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
+                             class="absolute right-0 z-[60] mt-2 w-64 origin-top-right rounded-2xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
                             <!-- User info header -->
                             <div class="px-4 py-3 border-b border-stone-100 dark:border-stone-700">
                                 <div class="flex items-center gap-3">

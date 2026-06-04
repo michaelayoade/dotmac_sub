@@ -20,7 +20,7 @@ from app.models.subscriber import (
     SubscriberCategory,
     SubscriberStatus,
 )
-from app.models.support import Ticket, TicketStatus
+from app.models.support import Ticket
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
@@ -296,9 +296,9 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                     .where(
                         Ticket.status.notin_(
                             (
-                                TicketStatus.closed,
-                                TicketStatus.canceled,
-                                TicketStatus.merged,
+                                "closed",
+                                "canceled",
+                                "merged",
                             )
                         )
                     )

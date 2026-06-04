@@ -1,4 +1,9 @@
-<div x-data="customersTable()" class="overflow-visible rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+<div
+    x-data="customersTable()"
+    data-filtered-total="{{ total or 0 }}"
+    data-current-page="{{ page or 1 }}"
+    class="overflow-visible rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800"
+>
     <div class="overflow-x-auto overflow-y-visible">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             <thead class="bg-slate-50/80 dark:bg-slate-800/80">
@@ -13,7 +18,9 @@
                     <th scope="col" class="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                         <button class="group inline-flex items-center gap-1.5 hover:text-slate-700 dark:hover:text-slate-200"
                                 hx-get="/admin/customers?sort=name&per_page={{ per_page }}{% if customer_type %}&customer_type={{ customer_type }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if nas_id %}&nas_id={{ nas_id }}{% endif %}{% if pop_site_id %}&pop_site_id={{ pop_site_id }}{% endif %}"
-                                hx-target="#customers-table">
+                                hx-target="#customers-table"
+                                hx-push-url="true"
+                                hx-sync="#customers-filters:replace">
                             Customer
                             <svg class="h-3.5 w-3.5 text-slate-400 opacity-0 transition group-hover:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
@@ -271,6 +278,8 @@
                 {% if page > 1 %}
                 <button hx-get="/admin/customers?page={{ page - 1 }}&per_page={{ per_page }}{% if customer_type %}&customer_type={{ customer_type }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if nas_id %}&nas_id={{ nas_id }}{% endif %}{% if pop_site_id %}&pop_site_id={{ pop_site_id }}{% endif %}"
                         hx-target="#customers-table"
+                        hx-push-url="true"
+                        hx-sync="#customers-filters:replace"
                         class="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-700 hover:shadow-sm dark:hover:bg-slate-700 dark:hover:text-slate-300">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                 </button>
@@ -288,6 +297,8 @@
                         {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
                         <button hx-get="/admin/customers?page={{ p }}&per_page={{ per_page }}{% if customer_type %}&customer_type={{ customer_type }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if nas_id %}&nas_id={{ nas_id }}{% endif %}{% if pop_site_id %}&pop_site_id={{ pop_site_id }}{% endif %}"
                                 hx-target="#customers-table"
+                                hx-push-url="true"
+                                hx-sync="#customers-filters:replace"
                                 class="flex h-9 min-w-[36px] items-center justify-center rounded-lg px-3 text-sm font-medium text-slate-600 transition hover:bg-white hover:shadow-sm dark:text-slate-400 dark:hover:bg-slate-700">
                             {{ p }}
                         </button>
@@ -301,6 +312,8 @@
                 {% if page < total_pages %}
                 <button hx-get="/admin/customers?page={{ page + 1 }}&per_page={{ per_page }}{% if customer_type %}&customer_type={{ customer_type }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if nas_id %}&nas_id={{ nas_id }}{% endif %}{% if pop_site_id %}&pop_site_id={{ pop_site_id }}{% endif %}"
                         hx-target="#customers-table"
+                        hx-push-url="true"
+                        hx-sync="#customers-filters:replace"
                         class="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-700 hover:shadow-sm dark:hover:bg-slate-700 dark:hover:text-slate-300">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 </button>

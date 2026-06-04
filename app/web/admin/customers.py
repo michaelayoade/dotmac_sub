@@ -32,6 +32,7 @@ from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_user_access as web_customer_user_access_service
+from app.services import web_notifications as web_notifications_service
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
@@ -295,6 +296,7 @@ def customers_list(
         {
             "request": request,
             **page_data,
+            **web_notifications_service.bulk_notification_setup_context(db),
             "active_page": "customers",
             "active_menu": "operations",
             "current_user": current_user,
@@ -1700,6 +1702,44 @@ def bulk_update_status(
     """Bulk update customer status (activate/deactivate)."""
     try:
         return web_customer_actions_service.bulk_update_customer_status_from_payload(
+            db=db, payload=data
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post(
+    "/bulk/update", dependencies=[Depends(require_permission("customer:write"))]
+)
+def bulk_update_customers(
+    request: Request,
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    """Bulk update supported customer fields."""
+    try:
+        return web_customer_actions_service.bulk_update_customers_from_payload(
+            db=db, payload=data
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post(
+    "/bulk/send-message", dependencies=[Depends(require_permission("customer:write"))]
+)
+def bulk_send_customer_message(
+    request: Request,
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    """Queue a bulk notification for selected or filtered customers."""
+    try:
+        return web_customer_actions_service.queue_bulk_message_from_payload(
             db=db, payload=data
         )
     except HTTPException:

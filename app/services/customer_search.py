@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -60,15 +60,16 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
             )
         )
 
-    people = (
-        db.query(Subscriber)
-        .filter(
-            Subscriber.is_active.is_(True),
-            or_(*conditions),
-        )
-        .order_by(Subscriber.last_name, Subscriber.first_name)
-        .limit(limit)
-        .all()
+    people = list(
+        db.scalars(
+            select(Subscriber)
+            .where(
+                Subscriber.is_active.is_(True),
+                or_(*conditions),
+            )
+            .order_by(Subscriber.last_name, Subscriber.first_name)
+            .limit(limit)
+        ).all()
     )
     items: list[dict] = []
     for subscriber in people:

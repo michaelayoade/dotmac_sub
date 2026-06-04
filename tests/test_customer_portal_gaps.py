@@ -4,8 +4,11 @@ Covers: ticket creation, password change, event types, route registration.
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+from fastapi import HTTPException
 
 from app.services.events.types import EventType
 
@@ -148,6 +151,36 @@ class TestCustomerRouteRegistration:
         }
         assert ("/portal/services/{subscription_id}/wifi", "POST") in routes
 
+    def test_topup_get_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/billing/topup", "GET") in routes
+
+    def test_topup_verify_get_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/billing/topup/verify", "GET") in routes
+
+    def test_topup_intent_post_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/billing/topup/intent", "POST") in routes
+
 
 # ---------------------------------------------------------------------------
 # 3. Ticket creation schema
@@ -156,17 +189,17 @@ class TestCustomerRouteRegistration:
 
 class TestTicketCreationSchema:
     def test_ticket_create_schema_accepts_portal_fields(self) -> None:
-        from app.models.support import TicketChannel, TicketPriority
+        from app.models.support import TicketChannel
         from app.schemas.support import TicketCreate
 
         payload = TicketCreate(
             title="Internet not working",
             description="Connection drops every 10 minutes",
-            priority=TicketPriority.high,
+            priority="high",
             channel=TicketChannel.web,
         )
         assert payload.title == "Internet not working"
-        assert payload.priority == TicketPriority.high
+        assert payload.priority == "high"
         assert payload.channel == TicketChannel.web
 
     def test_ticket_create_with_subscriber_id(self) -> None:
@@ -381,7 +414,8 @@ class TestPlanChangeUiHelpers:
             SimpleNamespace(billing_mode=SimpleNamespace(value="prepaid"))
         )
 
-        assert "prorated invoice or credit note" in copy["billing_message"]
+        assert "wallet" in copy["billing_message"]
+        assert "prorated difference" in copy["billing_message"]
 
     def test_get_fup_status_uses_highest_active_rule_threshold_for_allowance(
         self,
@@ -473,6 +507,197 @@ class TestPlanChangeUiHelpers:
 
 
 class TestPortalServiceVisibility:
+    def test_get_usage_page_skips_postgres_fallback_when_disabled(
+        self, db_session, subscription
+    ) -> None:
+        from app.services.customer_portal_flow_services import get_usage_page
+
+        customer = {"subscription_id": str(subscription.id)}
+
+        with (
+            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
+            patch(
+                "app.services.customer_portal_flow_services._daily_bandwidth_usage"
+            ) as daily_bandwidth_usage,
+            patch(
+                "app.services.customer_portal_flow_services._usage_summary_stats"
+            ) as usage_summary_stats,
+            patch(
+                "app.services.customer_portal_flow_services._get_fup_status"
+            ) as get_fup_status,
+        ):
+            get_engine.return_value.get_cached_customer_usage.return_value = None
+
+            page = get_usage_page(
+                db_session,
+                customer,
+                allow_postgres_fallback=False,
+            )
+
+        assert page["usage_records"] == []
+        assert page["chart_records"] == []
+        assert page["has_subscription"] is True
+        assert page["usage_source"] == "unavailable"
+        daily_bandwidth_usage.assert_not_called()
+        usage_summary_stats.assert_not_called()
+        get_fup_status.assert_not_called()
+
+    def test_get_usage_page_returns_full_chart_records_with_paginated_table(
+        self, db_session, subscription
+    ) -> None:
+        from app.services.customer_portal_flow_services import get_usage_page
+
+        customer = {"subscription_id": str(subscription.id)}
+        chart_source_records = [
+            SimpleNamespace(
+                recorded_at=datetime(2026, 5, 1, tzinfo=UTC),
+                amount=1.25,
+                usage_amount=1.25,
+                download_amount=0.75,
+                upload_amount=0.5,
+                unit="GB",
+            ),
+            SimpleNamespace(
+                recorded_at=datetime(2026, 5, 2, tzinfo=UTC),
+                amount=2.5,
+                usage_amount=2.5,
+                download_amount=1.5,
+                upload_amount=1.0,
+                unit="GB",
+            ),
+            SimpleNamespace(
+                recorded_at=datetime(2026, 5, 3, tzinfo=UTC),
+                amount=3.75,
+                usage_amount=3.75,
+                download_amount=2.25,
+                upload_amount=1.5,
+                unit="GB",
+            ),
+        ]
+
+        with (
+            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
+            patch(
+                "app.services.customer_portal_flow_services._daily_bandwidth_usage_records",
+                return_value=chart_source_records,
+            ) as daily_records,
+            patch(
+                "app.services.customer_portal_flow_services._usage_summary_stats",
+                return_value={
+                    "average_daily_usage_gb": 2.5,
+                    "average_speed_mbps": 10.0,
+                    "average_download_mbps": 6.0,
+                    "average_upload_mbps": 4.0,
+                },
+            ),
+            patch(
+                "app.services.customer_portal_flow_services._get_fup_status",
+                return_value=None,
+            ),
+        ):
+            get_engine.return_value.get_cached_customer_usage.return_value = None
+
+            page = get_usage_page(
+                db_session,
+                customer,
+                page=1,
+                per_page=2,
+            )
+
+        daily_records.assert_called_once()
+        assert len(page["usage_records"]) == 2
+        assert [record.amount for record in page["usage_records"]] == [1.25, 2.5]
+        assert len(page["chart_records"]) == 3
+        assert [record["label"] for record in page["chart_records"]] == [
+            "May 01",
+            "May 02",
+            "May 03",
+        ]
+        assert page["chart_records"][-1]["value"] == 3.75
+        assert page["chart_records"][0]["download_value"] == 0.75
+        assert page["chart_records"][0]["upload_value"] == 0.5
+
+    def test_daily_bandwidth_usage_batches_bandwidth_lookup(self) -> None:
+        from app.services.customer_portal_flow_services import _daily_bandwidth_usage
+
+        db = MagicMock()
+        query = MagicMock()
+        db.query.return_value = query
+        query.filter.return_value = query
+        query.group_by.return_value = query
+        query.all.return_value = [
+            SimpleNamespace(
+                bucket_start=datetime(2026, 3, 20, tzinfo=UTC),
+                rx_bps=8_000_000,
+                tx_bps=2_000_000,
+            )
+        ]
+
+        with patch(
+            "app.services.customer_portal_flow_services._daily_usage_breakdown_records",
+            return_value={},
+        ):
+            records, total = _daily_bandwidth_usage(
+                db,
+                subscription_id="00000000-0000-0000-0000-000000000001",
+                start_at=datetime(2026, 3, 20, 0, 0, tzinfo=UTC),
+                end_at=datetime(2026, 3, 20, 23, 59, tzinfo=UTC),
+                page=1,
+                per_page=10,
+            )
+
+        assert db.query.call_count == 2
+        assert query.group_by.call_count == 2
+        assert query.all.call_count == 2
+        query.first.assert_not_called()
+        assert total == 1
+        assert len(records) == 1
+        assert records[0].usage_amount > 0
+
+    def test_daily_bandwidth_usage_records_falls_back_to_radius_accounting(
+        self,
+    ) -> None:
+        from app.services.customer_portal_flow_services import (
+            _daily_bandwidth_usage_records,
+        )
+
+        db = MagicMock()
+        start_at = datetime(2026, 3, 19, 0, 0, tzinfo=UTC)
+        end_at = datetime(2026, 3, 20, 23, 59, tzinfo=UTC)
+
+        with (
+            patch(
+                "app.services.customer_portal_flow_services._daily_usage_breakdown_records",
+                return_value={},
+            ),
+            patch(
+                "app.services.customer_portal_flow_services._daily_bandwidth_averages",
+                return_value={},
+            ),
+            patch(
+                "app.services.customer_portal_flow_services._daily_radius_accounting_usage",
+                return_value={
+                    datetime(2026, 3, 19, tzinfo=UTC).date(): (1.25, 0.5, 1.75)
+                },
+            ),
+        ):
+            records = _daily_bandwidth_usage_records(
+                db,
+                subscription_id="00000000-0000-0000-0000-000000000001",
+                start_at=start_at,
+                end_at=end_at,
+            )
+
+        assert len(records) == 2
+        assert records[0].recorded_at == datetime(2026, 3, 20, tzinfo=UTC)
+        assert records[0].usage_amount == 0
+        assert records[0].download_amount == 0
+        assert records[0].upload_amount == 0
+        assert records[1].recorded_at == datetime(2026, 3, 19, tzinfo=UTC)
+        assert records[1].usage_amount == 1.75
+        assert records[1].download_amount == 1.25
+        assert records[1].upload_amount == 0.5
+
     def test_services_page_includes_blocked_subscription(
         self, db_session, subscription, subscriber
     ) -> None:
@@ -492,6 +717,82 @@ class TestPortalServiceVisibility:
         assert page["total"] == 1
         assert len(page["services"]) == 1
         assert page["services"][0].status == SubscriptionStatus.blocked
+
+
+class TestCustomerUsageRoute:
+    def test_usage_page_defaults_to_chart_and_includes_initial_bandwidth_stats(
+        self,
+    ) -> None:
+        from app.web.customer.routes import customer_usage
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        subscription = SimpleNamespace(id="svc-123")
+        usage_page = {
+            "usage_records": [],
+            "chart_records": [],
+            "period": "current",
+            "page": 1,
+            "per_page": 25,
+            "total": 0,
+            "total_pages": 1,
+            "usage_summary": {},
+            "fup_status": None,
+            "usage_source": "none",
+            "has_subscription": True,
+        }
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.get_usage_page",
+                return_value=usage_page,
+            ),
+            patch(
+                "app.web.customer.routes.resolve_customer_subscription",
+                return_value=subscription,
+            ),
+            patch(
+                "app.web.customer.routes._load_initial_bandwidth_stats",
+                return_value={"current_rx_formatted": "9.41 Kbps"},
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_usage(
+                request=request,
+                period="current",
+                page=1,
+                per_page=25,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/usage/index.html"
+        context = render.call_args.args[1]
+        assert context["bandwidth_chart_initial_stats"] == {
+            "current_rx_formatted": "9.41 Kbps"
+        }
+        assert context["usage_chart_records"] == usage_page["chart_records"]
+        assert context["usage_enable_records_chart"] is True
+        assert context["usage_records_default_view"] == "chart"
+        assert context["usage_records_chart_id"] == "portal-usage-records-chart"
+        assert context["usage_records_chart_label"] == "Daily Usage (GB)"
+
+
+class TestAdminUsageTemplateDefaults:
+    def test_admin_stats_defaults_to_chart_view(self) -> None:
+        template = Path("templates/admin/customers/_stats_panel.html").read_text(
+            encoding="utf-8"
+        )
+
+        assert "{% set usage_records_default_view = 'chart' %}" in template
 
 
 class TestPortalNotificationsPage:
@@ -550,6 +851,195 @@ class TestPortalNotificationsPage:
         entity_types = {item.entity_type for item in page["notifications"]}
         assert "invoice_created" in entity_types
         assert "service_order" in entity_types
+
+    def test_notifications_preview_returns_recent_items_and_total(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.comms import (
+            CustomerNotificationEvent,
+            CustomerNotificationStatus,
+        )
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import get_notifications_preview
+
+        subscriber.phone = "+2348000000000"
+        db_session.add_all(
+            [
+                Notification(
+                    subscriber_id=subscriber.id,
+                    channel=NotificationChannel.email,
+                    recipient=subscriber.email,
+                    body="Billing reminder",
+                    status=NotificationStatus.delivered,
+                ),
+                CustomerNotificationEvent(
+                    entity_type="service_order",
+                    entity_id=subscriber.id,
+                    subscriber_id=subscriber.id,
+                    channel="sms",
+                    recipient=subscriber.phone,
+                    message="Technician dispatched",
+                    status=CustomerNotificationStatus.sent,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        preview = get_notifications_preview(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            limit=1,
+        )
+
+        assert preview["recent_notifications_total"] == 2
+        assert preview["unread_notifications_count"] == 2
+        assert preview["has_recent_notifications"] is True
+        assert len(preview["recent_notifications"]) == 1
+
+    def test_notifications_page_prefers_subscriber_id_and_hides_non_visible_statuses(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.models.subscriber import Subscriber
+        from app.services.customer_portal_notifications import get_notifications_page
+
+        other_subscriber = Subscriber(
+            first_name="Other",
+            last_name="User",
+            email="other@example.com",
+            phone=subscriber.phone,
+        )
+        db_session.add(other_subscriber)
+        db_session.flush()
+
+        db_session.add_all(
+            [
+                Notification(
+                    subscriber_id=subscriber.id,
+                    channel=NotificationChannel.email,
+                    recipient="old-email@example.com",
+                    event_type="invoice_paid",
+                    category="billing",
+                    body="Delivered to owned subscriber",
+                    status=NotificationStatus.delivered,
+                ),
+                Notification(
+                    subscriber_id=subscriber.id,
+                    channel=NotificationChannel.email,
+                    recipient=subscriber.email,
+                    event_type="invoice_paid",
+                    category="billing",
+                    body="Queued row should stay hidden",
+                    status=NotificationStatus.queued,
+                ),
+                Notification(
+                    subscriber_id=other_subscriber.id,
+                    channel=NotificationChannel.email,
+                    recipient=subscriber.email,
+                    event_type="invoice_paid",
+                    category="billing",
+                    body="Recipient collision should stay hidden",
+                    status=NotificationStatus.delivered,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 1
+        assert page["notifications"][0].message == "Delivered to owned subscriber"
+
+    def test_notifications_page_respects_billing_and_sms_preferences(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.comms import (
+            CustomerNotificationEvent,
+            CustomerNotificationStatus,
+        )
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import get_notifications_page
+
+        subscriber.metadata_ = {
+            "billing_notifications": False,
+            "sms_updates": False,
+        }
+        subscriber.phone = "+2348000000011"
+        db_session.add_all(
+            [
+                Notification(
+                    subscriber_id=subscriber.id,
+                    channel=NotificationChannel.email,
+                    recipient=subscriber.email,
+                    event_type="invoice_paid",
+                    category="billing",
+                    body="Billing email",
+                    status=NotificationStatus.delivered,
+                ),
+                CustomerNotificationEvent(
+                    entity_type="service_order_completed",
+                    entity_id=subscriber.id,
+                    subscriber_id=subscriber.id,
+                    channel="sms",
+                    recipient=subscriber.phone,
+                    message="Service order completed",
+                    status=CustomerNotificationStatus.sent,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 0
+
+
+class TestCustomerProfileNotifications:
+    def test_update_customer_profile_persists_preferences_and_emits_subscriber_updated(
+        self, db_session, subscriber
+    ) -> None:
+        from app.services.events.types import EventType
+        from app.services.web_customer_actions import update_customer_profile
+
+        with patch("app.services.subscriber.emit_event") as emit_event_mock:
+            updated = update_customer_profile(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                name="Updated Customer",
+                email="updated@example.com",
+                phone="+2348000000012",
+                billing_notifications=False,
+                sms_updates=True,
+            )
+
+        assert updated is not None
+        assert updated.email == "updated@example.com"
+        assert updated.phone == "+2348000000012"
+        assert (updated.metadata_ or {}).get("billing_notifications") is False
+        assert (updated.metadata_ or {}).get("sms_updates") is True
+        assert emit_event_mock.call_args.args[1] == EventType.subscriber_updated
 
 
 class TestPaymentSuccessBanner:
@@ -648,6 +1138,191 @@ class TestPaymentSuccessBanner:
         context = render.call_args.args[1]
         assert context["was_restricted"] is True
         assert context["service_restored"] is False
+
+
+class TestPaymentArrangementRouteErrors:
+    def test_arrangement_submit_rerenders_form_on_http_exception(self) -> None:
+        from app.web.customer.routes import customer_submit_payment_arrangement
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.submit_payment_arrangement",
+                side_effect=HTTPException(
+                    status_code=400, detail="Invalid arrangement"
+                ),
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.get_arrangement_error_context",
+                return_value={"invoices": [], "outstanding_balance": 0},
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_submit_payment_arrangement(
+                request=request,
+                total_amount="1000",
+                installments=3,
+                frequency="monthly",
+                start_date="2025-01-31",
+                invoice_id=None,
+                notes=None,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/arrangement_form.html"
+        assert render.call_args.kwargs["status_code"] == 400
+        context = render.call_args.args[1]
+        assert context["error"] == "Invalid arrangement"
+
+
+class TestCustomerTopupRoutes:
+    def test_topup_page_renders_dedicated_template(self) -> None:
+        from unittest.mock import patch
+
+        from app.web.customer.routes import customer_billing_topup
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        page_data = {
+            "provider_type": "paystack",
+            "provider_public_key": "pk_test",
+            "customer_email": "test@example.com",
+            "prepaid_balance": 2500,
+            "min_amount": 1000,
+            "max_amount": 500000,
+            "preset_amounts": [1000, 2000, 5000],
+        }
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.get_topup_page",
+                return_value=page_data,
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_billing_topup(request=request, db=MagicMock())
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/topup.html"
+        context = render.call_args.args[1]
+        assert "payment_reference" not in context
+        assert context["active_page"] == "billing"
+
+    def test_topup_intent_route_returns_json_payload(self) -> None:
+        import json
+        from unittest.mock import patch
+
+        from app.web.customer.routes import customer_create_topup_intent
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.create_topup_intent",
+                return_value={
+                    "intent_id": "intent-1",
+                    "provider_type": "paystack",
+                    "provider_public_key": "pk_test",
+                    "reference": "ref-topup",
+                    "requested_amount": 5000,
+                    "currency": "NGN",
+                    "checkout_metadata": {
+                        "payment_flow": "account_topup",
+                        "topup_intent_id": "intent-1",
+                        "account_id": "acct-1",
+                    },
+                },
+            ),
+        ):
+            response = customer_create_topup_intent(
+                request=request,
+                payload={"amount": 5000, "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 200
+        payload = json.loads(response.body)
+        assert payload["reference"] == "ref-topup"
+        assert payload["checkout_metadata"]["topup_intent_id"] == "intent-1"
+
+    def test_topup_success_marks_service_restored_after_post_payment_check(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        from app.web.customer.routes import customer_verify_topup
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        result = {
+            "payment": SimpleNamespace(receipt_number="RCT-T1"),
+            "amount": 5000,
+            "reference": "ref-topup-1",
+            "already_recorded": False,
+            "allocated_to_invoices": [],
+            "allocated_total": 0,
+            "credit_added": 5000,
+            "available_balance": 5000,
+            "policy_warnings": [],
+        }
+
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_topup",
+                return_value=result,
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                side_effect=[True, False],
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_topup(
+                request=request,
+                reference="ref-topup-1",
+                provider="paystack",
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/topup_success.html"
+        context = render.call_args.args[1]
+        assert context["was_restricted"] is True
+        assert context["service_restored"] is True
+        assert context["credit_added"] == 5000
 
 
 class TestPlanChangeSettingsValidation:

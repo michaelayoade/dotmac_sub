@@ -4,6 +4,7 @@ import builtins
 import logging
 import os
 import re
+import uuid
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
@@ -58,6 +59,16 @@ logger = logging.getLogger(__name__)
 
 _MAC_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
 _RADIUS_ACCOUNTING_CURSOR_KEY = "radius_accounting_last_radacctid"
+
+# Bandwidth samples derived from RADIUS interim-update deltas are written to
+# the same Redis stream consumed by app.tasks.bandwidth.process_bandwidth_stream
+# so they flow into VictoriaMetrics + the hot BandwidthSample table alongside
+# samples from the active poller.
+_BANDWIDTH_REDIS_STREAM = os.getenv("BANDWIDTH_REDIS_STREAM", "bandwidth:samples")
+_BANDWIDTH_STREAM_MAXLEN = 100000
+# Octet rollover ceiling: ignore deltas implying > 100 Gbps (clearly a counter
+# reset, not real traffic). Mikrotik RADIUS uses 32-bit counters that wrap.
+_BANDWIDTH_SANITY_BPS_CEILING = 100 * 1_000_000_000
 
 
 def _round_money(value: Decimal) -> Decimal:
@@ -222,6 +233,121 @@ def _status_from_radacct(row: dict[str, object]) -> AccountingStatus:
     return AccountingStatus.start
 
 
+def _emit_bandwidth_sample_from_radius_delta(
+    *,
+    subscription_id: uuid.UUID,
+    nas_device_id: uuid.UUID,
+    session_id: str,
+    prev_input_octets: int | None,
+    prev_output_octets: int | None,
+    prev_update_at: datetime | None,
+    new_input_octets: int | None,
+    new_output_octets: int | None,
+    new_update_at: datetime | None,
+) -> None:
+    """Convert an interim-update octet delta into a bandwidth sample.
+
+    The poller-side ingest worker (app.tasks.bandwidth.process_bandwidth_stream)
+    consumes the same Redis stream regardless of source, so RADIUS-derived
+    samples flow into VictoriaMetrics + the hot BandwidthSample table without
+    any additional plumbing. Previous (octets, timestamp) per session lives in
+    a short-lived Redis hash so we don't have to migrate the accounting model.
+    """
+    if new_input_octets is None or new_output_octets is None or new_update_at is None:
+        return
+
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return
+
+    try:
+        import redis as redis_sync  # imported lazily — keeps usage.py optional
+    except ImportError:
+        return
+
+    state_key = f"radius_bandwidth_state:{session_id}"
+    client = redis_sync.from_url(redis_url, decode_responses=True)
+    try:
+        prev = client.hgetall(state_key)
+    except Exception as exc:
+        logger.debug("radius_bandwidth_state read failed: %s", exc)
+        prev = {}
+
+    # Establish the "previous" anchor from cache first, then from the row's
+    # prior in-memory state, then fall through to no-emit on the very first
+    # interim of a session.
+    prev_in = _safe_int(prev.get("in")) if prev else prev_input_octets
+    prev_out = _safe_int(prev.get("out")) if prev else prev_output_octets
+    prev_ts = _parse_iso_ts(prev.get("ts")) if prev else prev_update_at
+
+    new_state = {
+        "in": str(int(new_input_octets)),
+        "out": str(int(new_output_octets)),
+        "ts": new_update_at.isoformat(),
+    }
+    try:
+        # Two-interim TTL: long enough to bridge a missed/late update but
+        # short enough that a torn-down session doesn't keep a stale anchor.
+        client.hset(state_key, mapping=new_state)
+        client.expire(state_key, 600)
+    except Exception as exc:
+        logger.debug("radius_bandwidth_state write failed: %s", exc)
+
+    if prev_in is None or prev_out is None or prev_ts is None:
+        return
+
+    delta_seconds = (new_update_at - prev_ts).total_seconds()
+    if delta_seconds <= 0:
+        return
+
+    delta_in = int(new_input_octets) - int(prev_in)
+    delta_out = int(new_output_octets) - int(prev_out)
+    # Counter wrap / session restart: skip rather than emit a phantom spike.
+    if delta_in < 0 or delta_out < 0:
+        return
+
+    rx_bps = int((delta_in * 8) / delta_seconds)
+    tx_bps = int((delta_out * 8) / delta_seconds)
+    if rx_bps > _BANDWIDTH_SANITY_BPS_CEILING or tx_bps > _BANDWIDTH_SANITY_BPS_CEILING:
+        return
+
+    sample_payload: dict[bytes | str | int | float, bytes | str | int | float] = {
+        "subscription_id": str(subscription_id),
+        "nas_device_id": str(nas_device_id),
+        "queue_name": f"radius:{session_id}",
+        "rx_bps": str(rx_bps),
+        "tx_bps": str(tx_bps),
+        "sample_at": new_update_at.isoformat(),
+    }
+    try:
+        client.xadd(
+            _BANDWIDTH_REDIS_STREAM, sample_payload, maxlen=_BANDWIDTH_STREAM_MAXLEN
+        )
+    except Exception as exc:
+        logger.debug("radius bandwidth xadd failed: %s", exc)
+
+
+def _safe_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_iso_ts(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
     username = str(row.get("username") or "").strip()
     session_id = str(row.get("acctsessionid") or "").strip()
@@ -259,6 +385,15 @@ def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
     if not existing:
         db.add(target)
 
+    prev_input_octets = target.input_octets
+    prev_output_octets = target.output_octets
+    prev_update_at = target.session_start if existing is None else None
+    # session_end was cleared on prior interim updates; for delta math we want
+    # the most recent observation time, which we approximate by acctupdatetime
+    # of the incoming row vs. the stored session_end (only set on stop) or the
+    # session_start as a floor.
+    new_update_at = cast(datetime | None, row.get("acctupdatetime"))
+
     target.subscription_id = subscription.id if subscription else None
     target.radius_client_id = radius_client.id if radius_client else None
     target.nas_device_id = radius_client.nas_device_id if radius_client else None
@@ -268,6 +403,23 @@ def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
     target.input_octets = cast(int | None, row.get("acctinputoctets"))
     target.output_octets = cast(int | None, row.get("acctoutputoctets"))
     target.terminate_cause = cast(str | None, row.get("acctterminatecause"))
+
+    if (
+        status_type == AccountingStatus.interim
+        and subscription is not None
+        and target.nas_device_id is not None
+    ):
+        _emit_bandwidth_sample_from_radius_delta(
+            subscription_id=subscription.id,
+            nas_device_id=target.nas_device_id,
+            session_id=session_id,
+            prev_input_octets=prev_input_octets,
+            prev_output_octets=prev_output_octets,
+            prev_update_at=prev_update_at,
+            new_input_octets=target.input_octets,
+            new_output_octets=target.output_octets,
+            new_update_at=new_update_at,
+        )
     _write_subscription_mac_from_accounting(
         db,
         target.subscription_id,

@@ -39,6 +39,10 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.customer_identity_normalization import (
+    normalize_email_identifier,
+    normalize_phone_identifier,
+)
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
@@ -195,6 +199,15 @@ def _validate_tax_rate(db: Session, tax_rate_id: str | None):
     return rate
 
 
+def _normalize_subscriber_identity_fields(data: dict) -> dict:
+    normalized = dict(data)
+    if "email" in normalized:
+        normalized["email"] = normalize_email_identifier(normalized.get("email"))
+    if "phone" in normalized:
+        normalized["phone"] = normalize_phone_identifier(normalized.get("phone"))
+    return normalized
+
+
 class Resellers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ResellerCreate):
@@ -301,6 +314,10 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
 class Subscribers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriberCreate):
+        from app.services.customer_identity_resolution import (
+            rebuild_identity_index_for_subscriber,
+        )
+
         # Backwards-compat: some callers provide `person_id` to target an existing
         # subscriber row and just apply numbering/defaults.
         person_id = getattr(payload, "person_id", None)
@@ -308,7 +325,9 @@ class Subscribers(ListResponseMixin):
             subscriber = db.get(Subscriber, str(person_id))
             if not subscriber:
                 raise HTTPException(status_code=404, detail="Subscriber not found")
-            data = payload.model_dump(exclude_unset=True, exclude={"person_id"})
+            data = _normalize_subscriber_identity_fields(
+                payload.model_dump(exclude_unset=True, exclude={"person_id"})
+            )
             category = data.pop("category", None)
             data.pop("organization_id", None)
             for key, value in data.items():
@@ -344,11 +363,12 @@ class Subscribers(ListResponseMixin):
                 if generated_account:
                     subscriber.account_number = generated_account
             _apply_billing_defaults(db, subscriber)
+            rebuild_identity_index_for_subscriber(db, subscriber.id)
             db.commit()
             db.refresh(subscriber)
             return subscriber
 
-        data = payload.model_dump()
+        data = _normalize_subscriber_identity_fields(payload.model_dump())
         category = data.pop("category", None)
         data.pop("organization_id", None)
         if data.get("user_type") is None:
@@ -384,6 +404,8 @@ class Subscribers(ListResponseMixin):
             )
         _apply_billing_defaults(db, subscriber)
         db.add(subscriber)
+        db.flush()
+        rebuild_identity_index_for_subscriber(db, subscriber.id)
         db.commit()
         db.refresh(subscriber)
 
@@ -607,7 +629,11 @@ class Subscribers(ListResponseMixin):
         db: Session, emails: builtins.list[str]
     ) -> builtins.list[Subscriber]:
         """Return active subscribers matching any email (case-insensitive)."""
-        normalized = [email.strip().lower() for email in emails if email.strip()]
+        normalized = [
+            item
+            for item in (normalize_email_identifier(email) for email in emails)
+            if item
+        ]
         if not normalized:
             return []
         return (
@@ -619,11 +645,17 @@ class Subscribers(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, subscriber_id: str, payload: SubscriberUpdate):
+        from app.services.customer_identity_resolution import (
+            rebuild_identity_index_for_subscriber,
+        )
+
         subscriber = db.get(Subscriber, subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
         previous_status = subscriber.status
-        data = payload.model_dump(exclude_unset=True)
+        data = _normalize_subscriber_identity_fields(
+            payload.model_dump(exclude_unset=True)
+        )
         category = data.pop("category", None)
         data.pop("organization_id", None)
         for key, value in data.items():
@@ -637,6 +669,7 @@ class Subscribers(ListResponseMixin):
             previous_status=previous_status,
             next_status=subscriber.status,
         )
+        rebuild_identity_index_for_subscriber(db, subscriber.id)
         db.commit()
         db.refresh(subscriber)
 

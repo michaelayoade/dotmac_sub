@@ -80,7 +80,9 @@ class TestCustomerPortalContacts:
         assert warnings == []
         assert contact.subscriber_id == subscriber.id
         assert contact.full_name is None
-        assert contact.whatsapp == "08012345678"
+        assert contact.phone == "+2348012345678"
+        assert contact.email == "jane@example.com"
+        assert contact.whatsapp == "+2348012345678"
         assert contact.facebook == "jane.contact"
         assert contact.telegram == "@janecontact"
         assert contact.contact_type == "billing"
@@ -207,7 +209,7 @@ class TestCustomerPortalContacts:
         assert warnings == []
         assert contact.subscriber_id == managed_account.id
         assert contact.full_name == "Managed Contact"
-        assert contact.phone == "08000000011"
+        assert contact.phone == "+2348000000011"
         assert contact.email == "managed-new@example.com"
         assert contact.contact_type == "billing"
         assert contact.is_billing_contact is True
@@ -258,7 +260,7 @@ class TestCustomerPortalContacts:
         contact = db_session.query(SubscriberContact).one()
         assert warnings == []
         assert contact.subscriber_id == managed_account.id
-        assert contact.phone == "08000000111"
+        assert contact.phone == "+2348000000111"
         assert contact.email == "managed-contact@example.com"
 
     def test_managed_account_update_checks_duplicates_against_contact_owner(

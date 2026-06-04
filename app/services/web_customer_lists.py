@@ -21,6 +21,12 @@ from app.models.subscriber import (
 )
 from app.services.subscriber import splynx_deleted_import_clause
 
+_SUBSCRIBER_CATEGORY_COL: Any = Subscriber.metadata_["subscriber_category"].as_string()
+
+
+def _customer_user_clause():
+    return Subscriber.user_type == UserType.customer
+
 
 def _looks_like_uuid(value: str | None) -> bool:
     if not isinstance(value, str):
@@ -44,11 +50,11 @@ def _customer_display_identifier(*values: str | None) -> str | None:
 
 
 def _business_customer_clause():
-    metadata_category = func.lower(
-        func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
-    )
     return (
-        (metadata_category == SubscriberCategory.business.value)
+        (
+            func.coalesce(_SUBSCRIBER_CATEGORY_COL, "")
+            == SubscriberCategory.business.value
+        )
         | (func.trim(func.coalesce(Subscriber.company_name, "")) != "")
         | (func.trim(func.coalesce(Subscriber.legal_name, "")) != "")
     )
@@ -72,7 +78,7 @@ def build_contacts_index_context(
 
     _not_deleted = not_(splynx_deleted_import_clause())
     query = db.query(Subscriber).filter(
-        Subscriber.user_type != UserType.system_user,
+        _customer_user_clause(),
         _not_deleted,
     )
 
@@ -110,7 +116,7 @@ def build_contacts_index_context(
 
     _base_count = (
         db.query(func.count(Subscriber.id))
-        .filter(Subscriber.user_type != UserType.system_user)
+        .filter(_customer_user_clause())
         .filter(_not_deleted)
     )
     active_count = (
@@ -247,6 +253,153 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
     }
 
 
+def _normalize_customer_type(customer_type: str | None) -> str | None:
+    normalized = (customer_type or "").strip().lower()
+    if normalized in {"individual", "person"}:
+        return "person"
+    if normalized == "business":
+        return "business"
+    return None
+
+
+def _status_filter_clause(status: str | None) -> Any:
+    normalized = (status or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized == "inactive":
+        return Subscriber.is_active.is_(False)
+    if normalized in (
+        "active",
+        "blocked",
+        "suspended",
+        "disabled",
+        "canceled",
+        "new",
+        "delinquent",
+    ):
+        return Subscriber.status == SubscriberStatus(normalized)
+    return None
+
+
+def _apply_customer_filters(
+    query,
+    *,
+    search: str | None,
+    status: str | None,
+    customer_type: str | None,
+    nas_id: str | None,
+    pop_site_id: str | None,
+):
+    normalized_customer_type = _normalize_customer_type(customer_type)
+    status_filter = _status_filter_clause(status)
+
+    if normalized_customer_type == "business":
+        query = query.filter(_business_customer_clause())
+    elif normalized_customer_type == "person":
+        query = query.filter(_individual_customer_clause())
+
+    if status_filter is not None:
+        query = query.filter(status_filter)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(
+            Subscriber.first_name.ilike(like)
+            | Subscriber.last_name.ilike(like)
+            | Subscriber.display_name.ilike(like)
+            | Subscriber.email.ilike(like)
+            | Subscriber.phone.ilike(like)
+            | Subscriber.subscriber_number.ilike(like)
+            | Subscriber.account_number.ilike(like)
+            | Subscriber.subscriptions.any(Subscription.login.ilike(like))
+            | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
+        )
+    if nas_id:
+        query = query.filter(
+            Subscriber.subscriptions.any(
+                Subscription.provisioning_nas_device_id == nas_id
+            )
+        )
+    if pop_site_id:
+        query = query.filter(
+            Subscriber.subscriptions.any(
+                Subscription.provisioning_nas_device.has(
+                    NasDevice.pop_site_id == pop_site_id
+                )
+            )
+        )
+    return query
+
+
+def customer_scope_query(
+    db: Session,
+    *,
+    search: str | None,
+    status: str | None,
+    customer_type: str | None,
+    nas_id: str | None,
+    pop_site_id: str | None,
+    include_related: bool = True,
+):
+    query = db.query(Subscriber)
+    if include_related:
+        query = query.options(
+            selectinload(Subscriber.subscriptions)
+            .selectinload(Subscription.provisioning_nas_device)
+            .selectinload(NasDevice.pop_site),
+            selectinload(Subscriber.channels),
+        )
+    query = query.filter(_customer_user_clause()).filter(
+        not_(splynx_deleted_import_clause())
+    )
+    return _apply_customer_filters(
+        query,
+        search=search,
+        status=status,
+        customer_type=customer_type,
+        nas_id=nas_id,
+        pop_site_id=pop_site_id,
+    )
+
+
+def list_customers_for_scope(
+    db: Session,
+    *,
+    search: str | None,
+    status: str | None,
+    customer_type: str | None,
+    nas_id: str | None,
+    pop_site_id: str | None,
+) -> list[Subscriber]:
+    return (
+        customer_scope_query(
+            db,
+            search=search,
+            status=status,
+            customer_type=customer_type,
+            nas_id=nas_id,
+            pop_site_id=pop_site_id,
+            include_related=True,
+        )
+        .order_by(Subscriber.created_at.desc())
+        .all()
+    )
+
+
+def active_customer_filter_count(
+    *,
+    search: str | None,
+    status: str | None,
+    customer_type: str | None,
+    nas_id: str | None,
+    pop_site_id: str | None,
+) -> int:
+    return sum(
+        1
+        for value in (search, status, customer_type, nas_id, pop_site_id)
+        if str(value or "").strip()
+    )
+
+
 def build_customers_index_context(
     db: Session,
     *,
@@ -260,72 +413,15 @@ def build_customers_index_context(
 ) -> dict[str, Any]:
     """Build customer list context — all customers are subscribers."""
     offset = (page - 1) * per_page
-
-    _not_deleted2 = not_(splynx_deleted_import_clause())
-
-    # Build status filter clause
-    _status_filter: Any = None
-    if status:
-        normalized = status.strip().lower()
-        if normalized == "inactive":
-            _status_filter = Subscriber.is_active.is_(False)
-        elif normalized in (
-            "active",
-            "blocked",
-            "suspended",
-            "disabled",
-            "canceled",
-            "new",
-            "delinquent",
-        ):
-            _status_filter = Subscriber.status == SubscriberStatus(normalized)
-
-    # All customers are subscribers (including org members)
-    query = (
-        db.query(Subscriber)
-        .options(
-            selectinload(Subscriber.subscriptions)
-            .selectinload(Subscription.provisioning_nas_device)
-            .selectinload(NasDevice.pop_site),
-        )
-        .filter(Subscriber.user_type != UserType.system_user)
-        .filter(_not_deleted2)
+    query = customer_scope_query(
+        db,
+        search=search,
+        status=status,
+        customer_type=customer_type,
+        nas_id=nas_id,
+        pop_site_id=pop_site_id,
+        include_related=True,
     )
-    # Optional: filter to business vs individual customers
-    if customer_type == "business":
-        query = query.filter(_business_customer_clause())
-    elif customer_type in {"individual", "person"}:
-        query = query.filter(_individual_customer_clause())
-
-    if _status_filter is not None:
-        query = query.filter(_status_filter)
-    if search:
-        like = f"%{search}%"
-        query = query.filter(
-            Subscriber.first_name.ilike(like)
-            | Subscriber.last_name.ilike(like)
-            | Subscriber.display_name.ilike(like)
-            | Subscriber.email.ilike(like)
-            | Subscriber.phone.ilike(like)
-            | Subscriber.subscriber_number.ilike(like)
-            | Subscriber.account_number.ilike(like)
-            | Subscriber.subscriptions.any(Subscription.login.ilike(like))
-            | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
-        )
-    if nas_id:
-        query = query.filter(
-            Subscriber.subscriptions.any(
-                Subscription.provisioning_nas_device_id == nas_id
-            )
-        )
-    if pop_site_id:
-        query = query.filter(
-            Subscriber.subscriptions.any(
-                Subscription.provisioning_nas_device.has(
-                    NasDevice.pop_site_id == pop_site_id
-                )
-            )
-        )
 
     people = (
         query.order_by(Subscriber.created_at.desc())
@@ -335,56 +431,33 @@ def build_customers_index_context(
     )
     customers: list[dict[str, Any]] = [_build_customer_dict(p) for p in people]
 
-    # Count query (mirrors filters above)
-    count_query = (
-        db.query(func.count(Subscriber.id))
-        .select_from(Subscriber)
-        .filter(Subscriber.user_type != UserType.system_user)
-        .filter(_not_deleted2)
+    total = (
+        customer_scope_query(
+            db,
+            search=search,
+            status=status,
+            customer_type=customer_type,
+            nas_id=nas_id,
+            pop_site_id=pop_site_id,
+            include_related=False,
+        )
+        .order_by(None)
+        .count()
     )
-    if customer_type == "business":
-        count_query = count_query.filter(_business_customer_clause())
-    elif customer_type in {"individual", "person"}:
-        count_query = count_query.filter(_individual_customer_clause())
-    if _status_filter is not None:
-        count_query = count_query.filter(_status_filter)
-    if search:
-        like = f"%{search}%"
-        count_query = count_query.filter(
-            Subscriber.first_name.ilike(like)
-            | Subscriber.last_name.ilike(like)
-            | Subscriber.display_name.ilike(like)
-            | Subscriber.email.ilike(like)
-            | Subscriber.phone.ilike(like)
-            | Subscriber.subscriber_number.ilike(like)
-            | Subscriber.account_number.ilike(like)
-            | Subscriber.subscriptions.any(Subscription.login.ilike(like))
-            | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
-        )
-    if nas_id:
-        count_query = count_query.filter(
-            Subscriber.subscriptions.any(
-                Subscription.provisioning_nas_device_id == nas_id
-            )
-        )
-    if pop_site_id:
-        count_query = count_query.filter(
-            Subscriber.subscriptions.any(
-                Subscription.provisioning_nas_device.has(
-                    NasDevice.pop_site_id == pop_site_id
-                )
-            )
-        )
-    total = count_query.scalar() or 0
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
 
-    stats_base_query = (
-        db.query(Subscriber.id)
-        .filter(Subscriber.user_type != UserType.system_user)
-        .filter(_not_deleted2)
+    business_clause = _business_customer_clause()
+    stats_row = (
+        db.query(
+            func.count().filter(business_clause).label("businesses"),
+            func.count().filter(not_(business_clause)).label("people"),
+        )
+        .filter(_customer_user_clause())
+        .filter(not_(splynx_deleted_import_clause()))
+        .one()
     )
-    total_businesses = stats_base_query.filter(_business_customer_clause()).count() or 0
-    total_people = stats_base_query.filter(_individual_customer_clause()).count() or 0
+    total_businesses = int(stats_row.businesses or 0)
+    total_people = int(stats_row.people or 0)
 
     # Load filter dropdown options
     nas_options = (
@@ -413,4 +486,11 @@ def build_customers_index_context(
         "pop_site_id": pop_site_id or "",
         "nas_options": nas_options,
         "pop_site_options": pop_site_options,
+        "active_filter_count": active_customer_filter_count(
+            search=search,
+            status=status,
+            customer_type=customer_type,
+            nas_id=nas_id,
+            pop_site_id=pop_site_id,
+        ),
     }

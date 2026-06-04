@@ -31,24 +31,31 @@ from app.models.subscriber import (
     SubscriberNINVerification,
     UserType,
 )
-from app.models.support import Ticket, TicketStatus
+from app.models.support import Ticket
 from app.schemas.geocoding import GeocodePreviewRequest
-from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
-from app.services.audit_helpers import extract_changes, format_changes
+from app.services.audit_helpers import (
+    extract_changes,
+    format_changes,
+    humanize_action,
+    humanize_entity,
+    list_audit_events_for_entities,
+    load_audit_actor_subscribers,
+    resolve_actor_name,
+)
 from app.services.billing_settings import resolve_payment_due_days
 
 logger = logging.getLogger(__name__)
 
 RESOLVED_TICKET_STATUSES = {
-    TicketStatus.resolved,
-    TicketStatus.closed,
-    TicketStatus.canceled,
-    TicketStatus.merged,
+    "resolved",
+    "closed",
+    "canceled",
+    "merged",
 }
 ACTIVE_SERVICE_ORDER_STATUSES = {
     ServiceOrderStatus.submitted,
@@ -316,6 +323,60 @@ def _timeline_sort_key(item: dict[str, object]) -> datetime:
     return datetime.min.replace(tzinfo=UTC)
 
 
+def _audit_entity_link(entity_type: str | None, entity_id: str | None) -> str | None:
+    if not entity_type or not entity_id:
+        return None
+    route_prefix = {
+        "subscription": "/admin/catalog/subscriptions",
+        "invoice": "/admin/billing/invoices",
+        "payment": "/admin/billing/payments",
+        "support_ticket": "/admin/support/tickets",
+        "service_order": "/admin/provisioning/orders",
+    }.get(entity_type)
+    if not route_prefix:
+        return None
+    return f"{route_prefix}/{entity_id}"
+
+
+def _build_audit_activity_items(
+    db: Session,
+    entity_refs: list[tuple[str, str]],
+    limit: int = 16,
+) -> list[dict[str, object]]:
+    audit_events = list_audit_events_for_entities(db, entity_refs, limit=limit)
+    if not audit_events:
+        return []
+    people = load_audit_actor_subscribers(db, audit_events)
+    items: list[dict[str, object]] = []
+    for event in audit_events:
+        actor_name = resolve_actor_name(event, people)
+        metadata = getattr(event, "metadata_", None) or {}
+        comment_text = str(metadata.get("comment") or "").strip()
+        changes = extract_changes(metadata, getattr(event, "action", None))
+        change_summary = format_changes(changes, max_items=2)
+        description = actor_name
+        if comment_text:
+            description = f"{actor_name} · {comment_text}"
+        elif change_summary:
+            description = f"{actor_name} · {change_summary}"
+        items.append(
+            {
+                "type": "audit",
+                "title": (
+                    f"{humanize_entity(getattr(event, 'entity_type', None))} "
+                    f"{humanize_action(getattr(event, 'action', None))}"
+                ),
+                "description": description,
+                "timestamp": getattr(event, "occurred_at", None),
+                "link": _audit_entity_link(
+                    getattr(event, "entity_type", None),
+                    getattr(event, "entity_id", None),
+                ),
+            }
+        )
+    return items
+
+
 def _build_activity_items(
     db: Session,
     entity_type: str,
@@ -323,35 +384,6 @@ def _build_activity_items(
     account_ids: list[UUID],
     subscriptions: list[Subscription],
 ) -> list[dict[str, object]]:
-    audit_events = audit_service.audit_events.list(
-        db=db,
-        actor_id=None,
-        actor_type=None,
-        action=None,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        request_id=None,
-        is_success=None,
-        status_code=None,
-        is_active=None,
-        order_by="occurred_at",
-        order_dir="desc",
-        limit=10,
-        offset=0,
-    )
-    actor_ids = {
-        str(event.actor_id)
-        for event in audit_events
-        if getattr(event, "actor_id", None)
-    }
-    people = {}
-    if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Subscriber)
-            .filter(Subscriber.id.in_(actor_ids))
-            .all()
-        }
     activity_items: list[dict[str, object]] = []
 
     if account_ids:
@@ -546,29 +578,13 @@ def _build_activity_items(
             }
         )
 
-    for event in audit_events:
-        actor = (
-            people.get(str(event.actor_id))
-            if getattr(event, "actor_id", None)
-            else None
-        )
-        actor_name = (
-            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
-        )
-        metadata = getattr(event, "metadata_", None) or {}
-        changes = extract_changes(metadata, getattr(event, "action", None))
-        change_summary = format_changes(changes, max_items=2)
-        description_parts = [actor_name]
-        if change_summary:
-            description_parts.append(change_summary)
-        activity_items.append(
-            {
-                "type": "audit",
-                "title": (event.action or "Activity").replace("_", " ").title(),
-                "description": " · ".join(description_parts),
-                "timestamp": event.occurred_at,
-            }
-        )
+    entity_refs = [(entity_type, entity_id)]
+    entity_refs.extend(("subscription", str(subscription.id)) for subscription in subscriptions[:8])
+    entity_refs.extend(("invoice", str(invoice.id)) for invoice in invoices)
+    entity_refs.extend(("payment", str(payment.id)) for payment in payments)
+    entity_refs.extend(("support_ticket", str(ticket.id)) for ticket in support_tickets)
+    entity_refs.extend(("service_order", str(order.id)) for order in service_orders)
+    activity_items.extend(_build_audit_activity_items(db, entity_refs))
 
     activity_items.sort(key=_timeline_sort_key, reverse=True)
     return activity_items[:20]
@@ -1104,6 +1120,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
                 :5
             ]
     except Exception:
+        db.rollback()
         notifications = []
 
     activity_items = _build_activity_items(

@@ -19,8 +19,15 @@ from app.models.audit import AuditActorType
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+    NotificationTemplate,
+)
 from app.models.subscriber import (
     AddressType,
+    ContactMethod,
     ChannelType,
     Subscriber,
     SubscriberCategory,
@@ -38,8 +45,18 @@ from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services import subscriber as subscriber_service
+from app.services import web_customer_lists as web_customer_lists_service
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
+from app.services.customer_identity_normalization import (
+    normalize_email_identifier,
+    normalize_phone_identifier,
+)
+from app.services.customer_notification_policy import (
+    is_notification_enabled_for_subscriber,
+    resolve_notification_category,
+)
+from app.services.notification_template_renderer import render_template_text
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +235,397 @@ def bulk_delete_customers_from_payload(
     if not customer_ids:
         raise HTTPException(status_code=400, detail="customer_ids is required")
     return bulk_delete_customers(db=db, customer_ids=customer_ids)
+
+
+def _normalize_scope_filters(payload: dict[str, Any]) -> dict[str, str | None]:
+    filters = payload.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise HTTPException(status_code=400, detail="filters must be an object")
+    return {
+        "search": str(filters.get("search") or "").strip() or None,
+        "status": str(filters.get("status") or "").strip() or None,
+        "customer_type": str(filters.get("customer_type") or "").strip() or None,
+        "nas_id": str(filters.get("nas_id") or "").strip() or None,
+        "pop_site_id": str(filters.get("pop_site_id") or "").strip() or None,
+    }
+
+
+def _selected_scope_ids(payload: dict[str, Any]) -> list[str]:
+    customer_ids = payload.get("customer_ids") or []
+    if not isinstance(customer_ids, list):
+        raise HTTPException(status_code=400, detail="customer_ids must be a list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in customer_ids:
+        if not isinstance(item, dict):
+            continue
+        customer_id = str(item.get("id") or "").strip()
+        if not customer_id or customer_id in seen:
+            continue
+        seen.add(customer_id)
+        normalized.append(customer_id)
+    return normalized
+
+
+def resolve_bulk_customer_scope(
+    db: Session, payload: dict[str, Any]
+) -> tuple[list[Subscriber], str]:
+    selected_ids = _selected_scope_ids(payload)
+    if selected_ids:
+        try:
+            parsed_ids = [coerce_uuid(item) for item in selected_ids]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid customer id") from exc
+        query = (
+            web_customer_lists_service.customer_scope_query(
+                db,
+                search=None,
+                status=None,
+                customer_type=None,
+                nas_id=None,
+                pop_site_id=None,
+                include_related=True,
+            )
+            .filter(Subscriber.id.in_(parsed_ids))
+            .all()
+        )
+        ordered = {str(subscriber.id): subscriber for subscriber in query}
+        customers = [ordered[item] for item in selected_ids if item in ordered]
+        return customers, "selected"
+
+    filters = _normalize_scope_filters(payload)
+    customers = web_customer_lists_service.list_customers_for_scope(
+        db,
+        search=filters["search"],
+        status=filters["status"],
+        customer_type=filters["customer_type"],
+        nas_id=filters["nas_id"],
+        pop_site_id=filters["pop_site_id"],
+    )
+    return customers, "filtered"
+
+
+def _coerce_bool_value(value: Any, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise HTTPException(status_code=400, detail=f"{field_name} must be true or false")
+
+
+def _coerce_nullable_int(value: Any, field_name: str) -> int | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"{field_name} must be a whole number"
+        ) from exc
+
+
+def _normalize_bulk_updates(payload: dict[str, Any]) -> dict[str, Any]:
+    updates = payload.get("updates") or {}
+    if not isinstance(updates, dict) or not updates:
+        raise HTTPException(status_code=400, detail="updates are required")
+
+    normalized: dict[str, Any] = {}
+    if "account_state" in updates:
+        account_state = str(updates.get("account_state") or "").strip().lower()
+        if account_state not in {"active", "inactive"}:
+            raise HTTPException(
+                status_code=400,
+                detail="account_state must be active or inactive",
+            )
+        normalized["account_state"] = account_state
+
+    if "preferred_contact_method" in updates:
+        raw_method = str(updates.get("preferred_contact_method") or "").strip().lower()
+        if raw_method:
+            try:
+                normalized["preferred_contact_method"] = ContactMethod(raw_method)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="preferred_contact_method is invalid",
+                ) from exc
+        else:
+            normalized["preferred_contact_method"] = None
+
+    if "billing_enabled" in updates:
+        normalized["billing_enabled"] = _coerce_bool_value(
+            updates.get("billing_enabled"), "billing_enabled"
+        )
+
+    for field_name in ("billing_day", "payment_due_days", "grace_period_days"):
+        if field_name in updates:
+            normalized[field_name] = _coerce_nullable_int(
+                updates.get(field_name), field_name
+            )
+
+    if "payment_method" in updates:
+        normalized["payment_method"] = _normalize_optional(
+            str(updates.get("payment_method") or "")
+        )
+
+    if "notes" in updates:
+        normalized["notes"] = _normalize_optional(str(updates.get("notes") or ""))
+
+    if not normalized:
+        raise HTTPException(status_code=400, detail="No supported updates were provided")
+    return normalized
+
+
+def bulk_update_customers_from_payload(
+    db: Session, payload: dict[str, Any]
+) -> dict[str, object]:
+    customers, scope = resolve_bulk_customer_scope(db, payload)
+    if not customers:
+        raise HTTPException(status_code=400, detail="No customers matched this scope")
+    updates = _normalize_bulk_updates(payload)
+    return bulk_update_customers(db=db, customers=customers, updates=updates, scope=scope)
+
+
+def bulk_update_customers(
+    db: Session,
+    *,
+    customers: list[Subscriber],
+    updates: dict[str, Any],
+    scope: str,
+) -> dict[str, object]:
+    updated_count = 0
+    updated_ids: list[str] = []
+    errors: list[dict[str, str]] = []
+
+    for subscriber in customers:
+        try:
+            account_state = updates.get("account_state")
+            if account_state:
+                is_active = account_state == "active"
+                _apply_subscriber_activation_state(
+                    db,
+                    subscriber,
+                    is_active=is_active,
+                    source=f"admin:bulk_update:{scope}:{subscriber.id}",
+                )
+                subscriber.status = (
+                    SubscriberStatus.active
+                    if is_active
+                    else SubscriberStatus.suspended
+                )
+
+            if "preferred_contact_method" in updates:
+                subscriber.preferred_contact_method = updates[
+                    "preferred_contact_method"
+                ]
+            if "billing_enabled" in updates:
+                subscriber.billing_enabled = bool(updates["billing_enabled"])
+            if "billing_day" in updates:
+                subscriber.billing_day = updates["billing_day"]
+            if "payment_due_days" in updates:
+                subscriber.payment_due_days = updates["payment_due_days"]
+            if "grace_period_days" in updates:
+                subscriber.grace_period_days = updates["grace_period_days"]
+            if "payment_method" in updates:
+                subscriber.payment_method = updates["payment_method"]
+            if "notes" in updates:
+                subscriber.notes = updates["notes"]
+
+            updated_count += 1
+            updated_ids.append(str(subscriber.id))
+        except Exception as exc:
+            errors.append({"id": str(subscriber.id), "error": str(exc)})
+
+    db.commit()
+    return {
+        "success": True,
+        "scope": scope,
+        "updated_count": updated_count,
+        "updated_ids": updated_ids,
+        "errors": errors,
+    }
+
+
+def _subscriber_channel_address(
+    subscriber: Subscriber, channel_type: ChannelType
+) -> str | None:
+    ordered_channels = sorted(
+        list(subscriber.channels or []),
+        key=lambda row: (not bool(row.is_primary), str(row.created_at or "")),
+    )
+    for channel in ordered_channels:
+        if channel.channel_type != channel_type:
+            continue
+        address = str(channel.address or "").strip()
+        if address:
+            return address
+    return None
+
+
+def _resolve_notification_recipient(
+    subscriber: Subscriber, channel: NotificationChannel
+) -> str | None:
+    if channel == NotificationChannel.email:
+        return normalize_email_identifier(subscriber.email) or _subscriber_channel_address(
+            subscriber, ChannelType.email
+        )
+
+    if channel == NotificationChannel.sms:
+        return (
+            normalize_phone_identifier(subscriber.phone)
+            or normalize_phone_identifier(
+                _subscriber_channel_address(subscriber, ChannelType.sms)
+            )
+            or normalize_phone_identifier(
+                _subscriber_channel_address(subscriber, ChannelType.phone)
+            )
+        )
+
+    if channel == NotificationChannel.whatsapp:
+        return (
+            normalize_phone_identifier(
+                _subscriber_channel_address(subscriber, ChannelType.whatsapp)
+            )
+            or normalize_phone_identifier(subscriber.phone)
+            or normalize_phone_identifier(
+                _subscriber_channel_address(subscriber, ChannelType.phone)
+            )
+            or normalize_phone_identifier(
+                _subscriber_channel_address(subscriber, ChannelType.sms)
+            )
+        )
+    return None
+
+
+def _notification_template_variables(subscriber: Subscriber) -> dict[str, str]:
+    primary_subscription = next(iter(subscriber.subscriptions or []), None)
+    nas_name = ""
+    pop_site_name = ""
+    pppoe_login = ""
+    ipv4_address = ""
+    if primary_subscription:
+        pppoe_login = str(primary_subscription.login or "")
+        ipv4_address = str(primary_subscription.ipv4_address or "")
+        if primary_subscription.provisioning_nas_device:
+            nas_name = str(primary_subscription.provisioning_nas_device.name or "")
+            if primary_subscription.provisioning_nas_device.pop_site:
+                pop_site_name = str(
+                    primary_subscription.provisioning_nas_device.pop_site.name or ""
+                )
+    return {
+        "customer_name": subscriber.company_name
+        or subscriber.display_name
+        or subscriber.full_name,
+        "account_number": str(subscriber.account_number or ""),
+        "subscriber_number": str(subscriber.subscriber_number or ""),
+        "email": str(subscriber.email or ""),
+        "phone": str(subscriber.phone or ""),
+        "status": subscriber.status.value if subscriber.status else "",
+        "pppoe_login": pppoe_login,
+        "ipv4_address": ipv4_address,
+        "nas_name": nas_name,
+        "location": pop_site_name,
+    }
+
+
+def queue_bulk_message_from_payload(
+    db: Session, payload: dict[str, Any]
+) -> dict[str, object]:
+    template_id = str(payload.get("template_id") or "").strip()
+    channel_value = str(payload.get("channel") or "").strip().lower()
+    if not template_id or not channel_value:
+        raise HTTPException(
+            status_code=400, detail="template_id and channel are required"
+        )
+
+    try:
+        channel = NotificationChannel(channel_value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Unsupported notification channel") from exc
+
+    template = db.get(NotificationTemplate, coerce_uuid(template_id))
+    if not template or not template.is_active:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if template.channel != channel:
+        raise HTTPException(
+            status_code=400, detail="Template channel does not match selected channel"
+        )
+
+    customers, scope = resolve_bulk_customer_scope(db, payload)
+    if not customers:
+        raise HTTPException(status_code=400, detail="No customers matched this scope")
+
+    notifications: list[Notification] = []
+    skipped: list[dict[str, str]] = []
+    queued_count = 0
+    suppressed_count = 0
+    category = resolve_notification_category("service_bulk_message")
+
+    for subscriber in customers:
+        recipient = _resolve_notification_recipient(subscriber, channel)
+        if not recipient:
+            skipped.append(
+                {
+                    "id": str(subscriber.id),
+                    "name": subscriber.company_name
+                    or subscriber.display_name
+                    or subscriber.full_name,
+                    "reason": f"Missing {channel.value} recipient",
+                }
+            )
+            continue
+
+        variables = _notification_template_variables(subscriber)
+        subject = render_template_text(template.subject or "Service Update", variables)
+        body = render_template_text(template.body, variables)
+        status = NotificationStatus.queued
+        last_error = None
+        if not is_notification_enabled_for_subscriber(
+            db,
+            subscriber_id=subscriber.id,
+            channel=channel,
+            category=category,
+            recipient=recipient,
+        ):
+            status = NotificationStatus.canceled
+            last_error = "Suppressed by customer notification preferences"
+            suppressed_count += 1
+        else:
+            queued_count += 1
+
+        notification = Notification(
+            template_id=template.id,
+            subscriber_id=subscriber.id,
+            channel=channel,
+            event_type="service_bulk_message",
+            category=category,
+            recipient=recipient,
+            subject=subject if channel == NotificationChannel.email else None,
+            body=body,
+            status=status,
+            last_error=last_error,
+        )
+        db.add(notification)
+        notifications.append(notification)
+
+    db.commit()
+    for notification in notifications:
+        db.refresh(notification)
+
+    return {
+        "success": True,
+        "scope": scope,
+        "matched_count": len(customers),
+        "created_count": len(notifications),
+        "queued_count": queued_count,
+        "suppressed_count": suppressed_count,
+        "skipped": skipped,
+        "notification_ids": [str(notification.id) for notification in notifications],
+    }
 
 
 def _business_identity_from_contacts(
@@ -839,6 +1247,7 @@ def create_impersonation_session(
         account_id=selected_account.id,
         subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
+        is_impersonation=True,
         return_to=(
             f"/admin/customers/business/{selected_account.id}"
             if selected_account.category == SubscriberCategory.business
@@ -1289,9 +1698,7 @@ def export_customers_csv(
                 != SubscriberCategory.business.value
             )
             if search:
-                people_stmt = people_stmt.where(
-                    Subscriber.email.ilike(f"%{search}%")
-                )
+                people_stmt = people_stmt.where(Subscriber.email.ilike(f"%{search}%"))
             people = db.scalars(
                 people_stmt.order_by(Subscriber.created_at.desc())
             ).all()
@@ -1322,9 +1729,7 @@ def export_customers_csv(
                 orgs_stmt = orgs_stmt.where(
                     Subscriber.company_name.ilike(f"%{search}%")
                 )
-            orgs = db.scalars(
-                orgs_stmt.order_by(Subscriber.company_name.asc())
-            ).all()
+            orgs = db.scalars(orgs_stmt.order_by(Subscriber.company_name.asc())).all()
             for org in orgs:
                 customers.append(
                     {
