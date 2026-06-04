@@ -3,22 +3,21 @@
         <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
     </div>
     <div class="divide-y divide-slate-200 dark:divide-slate-700">
-        {% if recent_activity %}
-        {% for event in recent_activity %}
+        {% if recent_activities %}
+        {% for activity in recent_activities %}
         <div class="flex items-start gap-4 px-6 py-4">
             <div class="mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             </div>
             <div class="flex-1">
                 <p class="text-sm font-medium text-slate-900 dark:text-white">
-                    {{ event.action | default('Updated') | replace('_', ' ') | title }}
-                    <span class="text-slate-500 dark:text-slate-400">{{ event.entity_type | default('record') }}</span>
+                    {{ activity.message }}
                 </p>
                 <p class="text-sm text-slate-500 dark:text-slate-400">
-                    {{ event.actor_id | default('System') }} · {{ event.occurred_at.strftime('%b %d, %Y %H:%M') if event.occurred_at else 'Just now' }}
+                    {{ activity.detail }}
                 </p>
             </div>
-            <span class="text-xs text-slate-400 dark:text-slate-500">{{ 'Success' if event.is_success or event.is_success is not defined else 'Failed' }}</span>
+            <span class="text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">{{ activity.time }}</span>
         </div>
         {% endfor %}
         {% else %}

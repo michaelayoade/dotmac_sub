@@ -1,4 +1,8 @@
 from app.tasks.alert_evaluation import evaluate_alert_rules
+from app.tasks.app_cache import (
+    refresh_dashboard_stats_cache_task,
+    refresh_ont_zabbix_snapshot_cache_task,
+)
 from app.tasks.bandwidth import (
     aggregate_to_metrics as aggregate_bandwidth_to_metrics,
 )
@@ -70,6 +74,10 @@ from app.tasks.radius import run_radius_sync_job
 from app.tasks.splynx_sync import (
     run_customer_accounts_details_sync,
     run_incremental_sync,
+    run_new_subscriptions_sync,
+    run_refresh_radius_from_subs,
+    run_subscriber_status_sync,
+    run_subscription_status_sync,
 )
 from app.tasks.tr069 import (
     apply_acs_config as tr069_apply_acs_config,
@@ -166,6 +174,10 @@ __all__ = [
     "retry_pending_compensation_failures",
     "run_incremental_sync",
     "run_customer_accounts_details_sync",
+    "run_subscriber_status_sync",
+    "run_subscription_status_sync",
+    "run_refresh_radius_from_subs",
+    "run_new_subscriptions_sync",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",
@@ -186,6 +198,8 @@ __all__ = [
     "execute_ont_bulk_action",
     "authorize_ont_task",
     "evaluate_alert_rules",
+    "refresh_dashboard_stats_cache_task",
+    "refresh_ont_zabbix_snapshot_cache_task",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
     "retired_detect_sla_breaches",

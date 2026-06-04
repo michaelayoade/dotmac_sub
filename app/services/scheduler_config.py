@@ -801,6 +801,32 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=600,
         )
+        dashboard_cache_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "dashboard_cache_refresh_interval_seconds",
+            180,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dashboard_cache_refresh",
+            task_name="app.tasks.app_cache.refresh_dashboard_stats_cache",
+            enabled=True,
+            interval_seconds=max(dashboard_cache_seconds, 60),
+        )
+        ont_snapshot_cache_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ont_snapshot_cache_refresh_interval_seconds",
+            180,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ont_snapshot_cache_refresh",
+            task_name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache",
+            enabled=True,
+            interval_seconds=max(ont_snapshot_cache_seconds, 60),
+        )
         _retire_scheduled_task(
             session,
             "app.tasks.ont_discovery.discover_all_olt_onts",

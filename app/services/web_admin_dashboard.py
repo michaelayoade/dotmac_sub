@@ -1,13 +1,21 @@
 """Service helpers for admin dashboard routes."""
 
 import logging
+import os
 from datetime import UTC, datetime
+from threading import Lock
+from time import monotonic
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.metrics import (
+    observe_cache_refresh,
+    record_cache_fallback,
+    record_cache_lookup,
+)
 from app.models.audit import AuditActorType
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
@@ -18,6 +26,8 @@ from app.models.network_monitoring import (
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber
+from app.services import admin_whats_new as admin_whats_new_service
+from app.services import app_cache
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -29,16 +39,32 @@ from app.services import (
 )
 from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
+    build_recent_activity_feed,
     extract_changes,
     format_audit_datetime,
     format_changes,
     humanize_action,
     humanize_entity,
+    resolve_actor_name,
 )
 
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
+_DASHBOARD_STATS_CACHE_TTL_SECONDS = max(
+    60, int(os.getenv("DASHBOARD_STATS_CACHE_TTL_SECONDS", "180"))
+)
+_DASHBOARD_STATS_CACHE_KEY = app_cache.cache_key("dashboard", "stats-summary")
+
+# In-process cache for the main /admin/dashboard global context.
+# Contains SQLAlchemy ORM rows (recent_activity, recent_subscribers, active_alarms)
+# that can't be JSON-serialized to Redis, hence the in-process cache.
+_DASHBOARD_GLOBAL_TTL_SECONDS = float(
+    os.getenv("DASHBOARD_GLOBAL_CACHE_TTL_SECONDS", "60")
+)
+_dashboard_global_lock = Lock()
+_dashboard_global_cached_at = 0.0
+_dashboard_global_cache: dict[str, object] | None = None
 
 
 def _invoice_total(inv) -> float:
@@ -284,16 +310,7 @@ def _build_recent_activities(
         elif "subscriber" in entity_type.lower():
             activity_type = "signup" if "create" in action.lower() else "activation"
 
-        actor_name = None
-        if event.actor_id and _is_user_actor(getattr(event, "actor_type", None)):
-            actor = subscribers_lookup.get(str(event.actor_id))
-            if actor:
-                actor_name = f"{actor.first_name} {actor.last_name}".strip()
-        if not actor_name:
-            metadata = getattr(event, "metadata_", None) or {}
-            actor_name = (
-                metadata.get("actor_name") or metadata.get("actor_email") or "System"
-            )
+        actor_name = resolve_actor_name(event, subscribers_lookup)
 
         time_str = format_audit_datetime(getattr(event, "occurred_at", None), "%H:%M")
 
@@ -317,8 +334,11 @@ def _build_recent_activities(
     return recent_activities
 
 
-def dashboard(request: Request, db: Session):
-    """Build the main admin dashboard context and return TemplateResponse."""
+def _build_dashboard_global_context(db: Session) -> dict[str, object]:
+    """Build the heavy, non-user-specific portion of the dashboard context.
+
+    Result is cached in-process for ~60s (see _get_cached_dashboard_global_context).
+    """
     from app.services import network_monitoring as network_monitoring_service
 
     # --- Server health ---
@@ -490,66 +510,6 @@ def dashboard(request: Request, db: Session):
         }
 
     recent_activities = _build_recent_activities(recent_activity, subscribers_lookup)
-
-    sidebar_stats = web_admin_service.get_sidebar_stats(db)
-    current_user = web_admin_service.get_current_user(request)
-
-    # --- Permission-gated sections ---
-    from app.services.auth_dependencies import has_permission
-
-    # Permission-gated sections.
-    # Web session users: check via RBAC if auth state present, else default True
-    # (web admin middleware already verified authentication)
-    auth = getattr(request.state, "auth", None) or {}
-    user = getattr(request.state, "user", None)
-
-    if auth.get("principal_id"):
-        # API-style auth with explicit principal
-        def _has(perm: str) -> bool:
-            return has_permission(auth, db, perm)
-
-        show_financials = _has("billing:read")
-        show_network = _has("network:read") or _has("monitoring:read")
-        show_subscribers = _has("subscriber:read")
-    elif user:
-        # Web session auth — check user's role permissions
-        try:
-            from app.models.system_user import SystemUser
-
-            sys_user = db.get(
-                SystemUser, str(user.get("subscriber_id") or user.get("id", ""))
-            )
-            roles = getattr(sys_user, "roles", None)
-            if sys_user and roles is not None:
-                role_names = {getattr(r, "name", "") for r in roles} if roles else set()
-                # Admin role sees everything
-                is_admin = "admin" in role_names or "super_admin" in role_names
-                show_financials = (
-                    is_admin or "finance" in role_names or "billing" in role_names
-                )
-                show_network = (
-                    is_admin
-                    or "noc" in role_names
-                    or "network" in role_names
-                    or "technician" in role_names
-                )
-                show_subscribers = (
-                    is_admin or "support" in role_names or "sales" in role_names
-                )
-            else:
-                # No role info — show everything (admin default)
-                show_financials = True
-                show_network = True
-                show_subscribers = True
-        except Exception:
-            show_financials = True
-            show_network = True
-            show_subscribers = True
-    else:
-        # Fallback: show everything
-        show_financials = True
-        show_network = True
-        show_subscribers = True
 
     # --- Who's Online (RADIUS active sessions) ---
     try:
@@ -755,44 +715,138 @@ def dashboard(request: Request, db: Session):
             }
         )
 
+    whats_new_items = admin_whats_new_service.serialize_for_dashboard(
+        admin_whats_new_service.get_visible_items(db, limit=4)
+    )
+
+    return {
+        "stats": stats,
+        "subscriber_stats": sub_stats,
+        "network_stats": net_stats,
+        "billing_stats": {"stats": billing_summary},
+        "network_health": {
+            "percent": health_pct,
+            "status": health_status,
+            "warn_pct": warn_pct,
+            "crit_pct": crit_pct,
+        },
+        "recent_activity": recent_activity,
+        "recent_activities": recent_activities,
+        "recent_subscribers": sub_stats["recent_subscribers"],
+        "active_alarms": net_stats["active_alarms"],
+        "attention_items": attention_items,
+        "pending_orders": pending_orders,
+        "total_alarms": total_alarms,
+        "sidebar_stats": web_admin_service.get_sidebar_stats(db),
+        "server_health": server_health,
+        "server_health_status": server_health_status,
+        "online_count": online_count,
+        "sync_status": sync_status,
+        "monitoring_summary": monitoring_summary,
+        "ont_service_summary": ont_service_summary,
+        "ont_olt_link_summary": ont_olt_link_summary,
+        "pon_interface_summary": pon_interface_summary,
+        "pon_outages": pon_outages,
+        "vpn_tunnels": [],
+        "whats_new_items": whats_new_items,
+        "unconfigured_ont_count": unconfigured_ont_count,
+    }
+
+
+def _get_cached_dashboard_global_context(db: Session) -> dict[str, object]:
+    """Return cached dashboard global context, recomputing on TTL expiry.
+
+    Single-flight: first thread holds the lock during recompute so concurrent
+    requests don't all stampede the remote DB after cache expiry.
+    """
+    global _dashboard_global_cached_at, _dashboard_global_cache
+
+    now = monotonic()
+    if (
+        _dashboard_global_cache
+        and (now - _dashboard_global_cached_at) < _DASHBOARD_GLOBAL_TTL_SECONDS
+    ):
+        return _dashboard_global_cache
+
+    with _dashboard_global_lock:
+        now = monotonic()
+        if (
+            _dashboard_global_cache
+            and (now - _dashboard_global_cached_at) < _DASHBOARD_GLOBAL_TTL_SECONDS
+        ):
+            return _dashboard_global_cache
+        fresh = _build_dashboard_global_context(db)
+        _dashboard_global_cached_at = monotonic()
+        _dashboard_global_cache = fresh
+        return fresh
+
+
+def _resolve_dashboard_permissions(
+    request: Request, db: Session
+) -> tuple[bool, bool, bool]:
+    """Resolve per-user show_financials/show_network/show_subscribers flags."""
+    from app.services.auth_dependencies import has_permission
+
+    auth = getattr(request.state, "auth", None) or {}
+    user = getattr(request.state, "user", None)
+
+    if auth.get("principal_id"):
+
+        def _has(perm: str) -> bool:
+            return has_permission(auth, db, perm)
+
+        return (
+            _has("billing:read"),
+            _has("network:read") or _has("monitoring:read"),
+            _has("subscriber:read"),
+        )
+    if user:
+        try:
+            from app.models.system_user import SystemUser
+
+            sys_user = db.get(
+                SystemUser, str(user.get("subscriber_id") or user.get("id", ""))
+            )
+            roles = getattr(sys_user, "roles", None)
+            if sys_user and roles is not None:
+                role_names = {getattr(r, "name", "") for r in roles} if roles else set()
+                is_admin = "admin" in role_names or "super_admin" in role_names
+                return (
+                    is_admin or "finance" in role_names or "billing" in role_names,
+                    is_admin
+                    or "noc" in role_names
+                    or "network" in role_names
+                    or "technician" in role_names,
+                    is_admin or "support" in role_names or "sales" in role_names,
+                )
+        except Exception:
+            pass
+    return (True, True, True)
+
+
+def dashboard(request: Request, db: Session):
+    """Build the main admin dashboard context and return TemplateResponse.
+
+    Heavy global queries are memoized via _get_cached_dashboard_global_context().
+    Only per-user fields (current_user + permission flags) are computed inline.
+    """
+    show_financials, show_network, show_subscribers = _resolve_dashboard_permissions(
+        request, db
+    )
+    current_user = web_admin_service.get_current_user(request)
+    global_ctx = _get_cached_dashboard_global_context(db)
+
     return templates.TemplateResponse(
         "admin/dashboard/index.html",
         {
             "request": request,
-            "stats": stats,
-            "subscriber_stats": sub_stats,
-            "network_stats": net_stats,
-            "billing_stats": {"stats": billing_summary},
-            "network_health": {
-                "percent": health_pct,
-                "status": health_status,
-                "warn_pct": warn_pct,
-                "crit_pct": crit_pct,
-            },
-            "recent_activity": recent_activity,
-            "recent_activities": recent_activities,
-            "recent_subscribers": sub_stats["recent_subscribers"],
-            "active_alarms": net_stats["active_alarms"],
-            "attention_items": attention_items,
-            "pending_orders": pending_orders,
-            "total_alarms": total_alarms,
             "now": datetime.now(),
             "active_page": "dashboard",
             "current_user": current_user,
-            "sidebar_stats": sidebar_stats,
-            "server_health": server_health,
-            "server_health_status": server_health_status,
-            "online_count": online_count,
-            "sync_status": sync_status,
             "show_financials": show_financials,
             "show_network": show_network,
             "show_subscribers": show_subscribers,
-            "monitoring_summary": monitoring_summary,
-            "ont_service_summary": ont_service_summary,
-            "ont_olt_link_summary": ont_olt_link_summary,
-            "pon_interface_summary": pon_interface_summary,
-            "pon_outages": pon_outages,
-            "vpn_tunnels": [],
+            **global_ctx,
         },
     )
 
@@ -813,23 +867,7 @@ def dashboard_server_health_partial(request: Request, db: Session):
     )
 
 
-def _get_cached_dashboard_stats(db: Session) -> dict:
-    """Get dashboard stats with Redis caching (30 second TTL)."""
-    import json
-
-    from app.services.settings_cache import get_settings_redis
-
-    cache_key = "dashboard:stats_partial"
-    try:
-        r = get_settings_redis()
-        if r is not None:
-            cached = r.get(cache_key)
-            if cached and isinstance(cached, (str, bytes)):
-                return json.loads(cached)
-    except Exception:
-        logger.debug("Dashboard cache read failed", exc_info=True)
-
-    # Cache miss - compute stats
+def _build_dashboard_stats_summary(db: Session) -> dict:
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
     pon_interface_summary = _build_pon_interface_summary(db)
 
@@ -851,7 +889,7 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
     except Exception:
         logger.debug("Failed to load network monitoring dashboard stats", exc_info=True)
 
-    stats = {
+    return {
         "total_subscribers": sub_stats["total_count"],
         "active_subscribers": sub_stats["active_count"],
         "subscribers_change": sub_stats.get("new_this_month", 0),
@@ -864,15 +902,44 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
         "pon_interfaces_total": pon_interface_summary["total"],
     }
 
-    # Cache for 30 seconds
-    try:
-        r = get_settings_redis()
-        if r is not None:
-            r.setex(cache_key, 30, json.dumps(stats))
-    except Exception:
-        logger.debug("Dashboard cache write failed", exc_info=True)
 
-    return stats
+def refresh_dashboard_stats_cache(db: Session) -> dict:
+    started_at = monotonic()
+    try:
+        stats = _build_dashboard_stats_summary(db)
+        app_cache.set_json(
+            _DASHBOARD_STATS_CACHE_KEY,
+            stats,
+            _DASHBOARD_STATS_CACHE_TTL_SECONDS,
+        )
+        observe_cache_refresh(
+            "dashboard_stats_summary",
+            "success",
+            monotonic() - started_at,
+        )
+        return stats
+    except Exception:
+        observe_cache_refresh(
+            "dashboard_stats_summary",
+            "failure",
+            monotonic() - started_at,
+        )
+        raise
+
+
+def _get_cached_dashboard_stats(db: Session) -> dict:
+    cached = app_cache.get_json(_DASHBOARD_STATS_CACHE_KEY)
+    if isinstance(cached, dict):
+        record_cache_lookup("dashboard_stats_summary", "hit")
+        return cached
+
+    record_cache_lookup("dashboard_stats_summary", "miss")
+    record_cache_fallback("dashboard_stats_summary", "sync_recompute")
+    try:
+        return refresh_dashboard_stats_cache(db)
+    except Exception:
+        logger.debug("Dashboard cache refresh failed", exc_info=True)
+        return _build_dashboard_stats_summary(db)
 
 
 def dashboard_stats_partial(request: Request, db: Session):
@@ -900,8 +967,9 @@ def dashboard_activity_partial(request: Request, db: Session):
         limit=10,
         offset=0,
     )
+    recent_activities = build_recent_activity_feed(db, recent_activity, limit=10)
 
     return templates.TemplateResponse(
         "admin/dashboard/_activity.html",
-        {"request": request, "recent_activity": recent_activity},
+        {"request": request, "recent_activities": recent_activities},
     )

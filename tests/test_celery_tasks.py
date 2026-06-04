@@ -74,6 +74,15 @@ class TestOltProfileSyncTask:
             "app.tasks.profile_sync.execute_due_profile_sync_tasks"
         ] == {"queue": "tr069"}
 
+    def test_app_cache_refresh_tasks_are_registered(self):
+        """Beat-scheduled cache refresh tasks must be in the worker registry."""
+        from app.celery_app import celery_app
+
+        assert "app.tasks.app_cache.refresh_dashboard_stats_cache" in celery_app.tasks
+        assert (
+            "app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache" in celery_app.tasks
+        )
+
     def test_execute_due_profile_sync_tasks_success(self):
         """Test successful due profile sync execution."""
         mock_session = MagicMock()

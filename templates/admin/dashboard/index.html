@@ -87,7 +87,7 @@
     {% set dev_pct = ((dev_online / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
     {% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
 
-    <section data-tour-id="dashboard-kpis" class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 60s" hx-swap="none">
+    <section data-tour-id="dashboard-kpis" class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 180s" hx-swap="none">
         {{ kpi_tile(
             "Subscribers",
             stats.total_subscribers,
@@ -155,113 +155,172 @@
         ) }}
     </section>
 
-    {# ═══════════ Section 4: Quick Launch (4 compact cards) ═══════════ #}
-    <section data-tour-id="dashboard-quick-actions" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {# Subscribers #}
-        {% if show_subscribers %}
-        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-600 dark:text-amber-400">Subscribers</p>
-            </div>
-            <div class="grid grid-cols-2 gap-1.5 p-3">
-                <a href="/admin/customers" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_users("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">List</span>
-                </a>
-                <a href="/admin/customers/new" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_plus("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Add New</span>
-                </a>
-                <a href="/admin/provisioning" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_clipboard("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Orders</span>
-                </a>
-                <a href="/admin/support/tickets" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_bell("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Support</span>
-                </a>
+    {# ═══════════ Section 4: What's New + Quick Actions ═══════════ #}
+    <section class="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-stretch">
+        <div class="xl:col-span-2">
+            <div x-data='dashboardWhatsNew({{ (whats_new_items | default([], true)) | tojson }})'
+                 x-init="init()"
+                 x-on:mouseenter="pause()"
+                 x-on:mouseleave="resume()"
+                 x-on:touchstart.passive="onTouchStart($event)"
+                 x-on:touchend.passive="onTouchEnd($event)"
+                 class="relative h-full overflow-hidden rounded-2xl border border-slate-200/70 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-sm dark:border-slate-700/70">
+                <div class="absolute inset-0 overflow-hidden">
+                    <div class="absolute -top-16 -right-16 h-48 w-48 rounded-full bg-amber-400/15 blur-3xl"></div>
+                    <div class="absolute -bottom-20 -left-16 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl"></div>
+                    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.6) 1px, transparent 0); background-size: 24px 24px;"></div>
+                </div>
+
+                <div class="relative flex h-full flex-col p-6 sm:p-7">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-300">What's New</p>
+                        </div>
+                        <a href="/admin/system/whats-new" class="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/90 backdrop-blur-sm transition hover:bg-white/10">
+                            Manage slides
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                            </svg>
+                        </a>
+                    </div>
+
+                    <template x-if="itemCount()">
+                        <div class="mt-6 flex flex-1 flex-col justify-between">
+                            <div class="space-y-5">
+                                <div class="flex items-center gap-3">
+                                    <span x-text="currentItem().status === 'featured' ? 'Featured' : 'Active'"
+                                          class="inline-flex rounded-full bg-amber-400/15 px-3 py-1 text-xs font-semibold text-amber-200 ring-1 ring-inset ring-amber-300/20"></span>
+                                    <span class="text-xs font-medium text-slate-400" x-text="`${active + 1} of ${itemCount()}`"></span>
+                                </div>
+
+                                <div>
+                                    <h3 class="font-display text-3xl font-bold text-white" x-text="currentItem().title"></h3>
+                                    <p class="mt-3 max-w-3xl text-base text-slate-300" x-text="currentItem().message"></p>
+                                </div>
+
+                                <div class="flex flex-wrap gap-2" x-show="currentItem().benefits.length">
+                                    <template x-for="benefit in currentItem().benefits" :key="benefit">
+                                        <span class="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-200" x-text="benefit"></span>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div class="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                <a :href="currentItem().button_link"
+                                   x-on:click="handleAction($event, currentItem().button_link)"
+                                   class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-400">
+                                    <span x-text="currentItem().button_text"></span>
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                                    </svg>
+                                </a>
+
+                                <div class="flex items-center gap-3" x-show="itemCount() > 1">
+                                    <button type="button"
+                                            x-on:click="prev()"
+                                            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+                                            aria-label="Previous slide">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                                        </svg>
+                                    </button>
+                                    <div class="flex items-center gap-2">
+                                        <template x-for="(item, index) in items" :key="item.id">
+                                            <button type="button"
+                                                    x-on:click="goTo(index)"
+                                                    :class="index === active ? 'bg-amber-400' : 'bg-white/25'"
+                                                    class="h-2.5 w-2.5 rounded-full transition"
+                                                    :aria-label="`Go to slide ${index + 1}`"></button>
+                                        </template>
+                                    </div>
+                                    <button type="button"
+                                            x-on:click="next()"
+                                            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+                                            aria-label="Next slide">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <template x-if="!itemCount()">
+                        <div class="mt-6 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/5 px-6 py-12 text-center">
+                            <div>
+                                <p class="text-lg font-semibold text-white">No active updates yet</p>
+                                <p class="mt-2 text-sm text-slate-300">Create featured or active slides in settings to start surfacing new admin features here.</p>
+                            </div>
+                        </div>
+                    </template>
+                </div>
             </div>
         </div>
-        {% endif %}
 
-        {# Network #}
-        {% if show_network %}
-        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-400">Network</p>
+        <div data-tour-id="dashboard-quick-actions" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Quick Actions</p>
+                <h3 class="mt-2 font-display text-xl font-bold text-slate-900 dark:text-white">Quick Access to Frequent Tasks</h3>
             </div>
-            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
-                <a href="/admin/network/monitoring" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">Monitoring</span>
-                    {% if total_alarms_count > 0 %}
-                    <span class="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">{{ total_alarms_count }} alarms</span>
-                    {% else %}
-                    <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Stable</span>
-                    {% endif %}
+            <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-1">
+                {% if show_network %}
+                <a href="/admin/network/monitoring" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-blue-500/40 dark:hover:bg-blue-900/10">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ icon_server("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Monitoring</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{% if total_alarms_count > 0 %}{{ total_alarms_count }} alarms to review{% else %}All clear right now{% endif %}</p>
+                    </div>
                 </a>
-                <a href="/admin/network/olts" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">OLTs</span>
-                    <span class="text-xs font-mono text-slate-500 dark:text-slate-400">{{ dev_total }}</span>
+                <a href="/admin/network/onts?view=unconfigured" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-violet-300 hover:bg-violet-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-violet-500/40 dark:hover:bg-violet-900/10">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{{ icon_cpu("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ unconfigured_ont_count | default(0, true) }} awaiting setup</p>
+                    </div>
                 </a>
-                <a href="/admin/network/onts" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">ONTs</span>
-                    <span class="text-xs font-mono text-slate-500 dark:text-slate-400">{{ ont_total }}</span>
+                <a href="/admin/network/olts/profile-sync-tasks" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-cyan-300 hover:bg-cyan-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-900/10">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">{{ icon_clipboard("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Profile Sync Tasks</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Review, drift-check, and run tasks</p>
+                    </div>
                 </a>
-                <a href="/admin/network/cpes" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">CPEs</span>
-                </a>
-            </div>
-        </div>
-        {% endif %}
+                {% endif %}
 
-        {# Billing #}
-        {% if show_financials %}
-        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-600 dark:text-emerald-400">Billing</p>
-            </div>
-            <div class="grid grid-cols-2 gap-1.5 p-3">
-                <a href="/admin/billing/invoices" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_credit_card("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Invoices</span>
+                {% if show_subscribers %}
+                <a href="/admin/customers/new" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-amber-300 hover:bg-amber-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ icon_plus("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Add Customer</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Create a new subscriber record</p>
+                    </div>
                 </a>
-                <a href="/admin/billing/payments" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_chart_bar("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Payments</span>
-                </a>
-                <a href="/admin/catalog" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_archive("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Plans</span>
-                </a>
-                <a href="/admin/reports" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_view("h-4 w-4") }}</div>
-                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Reports</span>
-                </a>
-            </div>
-        </div>
-        {% endif %}
+                {% endif %}
 
-        {# System #}
-        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">System</p>
-            </div>
-            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
-                <a href="/admin/system/users" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_users("h-3.5 w-3.5") }}</div>
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">Users</span>
+                {% if show_financials %}
+                <a href="/admin/billing/invoices" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-900/10">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ icon_credit_card("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Billing</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Open invoices and payments</p>
+                    </div>
                 </a>
-                <a href="/admin/system/audit" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_bell("h-3.5 w-3.5") }}</div>
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">Audit Logs</span>
-                </a>
-                <a href="/admin/settings" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_cog("h-3.5 w-3.5") }}</div>
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">Settings</span>
-                </a>
-                <a href="/admin/system/health" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_server("h-3.5 w-3.5") }}</div>
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">Health</span>
+                {% endif %}
+
+                <button type="button" data-dashboard-tour-inline class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_view("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Quick Tour</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Learn the dashboard layout faster</p>
+                    </div>
+                </button>
+                <a href="/admin/settings" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_cog("h-4 w-4") }}</div>
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Settings</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Open the settings hub</p>
+                    </div>
                 </a>
             </div>
         </div>
@@ -322,6 +381,70 @@
 {% block scripts %}
 {{ super() }}
 <script>
+    window.dashboardWhatsNew = function(items) {
+        return {
+            items: Array.isArray(items) ? items : [],
+            active: 0,
+            timer: null,
+            touchStartX: 0,
+            init() {
+                this.resume();
+            },
+            itemCount() {
+                return this.items.length;
+            },
+            currentItem() {
+                return this.items[this.active] || { benefits: [] };
+            },
+            pause() {
+                if (this.timer) {
+                    window.clearInterval(this.timer);
+                    this.timer = null;
+                }
+            },
+            resume() {
+                this.pause();
+                if (this.itemCount() > 1) {
+                    this.timer = window.setInterval(() => this.next(), 12000);
+                }
+            },
+            goTo(index) {
+                this.active = index;
+                this.resume();
+            },
+            prev() {
+                if (!this.itemCount()) return;
+                this.active = (this.active - 1 + this.itemCount()) % this.itemCount();
+                this.resume();
+            },
+            next() {
+                if (!this.itemCount()) return;
+                this.active = (this.active + 1) % this.itemCount();
+                this.resume();
+            },
+            onTouchStart(event) {
+                this.touchStartX = event.changedTouches[0].screenX;
+            },
+            onTouchEnd(event) {
+                const delta = event.changedTouches[0].screenX - this.touchStartX;
+                if (Math.abs(delta) < 40) {
+                    return;
+                }
+                if (delta > 0) {
+                    this.prev();
+                    return;
+                }
+                this.next();
+            },
+            handleAction(event, link) {
+                if (typeof link === 'string' && link.includes('tour=1') && window.dashboardPageTips) {
+                    event.preventDefault();
+                    window.dashboardPageTips.start({ force: true });
+                }
+            }
+        };
+    };
+
     document.addEventListener('DOMContentLoaded', function() {
         if (!window.DotmacTour) {
             return;
@@ -378,7 +501,24 @@
             });
         }
 
-        if (!dashboardTour.isCompleted()) {
+        const inlineTourButton = document.querySelector('[data-dashboard-tour-inline]');
+        if (inlineTourButton) {
+            inlineTourButton.addEventListener('click', function() {
+                startDashboardTips(true);
+            });
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const forceTourFromQuery = params.get('tour') === '1';
+        if (forceTourFromQuery) {
+            startDashboardTips(true);
+            params.delete('tour');
+            const query = params.toString();
+            const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+            window.history.replaceState({}, '', nextUrl);
+        }
+
+        if (!forceTourFromQuery && !dashboardTour.isCompleted()) {
             window.setTimeout(function() {
                 startDashboardTips(false);
             }, 1200);
