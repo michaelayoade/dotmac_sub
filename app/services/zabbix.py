@@ -794,6 +794,7 @@ class ZabbixClient:
         self,
         host_id: str | None = None,
         limit: int = 1000,
+        host_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         method = "host.get"
         params: dict[str, Any] = {
@@ -807,6 +808,8 @@ class ZabbixClient:
                 "type",
                 "main",
                 "useip",
+                "available",
+                "error",
                 "details",
             ],
             "selectTags": ["tag", "value"],
@@ -814,7 +817,11 @@ class ZabbixClient:
             "sortfield": "name",
             "limit": limit,
         }
-        if host_id:
+        # ``host_ids`` fetches many hosts in one round trip; ``host_id`` keeps the
+        # single-host call site working.
+        if host_ids:
+            params["hostids"] = list(host_ids)
+        elif host_id:
             params["hostids"] = [host_id]
         payload = {
             "jsonrpc": "2.0",
@@ -957,6 +964,7 @@ class ZabbixClient:
         active_only: bool = True,
         min_priority: int | None = None,
         limit: int = 100,
+        host_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         method = "trigger.get"
         params: dict[str, Any] = {
@@ -973,7 +981,11 @@ class ZabbixClient:
             "sortorder": "DESC",
             "limit": limit,
         }
-        if host_id:
+        # ``host_ids`` batches many hosts into one call; each returned trigger
+        # carries its ``hosts`` so callers can group by host id.
+        if host_ids:
+            params["hostids"] = list(host_ids)
+        elif host_id:
             params["hostids"] = [host_id]
         if active_only:
             params["filter"] = {"value": 1}
