@@ -411,13 +411,11 @@ def test_synced_ont_no_proposed_change_is_a_noop(
     assert acs.spv_calls == []
 
 
-def test_wifi_password_change_on_synced_ont_skips_push_per_hole3(
+def test_wifi_password_change_on_synced_ont_pushes_once(
     db_session, ont, stub_desired, stub_ont_status
 ):
-    """Operator changes WiFi password on a present-and-synced ONT. Per Hole 3
-    (no observable, never push on sync against present ONTs), the planner
-    skips the push. The desired-state change still gets persisted to the
-    OntUnit row so a subsequent bootstrap-event reconcile will pick it up.
+    """Operator password changes are explicit writes even though PSK is
+    write-only. Verification should not re-emit the password write.
     """
     olt = _StubOltAdapter(present=True)
     acs = _StubAcsClient(device=_synced_acs_device(ont))
@@ -437,7 +435,7 @@ def test_wifi_password_change_on_synced_ont_skips_push_per_hole3(
     psk_writes = [
         call for call in acs.spv_calls if "PreSharedKey" in next(iter(call[1]))
     ]
-    assert psk_writes == []
+    assert len(psk_writes) == 1
     # apply_proposed_change writes the new password into desired_config.
     db_session.refresh(ont)
     assert ont.desired_config["wifi"]["password"] == "kursimining@98765"

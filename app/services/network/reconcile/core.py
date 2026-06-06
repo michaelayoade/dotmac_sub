@@ -149,11 +149,13 @@ def reconcile_ont(
 
             # ── Resolve desired ─────────────────────────────────────────────
             desired_current = desired_from_ont_unit(db, ont)
+            proposed_fields: frozenset[str] = frozenset()
             if proposed_change:
                 # Filter the proposed_change to OntDesiredState fields only —
                 # callers may have copy-pasted extras.
                 allowed = {f for f in vars(desired_current)}
                 filtered = {k: v for k, v in proposed_change.items() if k in allowed}
+                proposed_fields = frozenset(filtered)
                 target = replace(desired_current, **filtered)
                 # Validation runs only on actual mutations — the principle is
                 # "validate at the write boundary." When proposed_change is
@@ -211,7 +213,12 @@ def reconcile_ont(
             )
 
             # ── Compute plan ────────────────────────────────────────────────
-            plan = compute_plan(target, observed_before, mode)
+            plan = compute_plan(
+                target,
+                observed_before,
+                mode,
+                proposed_fields=proposed_fields,
+            )
 
             # ── Precondition: surfaces the plan needs must be reachable ─────
             unreachable: set[WriteSurface] = set()
@@ -358,7 +365,13 @@ def reconcile_ont(
                     drift_after=plan.drifts,
                 )
 
-            verify_plan = compute_plan(target, observed_after, mode)
+            verify_plan = compute_plan(
+                target,
+                observed_after,
+                mode,
+                proposed_fields=proposed_fields,
+                force_proposed_writes=False,
+            )
             if verify_plan.drifts:
                 return _finalise(
                     db,
