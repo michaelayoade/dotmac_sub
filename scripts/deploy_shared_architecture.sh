@@ -30,7 +30,7 @@ if [[ ! -f secrets/zabbix_db_password ]]; then
 fi
 
 chmod 600 .env
-chmod 644 secrets/zabbix_db_password
+chmod 600 secrets/zabbix_db_password
 
 docker compose config >/dev/null
 docker compose up -d --build

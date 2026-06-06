@@ -99,6 +99,15 @@ class Plan:
 
 # ── compute_plan ────────────────────────────────────────────────────────────
 
+# Fields a narrow WiFi UI edit may touch. When an operator's proposed change is
+# confined to these, the plan is scoped to the matching ACS writes so unrelated
+# OLT drift doesn't block the action.
+_WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
+
+
+def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    return mode == "sync" and bool(proposed_fields) and proposed_fields <= _WIFI_ONLY_FIELDS
+
 
 def compute_plan(
     desired: OntDesiredState,
@@ -122,10 +131,7 @@ def compute_plan(
     actions: list[Action] = []
     drifts: list[Drift] = []
     proposed_fields = proposed_fields or frozenset()
-    wifi_only_change = mode == "sync" and bool(proposed_fields) and proposed_fields <= {
-        "wifi_ssid",
-        "wifi_password_ref",
-    }
+    wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
 
     if wifi_only_change:
         omci_wan_planned = False
@@ -443,10 +449,7 @@ def _plan_acs_side(
 
     device_id = _acs_device_id(desired)
 
-    wifi_only_change = mode == "sync" and bool(proposed_fields) and proposed_fields <= {
-        "wifi_ssid",
-        "wifi_password_ref",
-    }
+    wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
     if not wifi_only_change and desired.wan_mode == "pppoe" and not omci_wan_planned:
