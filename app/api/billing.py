@@ -71,6 +71,13 @@ from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 
+# Public router for inbound payment-provider webhooks. These are mounted WITHOUT
+# require_user_auth (see main.py) because external providers authenticate by
+# HMAC signature, not a session — gating them behind user auth would 401 every
+# real callback. Keep ONLY signature-verified provider callbacks here; anything
+# that needs an operator session stays on ``router``.
+webhook_router = APIRouter()
+
 
 # --- Dashboard ---
 
@@ -984,7 +991,7 @@ def replay_payment_webhook_dead_letter(
     )
 
 
-@router.post(
+@webhook_router.post(
     "/payment-events/paystack",
     tags=["payment-events"],
 )
@@ -1004,7 +1011,7 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post(
+@webhook_router.post(
     "/payment-events/flutterwave",
     tags=["payment-events"],
 )
