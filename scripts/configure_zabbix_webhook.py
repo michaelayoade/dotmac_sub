@@ -171,22 +171,79 @@ def _upsert_media_type(api: _Api, *, app_url: str, webhook_token: str) -> str:
     return media_id
 
 
-def _upsert_trigger_action(api: _Api, media_id: str) -> None:
-    existing = api.call("action.get", {"filter": {"name": [ACTION_NAME]}, "output": ["actionid"]})
-    operations = [
-        {
-            "operationtype": "0",  # send message
-            "opmessage": {"default_msg": "1", "mediatypeid": media_id},
-            "opmessage_grp": [],  # see note printed below
-        }
-    ]
+_ALL_SEVERITIES = "63"  # bitmask: not-classified..disaster
+_ALL_WEEK = "1-7,00:00-24:00"
+
+
+def _assign_media_to_group_users(api: _Api, media_id: str, group_id: str) -> int:
+    """Ensure each user in the group has the webhook media (append, never clobber).
+
+    Zabbix only delivers an action's message to users who carry the media type
+    on their profile. ``user.update`` replaces the whole media list, so we merge
+    rather than overwrite (preserving any existing media).
+    """
+    group = api.call(
+        "usergroup.get",
+        {"usrgrpids": [group_id], "selectUsers": ["userid", "username"]},
+    )
+    users = (group[0].get("users") if group else []) or []
+    assigned = 0
+    for u in users:
+        uid = str(u["userid"])
+        full = api.call("user.get", {"userids": [uid], "selectMedias": "extend"})
+        if not full:
+            continue
+        medias = full[0].get("medias") or []
+        if any(str(m.get("mediatypeid")) == media_id for m in medias):
+            continue  # already has it
+        # Strip read-only/echoed fields Zabbix rejects on update.
+        cleaned = [
+            {
+                "mediatypeid": str(m["mediatypeid"]),
+                "sendto": m.get("sendto") or "-",
+                "active": str(m.get("active", "0")),
+                "severity": str(m.get("severity", _ALL_SEVERITIES)),
+                "period": m.get("period") or _ALL_WEEK,
+            }
+            for m in medias
+        ]
+        cleaned.append(
+            {
+                "mediatypeid": media_id,
+                "sendto": "dotmac",  # unused by our webhook; Zabbix requires a value
+                "active": "0",
+                "severity": _ALL_SEVERITIES,
+                "period": _ALL_WEEK,
+            }
+        )
+        api.call("user.update", {"userid": uid, "medias": cleaned})
+        assigned += 1
+        print(f"assigned media to user {uid} ({u.get('username')})")
+    return assigned
+
+
+def _upsert_trigger_action(api: _Api, media_id: str, group_id: str) -> None:
+    op = {
+        "operationtype": "0",  # send message
+        "opmessage": {"default_msg": "1", "mediatypeid": media_id},
+        "opmessage_grp": [{"usrgrpid": group_id}],
+    }
+    recovery_op = {
+        "operationtype": "0",
+        "opmessage": {"default_msg": "1", "mediatypeid": media_id},
+        "opmessage_grp": [{"usrgrpid": group_id}],
+    }
     fields = {
         "name": ACTION_NAME,
         "eventsource": "0",  # triggers
         "status": "0",
         "esc_period": "1h",
-        "operations": operations,
+        "operations": [op],
+        "recovery_operations": [recovery_op],
     }
+    existing = api.call(
+        "action.get", {"filter": {"name": [ACTION_NAME]}, "output": ["actionid"]}
+    )
     if existing:
         action_id = str(existing[0]["actionid"])
         api.call("action.update", {"actionid": action_id, **fields})
@@ -194,12 +251,6 @@ def _upsert_trigger_action(api: _Api, media_id: str) -> None:
     else:
         result = api.call("action.create", fields)
         print(f"created action '{ACTION_NAME}' (id={result['actionids'][0]})")
-    print(
-        "NOTE: the action sends via the media type, but Zabbix only delivers to "
-        "users who have this media type configured on their profile. Assign "
-        f"'{MEDIA_TYPE_NAME}' media (any sendto value) to the recipient user(s) "
-        "in Users > Media, and set the action's recipient user group as needed."
-    )
 
 
 def main() -> int:
@@ -208,6 +259,11 @@ def main() -> int:
         "--with-action",
         action="store_true",
         help="also create/update a trigger action that uses the media type",
+    )
+    parser.add_argument(
+        "--user-group",
+        default=os.getenv("ZABBIX_WEBHOOK_USER_GROUP", "Zabbix administrators"),
+        help="recipient user group for the action (default: Zabbix administrators)",
     )
     args = parser.parse_args()
 
@@ -236,7 +292,19 @@ def main() -> int:
         api = _Api(api_url, api_token)
         media_id = _upsert_media_type(api, app_url=app_url, webhook_token=webhook_token)
         if args.with_action:
-            _upsert_trigger_action(api, media_id)
+            groups = api.call(
+                "usergroup.get",
+                {"filter": {"name": [args.user_group]}, "output": ["usrgrpid"]},
+            )
+            if not groups:
+                print(
+                    f"error: user group '{args.user_group}' not found", file=sys.stderr
+                )
+                return 1
+            group_id = str(groups[0]["usrgrpid"])
+            print(f"recipient user group: {args.user_group} (id={group_id})")
+            _assign_media_to_group_users(api, media_id, group_id)
+            _upsert_trigger_action(api, media_id, group_id)
     except (httpx.HTTPError, ZabbixAdminError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
