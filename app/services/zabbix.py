@@ -203,6 +203,31 @@ def get_zabbix_api_token() -> str:
     return ""
 
 
+def get_zabbix_webhook_token() -> str:
+    """Resolve the shared secret that inbound Zabbix webhooks must present.
+
+    Mirrors ``get_zabbix_api_token`` (file / env / OpenBao). Inbound webhooks
+    authenticate by presenting this value in the ``X-Zabbix-Token`` header; it
+    is distinct from the outbound API token. Returns "" when unconfigured, in
+    which case the webhook endpoints fail closed.
+    """
+    from app.services.secrets import get_secret, resolve_secret
+
+    file_value = _read_secret_file(os.getenv("ZABBIX_WEBHOOK_TOKEN_FILE"))
+    if file_value:
+        return file_value
+
+    env_value = os.getenv("ZABBIX_WEBHOOK_TOKEN")
+    if env_value:
+        return str(resolve_secret(env_value) or "")
+
+    bao_value = get_secret("zabbix", "webhook_token", default="")
+    if bao_value:
+        return bao_value
+
+    return ""
+
+
 def zabbix_configured() -> bool:
     """Return true when the Zabbix API has enough config to be used."""
     try:
@@ -769,6 +794,7 @@ class ZabbixClient:
         self,
         host_id: str | None = None,
         limit: int = 1000,
+        host_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         method = "host.get"
         params: dict[str, Any] = {
@@ -782,6 +808,8 @@ class ZabbixClient:
                 "type",
                 "main",
                 "useip",
+                "available",
+                "error",
                 "details",
             ],
             "selectTags": ["tag", "value"],
@@ -789,7 +817,11 @@ class ZabbixClient:
             "sortfield": "name",
             "limit": limit,
         }
-        if host_id:
+        # ``host_ids`` fetches many hosts in one round trip; ``host_id`` keeps the
+        # single-host call site working.
+        if host_ids:
+            params["hostids"] = list(host_ids)
+        elif host_id:
             params["hostids"] = [host_id]
         payload = {
             "jsonrpc": "2.0",
@@ -932,6 +964,7 @@ class ZabbixClient:
         active_only: bool = True,
         min_priority: int | None = None,
         limit: int = 100,
+        host_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         method = "trigger.get"
         params: dict[str, Any] = {
@@ -948,7 +981,11 @@ class ZabbixClient:
             "sortorder": "DESC",
             "limit": limit,
         }
-        if host_id:
+        # ``host_ids`` batches many hosts into one call; each returned trigger
+        # carries its ``hosts`` so callers can group by host id.
+        if host_ids:
+            params["hostids"] = list(host_ids)
+        elif host_id:
             params["hostids"] = [host_id]
         if active_only:
             params["filter"] = {"value": 1}

@@ -131,6 +131,20 @@ class TestCredentialCrypto:
         result = decrypt_credential("plain:my-password")
         assert result == "my-password"
 
+    def test_encrypt_preserves_secret_ref(self):
+        key = Fernet.generate_key().decode("ascii")
+        ref = "bao://secret/network/olts/olt-1/ssh#password"
+        with patch(
+            "app.services.credential_crypto.get_encryption_key",
+            return_value=key.encode("ascii"),
+        ):
+            assert encrypt_credential(ref) == ref
+
+    def test_decrypt_resolves_secret_ref(self):
+        ref = "bao://secret/network/olts/olt-1/ssh#password"
+        with patch("app.services.secrets.resolve_secret", return_value="resolved"):
+            assert decrypt_credential(ref) == "resolved"
+
     def test_encrypt_plain_prefix_reencrypts_when_enforced(self):
         key = Fernet.generate_key()
         with (

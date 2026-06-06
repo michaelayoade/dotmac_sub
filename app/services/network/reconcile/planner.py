@@ -1,4 +1,4 @@
-"""compute_plan(desired, observed, mode) → Plan.
+"""compute_plan(desired, observed, mode) -> Plan.
 
 Pure function. Given the desired state and the last-read observed state,
 emits an ordered list of actions that, when applied successfully, leaves the
@@ -99,24 +99,58 @@ class Plan:
 
 # ── compute_plan ────────────────────────────────────────────────────────────
 
+# Fields a narrow WiFi UI edit may touch. When an operator's proposed change is
+# confined to these, the plan is scoped to the matching ACS writes so unrelated
+# OLT drift doesn't block the action.
+_WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
+
+
+def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    return mode == "sync" and bool(proposed_fields) and proposed_fields <= _WIFI_ONLY_FIELDS
+
 
 def compute_plan(
     desired: OntDesiredState,
     observed: OntObservedState,
     mode: ReconcileMode,
+    *,
+    proposed_fields: frozenset[str] | None = None,
+    force_proposed_writes: bool = True,
 ) -> Plan:
     """Diff desired vs observed; emit the ordered action list.
 
     Determinism guarantee: ``compute_plan(d, o, m) == compute_plan(d, o, m)``
     for all inputs. No randomness, no time-of-day dependence, no I/O.
+
+    ``proposed_fields`` carries the operator's current requested mutations.
+    For narrow WiFi edits, it scopes the plan to the relevant ACS writes so
+    unrelated drift does not block the UI action. ``force_proposed_writes`` is
+    used for write-only values, where observed state cannot prove drift; verify
+    calls keep the scope but disable the force.
     """
     actions: list[Action] = []
     drifts: list[Drift] = []
+    proposed_fields = proposed_fields or frozenset()
+    wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
 
-    _plan_olt_side(desired, observed, mode, actions, drifts)
-    omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
-    _append_reset_if_needed(desired, actions)
-    _plan_acs_side(desired, observed, mode, actions, drifts, omci_wan_planned)
+    if wifi_only_change:
+        omci_wan_planned = False
+    else:
+        _plan_olt_side(desired, observed, mode, actions, drifts)
+        omci_wan_planned = _plan_olt_omci_wan(
+            desired, observed, mode, actions, drifts
+        )
+        _append_reset_if_needed(desired, actions)
+    _plan_acs_side(
+        desired,
+        observed,
+        mode,
+        actions,
+        drifts,
+        omci_wan_planned,
+        proposed_fields,
+        force_proposed_writes,
+    )
 
     required_surfaces = frozenset(a.surface for a in actions)
     return Plan(
@@ -404,6 +438,8 @@ def _plan_acs_side(
     actions: list[Action],
     drifts: list[Drift],
     omci_wan_planned: bool,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
 ) -> None:
     if not desired.acs_server_id:
         # Without an ACS server bound, no ACS actions to plan. Reconciler
@@ -413,8 +449,10 @@ def _plan_acs_side(
 
     device_id = _acs_device_id(desired)
 
+    wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
+
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
-    if desired.wan_mode == "pppoe" and not omci_wan_planned:
+    if not wifi_only_change and desired.wan_mode == "pppoe" and not omci_wan_planned:
         _plan_acs_wan_ppp(desired, observed, device_id, actions, drifts)
 
     # WiFi SSID — observable. Push when the read value differs OR when this
@@ -435,13 +473,21 @@ def _plan_acs_side(
         )
 
     # WiFi password — unobservable, mode-gated (Hole 3 resolution).
-    if _should_push_wifi_password(mode, observed):
+    if _should_push_wifi_password(
+        mode,
+        observed,
+        proposed_fields,
+        force_proposed_writes,
+    ):
         actions.append(
             AcsSetWifiPassword(
                 device_id=device_id,
                 password_ref=desired.wifi_password_ref,
             )
         )
+
+    if wifi_only_change:
+        return
 
     # Defensive NAT on routed mode (Fix #4 follow-up).
     if desired.wan_mode == "pppoe" and not omci_wan_planned:
@@ -733,13 +779,26 @@ def _management_server_differs(
     return False
 
 
-def _should_push_wifi_password(mode: ReconcileMode, observed: OntObservedState) -> bool:
-    """Hole 3 resolution: push at desired-state change AND at BOOTSTRAP. The
-    sweeper never pushes (no observable to confirm). At sync time, push when
-    bringing up a fresh ONT (olt_present=False) — that's effectively the
-    same case as bootstrap.
+def _should_push_wifi_password(
+    mode: ReconcileMode,
+    observed: OntObservedState,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+) -> bool:
+    """Push at explicit desired-state change, fresh sync, and BOOTSTRAP.
+
+    The sweeper never pushes the PSK — no observable value can confirm drift.
+    In sync mode, an operator-proposed password change is an explicit write
+    request and must emit exactly one ACS action on the apply pass. Verification
+    calls omit ``proposed_fields`` so the write-only password is not re-emitted.
     """
     if mode == "bootstrap":
+        return True
+    if (
+        force_proposed_writes
+        and mode == "sync"
+        and "wifi_password_ref" in proposed_fields
+    ):
         return True
     if mode == "sync" and not observed.olt.olt_present:
         return True

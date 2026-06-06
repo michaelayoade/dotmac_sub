@@ -84,12 +84,12 @@ from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
-from app.web.auth.dependencies import require_web_auth
+from app.web.auth.dependencies import require_admin_web_auth
 
 router = APIRouter(
     prefix="/admin",
     tags=["web-admin"],
-    dependencies=[Depends(require_web_auth)],
+    dependencies=[Depends(require_admin_web_auth)],
 )
 
 

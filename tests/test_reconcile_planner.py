@@ -345,6 +345,47 @@ def test_wifi_password_skipped_on_sync_when_ont_already_present():
     assert AcsSetWifiPassword not in _types(plan)
 
 
+def test_wifi_password_pushed_on_operator_password_change():
+    """Password is write-only, so an explicit UI change must force one write."""
+    desired = _desired(wifi_password_ref="new-pass")
+    observed = _synced_observed(_desired(description="old-description"))
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset({"wifi_password_ref"}),
+    )
+    assert _types(plan) == [AcsSetWifiPassword]
+    assert OltModifyDescription not in _types(plan)
+
+
+def test_wifi_password_change_not_re_emitted_on_verify_plan():
+    """Verification omits proposed_fields to avoid an endless write-only drift."""
+    desired = _desired(wifi_password_ref="new-pass")
+    observed = _synced_observed(dataclasses.replace(desired, description="old"))
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset({"wifi_password_ref"}),
+        force_proposed_writes=False,
+    )
+    assert AcsSetWifiPassword not in _types(plan)
+    assert OltModifyDescription not in _types(plan)
+
+
+def test_wifi_ssid_change_scopes_out_unrelated_olt_drift():
+    desired = _desired(wifi_ssid="NEW_SSID")
+    observed = _synced_observed(_desired(description="old"))
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset({"wifi_ssid"}),
+    )
+    assert _types(plan) == [AcsSetWifiSsid]
+
+
 # ── WiFi SSID — observable, diff-driven ─────────────────────────────────────
 
 

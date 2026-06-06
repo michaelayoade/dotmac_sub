@@ -58,6 +58,7 @@ from app.schemas.billing import (
     PaymentProviderUpdate,
     PaymentRead,
     PaymentUpdate,
+    PaymentWebhookDeadLetterRead,
     TaxRateCreate,
     TaxRateRead,
     TaxRateUpdate,
@@ -69,6 +70,13 @@ from app.services import billing_automation as billing_automation_service
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
+
+# Public router for inbound payment-provider webhooks. These are mounted WITHOUT
+# require_user_auth (see main.py) because external providers authenticate by
+# HMAC signature, not a session — gating them behind user auth would 401 every
+# real callback. Keep ONLY signature-verified provider callbacks here; anything
+# that needs an operator session stays on ``router``.
+webhook_router = APIRouter()
 
 
 # --- Dashboard ---
@@ -942,7 +950,48 @@ def list_payment_events(
     )
 
 
+# --- Webhook dead-letters (ops replay surface) ---
+
+
+@router.get(
+    "/payment-event-dead-letters",
+    response_model=ListResponse[PaymentWebhookDeadLetterRead],
+    tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
+def list_payment_webhook_dead_letters(
+    provider_type: str | None = None,
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """List payment-provider webhooks that failed processing and were parked."""
+    return api_billing_webhooks_service.list_payment_webhook_dead_letters(
+        db,
+        provider_type=provider_type,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.post(
+    "/payment-event-dead-letters/{dead_letter_id}/replay",
+    response_model=PaymentWebhookDeadLetterRead,
+    tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:write"))],
+)
+def replay_payment_webhook_dead_letter(
+    dead_letter_id: str, db: Session = Depends(get_db)
+):
+    """Reprocess a parked webhook through ingest (idempotent)."""
+    return api_billing_webhooks_service.replay_payment_webhook_dead_letter(
+        db, dead_letter_id
+    )
+
+
+@webhook_router.post(
     "/payment-events/paystack",
     tags=["payment-events"],
 )
@@ -962,7 +1011,7 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post(
+@webhook_router.post(
     "/payment-events/flutterwave",
     tags=["payment-events"],
 )

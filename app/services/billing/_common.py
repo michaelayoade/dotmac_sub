@@ -35,6 +35,7 @@ from app.models.billing import (
 )
 from app.models.subscriber import Subscriber
 from app.services.common import get_by_id, round_money, to_decimal
+from app.services.locking import lock_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +194,19 @@ def _validate_invoice_currency(invoice: Invoice, currency: str | None):
 
 def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     """Recalculate invoice totals from lines and payments."""
+    # Serialize concurrent recalculation of the same invoice. The summary
+    # fields written below (subtotal/tax_total/total/balance_due/status) are
+    # denormalized from SUM() aggregates over lines, payment allocations and
+    # credit applications. Those feeder rows can be inserted by several
+    # requests/workers at once (e.g. two payments allocated to one invoice);
+    # under READ COMMITTED each recalc reads a snapshot that misses a sibling's
+    # not-yet-committed rows, so the last writer leaves balance_due/status
+    # stale. Taking a row lock here forces the read-modify-write of the summary
+    # to run serially per invoice, so the final committer always recomputes
+    # from the full committed set. Held until the caller's commit. Real lock on
+    # PostgreSQL; a harmless no-op on SQLite (tests) and for a not-yet-flushed
+    # new invoice (which has no concurrency).
+    lock_for_update(db, Invoice, invoice.id)
     lines = (
         db.query(InvoiceLine)
         .filter(InvoiceLine.invoice_id == invoice.id)
@@ -233,12 +247,13 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
                 if rate:
                     rate_percent = to_decimal(rate.rate)
                     if line.tax_application == TaxApplication.inclusive:
-                        # Legacy billing semantics: keep gross amount in
-                        # subtotal and additionally track extracted tax.
+                        # Inclusive: amount already contains tax — extract it so
+                        # the gross stays the customer-facing total
+                        # (subtotal + tax == gross). Mirrors the credit-note path.
                         tax_amount = _calculate_tax_amount(
                             amount, rate_percent, line.tax_application
                         )
-                        subtotal += amount
+                        subtotal += round_money(amount - tax_amount)
                         tax_total += tax_amount
                     elif line.tax_application == TaxApplication.exempt:
                         subtotal += amount

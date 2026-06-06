@@ -71,6 +71,8 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.notifications", "router", "api", "user"),
     ("app.api.external", "router", "api", "user"),
     ("app.api.billing", "router", "api", "user"),
+    # Inbound payment-provider webhooks: signature-verified, no user session.
+    ("app.api.billing", "webhook_router", "api", "none"),
     ("app.api.files", "router", "api", "user"),
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),

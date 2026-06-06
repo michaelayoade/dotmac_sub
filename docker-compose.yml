@@ -16,9 +16,9 @@ services:
     ports:
     - 127.0.0.1:8001:8001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -26,8 +26,8 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      SESSION_REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
+      SESSION_REDIS_URL: ${SESSION_REDIS_URL}
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
@@ -39,13 +39,18 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_URL: ${APP_URL:-}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       SERVER_NAME: ${SERVER_NAME:-dotmac-sub-prod}
       GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
+      GLITCHTIP_ENABLED: ${GLITCHTIP_ENABLED:-false}
+      LOKI_URL: ${LOKI_URL:-}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     cap_add:
     - NET_ADMIN
     privileged: true
@@ -76,9 +81,9 @@ services:
     pids_limit: 128
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -86,7 +91,7 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -101,7 +106,9 @@ services:
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -125,20 +132,22 @@ services:
     pids_limit: 64
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -162,9 +171,9 @@ services:
     pids_limit: 96
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -172,7 +181,7 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -186,7 +195,9 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -210,9 +221,9 @@ services:
     pids_limit: 96
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -220,7 +231,7 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -234,7 +245,9 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -258,11 +271,11 @@ services:
     pids_limit: 64
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -276,6 +289,8 @@ services:
     env_file:
     - .env
     depends_on:
+      dotmac-db:
+        condition: service_healthy
       victoriametrics:
         condition: service_started
     volumes:
@@ -301,11 +316,11 @@ services:
     pids_limit: 64
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -319,6 +334,8 @@ services:
     env_file:
     - .env
     depends_on:
+      dotmac-db:
+        condition: service_healthy
       victoriametrics:
         condition: service_started
     volumes:
@@ -344,10 +361,10 @@ services:
     pids_limit: 64
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      REDIS_URL: ${REDIS_URL}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -361,7 +378,9 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     command:
@@ -370,17 +389,42 @@ services:
     - app.celery_app.celery_app
     - beat
     - --loglevel=info
+  dotmac-db:
+    image: postgis/postgis:16-3.4
+    container_name: dotmac_sub_db
+    restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.0
+    pids_limit: 128
+    logging: *id001
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: dotmac_sub
+    ports:
+    - 127.0.0.1:5434:5432
+    volumes:
+    - dotmac_sub_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U postgres -d dotmac_sub
+      interval: 10s
+      timeout: 5s
+      retries: 5
   nominatim:
     image: mediagis/nominatim:4.4
     container_name: dotmac_sub_nominatim
     restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.0
-    pids_limit: 128
+    mem_limit: 8g
+    mem_reservation: 2g
+    cpus: 2.0
+    pids_limit: 256
     environment:
       PBF_URL: https://download.geofabrik.de/africa/nigeria-latest.osm.pbf
       IMPORT_STYLE: extratags
+      THREADS: "2"
     ports:
     - 8088:8080
     volumes:
@@ -404,11 +448,12 @@ services:
     - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
     - ./config/freeradius/dictionary:/etc/raddb/dictionary
     depends_on:
-    - radius-db
+    - dotmac-db
     environment:
-    - RADIUS_DB_HOST=radius-db
-    - RADIUS_DB_NAME=radius
-    - RADIUS_DB_USER=radius
+    - RADIUS_DB_HOST=${RADIUS_DB_HOST:-radius-db}
+    - RADIUS_DB_PORT=${RADIUS_DB_PORT:-5432}
+    - RADIUS_DB_NAME=${RADIUS_DB_NAME:-radius}
+    - RADIUS_DB_USER=${RADIUS_DB_USER:-postgres}
     - RADIUS_DB_PASS=${RADIUS_DB_PASS}
   radius-db:
     image: postgres:16
@@ -437,7 +482,7 @@ services:
     mem_limit: 2g
     mem_reservation: 1g
     cpus: 2.0
-    pids_limit: 384
+    pids_limit: 1024
     logging: *id001
     network_mode: host
     depends_on:
@@ -446,6 +491,10 @@ services:
     - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:${GENIEACS_MONGODB_PASSWORD}@127.0.0.1:27017/genieacs?authSource=admin
     - GENIEACS_UI_JWT_SECRET=${GENIEACS_UI_JWT_SECRET}
     - TR069_AUTH_SHARED_SECRET=${TR069_AUTH_SHARED_SECRET}
+    - GENIEACS_CWMP_WORKER_PROCESSES=${GENIEACS_CWMP_WORKER_PROCESSES:-1}
+    - GENIEACS_NBI_WORKER_PROCESSES=${GENIEACS_NBI_WORKER_PROCESSES:-1}
+    - GENIEACS_FS_WORKER_PROCESSES=${GENIEACS_FS_WORKER_PROCESSES:-1}
+    - GENIEACS_UI_WORKER_PROCESSES=${GENIEACS_UI_WORKER_PROCESSES:-1}
     - GENIEACS_EXT_TIMEOUT=15000
     - GENIEACS_DEBUG_FILE=/var/log/genieacs/debug.yaml
     - GENIEACS_CWMP_LOG_FILE=/var/log/genieacs/cwmp.log
@@ -510,8 +559,8 @@ services:
     pids_limit: 96
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       BANDWIDTH_POLLING_ENABLED: 'true'
       BANDWIDTH_POLL_INTERVAL_MS: '5000'
@@ -528,6 +577,8 @@ services:
     env_file:
     - .env
     depends_on:
+      dotmac-db:
+        condition: service_healthy
       victoriametrics:
         condition: service_started
     cap_add:
@@ -551,20 +602,22 @@ services:
     pids_limit: 64
     logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
-      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
       SYSLOG_ENABLED: ${SYSLOG_ENABLED:-true}
       SYSLOG_LISTEN_HOST: 0.0.0.0
       SYSLOG_LISTEN_PORT: '514'
       AUTOFIND_COOLDOWN_SECONDS: ${AUTOFIND_COOLDOWN_SECONDS:-30}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on: {}
+    depends_on:
+      dotmac-db:
+        condition: service_healthy
     ports:
     - 514:514/udp
     volumes:
@@ -613,7 +666,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
       ZBX_STARTPOLLERS: 10
       ZBX_STARTPINGERS: 5
-      ZBX_CACHESIZE: 512M
+      ZBX_CACHESIZE: 2048M
       ZBX_HISTORYCACHESIZE: 256M
       ZBX_TRENDCACHESIZE: 64M
       ZBX_VALUECACHESIZE: 128M

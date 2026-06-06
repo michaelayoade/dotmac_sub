@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -54,6 +55,7 @@ from app.schemas.billing import (
     TaxRateUpdate,
 )
 from app.services import billing as billing_service
+from app.services.billing import _common as billing_common
 from app.services.billing._common import (
     _calculate_tax_amount,
     _validate_invoice_line_amount,
@@ -608,9 +610,11 @@ class TestInvoiceLineWithTax:
             ),
         )
         db_session.refresh(invoice)
-        assert invoice.subtotal == Decimal("110.00")
+        # Inclusive tax is contained in the line price: a 110.00 gross line at
+        # 10% breaks down to net 100.00 + tax 10.00, total stays 110.00.
+        assert invoice.subtotal == Decimal("100.00")
         assert invoice.tax_total == Decimal("10.00")
-        assert invoice.total == Decimal("120.00")
+        assert invoice.total == Decimal("110.00")
 
     def test_line_with_exempt_tax(self, db_session, subscriber):
         tax = billing_service.tax_rates.create(
@@ -633,6 +637,71 @@ class TestInvoiceLineWithTax:
         assert invoice.subtotal == Decimal("100.00")
         assert invoice.tax_total == Decimal("0.00")
         assert invoice.total == Decimal("100.00")
+
+
+class TestInvoiceRecalcLocking:
+    """The invoice summary (subtotal/tax/total/balance_due/status) is
+    denormalized from SUM() aggregates and updated by ~13 call sites. Concurrent
+    mutators (e.g. two payments allocated to one invoice) would otherwise each
+    recompute from a snapshot missing the other's uncommitted rows, leaving the
+    summary stale. ``_recalculate_invoice_totals`` must take a row lock on the
+    invoice so the read-modify-write serializes per invoice. SQLite (tests)
+    can't exercise the race — FOR UPDATE is a no-op — so we pin the mechanism:
+    the lock is acquired for the right invoice on every recalc path.
+    """
+
+    def test_recalc_acquires_invoice_row_lock(self, db_session, subscriber):
+        invoice = _make_invoice(db_session, subscriber.id)
+        # wraps= keeps the real (no-op on SQLite) lock running so totals stay
+        # correct; the spy records that it was asked to lock this invoice.
+        with patch(
+            "app.services.billing._common.lock_for_update",
+            wraps=billing_common.lock_for_update,
+        ) as spy:
+            billing_service.invoice_lines.create(
+                db_session,
+                InvoiceLineCreate(
+                    invoice_id=invoice.id,
+                    description="Item",
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("100.00"),
+                ),
+            )
+        locked = [
+            call
+            for call in spy.call_args_list
+            if call.args[1:] == (Invoice, invoice.id)
+        ]
+        assert locked, (
+            "recalc must SELECT ... FOR UPDATE the invoice before recomputing "
+            "its denormalized summary"
+        )
+
+    def test_recalc_totals_correct_with_lock_in_place(self, db_session, subscriber):
+        # Guards that adding the lock did not break the recompute itself.
+        invoice = _make_invoice(db_session, subscriber.id)
+        billing_service.invoice_lines.create(
+            db_session,
+            InvoiceLineCreate(
+                invoice_id=invoice.id,
+                description="A",
+                quantity=Decimal("2"),
+                unit_price=Decimal("30.00"),
+            ),
+        )
+        billing_service.invoice_lines.create(
+            db_session,
+            InvoiceLineCreate(
+                invoice_id=invoice.id,
+                description="B",
+                quantity=Decimal("1"),
+                unit_price=Decimal("40.00"),
+            ),
+        )
+        db_session.refresh(invoice)
+        assert invoice.subtotal == Decimal("100.00")
+        assert invoice.total == Decimal("100.00")
+        assert invoice.balance_due == Decimal("100.00")
 
 
 # ============================================================================

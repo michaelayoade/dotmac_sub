@@ -6,7 +6,9 @@ import pytest
 
 from app.models.domain_settings import SettingDomain
 from app.services import domain_settings as domain_settings_service
+from app.services.credential_crypto import is_encrypted
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.secrets import is_secret_ref
 from app.services.settings_spec import resolve_value
 from app.services.web_integrations_whatsapp import (
     build_config_state,
@@ -43,8 +45,22 @@ def test_save_config_persists_and_masks_credentials(db_session):
     )
     assert stored_key.value_text
     assert stored_secret.value_text
-    assert str(stored_key.value_text).startswith(("plain:", "enc:"))
-    assert str(stored_secret.value_text).startswith(("plain:", "enc:"))
+    # The credential must never be persisted as bare plaintext. Depending on the
+    # environment it is stored either encryption-at-rest (``enc:``/``plain:``) or
+    # behind a secret reference (e.g. ``bao://`` when OpenBao is configured, with
+    # the encrypted value living in the secret store). Assert it is one of those
+    # protected forms — not the raw secret — and that it still round-trips.
+    for stored, original in (
+        (stored_key.value_text, "key-123456"),
+        (stored_secret.value_text, "secret-654321"),
+    ):
+        stored = str(stored)
+        assert original not in stored
+        assert is_encrypted(stored) or is_secret_ref(stored)
+
+    config = whatsapp_connector.load_whatsapp_config(db_session)
+    assert config["api_key"] == "key-123456"
+    assert config["api_secret"] == "secret-654321"
 
 
 def test_run_test_send_uses_current_configuration(db_session):

@@ -3,7 +3,7 @@
 import time
 from urllib.parse import quote, urlparse
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
@@ -186,6 +186,29 @@ def require_web_auth(
     request.state.actor_type = auth_info.get("principal_type", "user")
 
     return auth_info
+
+
+# Principal types permitted to reach staff/admin web surfaces. Subscriber and
+# reseller logins both authenticate as "subscriber"; only staff are "system_user".
+STAFF_PRINCIPAL_TYPES = frozenset({"system_user"})
+
+
+def require_admin_web_auth(auth: dict = Depends(require_web_auth)) -> dict:
+    """Require an authenticated *staff* principal for admin web routes.
+
+    ``require_web_auth`` already guarantees the request is authenticated (and
+    redirects to login otherwise). This adds a default-deny on principal type so
+    that subscriber/reseller logins cannot reach ``/admin`` — closing the gap
+    where any authenticated principal could read or mutate admin-only resources
+    (e.g. secret management, API-key minting). Per-route permission checks
+    (``require_permission``) still apply on top of this baseline.
+    """
+    if auth.get("principal_type") not in STAFF_PRINCIPAL_TYPES:
+        raise HTTPException(
+            status_code=403,
+            detail="Administrator access is required for this area.",
+        )
+    return auth
 
 
 def get_current_user_from_auth(auth: dict = Depends(require_web_auth)) -> dict:

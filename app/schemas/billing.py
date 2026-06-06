@@ -19,6 +19,7 @@ from app.models.billing import (
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
+    PaymentWebhookDeadLetterStatus,
     TaxApplication,
 )
 from app.models.catalog import BillingCycle
@@ -429,6 +430,22 @@ class PaymentProviderEventIngest(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     payload: dict | None = None
+
+
+class PaymentWebhookDeadLetterRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    provider_type: str
+    event_type: str | None = None
+    external_id: str | None = None
+    idempotency_key: str | None = None
+    status: PaymentWebhookDeadLetterStatus
+    payload: dict | None = None
+    error: str | None = None
+    retry_count: int
+    received_at: datetime
+    last_attempt_at: datetime | None = None
 
 
 class LedgerEntryBase(BaseModel):
