@@ -233,12 +233,13 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
                 if rate:
                     rate_percent = to_decimal(rate.rate)
                     if line.tax_application == TaxApplication.inclusive:
-                        # Legacy billing semantics: keep gross amount in
-                        # subtotal and additionally track extracted tax.
+                        # Inclusive: amount already contains tax — extract it so
+                        # the gross stays the customer-facing total
+                        # (subtotal + tax == gross). Mirrors the credit-note path.
                         tax_amount = _calculate_tax_amount(
                             amount, rate_percent, line.tax_application
                         )
-                        subtotal += amount
+                        subtotal += round_money(amount - tax_amount)
                         tax_total += tax_amount
                     elif line.tax_application == TaxApplication.exempt:
                         subtotal += amount

@@ -608,9 +608,11 @@ class TestInvoiceLineWithTax:
             ),
         )
         db_session.refresh(invoice)
-        assert invoice.subtotal == Decimal("110.00")
+        # Inclusive tax is contained in the line price: a 110.00 gross line at
+        # 10% breaks down to net 100.00 + tax 10.00, total stays 110.00.
+        assert invoice.subtotal == Decimal("100.00")
         assert invoice.tax_total == Decimal("10.00")
-        assert invoice.total == Decimal("120.00")
+        assert invoice.total == Decimal("110.00")
 
     def test_line_with_exempt_tax(self, db_session, subscriber):
         tax = billing_service.tax_rates.create(
