@@ -174,6 +174,16 @@ def _upsert_media_type(api: _Api, *, app_url: str, webhook_token: str) -> str:
 _ALL_SEVERITIES = "63"  # bitmask: not-classified..disaster
 _ALL_WEEK = "1-7,00:00-24:00"
 
+# Zabbix trigger severity levels (name -> numeric value used by action filters).
+_SEVERITY_LEVELS = {
+    "not_classified": 0,
+    "information": 1,
+    "warning": 2,
+    "average": 3,
+    "high": 4,
+    "disaster": 5,
+}
+
 
 def _assign_media_to_group_users(api: _Api, media_id: str, group_id: str) -> int:
     """Ensure each user in the group has the webhook media (append, never clobber).
@@ -222,7 +232,9 @@ def _assign_media_to_group_users(api: _Api, media_id: str, group_id: str) -> int
     return assigned
 
 
-def _upsert_trigger_action(api: _Api, media_id: str, group_id: str) -> None:
+def _upsert_trigger_action(
+    api: _Api, media_id: str, group_id: str, min_severity: int
+) -> None:
     op = {
         "operationtype": "0",  # send message
         "opmessage": {"default_msg": "1", "mediatypeid": media_id},
@@ -241,6 +253,19 @@ def _upsert_trigger_action(api: _Api, media_id: str, group_id: str) -> None:
         "operations": [op],
         "recovery_operations": [recovery_op],
     }
+    # Only forward problems at/above the chosen severity. min_severity == 0
+    # ("not classified") means forward everything, so no filter is added.
+    if min_severity > 0:
+        fields["filter"] = {
+            "evaltype": "0",  # and/or (single condition, so irrelevant)
+            "conditions": [
+                {
+                    "conditiontype": "4",  # trigger severity
+                    "operator": "5",  # >=
+                    "value": str(min_severity),
+                }
+            ],
+        }
     existing = api.call(
         "action.get", {"filter": {"name": [ACTION_NAME]}, "output": ["actionid"]}
     )
@@ -264,6 +289,13 @@ def main() -> int:
         "--user-group",
         default=os.getenv("ZABBIX_WEBHOOK_USER_GROUP", "Zabbix administrators"),
         help="recipient user group for the action (default: Zabbix administrators)",
+    )
+    parser.add_argument(
+        "--min-severity",
+        default=os.getenv("ZABBIX_WEBHOOK_MIN_SEVERITY", "warning"),
+        choices=list(_SEVERITY_LEVELS),
+        help="only forward problems at/above this severity (default: warning; "
+        "'not_classified' forwards everything)",
     )
     args = parser.parse_args()
 
@@ -302,9 +334,11 @@ def main() -> int:
                 )
                 return 1
             group_id = str(groups[0]["usrgrpid"])
+            min_sev = _SEVERITY_LEVELS[args.min_severity]
             print(f"recipient user group: {args.user_group} (id={group_id})")
+            print(f"min severity: {args.min_severity} ({min_sev})")
             _assign_media_to_group_users(api, media_id, group_id)
-            _upsert_trigger_action(api, media_id, group_id)
+            _upsert_trigger_action(api, media_id, group_id, min_sev)
     except (httpx.HTTPError, ZabbixAdminError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
