@@ -7,7 +7,12 @@ server {
 
     # Static files
     location /static/ {
-        alias /root/projects/dotmac_sub/static/;
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         expires 30d;
         add_header Cache-Control "public, immutable";
         access_log off;
@@ -15,7 +20,12 @@ server {
 
     # Uploads
     location /uploads/ {
-        alias /root/projects/dotmac_sub/uploads/;
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         expires 1d;
         access_log off;
     }
