@@ -36,11 +36,12 @@ from app.models.billing import (
 )
 from app.schemas.billing import PaymentProviderEventIngest
 from app.services import billing as billing_service
-from app.services.common import get_by_id
+from app.services.common import apply_pagination, get_by_id
 from app.services.flutterwave import (
     verify_webhook_signature as verify_flutterwave_signature,
 )
 from app.services.paystack import verify_webhook_signature as verify_paystack_signature
+from app.services.response import list_response
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,33 @@ def process_flutterwave_webhook(
         verify_signature=verify_flutterwave_signature,
         ref_keys=("tx_ref",),
     )
+
+
+def list_payment_webhook_dead_letters(
+    db: Session,
+    *,
+    provider_type: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """List parked webhook events, newest first. For the ops replay surface."""
+    query = db.query(PaymentWebhookDeadLetter)
+    if provider_type:
+        query = query.filter(
+            PaymentWebhookDeadLetter.provider_type == provider_type
+        )
+    if status:
+        try:
+            status_enum = PaymentWebhookDeadLetterStatus(status)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown status: {status}"
+            ) from exc
+        query = query.filter(PaymentWebhookDeadLetter.status == status_enum)
+    query = query.order_by(PaymentWebhookDeadLetter.received_at.desc())
+    items = apply_pagination(query, limit, offset).all()
+    return list_response(items, limit, offset)
 
 
 def replay_payment_webhook_dead_letter(

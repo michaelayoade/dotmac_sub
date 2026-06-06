@@ -16,6 +16,7 @@ from app.models.billing import (
     PaymentWebhookDeadLetterStatus,
 )
 from app.services.api_billing_webhooks import (
+    list_payment_webhook_dead_letters,
     process_flutterwave_webhook,
     process_paystack_webhook,
     replay_payment_webhook_dead_letter,
@@ -209,3 +210,50 @@ def test_replay_missing_row_404(db_session):
             db_session, "00000000-0000-0000-0000-0000000000ff"
         )
     assert exc.value.status_code == 404
+
+
+def _seed_dead_letter(db, *, provider_type, key, status):
+    row = PaymentWebhookDeadLetter(
+        provider_type=provider_type,
+        idempotency_key=key,
+        status=status,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_list_dead_letters_filters_by_provider_and_status(db_session):
+    _seed_dead_letter(
+        db_session,
+        provider_type="paystack",
+        key="paystack-a",
+        status=PaymentWebhookDeadLetterStatus.failed,
+    )
+    _seed_dead_letter(
+        db_session,
+        provider_type="flutterwave",
+        key="flutterwave-b",
+        status=PaymentWebhookDeadLetterStatus.rejected,
+    )
+
+    all_rows = list_payment_webhook_dead_letters(db_session)
+    assert all_rows["count"] >= 2
+
+    paystack_only = list_payment_webhook_dead_letters(
+        db_session, provider_type="paystack"
+    )
+    assert paystack_only["items"]
+    assert all(i.provider_type == "paystack" for i in paystack_only["items"])
+
+    failed_only = list_payment_webhook_dead_letters(db_session, status="failed")
+    assert all(
+        i.status == PaymentWebhookDeadLetterStatus.failed
+        for i in failed_only["items"]
+    )
+
+
+def test_list_dead_letters_rejects_unknown_status(db_session):
+    with pytest.raises(HTTPException) as exc:
+        list_payment_webhook_dead_letters(db_session, status="nonsense")
+    assert exc.value.status_code == 400

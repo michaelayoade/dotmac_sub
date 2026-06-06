@@ -58,6 +58,7 @@ from app.schemas.billing import (
     PaymentProviderUpdate,
     PaymentRead,
     PaymentUpdate,
+    PaymentWebhookDeadLetterRead,
     TaxRateCreate,
     TaxRateRead,
     TaxRateUpdate,
@@ -939,6 +940,47 @@ def list_payment_events(
         order_dir,
         limit,
         offset,
+    )
+
+
+# --- Webhook dead-letters (ops replay surface) ---
+
+
+@router.get(
+    "/payment-event-dead-letters",
+    response_model=ListResponse[PaymentWebhookDeadLetterRead],
+    tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
+def list_payment_webhook_dead_letters(
+    provider_type: str | None = None,
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """List payment-provider webhooks that failed processing and were parked."""
+    return api_billing_webhooks_service.list_payment_webhook_dead_letters(
+        db,
+        provider_type=provider_type,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/payment-event-dead-letters/{dead_letter_id}/replay",
+    response_model=PaymentWebhookDeadLetterRead,
+    tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:write"))],
+)
+def replay_payment_webhook_dead_letter(
+    dead_letter_id: str, db: Session = Depends(get_db)
+):
+    """Reprocess a parked webhook through ingest (idempotent)."""
+    return api_billing_webhooks_service.replay_payment_webhook_dead_letter(
+        db, dead_letter_id
     )
 
 
