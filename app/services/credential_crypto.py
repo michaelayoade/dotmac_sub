@@ -216,6 +216,17 @@ def is_encrypted(value: str | None) -> bool:
     return value.startswith(("enc:", "plain:"))
 
 
+def _is_secret_reference(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        from app.services.secrets import is_secret_ref
+
+        return is_secret_ref(value)
+    except Exception:
+        return False
+
+
 def encrypt_credential(value: str | None) -> str | None:
     """Encrypt a credential for storage at rest.
 
@@ -230,6 +241,9 @@ def encrypt_credential(value: str | None) -> str | None:
         (prefixed with "plain:"), or None if input is None/empty
     """
     if not value:
+        return value
+
+    if _is_secret_reference(value):
         return value
 
     # Don't double-encrypt, but do not preserve plaintext once enforcement is active.
@@ -293,6 +307,23 @@ def decrypt_credential(value: str | None) -> str | None:
     if not value:
         return value
 
+    if _is_secret_reference(value):
+        try:
+            from app.services.secrets import resolve_secret
+
+            resolved = resolve_secret(value)
+        except Exception as e:
+            raise ValueError(f"Failed to resolve credential secret reference: {e}") from e
+        # A credential can be both encryption-at-rest wrapped (``enc:``/``plain:``)
+        # *and* stored behind a secret reference — the resolved value is then
+        # still an at-rest blob, not the plaintext. Peel that inner layer too,
+        # otherwise callers (config masking, outbound auth headers) receive
+        # ciphertext. The ``resolved != value`` guard avoids re-resolving a
+        # reference that resolves to itself.
+        if resolved and resolved != value and is_encrypted(resolved):
+            return decrypt_credential(resolved)
+        return resolved
+
     if value.startswith("plain:"):
         return value[6:]
 
@@ -311,6 +342,9 @@ def decrypt_credential_with_key(
     Legacy values without an ``enc:`` or ``plain:`` prefix are treated as plaintext.
     """
     if not value:
+        return value
+
+    if _is_secret_reference(value):
         return value
 
     if value.startswith("plain:"):
