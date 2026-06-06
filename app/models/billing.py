@@ -78,6 +78,20 @@ class PaymentProviderEventStatus(enum.Enum):
     failed = "failed"
 
 
+class PaymentWebhookDeadLetterStatus(enum.Enum):
+    # Captured on receipt, before processing was attempted. A row stuck in this
+    # state means the worker died mid-ingest (crash/OOM/kill) — it is replayable.
+    received = "received"
+    # Ingest raised an unexpected/transient error. The provider was told to
+    # retry (HTTP 5xx); this row is replayable if the provider stops retrying.
+    failed = "failed"
+    # Ingest deterministically rejected the payload (HTTP 4xx, e.g. bad data).
+    # Replaying as-is will not help; needs human attention.
+    rejected = "rejected"
+    # A previously-failed event was successfully reprocessed.
+    replayed = "replayed"
+
+
 class LedgerEntryType(enum.Enum):
     debit = "debit"
     credit = "credit"
@@ -908,6 +922,58 @@ class PaymentProviderEvent(Base):
     provider = relationship("PaymentProvider", back_populates="events")
     payment = relationship("Payment", back_populates="provider_events")
     invoice = relationship("Invoice")
+
+
+class PaymentWebhookDeadLetter(Base):
+    """Durable capture of an inbound payment-provider webhook.
+
+    A row is written (and committed in its own transaction) the moment a
+    signature-verified webhook arrives, *before* ingest is attempted, so the
+    raw payload survives even if ingest's transaction rolls back or the worker
+    dies mid-processing. On success the row is deleted; on failure it is kept
+    (status ``failed``/``rejected``) for replay. This closes the silent-loss
+    gap where a transient ingest error returned HTTP 200 and the provider never
+    retried.
+
+    ``provider_type`` is stored as a plain string (not an FK) because a webhook
+    can arrive before — or without — a matching provider being configured, and
+    we must never lose it for that reason.
+    """
+
+    __tablename__ = "payment_webhook_dead_letters"
+    __table_args__ = (
+        Index(
+            "ix_payment_webhook_dead_letters_status",
+            "status",
+        ),
+        Index(
+            "ix_payment_webhook_dead_letters_provider_idem",
+            "provider_type",
+            "idempotency_key",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    event_type: Mapped[str | None] = mapped_column(String(120))
+    external_id: Mapped[str | None] = mapped_column(String(160))
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[PaymentWebhookDeadLetterStatus] = mapped_column(
+        Enum(PaymentWebhookDeadLetterStatus),
+        default=PaymentWebhookDeadLetterStatus.received,
+        nullable=False,
+    )
+    payload: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
 
 class BillingRun(Base):
