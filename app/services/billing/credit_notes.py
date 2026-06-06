@@ -42,6 +42,7 @@ from app.services.common import (
     to_decimal,
     validate_enum,
 )
+from app.services.locking import lock_for_update
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -206,12 +207,20 @@ class CreditNotes(ListResponseMixin):
 
     @staticmethod
     def apply(db: Session, credit_note_id: str, payload: CreditNoteApplyRequest):
-        credit_note = get_by_id(db, CreditNote, credit_note_id)
+        # Lock the credit note before the check-then-act below: `remaining` is
+        # derived from `applied_total`, and two concurrent applies would each
+        # read a snapshot missing the other's uncommitted application — both
+        # passing the balance check and over-applying the note (a $100 note
+        # spent twice). The row lock serializes applies per note so the later
+        # one sees the committed applied_total and is rejected. Lock order is
+        # CreditNote -> Invoice (the invoice recalc re-locks the same invoice);
+        # no path locks them the other way, so no deadlock. No-op on SQLite.
+        credit_note = lock_for_update(db, CreditNote, coerce_uuid(credit_note_id))
         if not credit_note:
             raise HTTPException(status_code=404, detail="Credit note not found")
         if credit_note.status in {CreditNoteStatus.draft, CreditNoteStatus.void}:
             raise HTTPException(status_code=400, detail="Credit note is not applicable")
-        invoice = get_by_id(db, Invoice, payload.invoice_id)
+        invoice = lock_for_update(db, Invoice, coerce_uuid(payload.invoice_id))
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if invoice.account_id != credit_note.account_id:

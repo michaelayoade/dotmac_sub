@@ -1,6 +1,10 @@
 from decimal import Decimal
+from unittest.mock import patch
 
-from app.models.billing import CreditNoteStatus, TaxApplication
+import pytest
+from fastapi import HTTPException
+
+from app.models.billing import CreditNote, CreditNoteStatus, Invoice, TaxApplication
 from app.schemas.billing import (
     CreditNoteApplyRequest,
     CreditNoteCreate,
@@ -9,6 +13,33 @@ from app.schemas.billing import (
     TaxRateCreate,
 )
 from app.services import billing as billing_service
+from app.services.locking import lock_for_update as _real_lock_for_update
+
+
+def _issued_credit_note_and_invoice(db_session, account_id, *, amount):
+    invoice = billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=account_id,
+            currency="USD",
+            subtotal=amount,
+            tax_total=Decimal("0.00"),
+            total=amount,
+            balance_due=amount,
+        ),
+    )
+    credit_note = billing_service.credit_notes.create(
+        db_session,
+        CreditNoteCreate(
+            account_id=account_id,
+            status=CreditNoteStatus.issued,
+            currency="USD",
+            subtotal=amount,
+            tax_total=Decimal("0.00"),
+            total=amount,
+        ),
+    )
+    return credit_note, invoice
 
 
 def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_account):
@@ -92,6 +123,48 @@ def test_credit_note_apply_without_lines_uses_total(db_session, subscriber_accou
     assert refreshed_credit_note.total == Decimal("50.00")
     assert refreshed_credit_note.applied_total == Decimal("50.00")
     assert refreshed_credit_note.status == CreditNoteStatus.applied
+
+
+def test_apply_locks_credit_note_and_invoice_rows(db_session, subscriber_account):
+    """Apply must SELECT ... FOR UPDATE both rows before the balance check, so
+    concurrent applies can't each read a stale applied_total and over-spend the
+    note. SQLite can't exercise the race (FOR UPDATE is a no-op), so we pin that
+    the locks are acquired for the right rows."""
+    credit_note, invoice = _issued_credit_note_and_invoice(
+        db_session, subscriber_account.id, amount=Decimal("100.00")
+    )
+    with patch(
+        "app.services.billing.credit_notes.lock_for_update",
+        wraps=_real_lock_for_update,
+    ) as spy:
+        billing_service.credit_notes.apply(
+            db_session,
+            str(credit_note.id),
+            CreditNoteApplyRequest(invoice_id=invoice.id, amount=Decimal("40.00")),
+        )
+    locked_models = {call.args[1] for call in spy.call_args_list}
+    assert CreditNote in locked_models
+    assert Invoice in locked_models
+
+
+def test_apply_cannot_exceed_credit_note_balance(db_session, subscriber_account):
+    """Sequential over-application is rejected (the lock makes the same guard
+    hold under concurrency): a fully-applied note has no remaining balance."""
+    credit_note, invoice = _issued_credit_note_and_invoice(
+        db_session, subscriber_account.id, amount=Decimal("100.00")
+    )
+    billing_service.credit_notes.apply(
+        db_session,
+        str(credit_note.id),
+        CreditNoteApplyRequest(invoice_id=invoice.id, amount=Decimal("100.00")),
+    )
+    with pytest.raises(HTTPException) as exc:
+        billing_service.credit_notes.apply(
+            db_session,
+            str(credit_note.id),
+            CreditNoteApplyRequest(invoice_id=invoice.id, amount=Decimal("1.00")),
+        )
+    assert exc.value.status_code == 400
 
 
 def test_credit_note_line_inclusive_tax_extracts_tax(
