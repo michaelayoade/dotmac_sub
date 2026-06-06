@@ -6,6 +6,7 @@ into internal notifications and alerts.
 
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import UTC, datetime
 from enum import Enum
@@ -23,6 +24,7 @@ from app.models.network_monitoring import (
     AlertStatus,
     MetricType,
 )
+from app.services.zabbix import get_zabbix_webhook_token
 from app.services.zabbix_webhook import (
     find_open_zabbix_alert,
     get_or_create_zabbix_alert_rule,
@@ -34,6 +36,33 @@ router = APIRouter(prefix="/zabbix", tags=["zabbix-webhook"])
 
 # Zabbix webhook authentication token (should match Zabbix action config)
 WEBHOOK_TOKEN_HEADER = "X-Zabbix-Token"
+
+
+def _require_zabbix_webhook_token(presented: str | None) -> None:
+    """Fail closed unless the request presents the configured shared secret.
+
+    These endpoints mount with no router-level auth and mutate state (alert
+    records, device sync), so they must authenticate themselves. The token is
+    resolved from ``ZABBIX_WEBHOOK_TOKEN`` (file/env/OpenBao). If it is not
+    configured we reject with 503 rather than silently accepting anonymous
+    callers; a configured-but-mismatched token is a 401. Compared in constant
+    time to avoid leaking the secret via timing.
+    """
+    expected = get_zabbix_webhook_token()
+    if not expected:
+        logger.error(
+            "zabbix_webhook_token_not_configured",
+            extra={"event": "zabbix_webhook_token_not_configured"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Zabbix webhook authentication is not configured.",
+        )
+    if not presented or not hmac.compare_digest(presented, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing Zabbix webhook token.",
+        )
 
 
 class ZabbixAlertStatus(str, Enum):
@@ -152,6 +181,7 @@ def receive_zabbix_alert(
     Alert records, enabling unified alert management across all monitoring
     sources.
     """
+    _require_zabbix_webhook_token(x_zabbix_token)
     logger.info(
         "zabbix_webhook_received",
         extra={
@@ -291,6 +321,7 @@ def trigger_device_sync(
     This endpoint can be called to sync all DotMac devices to Zabbix hosts.
     Useful for initial setup or after bulk device changes.
     """
+    _require_zabbix_webhook_token(x_zabbix_token)
     from app.services.zabbix_host_sync import sync_all_devices
 
     try:

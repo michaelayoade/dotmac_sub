@@ -203,6 +203,31 @@ def get_zabbix_api_token() -> str:
     return ""
 
 
+def get_zabbix_webhook_token() -> str:
+    """Resolve the shared secret that inbound Zabbix webhooks must present.
+
+    Mirrors ``get_zabbix_api_token`` (file / env / OpenBao). Inbound webhooks
+    authenticate by presenting this value in the ``X-Zabbix-Token`` header; it
+    is distinct from the outbound API token. Returns "" when unconfigured, in
+    which case the webhook endpoints fail closed.
+    """
+    from app.services.secrets import get_secret, resolve_secret
+
+    file_value = _read_secret_file(os.getenv("ZABBIX_WEBHOOK_TOKEN_FILE"))
+    if file_value:
+        return file_value
+
+    env_value = os.getenv("ZABBIX_WEBHOOK_TOKEN")
+    if env_value:
+        return str(resolve_secret(env_value) or "")
+
+    bao_value = get_secret("zabbix", "webhook_token", default="")
+    if bao_value:
+        return bao_value
+
+    return ""
+
+
 def zabbix_configured() -> bool:
     """Return true when the Zabbix API has enough config to be used."""
     try:
