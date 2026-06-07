@@ -95,6 +95,24 @@ def _get_external_engine(db_url: str) -> Engine:
         return engine
 
 
+def _safe_decrypt_credential(value: str | None, *, label: str) -> str | None:
+    """Decrypt a stored credential, returning None instead of raising when it
+    cannot be decrypted (e.g. encrypted under a retired/unavailable key).
+
+    Lets RADIUS sync skip a single undecryptable record rather than aborting the
+    entire job — a handful of dead credentials should not keep the whole sync red.
+    """
+    try:
+        return decrypt_credential(value)
+    except ValueError:
+        logger.warning(
+            "Skipping RADIUS sync for %s: credential cannot be decrypted with the "
+            "current key (encrypted under a retired/unavailable key)",
+            label,
+        )
+        return None
+
+
 def _external_password_row(
     credential: AccessCredential,
     *,
@@ -106,7 +124,13 @@ def _external_password_row(
         return None
     lowered = secret_hash.lower()
     if lowered.startswith(("plain:", "cleartext:", "enc:")):
-        return ("Cleartext-Password", ":=", decrypt_credential(secret_hash) or "")
+        cleartext = _safe_decrypt_credential(
+            secret_hash, label=f"user {credential.username}"
+        )
+        if cleartext is None and lowered.startswith("enc:"):
+            # Undecryptable ciphertext (retired key) — skip rather than abort.
+            return None
+        return ("Cleartext-Password", ":=", cleartext or "")
     if secret_hash.startswith(_CRYPT_PREFIXES):
         return ("Crypt-Password", ":=", secret_hash)
     if secret_hash.startswith("$pbkdf2-"):
@@ -873,7 +897,11 @@ def ensure_radius_clients_for_nas(db: Session, nas_device: NasDevice) -> int:
     if not client_ip or not nas_device.shared_secret:
         return 0
 
-    decrypted_secret = decrypt_credential(nas_device.shared_secret)
+    decrypted_secret = _safe_decrypt_credential(
+        nas_device.shared_secret, label=f"NAS {nas_device.name}"
+    )
+    if decrypted_secret is None:
+        return 0
     raw_secret = resolve_secret(decrypted_secret)
     if not raw_secret:
         return 0
@@ -1279,7 +1307,11 @@ def _external_sync_nas(
             if not client_ip:
                 continue
             # Decrypt the stored credential, then resolve any OpenBao references
-            decrypted_secret = decrypt_credential(device.shared_secret)
+            decrypted_secret = _safe_decrypt_credential(
+                device.shared_secret, label=f"NAS {device.name}"
+            )
+            if decrypted_secret is None:
+                continue
             secret = resolve_secret(decrypted_secret)
             if not secret:
                 continue
@@ -1466,7 +1498,11 @@ class RadiusSyncJobs(ListResponseMixin):
                     if not client_ip:
                         continue
                     # Decrypt the stored credential, then resolve any OpenBao references
-                    decrypted_secret = decrypt_credential(device.shared_secret)
+                    decrypted_secret = _safe_decrypt_credential(
+                        device.shared_secret, label=f"NAS {device.name}"
+                    )
+                    if decrypted_secret is None:
+                        continue
                     raw_secret = resolve_secret(decrypted_secret)
                     if not raw_secret:
                         continue
