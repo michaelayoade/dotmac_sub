@@ -4,6 +4,7 @@ import importlib
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -470,3 +471,94 @@ def test_no_provisioning_before_payment_coverage(db_session, subscriber, monkeyp
 
     assert result["success"] is False
     apply_mock.assert_not_called()
+
+
+def test_change_plan_page_does_not_price_catalog_upfront(
+    db_session, subscriber, monkeypatch
+):
+    """The page must not compute a proration quote per offer (it timed out)."""
+    from app.services import customer_portal_flow_changes as flow
+
+    current_offer = _make_offer(
+        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+    )
+    _make_offer(
+        db_session, name="Unlimited Plus", amount=Decimal("200.00"), plan_family="unlimited"
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    calls: list = []
+    monkeypatch.setattr(
+        flow, "_build_plan_change_quote", lambda *a, **k: calls.append(1)
+    )
+    page = flow.get_change_plan_page(
+        db_session, {"account_id": str(subscriber.id)}, str(subscription.id)
+    )
+
+    assert page is not None
+    assert page["available_offer_change_quotes"] == {}
+    assert calls == []  # no upfront per-offer quote computation
+
+
+def test_get_plan_change_quote_returns_single_quote(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+
+    current_offer = _make_offer(
+        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+    )
+    target_offer = _make_offer(
+        db_session, name="Unlimited Plus", amount=Decimal("200.00"), plan_family="unlimited"
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, tzinfo=UTC))
+
+    quote = flow.get_plan_change_quote(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+    )
+
+    assert quote is not None and quote != {}
+    assert "required_amount" in quote
+
+
+def test_get_plan_change_quote_enforces_ownership(db_session, subscriber):
+    from app.services import customer_portal_flow_changes as flow
+
+    current_offer = _make_offer(
+        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+    )
+    target_offer = _make_offer(
+        db_session, name="Unlimited Plus", amount=Decimal("200.00"), plan_family="unlimited"
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    # A different account must not get a quote for this subscription.
+    quote = flow.get_plan_change_quote(
+        db_session,
+        {"account_id": str(uuid4())},
+        str(subscription.id),
+        str(target_offer.id),
+    )
+    assert quote is None

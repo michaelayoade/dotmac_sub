@@ -239,6 +239,7 @@
                     <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + selectedOfferPrice.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>
                     <span x-text="selectedOfferPeriodLabel"></span>.
                 </p>
+                <p class="mt-4 text-sm text-slate-500 dark:text-slate-400" x-show="quoteLoading">Calculating prorated charges…</p>
                 <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40" x-show="changeQuote">
                     <p class="text-sm text-slate-700 dark:text-slate-200">Remaining value: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Required today: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span></p>
@@ -282,6 +283,7 @@ function changePlanPage() {
         selectedOfferId: {{ ('"' ~ selected_offer_id ~ '"') if selected_offer_id else 'null' }},
         quotes: {{ available_offer_change_quotes | tojson }},
         changeQuote: null,
+        quoteLoading: false,
         pendingForm: null,
         formatMoney(value) {
             return Number(value || 0).toLocaleString('en-NG', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -293,7 +295,22 @@ function changePlanPage() {
             this.selectedOfferCurrency = currency;
             this.selectedOfferPeriodLabel = periodLabel;
             this.priceDifference = price - this.currentPrice;
-            this.changeQuote = this.quotes[id] || null;
+            // Quotes load lazily (one per selected offer) to keep this page fast.
+            if (this.quotes[id]) { this.changeQuote = this.quotes[id]; return; }
+            this.changeQuote = null;
+            this.quoteLoading = true;
+            fetch(`/portal/services/{{ subscription.id }}/change/quote?offer_id=${encodeURIComponent(id)}`, {
+                headers: {'X-Requested-With': 'XMLHttpRequest'},
+            })
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    this.quoteLoading = false;
+                    if (data && data.quote) {
+                        this.quotes[id] = data.quote;
+                        if (this.selectedOfferId === id) this.changeQuote = data.quote;
+                    }
+                })
+                .catch(() => { this.quoteLoading = false; });
         },
         confirmAndSubmit(event) {
             if (!this.selectedOfferName) return;
