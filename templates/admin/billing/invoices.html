@@ -342,9 +342,15 @@ function invoiceBulkActions() {
                         'mark-paid': 'marked as paid',
                         'generate-pdf': 'queued for PDF generation'
                     };
+                    const result = await response.json().catch(() => ({}));
                     const label = actionLabels[action] || `${action}ed`;
+                    // Prefer the server's message: it reports the real count and
+                    // any skipped invoices, instead of assuming every selected row
+                    // succeeded.
+                    const message = result.message || `Successfully ${label} ${this.selectedIds.length} invoices`;
+                    const type = result.count === 0 ? 'info' : 'success';
                     window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: `Successfully ${label} ${this.selectedIds.length} invoices`, type: 'success' }
+                        detail: { message, type }
                     }));
                     window.location.reload();
                 } else {

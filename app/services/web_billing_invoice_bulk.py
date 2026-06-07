@@ -94,8 +94,10 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
                 InvoiceStatus.paid,
                 InvoiceStatus.void,
             ]:
-                invoice.status = InvoiceStatus.void
-                db.commit()
+                # Use the canonical void so debit ledger entries are reversed
+                # (previously bulk void only flipped the status, leaving the AR
+                # ledger out of sync).
+                billing_service.invoices.void(db, invoice_id)
                 updated.append(invoice_id)
         except Exception:
             logger.debug(
