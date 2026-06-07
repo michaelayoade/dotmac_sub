@@ -380,7 +380,7 @@ services:
       IMPORT_STYLE: extratags
       THREADS: "2"
     ports:
-    - 8088:8080
+    - 127.0.0.1:8088:8080
     volumes:
     - nominatim_data:/var/lib/postgresql/14/main
     - nominatim_flatnode:/var/lib/nominatim/flatnode
@@ -430,6 +430,7 @@ services:
     - GENIEACS_NBI_WORKER_PROCESSES=${GENIEACS_NBI_WORKER_PROCESSES:-1}
     - GENIEACS_FS_WORKER_PROCESSES=${GENIEACS_FS_WORKER_PROCESSES:-1}
     - GENIEACS_UI_WORKER_PROCESSES=${GENIEACS_UI_WORKER_PROCESSES:-1}
+    - GENIEACS_UI_INTERFACE=127.0.0.1
     - GENIEACS_EXT_TIMEOUT=15000
     - GENIEACS_DEBUG_FILE=/var/log/genieacs/debug.yaml
     - GENIEACS_CWMP_LOG_FILE=/var/log/genieacs/cwmp.log
@@ -464,7 +465,7 @@ services:
     cpus: 1.0
     pids_limit: 64
     ports:
-    - 0.0.0.0:8428:8428
+    - 127.0.0.1:8428:8428
     volumes:
     - victoriametrics_data:/victoria-metrics-data
     command:
@@ -634,7 +635,7 @@ services:
     secrets:
     - zabbix_db_password
     ports:
-    - 8085:8080
+    - 127.0.0.1:8085:8080
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     container_name: dotmac_zabbix_agent
