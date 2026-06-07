@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import count
@@ -103,6 +104,32 @@ class _ZabbixAuthCircuitBreaker:
 
 
 _AUTH_CIRCUIT = _ZabbixAuthCircuitBreaker()
+
+
+class _ZabbixReachabilityCircuit:
+    """Short-cooldown breaker tripped by connection/timeout failures.
+
+    A slow or unreachable Zabbix otherwise makes every per-OLT request wait out
+    the full HTTP timeout; on the monitoring dashboard that fanned out across
+    ~28 OLTs to ~100s. One failure trips this breaker so the remaining requests
+    in the same window fast-fail instead of each waiting the full timeout.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._open_until = 0.0
+
+    def is_open(self) -> bool:
+        with self._lock:
+            return time.monotonic() < self._open_until
+
+    def trip(self) -> None:
+        with self._lock:
+            cooldown = float(os.getenv("ZABBIX_REACHABILITY_CIRCUIT_SECONDS", "30"))
+            self._open_until = time.monotonic() + max(cooldown, 1.0)
+
+
+_REACHABILITY_CIRCUIT = _ZabbixReachabilityCircuit()
 
 
 def _looks_like_auth_error(message: str) -> bool:
@@ -312,6 +339,10 @@ class ZabbixClient:
         circuit_error = _AUTH_CIRCUIT.check()
         if circuit_error:
             raise ZabbixAuthError(circuit_error)
+        if _REACHABILITY_CIRCUIT.is_open():
+            raise ZabbixClientError(
+                "Zabbix circuit open after recent connection failures"
+            )
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
@@ -339,6 +370,7 @@ class ZabbixClient:
             )
             raise ZabbixClientError("Zabbix API request failed") from exc
         except (httpx.RequestError, ValueError) as exc:
+            _REACHABILITY_CIRCUIT.trip()
             logger.info(
                 "zabbix_request_failure",
                 extra={"event": "zabbix_request_failure", "method": expected},
@@ -380,6 +412,10 @@ class ZabbixClient:
         circuit_error = _AUTH_CIRCUIT.check()
         if circuit_error:
             raise ZabbixAuthError(circuit_error)
+        if _REACHABILITY_CIRCUIT.is_open():
+            raise ZabbixClientError(
+                "Zabbix circuit open after recent connection failures"
+            )
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
@@ -407,6 +443,7 @@ class ZabbixClient:
             )
             raise ZabbixClientError("Zabbix API request failed") from exc
         except (httpx.RequestError, ValueError) as exc:
+            _REACHABILITY_CIRCUIT.trip()
             logger.info(
                 "zabbix_request_failure",
                 extra={"event": "zabbix_request_failure", "method": expected},
