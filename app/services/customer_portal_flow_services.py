@@ -410,8 +410,9 @@ def _daily_bandwidth_usage_records(
         else:
             if day in bandwidth_by_day:
                 rx_bps, tx_bps = bandwidth_by_day[day]
-                download_gb = ((rx_bps / 8.0) * span_seconds) / (1024**3)
-                upload_gb = ((tx_bps / 8.0) * span_seconds) / (1024**3)
+                # rx = NAS ingress = subscriber upload; tx = egress = download.
+                download_gb = ((tx_bps / 8.0) * span_seconds) / (1024**3)
+                upload_gb = ((rx_bps / 8.0) * span_seconds) / (1024**3)
                 total_gb = download_gb + upload_gb
             else:
                 # Fallback for days with no sampled bandwidth history. RADIUS
@@ -614,8 +615,11 @@ def _usage_summary_stats(
         day += timedelta(days=1)
 
     avg_daily_usage_gb = (total_bytes / (1024**3)) / total_days
-    average_download_mbps = float(avg_rx_bps or 0) / 1_000_000
-    average_upload_mbps = float(avg_tx_bps or 0) / 1_000_000
+    # rx_bps/tx_bps are stored from the NAS-interface perspective: rx = NAS
+    # ingress = subscriber UPLOAD, tx = NAS egress = subscriber DOWNLOAD. So the
+    # subscriber-facing download is avg_tx and upload is avg_rx.
+    average_download_mbps = float(avg_tx_bps or 0) / 1_000_000
+    average_upload_mbps = float(avg_rx_bps or 0) / 1_000_000
     average_speed_mbps = average_download_mbps + average_upload_mbps
 
     return {
