@@ -60,7 +60,13 @@
             <p class="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Composition</p>
             <div class="relative mt-3 flex items-center gap-4">
                 <div class="relative h-14 w-14">
-                    {% set people_pct = (total_people / total_customers * 100) | round | int if total_customers else 50 %}
+                    {# Composition reflects the People-vs-Orgs split of the customer
+                       base, so the denominator must be people+orgs (both global
+                       counts), NOT total_customers — which is the filtered total and
+                       would otherwise blow the percentage past 100% when a filter
+                       is active. #}
+                    {% set composition_total = total_people + total_businesses %}
+                    {% set people_pct = (total_people / composition_total * 100) | round | int if composition_total else 50 %}
                     {% set org_pct = 100 - people_pct %}
                     <svg class="h-14 w-14 -rotate-90" viewBox="0 0 36 36">
                         <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" stroke-width="4" class="text-slate-100 dark:text-slate-700"/>
