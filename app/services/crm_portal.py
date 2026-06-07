@@ -1,7 +1,9 @@
-"""CRM portal service — orchestrates CRM API calls for customer/reseller portals.
+"""Customer/reseller portal support service.
 
-Handles subscriber ID resolution, Redis caching, and template context building
-for tickets and work orders sourced from the external CRM.
+Tickets are served by the internal (local) ticket module
+(``app.services.support``) so the portal works standalone. Work orders (and the
+reseller ticket counts) still read from the external CRM via ``crm_client``;
+those can be pointed at dotmac_crm when configured.
 """
 
 from __future__ import annotations
@@ -179,59 +181,67 @@ def _ok_context() -> dict[str, Any]:
 # ── Customer Portal: Tickets ────────────────────────────────────────────
 
 
+def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
+    """Map a local support Ticket to the dict shape the portal templates expect."""
+    return {
+        "id": str(ticket.id),
+        "ticket_number": ticket.number,
+        "title": ticket.title,
+        "description": ticket.description or "",
+        "status": ticket.status,
+        "priority": ticket.priority,
+        "subscriber_id": str(ticket.subscriber_id) if ticket.subscriber_id else None,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
+        "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+    }
+
+
+def _comment_to_dict(comment: Any) -> dict[str, Any]:
+    """Map a local TicketComment to the portal comment dict.
+
+    Staff replies carry author_person_id; customer/portal comments do not, so we
+    label them "Support Team" vs "You".
+    """
+    return {
+        "body": comment.body,
+        "author_name": "Support Team" if comment.author_person_id else "You",
+        "is_internal": comment.is_internal,
+        "created_at": comment.created_at.isoformat() if comment.created_at else None,
+    }
+
+
+def _ticket_list_base(request: Request, customer: dict) -> dict[str, Any]:
+    return {
+        "request": request,
+        "customer": customer,
+        "active_page": "support",
+        "status_display": TICKET_STATUS_DISPLAY,
+        "status_colors": TICKET_STATUS_COLORS,
+        "priority_display": TICKET_PRIORITY_DISPLAY,
+        "priority_colors": TICKET_PRIORITY_COLORS,
+    }
+
+
 def tickets_list_context(
     request: Request,
     db: Session,
     customer: dict,
     subscriber_ids: list[str],
 ) -> dict[str, Any]:
-    """Build template context for customer ticket list."""
-    try:
-        crm_sub_ids = resolve_crm_subscriber_ids(db, subscriber_ids)
-        if not crm_sub_ids:
-            return {
-                "request": request,
-                "customer": customer,
-                "tickets": [],
-                "active_page": "support",
-                "status_display": TICKET_STATUS_DISPLAY,
-                "status_colors": TICKET_STATUS_COLORS,
-                "priority_display": TICKET_PRIORITY_DISPLAY,
-                "priority_colors": TICKET_PRIORITY_COLORS,
-                **_ok_context(),
-            }
-        client = get_crm_client()
-        merged: dict[str, dict[str, Any]] = {}
-        for crm_sub_id in crm_sub_ids:
-            for ticket in client.list_tickets(subscriber_id=crm_sub_id):
-                ticket_id = str(ticket.get("id") or "")
-                if ticket_id:
-                    merged[ticket_id] = ticket
-        tickets = _sort_by_recent(list(merged.values()))
-    except CRMClientError:
-        return {
-            "request": request,
-            "customer": customer,
-            "tickets": [],
-            "active_page": "support",
-            "status_display": TICKET_STATUS_DISPLAY,
-            "status_colors": TICKET_STATUS_COLORS,
-            "priority_display": TICKET_PRIORITY_DISPLAY,
-            "priority_colors": TICKET_PRIORITY_COLORS,
-            **_error_context(),
-        }
+    """Customer ticket list, sourced from the internal (local) ticket module."""
+    from app.services import support as support_service
 
-    return {
-        "request": request,
-        "customer": customer,
-        "tickets": tickets,
-        "active_page": "support",
-        "status_display": TICKET_STATUS_DISPLAY,
-        "status_colors": TICKET_STATUS_COLORS,
-        "priority_display": TICKET_PRIORITY_DISPLAY,
-        "priority_colors": TICKET_PRIORITY_COLORS,
-        **_ok_context(),
-    }
+    merged: dict[str, dict[str, Any]] = {}
+    for sid in subscriber_ids:
+        sid_str = str(sid or "").strip()
+        if not sid_str:
+            continue
+        for ticket in support_service.Tickets.list(
+            db, subscriber_id=sid_str, limit=100
+        ):
+            merged[str(ticket.id)] = _ticket_to_dict(ticket)
+    tickets = _sort_by_recent(list(merged.values()))
+    return {**_ticket_list_base(request, customer), "tickets": tickets, **_ok_context()}
 
 
 def ticket_detail_context(
@@ -241,56 +251,35 @@ def ticket_detail_context(
     subscriber_ids: list[str],
     ticket_id: str,
 ) -> dict[str, Any]:
-    """Build template context for customer ticket detail."""
-    try:
-        crm_sub_ids = set(resolve_crm_subscriber_ids(db, subscriber_ids))
-        if not crm_sub_ids:
-            return {
-                "request": request,
-                "customer": customer,
-                "ticket": None,
-                "comments": [],
-                "active_page": "support",
-                **_error_context("Ticket not found."),
-            }
-        client = get_crm_client()
-        ticket = client.get_ticket(ticket_id)
+    """Customer ticket detail, sourced from the internal (local) ticket module."""
+    from app.services import support as support_service
 
-        # Verify ticket belongs to this subscriber
-        ticket_sub = str(ticket.get("subscriber_id", ""))
-        if not ticket_sub or ticket_sub not in crm_sub_ids:
-            return {
-                "request": request,
-                "customer": customer,
-                "ticket": None,
-                "comments": [],
-                "active_page": "support",
-                **_error_context("Ticket not found."),
-            }
-
-        comments_raw = client.list_ticket_comments(ticket_id)
-        # Filter out internal comments
-        comments = [c for c in comments_raw if not c.get("is_internal", False)]
-    except CRMClientError:
-        return {
-            "request": request,
-            "customer": customer,
-            "ticket": None,
-            "comments": [],
-            "active_page": "support",
-            **_error_context(),
-        }
-
-    return {
+    allowed = {str(s or "").strip() for s in subscriber_ids if str(s or "").strip()}
+    not_found = {
         "request": request,
         "customer": customer,
-        "ticket": ticket,
-        "comments": comments,
+        "ticket": None,
+        "comments": [],
         "active_page": "support",
-        "status_display": TICKET_STATUS_DISPLAY,
-        "status_colors": TICKET_STATUS_COLORS,
-        "priority_display": TICKET_PRIORITY_DISPLAY,
-        "priority_colors": TICKET_PRIORITY_COLORS,
+        **_error_context("Ticket not found."),
+    }
+    try:
+        ticket = support_service.Tickets.get(db, ticket_id)
+    except Exception:  # noqa: BLE001 - not found / invalid id
+        return not_found
+    # Verify the ticket belongs to one of this customer's subscriber accounts.
+    if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
+        return not_found
+
+    comments = [
+        _comment_to_dict(c)
+        for c in support_service.TicketComments.list(db, str(ticket.id))
+        if not c.is_internal
+    ]
+    return {
+        **_ticket_list_base(request, customer),
+        "ticket": _ticket_to_dict(ticket),
+        "comments": comments,
         **_ok_context(),
     }
 
@@ -318,34 +307,39 @@ def handle_ticket_create(
     description: str,
     priority: str,
 ) -> dict[str, Any]:
-    """Create a ticket in the CRM.
+    """Create a ticket in the internal (local) ticket module.
 
     Returns:
         Dict with 'success' bool and 'ticket' or 'error' key.
     """
-    try:
-        crm_sub_id = resolve_crm_subscriber_id(db, subscriber_id)
-        if not crm_sub_id:
-            return {
-                "success": False,
-                "error": "Unable to link your account to the support system.",
-            }
+    from app.schemas.support import TicketCreate
+    from app.services import support as support_service
 
-        client = get_crm_client()
-        ticket = client.create_ticket(
-            {
-                "subscriber_id": crm_sub_id,
-                "title": title,
-                "description": description or "",
-                "priority": priority
-                if priority in TICKET_PRIORITY_DISPLAY
-                else "normal",
-                "source": "customer_portal",
-            }
+    try:
+        sid = coerce_uuid(str(subscriber_id or "").strip() or None)
+    except (ValueError, TypeError):
+        sid = None
+    if not sid:
+        return {
+            "success": False,
+            "error": "Unable to link your account to the support system.",
+        }
+    try:
+        ticket = support_service.Tickets.create(
+            db,
+            TicketCreate(
+                subscriber_id=sid,
+                title=title,
+                description=description or "",
+                priority=priority if priority in TICKET_PRIORITY_DISPLAY else "normal",
+                channel="web",
+            ),
+            actor_id=None,
         )
-        return {"success": True, "ticket": ticket}
-    except CRMClientError as e:
-        logger.error("Failed to create CRM ticket: %s", e)
+        return {"success": True, "ticket": _ticket_to_dict(ticket)}
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to create portal ticket: %s", e)
+        db.rollback()
         return {
             "success": False,
             "error": "Unable to create ticket. Please try again later.",
@@ -359,30 +353,33 @@ def handle_ticket_comment(
     ticket_id: str,
     body: str,
 ) -> dict[str, Any]:
-    """Add a comment to a CRM ticket.
+    """Add a customer comment to a local support ticket.
 
     Returns:
         Dict with 'success' bool.
     """
+    from app.schemas.support import TicketCommentCreate
+    from app.services import support as support_service
+
+    allowed = {str(s or "").strip() for s in subscriber_ids if str(s or "").strip()}
     try:
-        crm_sub_ids = set(resolve_crm_subscriber_ids(db, subscriber_ids))
-        if not crm_sub_ids:
-            return {"success": False, "error": "Ticket not found."}
-        client = get_crm_client()
-        ticket = client.get_ticket(ticket_id)
-        if str(ticket.get("subscriber_id", "")) not in crm_sub_ids:
-            return {"success": False, "error": "Ticket not found."}
-        client.create_ticket_comment(
-            {
-                "ticket_id": ticket_id,
-                "body": body,
-                "is_internal": False,
-                "author_name": customer.get("current_user", {}).get("name", "Customer"),
-            }
+        ticket = support_service.Tickets.get(db, ticket_id)
+    except Exception:  # noqa: BLE001 - not found / invalid id
+        return {"success": False, "error": "Ticket not found."}
+    if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
+        return {"success": False, "error": "Ticket not found."}
+    try:
+        support_service.TicketComments.create(
+            db,
+            ticket=ticket,
+            payload=TicketCommentCreate(body=body, is_internal=False),
+            actor_id=None,
         )
+        db.commit()
         return {"success": True}
-    except CRMClientError as e:
-        logger.error("Failed to create CRM ticket comment: %s", e)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to add portal ticket comment: %s", e)
+        db.rollback()
         return {
             "success": False,
             "error": "Unable to add comment. Please try again later.",
