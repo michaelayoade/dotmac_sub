@@ -562,3 +562,30 @@ def test_get_plan_change_quote_enforces_ownership(db_session, subscriber):
         str(target_offer.id),
     )
     assert quote is None
+
+
+def test_available_portal_offers_eager_loads_prices(db_session, subscriber):
+    """Prices must be eager-loaded so the per-offer price summary is not an N+1."""
+    from sqlalchemy import inspect as sa_inspect
+
+    from app.services.customer_portal_context import get_available_portal_offers
+
+    current_offer = _make_offer(
+        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+    )
+    _make_offer(
+        db_session, name="Unlimited Plus", amount=Decimal("150.00"), plan_family="unlimited"
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    db_session.expire_all()  # force a fresh load so the selectinload is exercised
+    offers = get_available_portal_offers(db_session, subscription)
+
+    assert offers
+    assert all("prices" not in sa_inspect(o).unloaded for o in offers)

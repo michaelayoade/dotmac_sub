@@ -9,7 +9,7 @@ from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice
 from app.models.catalog import CatalogOffer, PriceType, Subscription, SubscriptionStatus
@@ -655,6 +655,7 @@ def get_available_portal_offers(
             list[CatalogOffer],
             db.scalars(
                 select(CatalogOffer)
+                .options(selectinload(CatalogOffer.prices))
                 .where(CatalogOffer.is_active.is_(True))
                 .where(CatalogOffer.show_on_customer_portal.is_(True))
                 .order_by(CatalogOffer.name.asc())
@@ -669,6 +670,7 @@ def get_available_portal_offers(
         list[CatalogOffer],
         db.scalars(
             select(CatalogOffer)
+            .options(selectinload(CatalogOffer.prices))
             .where(CatalogOffer.is_active.is_(True))
             .where(CatalogOffer.show_on_customer_portal.is_(True))
             .where(CatalogOffer.service_type == current_offer.service_type)
