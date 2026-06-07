@@ -8,9 +8,9 @@ services:
     build: .
     container_name: dotmac_sub_app
     restart: unless-stopped
-    mem_limit: 1536m
+    mem_limit: 3072m
     mem_reservation: 512m
-    cpus: 2.0
+    cpus: 4.0
     pids_limit: 256
     logging: *id001
     ports:
@@ -48,9 +48,6 @@ services:
       LOKI_URL: ${LOKI_URL:-}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     cap_add:
     - NET_ADMIN
     privileged: true
@@ -106,9 +103,6 @@ services:
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -145,9 +139,6 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -195,9 +186,6 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -245,9 +233,6 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -289,8 +274,6 @@ services:
     env_file:
     - .env
     depends_on:
-      dotmac-db:
-        condition: service_healthy
       victoriametrics:
         condition: service_started
     volumes:
@@ -334,8 +317,6 @@ services:
     env_file:
     - .env
     depends_on:
-      dotmac-db:
-        condition: service_healthy
       victoriametrics:
         condition: service_started
     volumes:
@@ -378,9 +359,6 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     command:
@@ -389,30 +367,6 @@ services:
     - app.celery_app.celery_app
     - beat
     - --loglevel=info
-  dotmac-db:
-    image: postgis/postgis:16-3.4
-    container_name: dotmac_sub_db
-    restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 256m
-    cpus: 1.0
-    pids_limit: 128
-    logging: *id001
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: dotmac_sub
-    ports:
-    - 127.0.0.1:5434:5432
-    volumes:
-    - dotmac_sub_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - pg_isready -U postgres -d dotmac_sub
-      interval: 10s
-      timeout: 5s
-      retries: 5
   nominatim:
     image: mediagis/nominatim:4.4
     container_name: dotmac_sub_nominatim
@@ -447,31 +401,12 @@ services:
     - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default
     - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
     - ./config/freeradius/dictionary:/etc/raddb/dictionary
-    depends_on:
-    - dotmac-db
     environment:
     - RADIUS_DB_HOST=${RADIUS_DB_HOST:-radius-db}
     - RADIUS_DB_PORT=${RADIUS_DB_PORT:-5432}
     - RADIUS_DB_NAME=${RADIUS_DB_NAME:-radius}
     - RADIUS_DB_USER=${RADIUS_DB_USER:-postgres}
     - RADIUS_DB_PASS=${RADIUS_DB_PASS}
-  radius-db:
-    image: postgres:16
-    container_name: dotmac_sub_radius_db
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 128m
-    cpus: 0.5
-    pids_limit: 96
-    environment:
-      POSTGRES_USER: radius
-      POSTGRES_PASSWORD: ${RADIUS_DB_PASS}
-      POSTGRES_DB: radius
-    ports:
-    - 127.0.0.1:5437:5432
-    volumes:
-    - radius_db_data:/var/lib/postgresql/data
-    - ./config/freeradius/schema.sql:/docker-entrypoint-initdb.d/schema.sql
   genieacs:
     build:
       context: .
@@ -577,8 +512,6 @@ services:
     env_file:
     - .env
     depends_on:
-      dotmac-db:
-        condition: service_healthy
       victoriametrics:
         condition: service_started
     cap_add:
@@ -615,9 +548,6 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      dotmac-db:
-        condition: service_healthy
     ports:
     - 514:514/udp
     volumes:
@@ -653,7 +583,7 @@ services:
     image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
     container_name: dotmac_zabbix_server
     restart: unless-stopped
-    mem_limit: 2g
+    mem_limit: 5g
     mem_reservation: 1g
     cpus: 2
     pids_limit: 512
