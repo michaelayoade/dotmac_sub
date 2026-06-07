@@ -844,6 +844,42 @@ def olt_backups_list(
     return templates.TemplateResponse("admin/network/olts/backups.html", context)
 
 
+# NOTE: this static route must be registered BEFORE /olts/backups/{backup_id};
+# otherwise "compare" is captured as a backup_id and crashes on UUID coercion.
+@router.get(
+    "/olts/backups/compare",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_backup_compare(
+    request: Request,
+    backup_id_1: str,
+    backup_id_2: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    try:
+        backup1, backup2, diff = olt_operations_service.compare_olt_backups(
+            db, backup_id_1, backup_id_2
+        )
+    except HTTPException as exc:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": str(exc.detail)},
+            status_code=exc.status_code,
+        )
+
+    olt = get_olt_or_none(db, str(backup1.olt_device_id))
+    if not olt:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "OLT not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="olts")
+    context.update({"olt": olt, "backup1": backup1, "backup2": backup2, "diff": diff})
+    return templates.TemplateResponse("admin/network/olts/backup_compare.html", context)
+
+
 @router.get(
     "/olts/backups/{backup_id}",
     response_class=HTMLResponse,
@@ -948,37 +984,3 @@ def olt_backup_restore(
         f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
         status_code=303,
     )
-
-
-@router.get(
-    "/olts/backups/compare",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def olt_backup_compare(
-    request: Request,
-    backup_id_1: str,
-    backup_id_2: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    try:
-        backup1, backup2, diff = olt_operations_service.compare_olt_backups(
-            db, backup_id_1, backup_id_2
-        )
-    except HTTPException as exc:
-        return templates.TemplateResponse(
-            "admin/errors/404.html",
-            {"request": request, "message": str(exc.detail)},
-            status_code=exc.status_code,
-        )
-
-    olt = get_olt_or_none(db, str(backup1.olt_device_id))
-    if not olt:
-        return templates.TemplateResponse(
-            "admin/errors/404.html",
-            {"request": request, "message": "OLT not found"},
-            status_code=404,
-        )
-    context = _base_context(request, db, active_page="olts")
-    context.update({"olt": olt, "backup1": backup1, "backup2": backup2, "diff": diff})
-    return templates.TemplateResponse("admin/network/olts/backup_compare.html", context)
