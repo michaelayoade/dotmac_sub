@@ -109,19 +109,19 @@
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-slate-200/60 dark:border-slate-700/60">
                     <div class="text-center">
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Download</p>
-                        <p class="mt-1 text-xl font-bold text-brand-600 dark:text-brand-400" x-text="currentTxFormatted">{{ bandwidth_chart_initial_stats.current_tx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                        <p class="mt-1 text-xl font-bold text-brand-600 dark:text-brand-400" x-text="currentDownloadFormatted">{{ bandwidth_chart_initial_stats.current_download_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
                     </div>
                     <div class="text-center">
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Upload</p>
-                        <p class="mt-1 text-xl font-bold text-purple-600 dark:text-purple-400" x-text="currentRxFormatted">{{ bandwidth_chart_initial_stats.current_rx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                        <p class="mt-1 text-xl font-bold text-purple-600 dark:text-purple-400" x-text="currentUploadFormatted">{{ bandwidth_chart_initial_stats.current_upload_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
                     </div>
                     <div class="text-center">
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Peak Download</p>
-                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakTxFormatted">{{ bandwidth_chart_initial_stats.peak_tx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakDownloadFormatted">{{ bandwidth_chart_initial_stats.peak_download_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
                     </div>
                     <div class="text-center">
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Peak Upload</p>
-                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakRxFormatted">{{ bandwidth_chart_initial_stats.peak_rx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakUploadFormatted">{{ bandwidth_chart_initial_stats.peak_upload_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
                     </div>
                 </div>
             </div>
