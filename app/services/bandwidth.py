@@ -407,6 +407,36 @@ class BandwidthSamples(ListResponseMixin):
         return {"data": data, "total": len(data), "source": source}
 
     @staticmethod
+    def _estimate_total_bytes_from_samples(
+        db: Session, subscription_id: str | UUID, start: datetime
+    ) -> tuple[int, int]:
+        """Approximate total bytes by integrating average throughput over the
+        sampled window (avg bits/s / 8 * span seconds).
+
+        Used when the metrics store has no byte totals but PostgreSQL has
+        samples — these totals were previously reported as 0.
+        """
+        row = (
+            db.query(
+                func.avg(BandwidthSample.rx_bps).label("avg_rx"),
+                func.avg(BandwidthSample.tx_bps).label("avg_tx"),
+                func.min(BandwidthSample.sample_at).label("first_at"),
+                func.max(BandwidthSample.sample_at).label("last_at"),
+            )
+            .filter(
+                BandwidthSample.subscription_id == subscription_id,
+                BandwidthSample.sample_at >= start,
+            )
+            .first()
+        )
+        if not row or not row.first_at or not row.last_at:
+            return 0, 0
+        span_seconds = max((row.last_at - row.first_at).total_seconds(), 0.0)
+        rx = int(float(row.avg_rx or 0) / 8 * span_seconds)
+        tx = int(float(row.avg_tx or 0) / 8 * span_seconds)
+        return rx, tx
+
+    @staticmethod
     async def get_bandwidth_stats(
         db: Session,
         subscription_id: str | UUID,
@@ -495,13 +525,24 @@ class BandwidthSamples(ListResponseMixin):
                     peak_rx_bps = float(pg_stats.peak_rx or 0)
                     peak_tx_bps = float(pg_stats.peak_tx or 0)
 
+            total_rx_bytes = int(total.get("rx_bytes") or 0)
+            total_tx_bytes = int(total.get("tx_bytes") or 0)
+            # The metrics store often has no byte totals even when PostgreSQL
+            # has samples; integrate the samples rather than report 0.
+            if not total_rx_bytes and not total_tx_bytes and sample_count_value > 0:
+                total_rx_bytes, total_tx_bytes = (
+                    BandwidthSamples._estimate_total_bytes_from_samples(
+                        db, subscription_id, start
+                    )
+                )
+
             return {
                 "current_rx_bps": current_rx_bps,
                 "current_tx_bps": current_tx_bps,
                 "peak_rx_bps": peak_rx_bps,
                 "peak_tx_bps": peak_tx_bps,
-                "total_rx_bytes": total["rx_bytes"],
-                "total_tx_bytes": total["tx_bytes"],
+                "total_rx_bytes": total_rx_bytes,
+                "total_tx_bytes": total_tx_bytes,
                 "sample_count": sample_count_value,
             }
 
@@ -533,13 +574,18 @@ class BandwidthSamples(ListResponseMixin):
                 .first()
             )
 
+            total_rx_bytes, total_tx_bytes = (
+                BandwidthSamples._estimate_total_bytes_from_samples(
+                    db, subscription_id, start
+                )
+            )
             return {
                 "current_rx_bps": float(latest.rx_bps if latest else 0),
                 "current_tx_bps": float(latest.tx_bps if latest else 0),
                 "peak_rx_bps": float(stats.peak_rx or 0),
                 "peak_tx_bps": float(stats.peak_tx or 0),
-                "total_rx_bytes": 0,  # Can't easily calculate without VM
-                "total_tx_bytes": 0,
+                "total_rx_bytes": total_rx_bytes,
+                "total_tx_bytes": total_tx_bytes,
                 "sample_count": stats.count or 0,
             }
 
