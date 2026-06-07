@@ -655,7 +655,7 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
     Queries the latest DeviceMetric for each active device.
     Returns a list of dicts suitable for the monitoring dashboard table.
     """
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from app.models.network_monitoring import (
         DeviceMetric,
@@ -678,6 +678,44 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
     if not devices:
         return []
 
+    metric_fields = [
+        (MetricType.cpu, "cpu"),
+        (MetricType.memory, "memory"),
+        (MetricType.temperature, "temperature"),
+        (MetricType.uptime, "uptime"),
+    ]
+
+    # Latest value per (device, metric_type) in ONE windowed query instead of
+    # four queries per device — that N+1 fan-out (~400 queries) serialized to
+    # ~37s and dominated the monitoring dashboard load.
+    device_ids = [device.id for device in devices]
+    ranked = (
+        select(
+            DeviceMetric.device_id.label("device_id"),
+            DeviceMetric.metric_type.label("metric_type"),
+            DeviceMetric.value.label("value"),
+            func.row_number()
+            .over(
+                partition_by=(DeviceMetric.device_id, DeviceMetric.metric_type),
+                order_by=DeviceMetric.recorded_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(
+            DeviceMetric.device_id.in_(device_ids),
+            DeviceMetric.metric_type.in_([mt for mt, _ in metric_fields]),
+        )
+        .subquery()
+    )
+    latest_by_key: dict[tuple, float] = {}
+    for device_id, metric_type, value, _rn in db.execute(
+        select(
+            ranked.c.device_id, ranked.c.metric_type, ranked.c.value, ranked.c.rn
+        ).where(ranked.c.rn == 1)
+    ).all():
+        if value is not None:
+            latest_by_key[(device_id, metric_type)] = round(float(value), 1)
+
     results = []
     for device in devices:
         row: dict = {
@@ -691,25 +729,10 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
             "temperature": None,
             "uptime": None,
         }
-
-        # Get latest metrics for this device
-        for mt, field in [
-            (MetricType.cpu, "cpu"),
-            (MetricType.memory, "memory"),
-            (MetricType.temperature, "temperature"),
-            (MetricType.uptime, "uptime"),
-        ]:
-            val = db.scalars(
-                select(DeviceMetric.value)
-                .where(
-                    DeviceMetric.device_id == device.id, DeviceMetric.metric_type == mt
-                )
-                .order_by(DeviceMetric.recorded_at.desc())
-                .limit(1)
-            ).first()
-            if val is not None:
-                row[field] = round(float(val), 1)
-
+        for mt, field in metric_fields:
+            value = latest_by_key.get((device.id, mt))
+            if value is not None:
+                row[field] = value
         results.append(row)
 
     return results
