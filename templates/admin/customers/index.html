@@ -1017,11 +1017,13 @@ function customersPage() {
 
             this.bulkLoading = true;
             try {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
                 const response = await fetch('/admin/customers/bulk/update', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest'
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
                     },
                     body: JSON.stringify(
                         this.buildScopePayload({
@@ -1050,11 +1052,13 @@ function customersPage() {
 
             this.bulkLoading = true;
             try {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
                 const response = await fetch('/admin/customers/bulk/send-message', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest'
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
                     },
                     body: JSON.stringify(
                         this.buildScopePayload({
