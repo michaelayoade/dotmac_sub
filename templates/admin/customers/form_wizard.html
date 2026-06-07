@@ -43,7 +43,11 @@
     </div>
 
     <!-- Form Container -->
-    <form @submit.prevent="handleSubmit()" x-data="{ submitting: false }">
+    <!-- novalidate: this is a JS-driven multi-step wizard (validation via
+         canProceed/handleSubmit). Native HTML5 validation would try to validate
+         required controls in hidden steps and fail with "invalid form control
+         is not focusable", silently blocking submit. -->
+    <form @submit.prevent="handleSubmit()" x-data="{ submitting: false }" novalidate>
         {% include "components/forms/csrf_input.html" %}
 
         <!-- Step 1: Type Selection -->
@@ -130,12 +134,16 @@ function customerWizard() {
 
         // Step navigation
         currentStep: 1,
+        // NOTE: use regular functions (not arrows) so canProceed's
+        // `validate.call(this)` can bind `this` to the component. Arrow
+        // functions ignore .call() and would capture the wrong `this`,
+        // throwing "this.validateBasicInfo is not a function".
         steps: [
-            { label: 'Type', validate: () => this.customerType !== '' },
-            { label: 'Details', validate: () => this.validateBasicInfo() },
-            { label: 'Address', validate: () => true },  // Optional
-            { label: 'Contacts', validate: () => true },  // Only for business accounts, optional
-            { label: 'Review', validate: () => true }
+            { label: 'Type', validate: function () { return this.customerType !== ''; } },
+            { label: 'Details', validate: function () { return this.validateBasicInfo(); } },
+            { label: 'Address', validate: function () { return true; } },  // Optional
+            { label: 'Contacts', validate: function () { return true; } },  // business only, optional
+            { label: 'Review', validate: function () { return true; } }
         ],
 
         // Billing mode
