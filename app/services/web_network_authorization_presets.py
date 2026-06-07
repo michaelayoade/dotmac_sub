@@ -114,13 +114,25 @@ def form_context(
 
     item = authorization_presets.get(db, preset_id) if preset_id else None
 
+    vlans = _active_vlans(db)
     return {
         "request": request,
         "active_page": "authorization-presets",
         "active_menu": "network",
         "item": item,
         "olt_devices": _active_olts(db),
-        "vlans": _active_vlans(db),
+        "vlans": vlans,
+        # JSON-safe projection for the Alpine x-data array; the ORM __dict__
+        # carries timezone DisplayObject wrappers that tojson cannot serialize.
+        "vlans_json": [
+            {
+                "id": str(v.id),
+                "olt_device_id": str(v.olt_device_id) if v.olt_device_id else None,
+                "tag": v.tag,
+                "name": v.name,
+            }
+            for v in vlans
+        ],
         "action_url": (
             f"/admin/network/authorization-presets/{preset_id}/edit"
             if preset_id
