@@ -254,16 +254,21 @@ def build_create_payload(
 
 def build_update_payload(
     *,
-    account_id,
     payment_method_id,
     amount,
     currency: str,
     status: str | None,
     memo: str | None,
 ) -> PaymentUpdate:
-    """Build payment-update payload."""
+    """Build payment-update payload.
+
+    Deliberately omits account_id: the payment scope is immutable and
+    billing_service.payments.update() rejects any payload that sets it (it
+    checks ``"account_id" in model_dump(exclude_unset=True)``). The edit form
+    always submits the locked account, so including it here made every payment
+    edit fail with a 400. The account is resolved/validated by the caller.
+    """
     return PaymentUpdate(
-        account_id=account_id,
         payment_method_id=payment_method_id,
         amount=amount,
         currency=currency.strip().upper(),
@@ -1038,7 +1043,6 @@ def process_payment_update(
         requested_invoice_id and requested_invoice_id != current_invoice_id
     )
     payload = build_update_payload(
-        account_id=parsed_account_id,
         payment_method_id=resolve_payment_method_id(
             db, parsed_account_id, payment_method_id
         ),
