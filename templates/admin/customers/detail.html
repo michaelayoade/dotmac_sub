@@ -381,7 +381,10 @@
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Contact Information</h3>
-                        <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Edit</a>
+                        <div class="flex items-center gap-3">
+                            <button type="button" @click="showContactModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Contact</button>
+                            <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Edit</a>
+                        </div>
                     </div>
                     <div class="p-5 space-y-4">
                         {% if organization %}
@@ -825,9 +828,12 @@
                             </div>
                             <h3 class="font-semibold text-slate-900 dark:text-white">Location</h3>
                         </div>
-                        {% if map_data %}
-                        <a href="/admin/network/map" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full Map</a>
-                        {% endif %}
+                        <div class="flex items-center gap-3">
+                            {% if map_data %}
+                            <a href="/admin/network/map" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full Map</a>
+                            {% endif %}
+                            <button type="button" @click="showAddressModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Address</button>
+                        </div>
                     </div>
                     {% if map_data %}
                     <div class="p-2">
