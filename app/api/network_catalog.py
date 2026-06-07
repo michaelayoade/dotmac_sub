@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -44,6 +44,17 @@ from app.services.network.zones import NetworkZones
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["network-catalog"])
+
+
+def _enum_or_422(enum_cls, value, field: str):
+    """Coerce a string to an enum, returning HTTP 422 (not 500) on a bad value."""
+    try:
+        return enum_cls(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {field}: {value!r}",
+        ) from exc
 
 
 # ── ONU Types ──────────────────────────────────────────────────────────
@@ -89,8 +100,8 @@ def create_onu_type(
     item = onu_types.create(
         db,
         name=payload.name,
-        pon_type=PonType(payload.pon_type),
-        gpon_channel=GponChannel(payload.gpon_channel),
+        pon_type=_enum_or_422(PonType, payload.pon_type, "pon_type"),
+        gpon_channel=_enum_or_422(GponChannel, payload.gpon_channel, "gpon_channel"),
         ethernet_ports=payload.ethernet_ports,
         wifi_ports=payload.wifi_ports,
         voip_ports=payload.voip_ports,
@@ -213,9 +224,9 @@ def create_speed_profile(
     item = SpeedProfiles.create(
         db,
         name=payload.name,
-        direction=SpeedProfileDirection(payload.direction),
+        direction=_enum_or_422(SpeedProfileDirection, payload.direction, "direction"),
         speed_kbps=payload.speed_kbps,
-        speed_type=SpeedProfileType(payload.speed_type),
+        speed_type=_enum_or_422(SpeedProfileType, payload.speed_type, "speed_type"),
         use_prefix_suffix=payload.use_prefix_suffix,
         is_default=payload.is_default,
         notes=payload.notes,
