@@ -39,6 +39,99 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+# Where a customer lands after accepting an invite / completing a reset.
+CUSTOMER_LOGIN_NEXT = "/portal/auth/login?next=/portal/dashboard"
+
+
+def _ensure_subscriber_local_credential(
+    db: Session, subscriber: Subscriber
+) -> UserCredential:
+    """Create or reactivate a customer's local portal credential.
+
+    Customer portal credentials live in ``UserCredential`` keyed by
+    ``subscriber_id``. The staff helpers in ``web_system_user_mutations`` key on
+    ``system_user_id`` (via ``db.get(SystemUser, ...)``) and never match a
+    customer — which is why customer invite/reset/activate failed with
+    "User not found". This mirrors ``_ensure_local_credential`` on the subscriber
+    side. Local credentials require username + password_hash (DB CHECK); the
+    random hash is a placeholder the customer replaces via the invite/reset link.
+    The customer portal accepts this local credential OR RADIUS at login.
+    """
+    import secrets
+
+    from app.services.auth_flow import hash_password
+
+    cred = (
+        db.query(UserCredential)
+        .filter(UserCredential.subscriber_id == subscriber.id)
+        .filter(UserCredential.provider == AuthProvider.local)
+        .order_by(UserCredential.created_at.desc())
+        .first()
+    )
+    if cred:
+        if not cred.username:
+            cred.username = subscriber.email
+        if not cred.password_hash:
+            cred.password_hash = hash_password(secrets.token_urlsafe(24))
+        cred.is_active = True
+        cred.must_change_password = True
+        cred.password_updated_at = _now()
+        db.flush()
+        return cred
+    cred = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username=subscriber.email,
+        password_hash=hash_password(secrets.token_urlsafe(24)),
+        must_change_password=True,
+        password_updated_at=_now(),
+        is_active=True,
+    )
+    db.add(cred)
+    db.flush()
+    return cred
+
+
+def _set_subscriber_local_login_active(
+    db: Session, subscriber: Subscriber, *, is_active: bool
+) -> None:
+    """Activate/deactivate a customer's local portal login (subscriber-keyed)."""
+    if is_active:
+        _ensure_subscriber_local_credential(db, subscriber)
+    else:
+        db.query(UserCredential).filter(
+            UserCredential.subscriber_id == subscriber.id,
+            UserCredential.provider == AuthProvider.local,
+        ).update({"is_active": False}, synchronize_session=False)
+    db.commit()
+
+
+def _send_subscriber_reset_link(
+    db: Session, *, subscriber: Subscriber, email: str
+) -> str:
+    """Send a portal password-reset link to a customer (subscriber-keyed)."""
+    from app.services import auth_flow as auth_flow_service
+    from app.services import email as email_service
+
+    _ensure_subscriber_local_credential(db, subscriber)
+    db.commit()
+    reset = auth_flow_service.request_password_reset(db=db, email=email)
+    if not reset or not reset.get("token"):
+        return "Password reset link could not be generated for this user."
+    sent = email_service.send_password_reset_email(
+        db,
+        to_email=email,
+        reset_token=reset["token"],
+        person_name=reset.get("subscriber_name"),
+        next_login_path=CUSTOMER_LOGIN_NEXT,
+    )
+    return (
+        "Password reset link sent successfully."
+        if sent
+        else "Password reset link could not be sent."
+    )
+
+
 def _invite_expiry_minutes(db: Session) -> int:
     value = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
     try:
@@ -248,11 +341,7 @@ def activate_customer_login(
         customer_type=customer_type,
         customer_id=customer_id,
     )
-    web_system_user_mutations_service.set_local_login_active(
-        db,
-        user_id=str(target.subscriber.id),
-        is_active=True,
-    )
+    _set_subscriber_local_login_active(db, target.subscriber, is_active=True)
     return target
 
 
@@ -314,9 +403,15 @@ def send_customer_invite(
             "message": "Invite rate limit reached. Try again later.",
         }
 
-    note = web_system_user_mutations_service.send_user_invite_for_user(
+    target = resolve_customer_user_target(
+        db, customer_type=customer_type, customer_id=customer_id
+    )
+    _ensure_subscriber_local_credential(db, target.subscriber)
+    db.commit()
+    note = web_system_user_mutations_service.send_user_invite(
         db,
-        user_id=str(state["target_subscriber_id"]),
+        email=target.email,
+        next_login_path=CUSTOMER_LOGIN_NEXT,
     )
     ok = "sent" in note.lower()
     record_audit_event(
@@ -389,10 +484,10 @@ def send_customer_reset_link(
             "message": "Reset limit reached: max 3 reset links per hour.",
         }
 
-    note = web_system_user_mutations_service.send_password_reset_link_for_user(
-        db,
-        user_id=str(state["target_subscriber_id"]),
+    target = resolve_customer_user_target(
+        db, customer_type=customer_type, customer_id=customer_id
     )
+    note = _send_subscriber_reset_link(db, subscriber=target.subscriber, email=target.email)
     ok = "sent" in note.lower()
     record_audit_event(
         db,
@@ -476,11 +571,7 @@ def log_customer_user_access_error(
 
 def activate_subscriber_login(db: Session, *, subscriber_id: str) -> CustomerUserTarget:
     target = resolve_subscriber_user_target(db, subscriber_id=subscriber_id)
-    web_system_user_mutations_service.set_local_login_active(
-        db,
-        user_id=str(target.subscriber.id),
-        is_active=True,
-    )
+    _set_subscriber_local_login_active(db, target.subscriber, is_active=True)
     return target
 
 
@@ -492,11 +583,7 @@ def deactivate_customer_login(
         customer_type=customer_type,
         customer_id=customer_id,
     )
-    web_system_user_mutations_service.set_local_login_active(
-        db,
-        user_id=str(target.subscriber.id),
-        is_active=False,
-    )
+    _set_subscriber_local_login_active(db, target.subscriber, is_active=False)
     return target
 
 
@@ -504,11 +591,7 @@ def deactivate_subscriber_login(
     db: Session, *, subscriber_id: str
 ) -> CustomerUserTarget:
     target = resolve_subscriber_user_target(db, subscriber_id=subscriber_id)
-    web_system_user_mutations_service.set_local_login_active(
-        db,
-        user_id=str(target.subscriber.id),
-        is_active=False,
-    )
+    _set_subscriber_local_login_active(db, target.subscriber, is_active=False)
     return target
 
 
