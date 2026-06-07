@@ -216,7 +216,7 @@ function bandwidthChart(config = {}) {
                 datasets: [
                     {
                         label: 'Download',
-                        data: rxData,
+                        data: txData,
                         color: DotmacCharts.colors.accent[500],
                         fillColor: DotmacCharts.colors.accent[500] + '40',
                         fill: true,
@@ -224,7 +224,7 @@ function bandwidthChart(config = {}) {
                     },
                     {
                         label: 'Upload',
-                        data: txData,
+                        data: rxData,
                         color: DotmacCharts.colors.primary[500],
                         fillColor: DotmacCharts.colors.primary[500] + '40',
                         fill: true,
@@ -315,8 +315,8 @@ function bandwidthChart(config = {}) {
                         }
                         const now = new Date();
                         this.chart.data.labels.push(this.formatTimeLabel(now));
-                        this.chart.data.datasets[0].data.push(this.currentRx / 1000000);
-                        this.chart.data.datasets[1].data.push(this.currentTx / 1000000);
+                        this.chart.data.datasets[0].data.push(this.currentTx / 1000000);
+                        this.chart.data.datasets[1].data.push(this.currentRx / 1000000);
 
                         // Keep chart lightweight to avoid client-side rendering loops.
                         const maxPoints = 900;
