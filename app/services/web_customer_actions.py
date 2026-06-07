@@ -1910,6 +1910,9 @@ def create_customer_contact(
         "is_primary": is_primary == "true",
     }
     _create_subscriber_channels_from_rows(db, str(UUID(account_id)), [row])
+    # _create_subscriber_channels_from_rows only flushes; persist the new
+    # contact (delete_customer_contact already commits its own change).
+    db.commit()
 
 
 def delete_customer_contact(db: Session, *, contact_id: str) -> None:
