@@ -44,6 +44,23 @@ from app.web.request_parsing import parse_json_body
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
+
+
+def _safe_form_error(exc: Exception) -> str:
+    """Message safe to render back into a form.
+
+    User-facing validation errors (``ValueError``) are shown verbatim; any other
+    exception (DB constraint, integrity error, etc.) is logged with a full
+    traceback but shown generically so SQL/schema/internals never leak to the UI.
+    Call only from inside an ``except`` block (uses the active exception for the
+    traceback log).
+    """
+    if isinstance(exc, ValueError):
+        return str(exc)
+    logger.exception("Admin customer form action failed")
+    return (
+        "Something went wrong. Please try again or contact support if it persists."
+    )
 contacts_router = APIRouter(prefix="/contacts", tags=["web-admin-contacts"])
 _ALLOWED_USAGE_PERIODS = {"current", "last"}
 
@@ -530,6 +547,17 @@ def customer_create(
     except Exception as e:
         # Ensure failed transactions don't break error-page queries/rendering.
         db.rollback()
+        # Only surface user-facing validation messages (ValueError). Unexpected
+        # errors (DB constraints, etc.) are logged but shown generically so we
+        # don't leak SQL/schema/internals to the admin UI.
+        if isinstance(e, ValueError):
+            error_message = str(e)
+        else:
+            logger.exception("Customer create failed (customer_type=%s)", customer_type)
+            error_message = (
+                "Something went wrong creating the customer. "
+                "Please try again or contact support if it persists."
+            )
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -556,7 +584,7 @@ def customer_create(
                 "customer": None,
                 "customer_type": customer_type,
                 "action": "create",
-                "error": str(e),
+                "error": error_message,
                 "form": {
                     "contact_rows": contact_rows or None,
                 },
@@ -1174,7 +1202,7 @@ def person_update(
                 "customer": customer,
                 "customer_type": "person",
                 "action": "edit",
-                "error": str(e),
+                "error": _safe_form_error(e),
                 "tax_rates": _load_tax_rates(db),
                 "billing_form": _billing_form_defaults(db, "person", customer),
                 "current_user": current_user,
@@ -1263,7 +1291,7 @@ def business_update(
                 "customer": customer,
                 "customer_type": "business",
                 "action": "edit",
-                "error": str(e),
+                "error": _safe_form_error(e),
                 "tax_rates": _load_tax_rates(db),
                 "billing_form": _billing_form_defaults(db, "business", customer),
                 "current_user": current_user,
@@ -1395,7 +1423,7 @@ def person_delete(
             "admin/errors/500.html",
             {
                 "request": request,
-                "error": str(e),
+                "error": _safe_form_error(e),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1457,7 +1485,7 @@ def business_delete(
             "admin/errors/500.html",
             {
                 "request": request,
-                "error": str(e),
+                "error": _safe_form_error(e),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1522,7 +1550,7 @@ def create_address(
             "admin/errors/500.html",
             {
                 "request": request,
-                "error": str(e),
+                "error": _safe_form_error(e),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1652,7 +1680,7 @@ def create_contact(
             "admin/errors/500.html",
             {
                 "request": request,
-                "error": str(e),
+                "error": _safe_form_error(e),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
