@@ -17,6 +17,7 @@ from app.models.billing import (
     TopupIntent,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
@@ -257,7 +258,7 @@ def get_payment_page(
     invoice_number = getattr(invoice, "invoice_number", None)
 
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
-    email = billing_contact["billing_email"] or customer.get("username", "")
+    email = billing_contact["billing_email"] or _resolve_customer_email(db, customer)
 
     gateway_context = payment_gateway_adapter.build_context(
         db,
@@ -361,6 +362,30 @@ def verify_and_record_payment(
     }
 
 
+def _resolve_customer_email(db: Session, customer: dict) -> str:
+    """Resolve a real email address for the customer (for payment gateways).
+
+    The session ``username`` is the RADIUS/PPPoE login (or an impersonation
+    token), not an email, so Paystack rejects it. Prefer an email already on the
+    session, then fall back to the subscriber record. Returns "" if none.
+    """
+    for candidate in (customer.get("email"), customer.get("billing_email")):
+        value = str(candidate or "").strip()
+        if "@" in value:
+            return value
+    account_id = customer.get("account_id")
+    if account_id:
+        try:
+            subscriber = db.get(Subscriber, uuid.UUID(str(account_id)))
+        except (ValueError, TypeError):
+            subscriber = None
+        if subscriber:
+            value = str(getattr(subscriber, "email", "") or "").strip()
+            if "@" in value:
+                return value
+    return ""
+
+
 def get_topup_page(
     db: Session,
     customer: dict,
@@ -382,7 +407,7 @@ def get_topup_page(
 
     min_amount_value, max_amount_value = _resolve_topup_limits(db)
 
-    email = customer.get("username", "")
+    email = _resolve_customer_email(db, customer)
 
     context = {
         "provider_type": provider_type,
