@@ -311,6 +311,26 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
             subscriber.min_balance = Decimal(str(val))
 
 
+def _default_reseller_id(db: Session):
+    """Resolve the reseller a new subscriber belongs to when none is supplied.
+
+    ``subscribers.reseller_id`` is NOT NULL (migration 116). New customers
+    created without an explicit reseller (e.g. the admin "Add Customer" form,
+    which has no reseller field) default to the House reseller — the company's
+    own reseller row, which migration 116 guarantees exists. Falls back to any
+    reseller so creation never hard-fails on a misconfigured deployment.
+    """
+    house = (
+        db.query(Reseller.id)
+        .filter(Reseller.is_house.is_(True))
+        .first()
+    )
+    if house:
+        return house[0]
+    any_reseller = db.query(Reseller.id).order_by(Reseller.created_at).first()
+    return any_reseller[0] if any_reseller else None
+
+
 class Subscribers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriberCreate):
@@ -373,6 +393,10 @@ class Subscribers(ListResponseMixin):
         data.pop("organization_id", None)
         if data.get("user_type") is None:
             data["user_type"] = UserType.customer
+        if not data.get("reseller_id"):
+            # reseller_id is NOT NULL; default unassigned customers to the House
+            # reseller so creation paths without a reseller field still succeed.
+            data["reseller_id"] = _default_reseller_id(db)
         if not data.get("subscriber_number"):
             generated = numbering.generate_number(
                 db,
