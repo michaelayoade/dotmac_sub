@@ -245,42 +245,6 @@ def customer_support_add_comment(
 # ── Work Orders (CRM-backed) ─────────────────────────────────────────────
 
 
-@router.get("/work-orders", response_class=HTMLResponse)
-def customer_work_orders(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> Response:
-    """Customer work orders list (CRM-backed)."""
-    customer = get_current_customer_from_request(request, db)
-    if not customer:
-        return RedirectResponse(
-            url="/portal/auth/login?next=/portal/work-orders", status_code=303
-        )
-    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
-    context = crm_portal.work_orders_list_context(request, db, customer, subscriber_ids)
-    return templates.TemplateResponse("customer/work-orders/index.html", context)
-
-
-@router.get("/work-orders/{work_order_id}", response_class=HTMLResponse)
-def customer_work_order_detail(
-    request: Request,
-    work_order_id: str,
-    db: Session = Depends(get_db),
-) -> Response:
-    """Customer work order detail (CRM-backed)."""
-    customer = get_current_customer_from_request(request, db)
-    if not customer:
-        return RedirectResponse(
-            url=f"/portal/auth/login?next=/portal/work-orders/{quote_plus(work_order_id)}",
-            status_code=303,
-        )
-    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
-    context = crm_portal.work_order_detail_context(
-        request, db, customer, subscriber_ids, work_order_id
-    )
-    return templates.TemplateResponse("customer/work-orders/detail.html", context)
-
-
 @router.get("/billing", response_class=HTMLResponse)
 def customer_billing(
     request: Request,

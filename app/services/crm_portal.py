@@ -62,34 +62,6 @@ TICKET_PRIORITY_COLORS: dict[str, str] = {
     "urgent": "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
 }
 
-WORK_ORDER_STATUS_DISPLAY: dict[str, str] = {
-    "draft": "Draft",
-    "scheduled": "Scheduled",
-    "in_progress": "In Progress",
-    "completed": "Completed",
-    "cancelled": "Cancelled",
-    "on_hold": "On Hold",
-}
-
-WORK_ORDER_STATUS_COLORS: dict[str, str] = {
-    "draft": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
-    "scheduled": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    "in_progress": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "completed": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-    "cancelled": "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
-    "on_hold": "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
-}
-
-WORK_ORDER_TYPE_DISPLAY: dict[str, str] = {
-    "installation": "Installation",
-    "repair": "Repair",
-    "maintenance": "Maintenance",
-    "upgrade": "Upgrade",
-    "relocation": "Relocation",
-    "decommission": "Decommission",
-}
-
-
 # ── Subscriber ID Resolution ────────────────────────────────────────────
 
 
@@ -312,6 +284,7 @@ def handle_ticket_create(
     Returns:
         Dict with 'success' bool and 'ticket' or 'error' key.
     """
+    from app.models.support import TicketChannel
     from app.schemas.support import TicketCreate
     from app.services import support as support_service
 
@@ -332,7 +305,7 @@ def handle_ticket_create(
                 title=title,
                 description=description or "",
                 priority=priority if priority in TICKET_PRIORITY_DISPLAY else "normal",
-                channel="web",
+                channel=TicketChannel.web,
             ),
             actor_id=None,
         )
@@ -384,119 +357,6 @@ def handle_ticket_comment(
             "success": False,
             "error": "Unable to add comment. Please try again later.",
         }
-
-
-# ── Customer Portal: Work Orders ─────────────────────────────────────────
-
-
-def work_orders_list_context(
-    request: Request,
-    db: Session,
-    customer: dict,
-    subscriber_ids: list[str],
-) -> dict[str, Any]:
-    """Build template context for customer work order list."""
-    try:
-        crm_sub_ids = resolve_crm_subscriber_ids(db, subscriber_ids)
-        if not crm_sub_ids:
-            return {
-                "request": request,
-                "customer": customer,
-                "work_orders": [],
-                "active_page": "work-orders",
-                "status_display": WORK_ORDER_STATUS_DISPLAY,
-                "status_colors": WORK_ORDER_STATUS_COLORS,
-                "type_display": WORK_ORDER_TYPE_DISPLAY,
-                **_ok_context(),
-            }
-        client = get_crm_client()
-        merged: dict[str, dict[str, Any]] = {}
-        for crm_sub_id in crm_sub_ids:
-            for work_order in client.list_work_orders(subscriber_id=crm_sub_id):
-                work_order_id = str(work_order.get("id") or "")
-                if work_order_id:
-                    merged[work_order_id] = work_order
-        work_orders = _sort_by_recent(list(merged.values()))
-    except CRMClientError:
-        return {
-            "request": request,
-            "customer": customer,
-            "work_orders": [],
-            "active_page": "work-orders",
-            "status_display": WORK_ORDER_STATUS_DISPLAY,
-            "status_colors": WORK_ORDER_STATUS_COLORS,
-            "type_display": WORK_ORDER_TYPE_DISPLAY,
-            **_error_context(),
-        }
-
-    return {
-        "request": request,
-        "customer": customer,
-        "work_orders": work_orders,
-        "active_page": "work-orders",
-        "status_display": WORK_ORDER_STATUS_DISPLAY,
-        "status_colors": WORK_ORDER_STATUS_COLORS,
-        "type_display": WORK_ORDER_TYPE_DISPLAY,
-        **_ok_context(),
-    }
-
-
-def work_order_detail_context(
-    request: Request,
-    db: Session,
-    customer: dict,
-    subscriber_ids: list[str],
-    work_order_id: str,
-) -> dict[str, Any]:
-    """Build template context for customer work order detail."""
-    try:
-        crm_sub_ids = set(resolve_crm_subscriber_ids(db, subscriber_ids))
-        if not crm_sub_ids:
-            return {
-                "request": request,
-                "customer": customer,
-                "work_order": None,
-                "notes": [],
-                "active_page": "work-orders",
-                **_error_context("Work order not found."),
-            }
-        client = get_crm_client()
-        work_order = client.get_work_order(work_order_id)
-
-        # Verify work order belongs to this subscriber
-        wo_sub = str(work_order.get("subscriber_id", ""))
-        if not wo_sub or wo_sub not in crm_sub_ids:
-            return {
-                "request": request,
-                "customer": customer,
-                "work_order": None,
-                "notes": [],
-                "active_page": "work-orders",
-                **_error_context("Work order not found."),
-            }
-
-        notes = client.list_work_order_notes(work_order_id)
-    except CRMClientError:
-        return {
-            "request": request,
-            "customer": customer,
-            "work_order": None,
-            "notes": [],
-            "active_page": "work-orders",
-            **_error_context(),
-        }
-
-    return {
-        "request": request,
-        "customer": customer,
-        "work_order": work_order,
-        "notes": notes,
-        "active_page": "work-orders",
-        "status_display": WORK_ORDER_STATUS_DISPLAY,
-        "status_colors": WORK_ORDER_STATUS_COLORS,
-        "type_display": WORK_ORDER_TYPE_DISPLAY,
-        **_ok_context(),
-    }
 
 
 # ── Reseller Portal ─────────────────────────────────────────────────────
