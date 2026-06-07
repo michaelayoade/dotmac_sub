@@ -173,6 +173,9 @@ class AlertNotificationPolicy(Base):
     template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("notification_templates.id")
     )
+    connector_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("connector_configs.id")
+    )
     rule_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("alert_rules.id")
     )

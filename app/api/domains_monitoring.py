@@ -431,34 +431,9 @@ def get_alert(alert_id: str, db: Session = Depends(get_db)):
     return monitoring_service.alerts.get(db, alert_id)
 
 
-@router.post(
-    "/alerts/{alert_id}/ack",
-    response_model=AlertRead,
-    tags=["network-monitoring"],
-    dependencies=[Depends(require_permission("monitoring:write"))],
-)
-def acknowledge_alert(
-    alert_id: str, payload: AlertAcknowledgeRequest, db: Session = Depends(get_db)
-):
-    result = monitoring_service.alerts.acknowledge(db, alert_id, payload)
-    db.commit()
-    return result
-
-
-@router.post(
-    "/alerts/{alert_id}/resolve",
-    response_model=AlertRead,
-    tags=["network-monitoring"],
-    dependencies=[Depends(require_permission("monitoring:write"))],
-)
-def resolve_alert(
-    alert_id: str, payload: AlertResolveRequest, db: Session = Depends(get_db)
-):
-    result = monitoring_service.alerts.resolve(db, alert_id, payload)
-    db.commit()
-    return result
-
-
+# NOTE: the static /alerts/bulk/* routes MUST be declared before the
+# parametrized /alerts/{alert_id}/* routes — otherwise "bulk" is captured as an
+# alert_id and the request 500s on a malformed-UUID lookup. Do not reorder.
 @router.post(
     "/alerts/bulk/ack",
     response_model=AlertBulkActionResponse,
@@ -491,6 +466,34 @@ def bulk_resolve_alerts(
     )
     db.commit()
     return AlertBulkActionResponse(**response)
+
+
+@router.post(
+    "/alerts/{alert_id}/ack",
+    response_model=AlertRead,
+    tags=["network-monitoring"],
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def acknowledge_alert(
+    alert_id: str, payload: AlertAcknowledgeRequest, db: Session = Depends(get_db)
+):
+    result = monitoring_service.alerts.acknowledge(db, alert_id, payload)
+    db.commit()
+    return result
+
+
+@router.post(
+    "/alerts/{alert_id}/resolve",
+    response_model=AlertRead,
+    tags=["network-monitoring"],
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def resolve_alert(
+    alert_id: str, payload: AlertResolveRequest, db: Session = Depends(get_db)
+):
+    result = monitoring_service.alerts.resolve(db, alert_id, payload)
+    db.commit()
+    return result
 
 
 @router.get(

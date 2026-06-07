@@ -211,7 +211,11 @@ def post_usage_charge(
 def post_usage_charges_batch(
     payload: UsageChargePostBatchRequest, db: Session = Depends(get_db)
 ):
-    return usage_service.usage_charges.post_batch(db, payload)
+    # post_batch returns the number of charges posted; the response model is
+    # {posted: int}, so wrap the scalar to match.
+    return UsageChargePostBatchResponse(
+        posted=usage_service.usage_charges.post_batch(db, payload)
+    )
 
 
 @router.post(
