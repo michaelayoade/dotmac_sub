@@ -200,15 +200,20 @@ def sync_customer_accounts(conn, db, *, dry_run: bool = True) -> dict[str, int]:
             cid = int(row["id"])
             subscriber_id = existing_by_splynx.get(cid) or existing_by_column.get(cid)
             subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
-            is_new = subscriber is None
-            if is_new:
-                subscriber = Subscriber(
-                    first_name="Unknown",
-                    last_name="Unknown",
-                    email=f"no-email+{cid}@splynx.local",
+            if subscriber is None:
+                # This is a details-refresh sync: it updates existing
+                # subscribers only. Creating a new Subscriber here is unsafe —
+                # reseller_id is NOT NULL and is never resolved on this path, so
+                # the old code flushed a half-built row and aborted the whole
+                # run. New-customer creation belongs to the full migration /
+                # new-subscriptions path, which resolves the reseller. Skip.
+                logger.debug(
+                    "Customer %s has no DotMac subscriber yet — skipping "
+                    "(details sync does not create subscribers)",
+                    cid,
                 )
-                db.add(subscriber)
-                db.flush()
+                skipped += 1
+                continue
 
             try:
                 _apply_customer_row(
@@ -217,7 +222,7 @@ def sync_customer_accounts(conn, db, *, dry_run: bool = True) -> dict[str, int]:
                     email_by_lower=email_by_lower,
                     seen_emails=seen_emails,
                     seen_subscriber_numbers=seen_subscriber_numbers,
-                    is_new=is_new,
+                    is_new=False,
                 )
                 if cid not in existing_by_splynx:
                     db.add(
@@ -231,8 +236,7 @@ def sync_customer_accounts(conn, db, *, dry_run: bool = True) -> dict[str, int]:
                     existing_by_splynx[cid] = subscriber.id
                     mapped += 1
                 existing_by_column[cid] = subscriber.id
-                created += 1 if is_new else 0
-                updated += 0 if is_new else 1
+                updated += 1
             except Exception as exc:
                 logger.warning("Customer %s skipped: %s", cid, exc)
                 skipped += 1
