@@ -299,6 +299,21 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
             invoice.paid_at = datetime.now(UTC)
     elif paid_amount > 0 or credit_amount > 0:
         invoice.status = InvoiceStatus.partially_paid
+    elif invoice.status in (InvoiceStatus.paid, InvoiceStatus.partially_paid):
+        # The invoice is fully unpaid again (e.g. its payment was refunded or
+        # removed). Without this branch the status stayed a stale 'paid' while
+        # balance_due rose back above zero. Revert to overdue/issued; leave
+        # draft and void invoices untouched.
+        invoice.paid_at = None
+        now = datetime.now(UTC)
+        due_at = invoice.due_at
+        if due_at is not None and due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=UTC)
+        invoice.status = (
+            InvoiceStatus.overdue
+            if due_at and due_at < now
+            else InvoiceStatus.issued
+        )
 
 
 def _validate_payment_channel(

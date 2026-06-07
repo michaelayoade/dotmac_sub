@@ -807,6 +807,10 @@ def void_invoice_web(
     actor_id: str | None,
     invoice_id: str,
 ) -> None:
+    # Actually void the invoice (reverse its debit ledger entries, set
+    # status=void, balance_due=0) via the canonical service — previously this
+    # only wrote an audit log and left the invoice untouched.
+    billing_service.invoices.void(db, invoice_id)
     log_audit_event(
         db=db,
         request=request,

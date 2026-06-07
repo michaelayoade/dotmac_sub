@@ -558,6 +558,24 @@ def payment_update(
     return RedirectResponse(url="/admin/billing/payments", status_code=303)
 
 
+@router.post(
+    "/payments/{payment_id:uuid}/refund",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_refund(
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """One-click refund: mark the payment refunded and recompute its invoice."""
+    web_billing_payments_service.process_payment_refund_with_audit(
+        db, request, payment_id=str(payment_id)
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/payments/{payment_id}", status_code=303
+    )
+
+
 @router.get(
     "/payments/import",
     response_class=HTMLResponse,

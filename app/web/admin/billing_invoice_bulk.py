@@ -70,7 +70,12 @@ def invoice_bulk_void(
         invoice_ids_csv=invoice_ids,
     )
     count = len(updated_ids)
-    return JSONResponse({"message": f"Voided {count} invoices", "count": count})
+    total = len([part for part in invoice_ids.split(",") if part.strip()])
+    skipped = max(0, total - count)
+    message = f"Voided {count} invoice{'s' if count != 1 else ''}"
+    if skipped:
+        message += f"; skipped {skipped} (already paid or void)"
+    return JSONResponse({"message": message, "count": count, "skipped": skipped})
 
 
 @router.post(
