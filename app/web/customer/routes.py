@@ -17,7 +17,7 @@ from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
-from app.services.bandwidth import bandwidth_samples
+from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_portal_context import (
     emit_customer_event,
     get_dashboard_template_context,
@@ -77,6 +77,11 @@ def _load_initial_bandwidth_stats(
         "current_tx_formatted": _format_bps(stats.get("current_tx_bps")),
         "peak_rx_formatted": _format_bps(stats.get("peak_rx_bps")),
         "peak_tx_formatted": _format_bps(stats.get("peak_tx_bps")),
+        # Explicit subscriber-perspective fields the templates bind to.
+        "current_download_formatted": _format_bps(stats.get("download_bps")),
+        "current_upload_formatted": _format_bps(stats.get("upload_bps")),
+        "peak_download_formatted": _format_bps(stats.get("peak_download_bps")),
+        "peak_upload_formatted": _format_bps(stats.get("peak_upload_bps")),
     }
 
 
@@ -469,6 +474,8 @@ def customer_bandwidth_series(
                         ),
                         "rx_bps": point["download_bps"],
                         "tx_bps": point["upload_bps"],
+                        "download_bps": point["download_bps"],
+                        "upload_bps": point["upload_bps"],
                     }
                     for point in cached["graph"]
                 ],
@@ -490,7 +497,7 @@ def customer_bandwidth_series(
         end_at,
         interval,
     )
-    return JSONResponse(content=jsonable_encoder(result))
+    return JSONResponse(content=jsonable_encoder(add_directions_to_series(result)))
 
 
 @router.get("/bandwidth/my/stats")
@@ -547,6 +554,24 @@ def customer_bandwidth_stats(
                 ),
                 "sample_count": len(graph),
                 "source": "zabbix",
+                # Zabbix data is already subscriber-perspective (its rx is the
+                # subscriber's download); expose the explicit fields the UI reads.
+                "download_bps": float(latest.get("download_bps") or 0),
+                "upload_bps": float(latest.get("upload_bps") or 0),
+                "peak_download_bps": max(
+                    (float(point.get("download_bps") or 0) for point in graph),
+                    default=0,
+                ),
+                "peak_upload_bps": max(
+                    (float(point.get("upload_bps") or 0) for point in graph),
+                    default=0,
+                ),
+                "total_download_bytes": int(
+                    float(cached.get("totalDownloadGB") or 0) * (1024**3)
+                ),
+                "total_upload_bytes": int(
+                    float(cached.get("totalUploadGB") or 0) * (1024**3)
+                ),
             }
             return JSONResponse(stats)
     except Exception:

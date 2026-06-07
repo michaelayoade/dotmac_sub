@@ -19,6 +19,40 @@ from app.services.response import ListResponseMixin, list_response
 logger = logging.getLogger(__name__)
 
 
+def to_subscriber_directions(rx_bps, tx_bps) -> tuple[float, float]:
+    """Map raw NAS-interface throughput to subscriber-facing (download, upload).
+
+    bandwidth_samples store rx = NAS ingress = the subscriber's UPLOAD and
+    tx = NAS egress = the subscriber's DOWNLOAD. This is the single place that
+    encodes that convention — subscriber-facing code must never read
+    rx_bps/tx_bps directly to mean download/upload.
+    """
+    return float(tx_bps or 0), float(rx_bps or 0)
+
+
+def with_subscriber_directions(stats: dict) -> dict:
+    """Add explicit download_bps/upload_bps (+ peak/total) to a samples-based
+    stats dict, derived from its rx/tx fields via to_subscriber_directions."""
+    stats["download_bps"], stats["upload_bps"] = to_subscriber_directions(
+        stats.get("current_rx_bps", 0), stats.get("current_tx_bps", 0)
+    )
+    stats["peak_download_bps"], stats["peak_upload_bps"] = to_subscriber_directions(
+        stats.get("peak_rx_bps", 0), stats.get("peak_tx_bps", 0)
+    )
+    stats["total_download_bytes"] = int(stats.get("total_tx_bytes", 0) or 0)
+    stats["total_upload_bytes"] = int(stats.get("total_rx_bytes", 0) or 0)
+    return stats
+
+
+def add_directions_to_series(result: dict) -> dict:
+    """Add download_bps/upload_bps to each point of a samples-based series."""
+    for point in result.get("data", []) or []:
+        point["download_bps"], point["upload_bps"] = to_subscriber_directions(
+            point.get("rx_bps", 0), point.get("tx_bps", 0)
+        )
+    return result
+
+
 class BandwidthSamples(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: BandwidthSampleCreate):
@@ -536,15 +570,17 @@ class BandwidthSamples(ListResponseMixin):
                     )
                 )
 
-            return {
-                "current_rx_bps": current_rx_bps,
-                "current_tx_bps": current_tx_bps,
-                "peak_rx_bps": peak_rx_bps,
-                "peak_tx_bps": peak_tx_bps,
-                "total_rx_bytes": total_rx_bytes,
-                "total_tx_bytes": total_tx_bytes,
-                "sample_count": sample_count_value,
-            }
+            return with_subscriber_directions(
+                {
+                    "current_rx_bps": current_rx_bps,
+                    "current_tx_bps": current_tx_bps,
+                    "peak_rx_bps": peak_rx_bps,
+                    "peak_tx_bps": peak_tx_bps,
+                    "total_rx_bytes": total_rx_bytes,
+                    "total_tx_bytes": total_tx_bytes,
+                    "sample_count": sample_count_value,
+                }
+            )
 
         except Exception as exc:
             logger.error(
@@ -579,15 +615,17 @@ class BandwidthSamples(ListResponseMixin):
                     db, subscription_id, start
                 )
             )
-            return {
-                "current_rx_bps": float(latest.rx_bps if latest else 0),
-                "current_tx_bps": float(latest.tx_bps if latest else 0),
-                "peak_rx_bps": float(stats.peak_rx or 0),
-                "peak_tx_bps": float(stats.peak_tx or 0),
-                "total_rx_bytes": total_rx_bytes,
-                "total_tx_bytes": total_tx_bytes,
-                "sample_count": stats.count or 0,
-            }
+            return with_subscriber_directions(
+                {
+                    "current_rx_bps": float(latest.rx_bps if latest else 0),
+                    "current_tx_bps": float(latest.tx_bps if latest else 0),
+                    "peak_rx_bps": float(stats.peak_rx or 0),
+                    "peak_tx_bps": float(stats.peak_tx or 0),
+                    "total_rx_bytes": total_rx_bytes,
+                    "total_tx_bytes": total_tx_bytes,
+                    "sample_count": stats.count or 0,
+                }
+            )
 
     @staticmethod
     async def get_top_users(

@@ -73,6 +73,9 @@ async def live_bandwidth_events(
                     "timestamp": now.isoformat(),
                     "rx_bps": float(current.get("rx_bps", 0) or 0),
                     "tx_bps": float(current.get("tx_bps", 0) or 0),
+                    # Samples: tx = NAS egress = subscriber download, rx = upload.
+                    "download_bps": float(current.get("tx_bps", 0) or 0),
+                    "upload_bps": float(current.get("rx_bps", 0) or 0),
                 }
             ),
         }
