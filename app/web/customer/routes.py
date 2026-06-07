@@ -1529,6 +1529,29 @@ def customer_change_plan(
     )
 
 
+@router.get("/services/{subscription_id}/change/quote", response_class=JSONResponse)
+def customer_change_plan_quote(
+    request: Request,
+    subscription_id: UUID,
+    offer_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Lazily compute the prorated plan-change quote for one target offer.
+
+    The change-plan page fetches this on offer selection instead of pricing the
+    whole catalog up front (which timed out for large catalogs).
+    """
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    quote = customer_portal.get_plan_change_quote(
+        db, customer, str(subscription_id), offer_id
+    )
+    if quote is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({"quote": quote})
+
+
 @router.post("/services/{subscription_id}/change", response_class=HTMLResponse)
 def customer_submit_change_plan(
     request: Request,
