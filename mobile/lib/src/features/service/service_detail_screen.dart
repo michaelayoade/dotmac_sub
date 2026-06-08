@@ -5,6 +5,7 @@ import '../../core/formatters.dart';
 import '../../models/subscription.dart';
 import '../../widgets/status_chip.dart';
 import '../billing/topup_screen.dart';
+import 'add_ons_screen.dart';
 import 'change_plan_screen.dart';
 
 /// Full detail for one service: plan, connection (IP/login/MAC), validity
@@ -63,6 +64,14 @@ class ServiceDetailScreen extends StatelessWidget {
             ),
             icon: const Icon(Icons.swap_horiz),
             label: const Text('Change plan'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => AddOnsScreen(service: s)),
+            ),
+            icon: const Icon(Icons.add_box_outlined),
+            label: const Text('Add-ons'),
           ),
           if (s.isPrepaid) ...[
             const SizedBox(height: 12),

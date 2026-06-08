@@ -1,0 +1,244 @@
+"""Customer self-service add-on purchase, paid from the wallet balance.
+
+Add-ons available to a subscription come from its offer's ``OfferAddOn`` links.
+A purchase is charged from the customer's wallet credit balance via a ledger
+debit — mirroring the prepaid plan-change charge (``_create_prepaid_plan_change_debit``)
+— so we never invent invoice logic. Insufficient balance is rejected (the
+customer tops up first). Ownership is enforced against the caller's account.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from sqlalchemy.orm import Session
+
+from app.models.billing import (
+    LedgerCategory,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
+from app.models.catalog import (
+    AddOn,
+    OfferAddOn,
+    PriceType,
+    SubscriptionAddOn,
+)
+from app.services import catalog as catalog_service
+from app.services.billing._common import get_account_credit_balance
+from app.services.common import coerce_uuid, round_money, to_decimal
+
+
+def _addon_active_price(add_on: AddOn) -> tuple[Decimal, str]:
+    """Best price for an add-on: prefer a recurring active price, else any
+    active price. Returns (amount, currency); (0, NGN) when unpriced."""
+    prices = [p for p in (add_on.prices or []) if p.is_active]
+    if not prices:
+        return Decimal("0.00"), "NGN"
+    chosen = next((p for p in prices if p.price_type == PriceType.recurring), prices[0])
+    return round_money(to_decimal(chosen.amount or 0)), str(chosen.currency or "NGN")
+
+
+def _owned_subscription(db: Session, customer: dict, subscription_id: str):
+    """Return the subscription iff it belongs to the caller, else None."""
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription:
+        return None
+    account_id = customer.get("account_id")
+    if not account_id or str(subscription.subscriber_id) != str(account_id):
+        return None
+    return subscription
+
+
+def _offer_links(db: Session, offer_id) -> list[tuple[OfferAddOn, AddOn]]:
+    """Active add-ons offered for a subscription's offer, with their link row."""
+    if not offer_id:
+        return []
+    rows = (
+        db.query(OfferAddOn, AddOn)
+        .join(AddOn, AddOn.id == OfferAddOn.add_on_id)
+        .filter(OfferAddOn.offer_id == offer_id)
+        .filter(AddOn.is_active.is_(True))
+        .all()
+    )
+    return list(rows)
+
+
+def _serialize_option(link: OfferAddOn, add_on: AddOn) -> dict:
+    amount, currency = _addon_active_price(add_on)
+    return {
+        "add_on_id": str(add_on.id),
+        "name": add_on.name,
+        "addon_type": getattr(add_on.addon_type, "value", str(add_on.addon_type)),
+        "description": add_on.description,
+        "amount": float(amount),
+        "currency": currency,
+        "min_quantity": int(link.min_quantity or 1),
+        "max_quantity": link.max_quantity,
+        "is_required": bool(link.is_required),
+    }
+
+
+def list_available_addons(
+    db: Session, customer: dict, subscription_id: str
+) -> dict | None:
+    """Add-ons the customer can buy for this service, plus active ones."""
+    subscription = _owned_subscription(db, customer, subscription_id)
+    if subscription is None:
+        return None
+
+    options = [
+        _serialize_option(link, add_on)
+        for link, add_on in _offer_links(db, subscription.offer_id)
+    ]
+
+    active_rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .all()
+    )
+    active = [
+        {
+            "id": str(sa.id),
+            "add_on_id": str(sa.add_on_id),
+            "name": add_on.name,
+            "quantity": int(sa.quantity or 1),
+        }
+        for sa, add_on in active_rows
+    ]
+
+    balance = get_account_credit_balance(db, str(subscription.subscriber_id))
+    return {
+        "available": options,
+        "active": active,
+        "wallet_balance": round_money(balance),
+        "currency": "NGN",
+    }
+
+
+def _resolve_purchasable(
+    db: Session, subscription, add_on_id: str, quantity: int
+) -> tuple[AddOn, Decimal, str]:
+    """Validate the add-on is offered for this subscription and the quantity is
+    in range; return (add_on, unit_amount, currency). Raises ValueError."""
+    links = _offer_links(db, subscription.offer_id)
+    match = next(
+        ((link, ao) for link, ao in links if str(ao.id) == str(add_on_id)), None
+    )
+    if match is None:
+        raise ValueError("Add-on is not available for this service")
+    link, add_on = match
+    min_q = int(link.min_quantity or 1)
+    if quantity < min_q:
+        raise ValueError(f"Minimum quantity is {min_q}")
+    if link.max_quantity is not None and quantity > int(link.max_quantity):
+        raise ValueError(f"Maximum quantity is {link.max_quantity}")
+    amount, currency = _addon_active_price(add_on)
+    return add_on, amount, currency
+
+
+def get_addon_quote(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+    add_on_id: str,
+    quantity: int = 1,
+) -> dict | None:
+    """Cost of buying ``quantity`` of an add-on, vs the wallet balance."""
+    subscription = _owned_subscription(db, customer, subscription_id)
+    if subscription is None:
+        return None
+    _add_on, unit_amount, currency = _resolve_purchasable(
+        db, subscription, add_on_id, quantity
+    )
+    charge = round_money(unit_amount * quantity)
+    balance = round_money(
+        get_account_credit_balance(db, str(subscription.subscriber_id))
+    )
+    shortfall = charge - balance
+    shortfall = shortfall if shortfall > Decimal("0.00") else Decimal("0.00")
+    return {
+        "add_on_id": str(add_on_id),
+        "quantity": quantity,
+        "unit_amount": unit_amount,
+        "charge": charge,
+        "currency": currency,
+        "current_balance": balance,
+        "shortfall": shortfall,
+        "can_afford": shortfall <= Decimal("0.00"),
+    }
+
+
+def purchase_addon(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+    add_on_id: str,
+    quantity: int = 1,
+) -> dict:
+    """Buy an add-on, charged from the wallet balance. Rejects (without any
+    write) when the balance is insufficient."""
+    subscription = _owned_subscription(db, customer, subscription_id)
+    if subscription is None:
+        raise ValueError("Service not found")
+
+    add_on, unit_amount, currency = _resolve_purchasable(
+        db, subscription, add_on_id, quantity
+    )
+    charge = round_money(unit_amount * quantity)
+    balance = round_money(
+        get_account_credit_balance(db, str(subscription.subscriber_id))
+    )
+
+    if charge > Decimal("0.00") and charge > balance:
+        shortfall = round_money(charge - balance)
+        return {
+            "success": False,
+            "reason": "insufficient_balance",
+            "charge": charge,
+            "current_balance": balance,
+            "shortfall": shortfall,
+            "currency": currency,
+        }
+
+    sub_add_on = SubscriptionAddOn(
+        subscription_id=subscription.id,
+        add_on_id=coerce_uuid(str(add_on.id)),
+        quantity=quantity,
+        start_at=datetime.now(UTC),
+    )
+    db.add(sub_add_on)
+
+    if charge > Decimal("0.00"):
+        db.add(
+            LedgerEntry(
+                account_id=subscription.subscriber_id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.adjustment,
+                category=LedgerCategory.custom_service,
+                amount=charge,
+                currency=currency,
+                memo=f"Add-on purchase: {add_on.name}"
+                + (f" x{quantity}" if quantity > 1 else ""),
+            )
+        )
+
+    db.commit()
+    db.refresh(sub_add_on)
+    new_balance = round_money(
+        get_account_credit_balance(db, str(subscription.subscriber_id))
+    )
+    return {
+        "success": True,
+        "subscription_add_on_id": str(sub_add_on.id),
+        "add_on_name": add_on.name,
+        "quantity": quantity,
+        "charge": charge,
+        "currency": currency,
+        "new_balance": new_balance,
+    }

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../core/http.dart';
+import '../models/addon.dart';
 import '../models/page.dart';
 import '../models/plan_change.dart';
 import '../models/subscription.dart';
@@ -47,6 +48,33 @@ class CatalogRepository {
           queryParameters: {'offer_id': offerId},
         ));
     return PlanChangeQuote.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// GET /me/subscriptions/{id}/add-ons — add-ons available + active + wallet.
+  Future<AddonsAvailable> addons(String subscriptionId) async {
+    final data =
+        await guard(() => dio.get('/me/subscriptions/$subscriptionId/add-ons'));
+    return AddonsAvailable.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// GET …/add-ons/quote — cost of buying an add-on vs the wallet balance.
+  Future<AddonQuote> addonQuote(
+      String subscriptionId, String addOnId, int quantity) async {
+    final data = await guard(() => dio.get(
+          '/me/subscriptions/$subscriptionId/add-ons/quote',
+          queryParameters: {'add_on_id': addOnId, 'quantity': quantity},
+        ));
+    return AddonQuote.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// POST …/add-ons — buy an add-on, charged from the wallet balance.
+  Future<AddonPurchaseResult> purchaseAddon(
+      String subscriptionId, String addOnId, int quantity) async {
+    final data = await guard(() => dio.post(
+          '/me/subscriptions/$subscriptionId/add-ons',
+          data: {'add_on_id': addOnId, 'quantity': quantity},
+        ));
+    return AddonPurchaseResult.fromJson(data as Map<String, dynamic>);
   }
 
   /// POST …/plan-change — submit a plan-change request.

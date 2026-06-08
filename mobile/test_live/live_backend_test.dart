@@ -127,6 +127,10 @@ void main() {
       final opts = await catalog.planChangeOptions(subs.items.first.id);
       print('✅ /me/.../plan-change — current=${opts.currentOffer?.name} '
           'available=${opts.availableOffers.length}');
+
+      final addons = await catalog.addons(subs.items.first.id);
+      print('✅ /me/.../add-ons — available=${addons.available.length} '
+          'active=${addons.active.length} wallet=${addons.walletBalance}');
     }
   }, timeout: const Timeout(Duration(seconds: 30)), skip: _user.isEmpty);
 

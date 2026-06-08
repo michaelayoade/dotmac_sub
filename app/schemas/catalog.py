@@ -1092,3 +1092,61 @@ class PlanChangeSubmitRequest(BaseModel):
 
 class PlanChangeSubmitResponse(BaseModel):
     success: bool = True
+
+
+# --- Customer self-service add-on purchase (app/api/me.py) -----------------
+
+
+class AddonOption(BaseModel):
+    add_on_id: UUID
+    name: str
+    addon_type: str
+    description: str | None = None
+    amount: float = 0.0
+    currency: str = "NGN"
+    min_quantity: int = 1
+    max_quantity: int | None = None
+    is_required: bool = False
+
+
+class ActiveAddon(BaseModel):
+    id: UUID
+    add_on_id: UUID
+    name: str
+    quantity: int = 1
+
+
+class AddonsAvailableResponse(BaseModel):
+    available: list[AddonOption] = Field(default_factory=list)
+    active: list[ActiveAddon] = Field(default_factory=list)
+    wallet_balance: Decimal | None = None
+    currency: str = "NGN"
+
+
+class AddonQuoteResponse(BaseModel):
+    add_on_id: UUID
+    quantity: int
+    unit_amount: Decimal
+    charge: Decimal
+    currency: str = "NGN"
+    current_balance: Decimal
+    shortfall: Decimal
+    can_afford: bool
+
+
+class AddonPurchaseRequest(BaseModel):
+    add_on_id: UUID
+    quantity: int = Field(default=1, ge=1)
+
+
+class AddonPurchaseResponse(BaseModel):
+    success: bool
+    reason: str | None = None
+    subscription_add_on_id: UUID | None = None
+    add_on_name: str | None = None
+    quantity: int | None = None
+    charge: Decimal | None = None
+    currency: str = "NGN"
+    current_balance: Decimal | None = None
+    shortfall: Decimal | None = None
+    new_balance: Decimal | None = None

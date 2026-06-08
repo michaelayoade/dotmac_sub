@@ -28,6 +28,10 @@ from app.schemas.billing import (
     TopupVerifyResponse,
 )
 from app.schemas.catalog import (
+    AddonPurchaseRequest,
+    AddonPurchaseResponse,
+    AddonQuoteResponse,
+    AddonsAvailableResponse,
     PlanChangePageResponse,
     PlanChangeSubmitRequest,
     PlanChangeSubmitResponse,
@@ -39,6 +43,7 @@ from app.schemas.notification import NotificationRead
 from app.schemas.usage import QuotaBucketRead, RadiusAccountingSessionRead
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
+from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import notification as notification_service
@@ -258,6 +263,70 @@ def my_plan_change_submit(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PlanChangeSubmitResponse(success=bool(result.get("success", True)))
+
+
+@router.get(
+    "/subscriptions/{subscription_id}/add-ons",
+    response_model=AddonsAvailableResponse,
+)
+def my_addons(
+    subscription_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Add-ons the caller can buy for this service, plus their active ones."""
+    result = customer_addons.list_available_addons(
+        db, _customer(db, principal), subscription_id
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return result
+
+
+@router.get(
+    "/subscriptions/{subscription_id}/add-ons/quote",
+    response_model=AddonQuoteResponse,
+)
+def my_addon_quote(
+    subscription_id: str,
+    add_on_id: str,
+    quantity: int = Query(default=1, ge=1),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Cost of buying an add-on, against the wallet balance."""
+    try:
+        quote = customer_addons.get_addon_quote(
+            db, _customer(db, principal), subscription_id, add_on_id, quantity
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if quote is None:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return quote
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/add-ons",
+    response_model=AddonPurchaseResponse,
+)
+def my_addon_purchase(
+    subscription_id: str,
+    payload: AddonPurchaseRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Buy an add-on, charged from the caller's wallet balance."""
+    try:
+        return customer_addons.purchase_addon(
+            db,
+            _customer(db, principal),
+            subscription_id,
+            str(payload.add_on_id),
+            payload.quantity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/topup", response_model=TopupPageResponse)
