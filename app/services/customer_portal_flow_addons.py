@@ -304,3 +304,25 @@ def purchase_addon(
         "currency": currency,
         "new_balance": new_balance,
     }
+
+
+def cancel_addon(
+    db: Session, customer: dict, subscription_id: str, sub_add_on_id: str
+) -> bool:
+    """End one of the caller's add-ons (stops recurring billing from the next
+    cycle). Returns False if the add-on isn't found on the caller's service or is
+    already ended. No refund is issued — the customer keeps it for the cycle
+    already billed."""
+    subscription = _owned_subscription(db, customer, subscription_id)
+    if subscription is None:
+        return False
+    sub_add_on = db.get(SubscriptionAddOn, coerce_uuid(sub_add_on_id))
+    if (
+        sub_add_on is None
+        or str(sub_add_on.subscription_id) != str(subscription.id)
+        or sub_add_on.end_at is not None
+    ):
+        return False
+    sub_add_on.end_at = datetime.now(UTC)
+    db.commit()
+    return True

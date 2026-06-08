@@ -177,6 +177,29 @@ def test_purchase_charges_wallet_and_links_addon(_setup, db_session, subscriber)
     assert links[0].quantity == 2
 
 
+def test_cancel_addon_ends_it(_setup, db_session, subscriber):
+    _subscriber, sub, add_on, customer = _setup
+    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    bought = addons.purchase_addon(db_session, customer, str(sub.id), str(add_on.id), 1)
+    said = bought["subscription_add_on_id"]
+
+    assert addons.cancel_addon(db_session, customer, str(sub.id), said) is True
+    sa = db_session.query(SubscriptionAddOn).filter_by(id=said).one()
+    assert sa.end_at is not None
+    # cancelling again is a no-op (already ended)
+    assert addons.cancel_addon(db_session, customer, str(sub.id), said) is False
+
+
+def test_cancel_addon_rejects_foreign(_setup, db_session, subscriber):
+    import uuid
+
+    _subscriber, sub, _add_on, customer = _setup
+    assert (
+        addons.cancel_addon(db_session, customer, str(sub.id), str(uuid.uuid4()))
+        is False
+    )
+
+
 def test_purchase_is_idempotent_on_key(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
     _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))

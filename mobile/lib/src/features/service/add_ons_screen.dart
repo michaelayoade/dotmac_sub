@@ -92,6 +92,38 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
     }
   }
 
+  Future<void> _cancel(ActiveAddon addon) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Cancel ${addon.name}?'),
+        content: const Text('It stays active until the end of the current '
+            'billing cycle, then stops.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Cancel add-on')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(catalogRepositoryProvider).cancelAddon(_subId, addon.id);
+      messenger
+          .showSnackBar(SnackBar(content: Text('${addon.name} cancelled')));
+      await _load();
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -145,7 +177,11 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
               child: ListTile(
                 leading: const Icon(Icons.check_circle, color: Colors.green),
                 title: Text(a.name),
-                trailing: a.quantity > 1 ? Text('x${a.quantity}') : null,
+                subtitle: a.quantity > 1 ? Text('x${a.quantity}') : null,
+                trailing: TextButton(
+                  onPressed: _busy ? null : () => _cancel(a),
+                  child: const Text('Cancel'),
+                ),
               ),
             ),
         ],

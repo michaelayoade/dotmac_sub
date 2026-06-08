@@ -373,6 +373,33 @@ class TestTerminalStates:
         assert subscription.cancel_reason == "prepaid_deactivation"
         assert not has_active_lock(db_session, str(subscription.id))
 
+    def test_cancel_ends_active_addons(self, db_session):
+        """Canceling a subscription ends its add-ons so they stop billing."""
+        from app.models.catalog import AddOn, AddOnType, SubscriptionAddOn
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        add_on = AddOn(name="/29 IP", addon_type=AddOnType.extra_ip, is_active=True)
+        db_session.add(add_on)
+        db_session.flush()
+        sub_addon = SubscriptionAddOn(
+            subscription_id=subscription.id, add_on_id=add_on.id, quantity=1
+        )
+        db_session.add(sub_addon)
+        db_session.commit()
+
+        cancel_subscription(
+            db_session,
+            str(subscription.id),
+            cancel_reason="prepaid_deactivation",
+            source="test",
+            emit=False,
+        )
+
+        db_session.refresh(sub_addon)
+        assert sub_addon.end_at is not None
+
 
 class TestActivateSubscription:
     """Tests for activate_subscription."""
