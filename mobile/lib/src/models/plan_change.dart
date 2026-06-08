@@ -1,5 +1,7 @@
 // Plan-change models mirroring app/api/me.py plan-change endpoints.
 
+import '../core/parsers.dart';
+
 class PlanOffer {
   PlanOffer({
     required this.id,
@@ -18,7 +20,7 @@ class PlanOffer {
   factory PlanOffer.fromJson(Map<String, dynamic> json) => PlanOffer(
         id: json['id'].toString(),
         name: json['name'] as String? ?? 'Plan',
-        amount: _toDouble(json['amount']) ?? 0,
+        amount: asDouble(json['amount']),
         currency: json['currency'] as String? ?? 'NGN',
         periodLabel: json['period_label'] as String? ?? '/cycle',
       );
@@ -47,7 +49,7 @@ class PlanChangeOptions {
           .cast<Map<String, dynamic>>()
           .map(PlanOffer.fromJson)
           .toList(),
-      walletBalance: _toDouble(json['wallet_balance']),
+      walletBalance: asDoubleOrNull(json['wallet_balance']),
       nextBillingDate:
           DateTime.tryParse(json['next_billing_date']?.toString() ?? '')
               ?.toLocal(),
@@ -89,20 +91,14 @@ class PlanChangeQuote {
     }
     return PlanChangeQuote(
       hasProration: true,
-      chargeAmount: _toDouble(json['charge_amount']) ?? 0,
-      netAmount: _toDouble(json['net_amount']) ?? 0,
-      currentBalance: _toDouble(json['current_balance']) ?? 0,
-      shortfall: _toDouble(json['shortfall']) ?? 0,
+      chargeAmount: asDouble(json['charge_amount']),
+      netAmount: asDouble(json['net_amount']),
+      currentBalance: asDouble(json['current_balance']),
+      shortfall: asDouble(json['shortfall']),
       daysRemaining: (json['days_remaining'] as num?)?.toInt() ?? 0,
       canApplyImmediately: json['can_apply_immediately'] as bool? ?? false,
       isUpgrade: json['is_upgrade'] as bool? ?? false,
       isDowngrade: json['is_downgrade'] as bool? ?? false,
     );
   }
-}
-
-double? _toDouble(dynamic v) {
-  if (v == null) return null;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString());
 }

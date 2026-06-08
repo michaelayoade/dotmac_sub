@@ -1,4 +1,6 @@
-/// Mirrors InvoiceRead from app/schemas/billing.py.
+// Mirrors InvoiceRead from app/schemas/billing.py.
+import '../core/parsers.dart';
+
 class Invoice {
   Invoice({
     required this.id,
@@ -39,10 +41,10 @@ class Invoice {
         accountId: json['account_id'].toString(),
         status: json['status'] as String? ?? 'draft',
         currency: json['currency'] as String? ?? 'NGN',
-        subtotal: _toDouble(json['subtotal']),
-        taxTotal: _toDouble(json['tax_total']),
-        total: _toDouble(json['total']),
-        balanceDue: _toDouble(json['balance_due']),
+        subtotal: asDouble(json['subtotal']),
+        taxTotal: asDouble(json['tax_total']),
+        total: asDouble(json['total']),
+        balanceDue: asDouble(json['balance_due']),
         invoiceNumber: json['invoice_number'] as String?,
         issuedAt: _toDate(json['issued_at']),
         dueAt: _toDate(json['due_at']),
@@ -73,19 +75,13 @@ class Payment {
 
   factory Payment.fromJson(Map<String, dynamic> json) => Payment(
         id: json['id'].toString(),
-        amount: _toDouble(json['amount']),
+        amount: asDouble(json['amount']),
         currency: json['currency'] as String? ?? 'NGN',
         status: json['status'] as String? ?? 'pending',
         paidAt: _toDate(json['paid_at']),
         memo: json['memo'] as String?,
         externalId: json['external_id'] as String?,
       );
-}
-
-double _toDouble(dynamic v) {
-  if (v == null) return 0;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString()) ?? 0; // Decimal serialises as string
 }
 
 DateTime? _toDate(dynamic v) {

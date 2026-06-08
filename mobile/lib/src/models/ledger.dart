@@ -1,5 +1,7 @@
-/// A single account ledger entry (app/api/me.py GET /me/ledger): a charge,
-/// payment, credit or adjustment on the customer's account.
+// A single account ledger entry (app/api/me.py GET /me/ledger): a charge,
+// payment, credit or adjustment on the customer's account.
+import '../core/parsers.dart';
+
 class LedgerTxn {
   LedgerTxn({
     required this.id,
@@ -44,7 +46,7 @@ class LedgerTxn {
   factory LedgerTxn.fromJson(Map<String, dynamic> json) => LedgerTxn(
         id: json['id'].toString(),
         entryType: json['entry_type'] as String? ?? 'debit',
-        amount: _toDouble(json['amount']),
+        amount: asDouble(json['amount']),
         currency: json['currency'] as String? ?? 'NGN',
         createdAt:
             DateTime.tryParse(json['created_at']?.toString() ?? '')?.toLocal(),
@@ -67,12 +69,7 @@ class AccountBalance {
   bool get owes => creditBalance < 0;
 
   factory AccountBalance.fromJson(Map<String, dynamic> json) => AccountBalance(
-        creditBalance: _toDouble(json['credit_balance']),
+        creditBalance: asDouble(json['credit_balance']),
         currency: json['currency'] as String? ?? 'NGN',
       );
-}
-
-double _toDouble(dynamic v) {
-  if (v is num) return v.toDouble();
-  return double.tryParse(v?.toString() ?? '') ?? 0;
 }

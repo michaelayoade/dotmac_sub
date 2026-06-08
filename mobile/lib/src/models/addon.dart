@@ -1,9 +1,6 @@
 // Add-on models (app/api/me.py add-on endpoints).
 
-double _toDouble(dynamic v) {
-  if (v is num) return v.toDouble();
-  return double.tryParse(v?.toString() ?? '') ?? 0;
-}
+import '../core/parsers.dart';
 
 class AddonOption {
   AddonOption({
@@ -30,7 +27,7 @@ class AddonOption {
         addOnId: json['add_on_id'].toString(),
         name: json['name'] as String? ?? 'Add-on',
         addonType: json['addon_type'] as String? ?? 'custom',
-        amount: _toDouble(json['amount']),
+        amount: asDouble(json['amount']),
         currency: json['currency'] as String? ?? 'NGN',
         minQuantity: (json['min_quantity'] as num?)?.toInt() ?? 1,
         maxQuantity: (json['max_quantity'] as num?)?.toInt(),
@@ -81,7 +78,7 @@ class AddonsAvailable {
             .toList(),
         walletBalance: json['wallet_balance'] == null
             ? null
-            : _toDouble(json['wallet_balance']),
+            : asDouble(json['wallet_balance']),
         currency: json['currency'] as String? ?? 'NGN',
       );
 }
@@ -102,10 +99,10 @@ class AddonQuote {
   final bool canAfford;
 
   factory AddonQuote.fromJson(Map<String, dynamic> json) => AddonQuote(
-        charge: _toDouble(json['charge']),
+        charge: asDouble(json['charge']),
         currency: json['currency'] as String? ?? 'NGN',
-        currentBalance: _toDouble(json['current_balance']),
-        shortfall: _toDouble(json['shortfall']),
+        currentBalance: asDouble(json['current_balance']),
+        shortfall: asDouble(json['shortfall']),
         canAfford: json['can_afford'] as bool? ?? false,
       );
 }
@@ -133,11 +130,11 @@ class AddonPurchaseResult {
       AddonPurchaseResult(
         success: json['success'] as bool? ?? false,
         reason: json['reason'] as String?,
-        charge: json['charge'] == null ? null : _toDouble(json['charge']),
+        charge: json['charge'] == null ? null : asDouble(json['charge']),
         currency: json['currency'] as String? ?? 'NGN',
         newBalance:
-            json['new_balance'] == null ? null : _toDouble(json['new_balance']),
+            json['new_balance'] == null ? null : asDouble(json['new_balance']),
         shortfall:
-            json['shortfall'] == null ? null : _toDouble(json['shortfall']),
+            json['shortfall'] == null ? null : asDouble(json['shortfall']),
       );
 }

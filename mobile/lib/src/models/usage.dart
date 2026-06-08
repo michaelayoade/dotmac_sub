@@ -1,4 +1,6 @@
-/// Mirrors QuotaBucketRead from app/schemas/usage.py.
+// Mirrors QuotaBucketRead from app/schemas/usage.py.
+import '../core/parsers.dart';
+
 class QuotaBucket {
   QuotaBucket({
     required this.id,
@@ -46,10 +48,10 @@ class QuotaBucket {
         subscriptionId: json['subscription_id'].toString(),
         periodStart: DateTime.parse(json['period_start'].toString()).toLocal(),
         periodEnd: DateTime.parse(json['period_end'].toString()).toLocal(),
-        includedGb: _toDoubleOrNull(json['included_gb']),
-        usedGb: _toDouble(json['used_gb']),
-        rolloverGb: _toDouble(json['rollover_gb']),
-        overageGb: _toDouble(json['overage_gb']),
+        includedGb: asDoubleOrNull(json['included_gb']),
+        usedGb: asDouble(json['used_gb']),
+        rolloverGb: asDouble(json['rollover_gb']),
+        overageGb: asDouble(json['overage_gb']),
       );
 }
 
@@ -146,18 +148,6 @@ class UsageSummary {
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
-}
-
-double _toDouble(dynamic v) {
-  if (v == null) return 0;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString()) ?? 0;
-}
-
-double? _toDoubleOrNull(dynamic v) {
-  if (v == null) return null;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString());
 }
 
 DateTime? _toDate(dynamic v) {

@@ -1,4 +1,6 @@
-/// Response from POST /payments/initiate.
+// Response from POST /payments/initiate.
+import '../core/parsers.dart';
+
 class PaymentInitiation {
   PaymentInitiation({
     required this.invoiceId,
@@ -23,7 +25,7 @@ class PaymentInitiation {
   factory PaymentInitiation.fromJson(Map<String, dynamic> json) =>
       PaymentInitiation(
         invoiceId: json['invoice_id'].toString(),
-        amount: _toDouble(json['amount']),
+        amount: asDouble(json['amount']),
         currency: json['currency'] as String? ?? 'NGN',
         providerType: json['provider_type'] as String? ?? 'paystack',
         paymentReference: json['payment_reference'].toString(),
@@ -59,16 +61,10 @@ class PaymentVerification {
       PaymentVerification(
         reference: json['reference'].toString(),
         paymentId: json['payment_id'].toString(),
-        amount: _toDouble(json['amount']),
+        amount: asDouble(json['amount']),
         currency: json['currency'] as String? ?? 'NGN',
         status: json['status'] as String? ?? 'succeeded',
         invoiceId: json['invoice_id']?.toString(),
         alreadyRecorded: json['already_recorded'] as bool? ?? false,
       );
-}
-
-double _toDouble(dynamic v) {
-  if (v == null) return 0;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString()) ?? 0;
 }
