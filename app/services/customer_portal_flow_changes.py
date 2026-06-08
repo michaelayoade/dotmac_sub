@@ -221,22 +221,11 @@ def get_change_plan_page(
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
     wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    # Plan-change quotes are computed lazily - one per offer the customer
+    # selects - via get_plan_change_quote(). Pricing the whole catalog here ran a
+    # proration calc per available offer, making this page take ~46s for large
+    # catalogs and time out on submit (which could saturate workers / crash the app).
     quote_map: dict[str, dict[str, object]] = {}
-    billing_mode_value = str(
-        getattr(subscription.billing_mode, "value", subscription.billing_mode or "")
-    )
-    if current_offer and billing_mode_value == "prepaid":
-        for offer in available_offers:
-            if str(offer.id) == str(current_offer.id):
-                continue
-            quote_map[str(offer.id)] = _serialize_plan_change_quote(
-                _build_plan_change_quote(
-                    db,
-                    subscription,
-                    offer,
-                    current_balance=wallet_balance,
-                )
-            )
 
     return {
         "subscription": subscription,
@@ -254,6 +243,53 @@ def get_change_plan_page(
         "next_billing_date": next_billing_date,
         **copy,
     }
+
+
+def get_plan_change_quote(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+    offer_id: str,
+) -> dict | None:
+    """Build the prorated plan-change quote for a single target offer (lazy).
+
+    Replaces the per-offer upfront computation in get_change_plan_page so the
+    change-plan page renders without pricing the whole catalog.
+
+    Returns the serialized quote dict, ``{}`` when the subscription is not
+    prepaid (no proration applies), or ``None`` when the subscription/offer is
+    not found, not owned by this customer, or not a valid change target.
+    """
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription:
+        return None
+
+    account_id = customer.get("account_id")
+    if not account_id or str(subscription.subscriber_id) != str(account_id):
+        return None
+
+    # Only quote offers that are actually offered to this subscription.
+    available_offers = get_available_portal_offers(db, subscription)
+    target_offer = next(
+        (o for o in available_offers if str(o.id) == str(offer_id)), None
+    )
+    if target_offer is None or str(target_offer.id) == str(subscription.offer_id):
+        return None
+
+    billing_mode_value = str(
+        getattr(subscription.billing_mode, "value", subscription.billing_mode or "")
+    )
+    if billing_mode_value != "prepaid":
+        return {}
+
+    wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    return _serialize_plan_change_quote(
+        _build_plan_change_quote(
+            db, subscription, target_offer, current_balance=wallet_balance
+        )
+    )
 
 
 def submit_change_plan(
@@ -658,6 +694,7 @@ __all__ = [
     "_get_offer_recurring_price",
     "get_offer_price_summary",
     "get_plan_change_copy",
+    "get_plan_change_quote",
     "apply_instant_plan_change",
     "request_plan_migration",
 ]

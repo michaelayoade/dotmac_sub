@@ -17,6 +17,7 @@ from app.services.customer_portal_flow_changes import (
     get_change_plan_error_context,
     get_change_plan_page,
     get_change_requests_page,
+    get_plan_change_quote,
     request_plan_migration,
     submit_change_plan,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "get_service_order_detail",
     "get_installation_detail",
     "get_change_plan_page",
+    "get_plan_change_quote",
     "submit_change_plan",
     "get_change_plan_error_context",
     "get_change_requests_page",
