@@ -19,7 +19,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.subscriber import Reseller, Subscriber, UserType
+from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import customer_portal, reseller_portal
@@ -122,6 +122,26 @@ def _ensure_reseller_setup(
         reseller_subscriber.user_type = UserType.reseller
         reseller_subscriber.reseller_id = reseller.id
         customer_subscriber.reseller_id = reseller.id
+
+        # The reseller portal validates sessions via the reseller_users link
+        # table (reseller_portal._get_reseller_user). Without this row, every
+        # authenticated reseller page redirects to login.
+        reseller_user = (
+            db.query(ResellerUser)
+            .filter(ResellerUser.subscriber_id == reseller_subscriber.id)
+            .first()
+        )
+        if reseller_user is None:
+            db.add(
+                ResellerUser(
+                    subscriber_id=reseller_subscriber.id,
+                    reseller_id=reseller.id,
+                    is_active=True,
+                )
+            )
+        else:
+            reseller_user.reseller_id = reseller.id
+            reseller_user.is_active = True
 
         db.commit()
         return {
@@ -719,3 +739,15 @@ def reseller_page(reseller_context):
     page = reseller_context.new_page()
     yield page
     page.close()
+
+
+@pytest.fixture()
+def reseller_credentials(test_identities: dict) -> tuple[str, str]:
+    """Username/password for the seeded reseller portal login."""
+    return RESELLER_PORTAL_USERNAME, RESELLER_PORTAL_PASSWORD
+
+
+@pytest.fixture()
+def reseller_account_id(test_identities: dict) -> str:
+    """A customer account id linked to the seeded reseller."""
+    return test_identities["customer"]["account"]["id"]
