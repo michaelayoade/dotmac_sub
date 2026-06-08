@@ -313,7 +313,9 @@ def decrypt_credential(value: str | None) -> str | None:
 
             resolved = resolve_secret(value)
         except Exception as e:
-            raise ValueError(f"Failed to resolve credential secret reference: {e}") from e
+            raise ValueError(
+                f"Failed to resolve credential secret reference: {e}"
+            ) from e
         # A credential can be both encryption-at-rest wrapped (``enc:``/``plain:``)
         # *and* stored behind a secret reference — the resolved value is then
         # still an at-rest blob, not the plaintext. Peel that inner layer too,

@@ -248,8 +248,7 @@ def test_list_dead_letters_filters_by_provider_and_status(db_session):
 
     failed_only = list_payment_webhook_dead_letters(db_session, status="failed")
     assert all(
-        i.status == PaymentWebhookDeadLetterStatus.failed
-        for i in failed_only["items"]
+        i.status == PaymentWebhookDeadLetterStatus.failed for i in failed_only["items"]
     )
 
 

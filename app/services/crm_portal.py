@@ -203,15 +203,23 @@ def tickets_list_context(
     """Customer ticket list, sourced from the internal (local) ticket module."""
     from app.services import support as support_service
 
-    merged: dict[str, dict[str, Any]] = {}
-    for sid in subscriber_ids:
-        sid_str = str(sid or "").strip()
-        if not sid_str:
-            continue
-        for ticket in support_service.Tickets.list(
-            db, subscriber_id=sid_str, limit=100
-        ):
-            merged[str(ticket.id)] = _ticket_to_dict(ticket)
+    try:
+        merged: dict[str, dict[str, Any]] = {}
+        for sid in subscriber_ids:
+            sid_str = str(sid or "").strip()
+            if not sid_str:
+                continue
+            for ticket in support_service.Tickets.list(
+                db, subscriber_id=sid_str, limit=100
+            ):
+                merged[str(ticket.id)] = _ticket_to_dict(ticket)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to load portal tickets: %s", e)
+        return {
+            **_ticket_list_base(request, customer),
+            "tickets": [],
+            **_error_context(),
+        }
     tickets = _sort_by_recent(list(merged.values()))
     return {**_ticket_list_base(request, customer), "tickets": tickets, **_ok_context()}
 

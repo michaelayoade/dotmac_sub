@@ -971,9 +971,7 @@ class PaymentWebhookDeadLetter(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
-    last_attempt_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class BillingRun(Base):

@@ -106,7 +106,11 @@ _WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
 
 
 def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
-    return mode == "sync" and bool(proposed_fields) and proposed_fields <= _WIFI_ONLY_FIELDS
+    return (
+        mode == "sync"
+        and bool(proposed_fields)
+        and proposed_fields <= _WIFI_ONLY_FIELDS
+    )
 
 
 def compute_plan(
@@ -137,9 +141,7 @@ def compute_plan(
         omci_wan_planned = False
     else:
         _plan_olt_side(desired, observed, mode, actions, drifts)
-        omci_wan_planned = _plan_olt_omci_wan(
-            desired, observed, mode, actions, drifts
-        )
+        omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
         _append_reset_if_needed(desired, actions)
     _plan_acs_side(
         desired,

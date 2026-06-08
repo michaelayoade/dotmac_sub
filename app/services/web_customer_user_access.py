@@ -487,7 +487,9 @@ def send_customer_reset_link(
     target = resolve_customer_user_target(
         db, customer_type=customer_type, customer_id=customer_id
     )
-    note = _send_subscriber_reset_link(db, subscriber=target.subscriber, email=target.email)
+    note = _send_subscriber_reset_link(
+        db, subscriber=target.subscriber, email=target.email
+    )
     ok = "sent" in note.lower()
     record_audit_event(
         db,
