@@ -82,35 +82,24 @@ def push_subscriber_change(
     return False
 
 
-def push_status_change(
-    splynx_customer_id: int,
-    new_status: str,
-    name: str = "",
-) -> bool:
-    """Push a subscriber status change to CRM."""
-    return push_subscriber_change(
-        splynx_customer_id,
-        {
-            "status": new_status,
-            "name": name,
-            "last_update": datetime.now(UTC).isoformat(),
-        },
-    )
+def status_change_payload(new_status: str, name: str = "") -> dict:
+    """Build the subscriber-status webhook payload (no I/O)."""
+    return {
+        "status": new_status,
+        "name": name,
+        "last_update": datetime.now(UTC).isoformat(),
+    }
 
 
-def push_service_activation(
-    splynx_customer_id: int,
+def service_activation_payload(
     service_name: str,
     service_speed: str = "",
     status: str = "active",
-) -> bool:
-    """Push a service activation/change to CRM."""
-    return push_subscriber_change(
-        splynx_customer_id,
-        {
-            "status": status,
-            "service_name": service_name,
-            "service_speed": service_speed,
-            "last_update": datetime.now(UTC).isoformat(),
-        },
-    )
+) -> dict:
+    """Build the service-activation webhook payload (no I/O)."""
+    return {
+        "status": status,
+        "service_name": service_name,
+        "service_speed": service_speed,
+        "last_update": datetime.now(UTC).isoformat(),
+    }
