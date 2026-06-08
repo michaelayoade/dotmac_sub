@@ -11,7 +11,9 @@ import '../models/ticket.dart';
 import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
 import '../repositories/catalog_repository.dart';
+import '../models/reseller.dart';
 import '../repositories/notification_repository.dart';
+import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
 import 'auth_controller.dart';
@@ -32,6 +34,13 @@ final supportRepositoryProvider = Provider<SupportRepository>(
 
 final notificationRepositoryProvider = Provider<NotificationRepository>(
     (ref) => NotificationRepository(ref.watch(apiClientProvider).dio));
+
+final resellerRepositoryProvider = Provider<ResellerRepository>(
+    (ref) => ResellerRepository(ref.watch(apiClientProvider).dio));
+
+/// The authenticated reseller's dashboard (KPIs + first page of accounts).
+final resellerDashboardProvider = FutureProvider<ResellerDashboard>(
+    (ref) => ref.watch(resellerRepositoryProvider).dashboard());
 
 /// The signed-in subscriber's id (== Subscriber.id == billing account_id).
 /// Used where a request needs the caller's id explicitly (e.g. new tickets);

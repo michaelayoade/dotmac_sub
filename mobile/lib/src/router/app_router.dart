@@ -17,6 +17,7 @@ import '../features/home/dashboard_screen.dart';
 import '../features/home/home_shell.dart';
 import '../features/home/notifications_screen.dart';
 import '../features/home/splash_screen.dart';
+import '../features/reseller/reseller_home_screen.dart';
 import '../features/support/create_ticket_screen.dart';
 import '../features/support/ticket_detail_screen.dart';
 import '../features/support/tickets_screen.dart';
@@ -61,7 +62,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (auth.locked) return loc == '/lock' ? null : '/lock';
       // Authenticated and unlocked: leave the splash/login/lock behind.
       if (loc == '/splash' || loc == '/login' || loc == '/lock') {
-        return '/dashboard';
+        return (auth.me?.isReseller ?? false) ? '/reseller' : '/dashboard';
       }
       return null;
     },
@@ -87,6 +88,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/topup',
         builder: (_, __) => const TopUpScreen(),
+      ),
+      // Reseller portal — a standalone landing (resellers manage many customer
+      // accounts), outside the customer bottom-nav shell.
+      GoRoute(
+        path: '/reseller',
+        builder: (_, __) => const ResellerHomeScreen(),
       ),
       // Authenticated shell with bottom navigation.
       ShellRoute(
