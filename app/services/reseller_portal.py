@@ -153,6 +153,16 @@ def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
     )
 
 
+def reseller_id_for_subscriber(db: Session, subscriber_id: str) -> str | None:
+    """Return the reseller_id the subscriber administers, or None when they are
+    not an active reseller user. Used by the bearer reseller API to scope every
+    request to the caller's own reseller."""
+    reseller_user = _get_reseller_user(db, subscriber_id)
+    if reseller_user is None or not getattr(reseller_user, "reseller_id", None):
+        return None
+    return str(reseller_user.reseller_id)
+
+
 def _create_session(
     username: str,
     reseller_id: str,

@@ -44,6 +44,8 @@ def _build_me_response(
         preferred_contact_method=preferred_contact_method,
         locale=getattr(person, "locale", None),
         timezone=getattr(person, "timezone", None),
+        user_type=getattr(getattr(person, "user_type", None), "value", None)
+        or "customer",
         roles=roles,
         scopes=scopes,
     )

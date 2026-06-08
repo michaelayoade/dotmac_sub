@@ -86,3 +86,6 @@ data/olt_samples/
 
 # Stray local screenshot capture at repo root
 /login.png
+
+# local type-check cache
+.mypy_cache/
