@@ -35,6 +35,7 @@ class ResellerRepository {
         'offset': offset,
       }),
     );
-    return Page.fromJson(data as Map<String, dynamic>, ResellerAccount.fromJson);
+    return Page.fromJson(
+        data as Map<String, dynamic>, ResellerAccount.fromJson);
   }
 }

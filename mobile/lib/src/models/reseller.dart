@@ -19,7 +19,8 @@ class ResellerAccount {
   final String? accountNumber;
   final DateTime? lastPaymentAt;
 
-  factory ResellerAccount.fromJson(Map<String, dynamic> json) => ResellerAccount(
+  factory ResellerAccount.fromJson(Map<String, dynamic> json) =>
+      ResellerAccount(
         id: json['id'].toString(),
         subscriberName: json['subscriber_name'] as String? ?? '',
         status: json['status'] as String? ?? 'active',
