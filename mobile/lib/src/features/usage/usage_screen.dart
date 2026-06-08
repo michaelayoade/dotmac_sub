@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../models/usage.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/skeleton.dart';
 
 class UsageScreen extends ConsumerWidget {
   const UsageScreen({super.key});
@@ -42,6 +43,7 @@ class UsageScreen extends ConsumerWidget {
             AsyncValueView(
               value: summary,
               onRetry: () => ref.invalidate(usageSummaryProvider(period)),
+              skeleton: const CardSkeleton(height: 160),
               data: (s) => _WindowSummaryCard(summary: s),
             ),
             for (final b in quotaList) ...[

@@ -8,6 +8,7 @@ import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
+import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 import '../service/service_detail_screen.dart';
 
@@ -97,6 +98,8 @@ class DashboardScreen extends ConsumerWidget {
             _StatusBanner(
               suspended: hasSuspended,
               known: subList != null,
+              // A suspended service is resolved by paying — deep-link to billing.
+              onTap: hasSuspended ? () => context.go('/billing') : null,
             ),
             const SizedBox(height: 16),
 
@@ -143,15 +146,39 @@ class DashboardScreen extends ConsumerWidget {
             const _QuickActions(),
             const SizedBox(height: 20),
 
-            // --- Current service ---
+            // --- Current service (with a switcher when there are several) ---
             const _SectionHeader('Current service'),
-            ref.watch(currentServiceProvider).when(
-                  loading: () => const _LoadingCard(),
-                  error: (e, _) => _MessageCard('Could not load service: $e'),
-                  data: (s) => s == null
-                      ? const _MessageCard('No active service found.')
-                      : _CurrentServiceCard(service: s),
-                ),
+            subs.when(
+              loading: () => const CardSkeleton(),
+              error: (e, _) => _MessageCard('Could not load service: $e'),
+              data: (page) {
+                final services = page.items;
+                if (services.isEmpty) {
+                  return const _MessageCard('No active service found.');
+                }
+                final selectedId = ref.watch(selectedServiceIdProvider);
+                final selected = services.firstWhere(
+                  (s) => s.id == selectedId,
+                  orElse: () => pickCurrentService(services),
+                );
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (services.length > 1) ...[
+                      _ServiceSwitcher(
+                        services: services,
+                        selectedId: selected.id,
+                        onSelect: (id) => ref
+                            .read(selectedServiceIdProvider.notifier)
+                            .state = id,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    _CurrentServiceCard(service: selected),
+                  ],
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -219,9 +246,14 @@ class _ConnectionBanner extends StatelessWidget {
 }
 
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.suspended, required this.known});
+  const _StatusBanner({
+    required this.suspended,
+    required this.known,
+    this.onTap,
+  });
   final bool suspended;
   final bool known;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -238,7 +270,7 @@ class _StatusBanner extends StatelessWidget {
                 scheme.errorContainer,
                 scheme.onErrorContainer,
                 Icons.warning_amber_rounded,
-                'A service is suspended'
+                'A service is suspended — tap to pay'
               )
             : (
                 scheme.primaryContainer,
@@ -246,21 +278,66 @@ class _StatusBanner extends StatelessWidget {
                 Icons.check_circle_outline,
                 'All services active'
               );
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: fg),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+    final radius = BorderRadius.circular(14);
+    return Material(
+      color: bg,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(icon, color: fg),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(text,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              ),
+              if (onTap != null) Icon(Icons.chevron_right, color: fg),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Horizontal chip selector for picking which subscription the "Current
+/// service" card shows, when the customer has more than one.
+class _ServiceSwitcher extends StatelessWidget {
+  const _ServiceSwitcher({
+    required this.services,
+    required this.selectedId,
+    required this.onSelect,
+  });
+  final List<Subscription> services;
+  final String selectedId;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: services.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final s = services[i];
+          return ChoiceChip(
+            label: Text(s.displayName,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            selected: s.id == selectedId,
+            avatar: Icon(
+              s.isActive ? Icons.circle : Icons.pause_circle_outline,
+              size: 14,
+              color: s.isActive ? Colors.green.shade600 : null,
+            ),
+            onSelected: (_) => onSelect(s.id),
+          );
+        },
       ),
     );
   }
@@ -446,16 +523,33 @@ class _CurrentServiceCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => ServiceDetailScreen(service: s)),
-                  ),
-                  child: const Text('Manage'),
-                ),
-              ),
+              Builder(builder: (context) {
+                // Surface a pay CTA when the service needs attention: suspended,
+                // or expiring within 3 days / already expired.
+                final needsAttention =
+                    !s.isActive || (days != null && days <= 3);
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (needsAttention)
+                      Expanded(
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.payment, size: 18),
+                          onPressed: () => context.go('/billing'),
+                          label: Text(s.isActive ? 'Renew' : 'Reactivate'),
+                        ),
+                      ),
+                    if (needsAttention) const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => ServiceDetailScreen(service: s)),
+                      ),
+                      child: const Text('Manage'),
+                    ),
+                  ],
+                );
+              }),
             ],
           ),
         ),
@@ -508,17 +602,6 @@ class _SectionHeader extends StatelessWidget {
       child: Text(title, style: Theme.of(context).textTheme.titleMedium),
     );
   }
-}
-
-class _LoadingCard extends StatelessWidget {
-  const _LoadingCard();
-  @override
-  Widget build(BuildContext context) => const Card(
-        child: SizedBox(
-          height: 88,
-          child: Center(child: CircularProgressIndicator()),
-        ),
-      );
 }
 
 class _MessageCard extends StatelessWidget {

@@ -3,10 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../models/invoice.dart';
 import '../../models/ledger.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
+import 'invoice_pay_button.dart';
 
 class InvoicesScreen extends ConsumerWidget {
   const InvoicesScreen({super.key});
@@ -35,41 +38,49 @@ class InvoicesScreen extends ConsumerWidget {
             child: AsyncValueView(
               value: invoices,
               onRetry: () => ref.invalidate(invoicesProvider),
+              skeleton: const ListSkeleton(),
               data: (page) {
-                if (page.items.isEmpty) {
+                final all = page.items;
+                if (all.isEmpty) {
                   return const _ScrollableEmpty(
                     icon: Icons.receipt_long_outlined,
                     message: 'No invoices yet.',
                   );
                 }
-                return ListView.separated(
+                final filter = ref.watch(invoiceFilterProvider);
+                final outstanding = all
+                    .where((i) => !i.isPaid)
+                    .fold<double>(0, (sum, i) => sum + i.balanceDue);
+                final currency = all.first.currency;
+                final items = all.where(filter.test).toList();
+                return ListView(
                   padding: const EdgeInsets.all(12),
-                  itemCount: page.items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) {
-                    final inv = page.items[i];
-                    return Card(
-                      margin: EdgeInsets.zero,
-                      child: ListTile(
-                        title: Text(inv.invoiceNumber ??
-                            'Invoice ${inv.id.substring(0, 8)}'),
-                        subtitle: Text('Due ${Fmt.date(inv.dueAt)}'),
-                        trailing: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(Fmt.money(inv.total, inv.currency),
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 4),
-                            StatusChip.forInvoice(
-                                inv.isOverdue ? 'overdue' : inv.status),
-                          ],
+                  children: [
+                    if (outstanding > 0) ...[
+                      _OutstandingHeader(
+                          amount: outstanding, currency: currency),
+                      const SizedBox(height: 8),
+                    ],
+                    _InvoiceFilterBar(
+                      selected: filter,
+                      onChanged: (f) =>
+                          ref.read(invoiceFilterProvider.notifier).state = f,
+                    ),
+                    const SizedBox(height: 12),
+                    if (items.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 64),
+                        child: EmptyState(
+                          icon: Icons.filter_alt_off_outlined,
+                          message: 'No ${filter.label.toLowerCase()} invoices.',
                         ),
-                        onTap: () => context.go('/billing/invoices/${inv.id}'),
-                      ),
-                    );
-                  },
+                      )
+                    else
+                      for (final inv in items) ...[
+                        _InvoiceTile(invoice: inv),
+                        const SizedBox(height: 8),
+                      ],
+                  ],
                 );
               },
             ),
@@ -82,6 +93,7 @@ class InvoicesScreen extends ConsumerWidget {
             child: AsyncValueView(
               value: payments,
               onRetry: () => ref.invalidate(paymentsProvider),
+              skeleton: const ListSkeleton(hasLeading: true),
               data: (page) {
                 if (page.items.isEmpty) {
                   return const _ScrollableEmpty(
@@ -118,6 +130,7 @@ class InvoicesScreen extends ConsumerWidget {
             child: AsyncValueView(
               value: ref.watch(ledgerProvider),
               onRetry: () => ref.invalidate(ledgerProvider),
+              skeleton: const ListSkeleton(hasLeading: true),
               data: (page) {
                 final balance = ref.watch(balanceProvider);
                 return ListView(
@@ -149,6 +162,118 @@ class InvoicesScreen extends ConsumerWidget {
         ],
       ),
     ).withTabs();
+  }
+}
+
+/// Total still owed across unpaid invoices — the number a customer opens the
+/// Invoices tab to find.
+class _OutstandingHeader extends StatelessWidget {
+  const _OutstandingHeader({required this.amount, required this.currency});
+  final double amount;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      color: scheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Outstanding balance',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: scheme.onErrorContainer,
+                    )),
+            Text(
+              Fmt.money(amount, currency),
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: scheme.onErrorContainer,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Status filter chips above the invoices list.
+class _InvoiceFilterBar extends StatelessWidget {
+  const _InvoiceFilterBar({required this.selected, required this.onChanged});
+  final InvoiceFilter selected;
+  final ValueChanged<InvoiceFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      children: [
+        for (final f in InvoiceFilter.values)
+          ChoiceChip(
+            label: Text(f.label),
+            selected: f == selected,
+            onSelected: (_) => onChanged(f),
+          ),
+      ],
+    );
+  }
+}
+
+/// One invoice row: number, due date, amount + status, and an inline Pay action
+/// on anything still owing so the customer can pay without opening the detail.
+class _InvoiceTile extends StatelessWidget {
+  const _InvoiceTile({required this.invoice});
+  final Invoice invoice;
+
+  @override
+  Widget build(BuildContext context) {
+    final inv = invoice;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.go('/billing/invoices/${inv.id}'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      inv.invoiceNumber ?? 'Invoice ${inv.id.substring(0, 8)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 2),
+                    Text('Due ${Fmt.date(inv.dueAt)}',
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(Fmt.money(inv.total, inv.currency),
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  StatusChip.forInvoice(inv.isOverdue ? 'overdue' : inv.status),
+                ],
+              ),
+              if (!inv.isPaid) ...[
+                const SizedBox(width: 12),
+                InvoicePayButton(invoice: inv, compact: true),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

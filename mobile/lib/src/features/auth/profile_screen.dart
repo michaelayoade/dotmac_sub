@@ -48,21 +48,19 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 24),
                 Card(
                   child: Column(
-                    children: [
+                    // Hide rows the backend has no value for rather than showing
+                    // a row of dashes; dividers are inserted between whatever
+                    // rows actually render.
+                    children: _withDividers([
                       _Tile(label: 'Phone', value: me.phone ?? '—'),
-                      const Divider(height: 1),
-                      _Tile(
-                          label: 'Email verified',
-                          value: me.emailVerified ? 'Yes' : 'No'),
-                      const Divider(height: 1),
-                      _Tile(label: 'Locale', value: me.locale ?? '—'),
-                      const Divider(height: 1),
-                      _Tile(label: 'Timezone', value: me.timezone ?? '—'),
-                      if (me.roles.isNotEmpty) ...[
-                        const Divider(height: 1),
+                      _EmailVerifiedTile(verified: me.emailVerified),
+                      if (me.locale != null && me.locale!.isNotEmpty)
+                        _Tile(label: 'Locale', value: me.locale!),
+                      if (me.timezone != null && me.timezone!.isNotEmpty)
+                        _Tile(label: 'Timezone', value: me.timezone!),
+                      if (me.roles.isNotEmpty)
                         _Tile(label: 'Roles', value: me.roles.join(', ')),
-                      ],
-                    ],
+                    ]),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -346,6 +344,57 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
         subtitle: const Text('Require Face ID / fingerprint to open the app'),
         value: _enabled,
         onChanged: _busy ? null : _toggle,
+      ),
+    );
+  }
+}
+
+/// Interleaves a 1px divider between each visible row.
+List<Widget> _withDividers(List<Widget> rows) {
+  final out = <Widget>[];
+  for (var i = 0; i < rows.length; i++) {
+    if (i > 0) out.add(const Divider(height: 1));
+    out.add(rows[i]);
+  }
+  return out;
+}
+
+/// Email-verification status, drawn prominently when unverified so the customer
+/// notices and knows to act. (A self-service re-send needs a backend endpoint
+/// that doesn't exist yet — see POST /auth/* — so this surfaces the state
+/// rather than triggering a resend.)
+class _EmailVerifiedTile extends StatelessWidget {
+  const _EmailVerifiedTile({required this.verified});
+  final bool verified;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (verified) {
+      return ListTile(
+        title: const Text('Email verified'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.verified, size: 18, color: Colors.green.shade600),
+            const SizedBox(width: 6),
+            const Text('Verified'),
+          ],
+        ),
+      );
+    }
+    return ListTile(
+      title: const Text('Email verified'),
+      subtitle: const Text('Check your inbox for the verification link.'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 18, color: scheme.error),
+          const SizedBox(width: 6),
+          Text('Not verified',
+              style:
+                  TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+        ],
       ),
     );
   }

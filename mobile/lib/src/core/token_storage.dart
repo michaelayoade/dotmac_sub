@@ -15,6 +15,7 @@ class TokenStorage {
   static const _kRefresh = 'refresh_token';
   static const _kBiometric = 'biometric_lock_enabled';
   static const _kThemeMode = 'theme_mode';
+  static const _kProfile = 'cached_profile';
 
   Future<void> save({required String accessToken, String? refreshToken}) async {
     await _storage.write(key: _kAccess, value: accessToken);
@@ -44,8 +45,18 @@ class TokenStorage {
 
   Future<String?> readThemeMode() => _storage.read(key: _kThemeMode);
 
+  /// The last-known profile, as a JSON string. Lets the app render the
+  /// dashboard optimistically on cold start instead of blocking the splash on
+  /// `/auth/me`. Carries PII, so it is wiped together with the tokens in
+  /// [clear].
+  Future<void> saveProfile(String json) =>
+      _storage.write(key: _kProfile, value: json);
+
+  Future<String?> readProfile() => _storage.read(key: _kProfile);
+
   Future<void> clear() async {
     await _storage.delete(key: _kAccess);
     await _storage.delete(key: _kRefresh);
+    await _storage.delete(key: _kProfile);
   }
 }

@@ -93,6 +93,24 @@ class Me {
     return result.isEmpty ? '?' : result;
   }
 
+  /// Round-trips with [Me.fromJson] for the on-device profile cache. Uses the
+  /// same snake_case keys as the API so a cached blob and a fresh `/auth/me`
+  /// response are interchangeable.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'email': email,
+        'display_name': displayName,
+        'avatar_url': avatarUrl,
+        'email_verified': emailVerified,
+        'phone': phone,
+        'locale': locale,
+        'timezone': timezone,
+        'roles': roles,
+        'scopes': scopes,
+      };
+
   factory Me.fromJson(Map<String, dynamic> json) => Me(
         id: json['id'].toString(),
         firstName: json['first_name'] as String? ?? '',
