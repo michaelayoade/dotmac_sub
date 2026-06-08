@@ -90,7 +90,9 @@ def downgrade() -> None:
     inspector = inspect(bind)
 
     if _TABLE in inspector.get_table_names():
-        op.drop_index("ix_payment_webhook_dead_letters_provider_idem", table_name=_TABLE)
+        op.drop_index(
+            "ix_payment_webhook_dead_letters_provider_idem", table_name=_TABLE
+        )
         op.drop_index("ix_payment_webhook_dead_letters_status", table_name=_TABLE)
         op.drop_table(_TABLE)
 

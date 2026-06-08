@@ -44,9 +44,7 @@ def test_list_and_detail_round_trip(db_session, subscriber):
     crm_portal.handle_ticket_create(
         db_session, {}, str(subscriber.id), "Slow speeds", "details", "normal"
     )
-    ctx = crm_portal.tickets_list_context(
-        None, db_session, {}, [str(subscriber.id)]
-    )
+    ctx = crm_portal.tickets_list_context(None, db_session, {}, [str(subscriber.id)])
     assert len(ctx["tickets"]) == 1
     tid = ctx["tickets"][0]["id"]
 

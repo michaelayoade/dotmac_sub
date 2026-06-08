@@ -310,9 +310,7 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         if due_at is not None and due_at.tzinfo is None:
             due_at = due_at.replace(tzinfo=UTC)
         invoice.status = (
-            InvoiceStatus.overdue
-            if due_at and due_at < now
-            else InvoiceStatus.issued
+            InvoiceStatus.overdue if due_at and due_at < now else InvoiceStatus.issued
         )
 
 

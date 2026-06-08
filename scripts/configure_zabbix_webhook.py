@@ -133,7 +133,9 @@ class _Api:
 
 
 def _upsert_media_type(api: _Api, *, app_url: str, webhook_token: str) -> str:
-    parameters = [{"name": "URL", "value": f"{app_url.rstrip('/')}/api/v1/zabbix/webhook/alert"}]
+    parameters = [
+        {"name": "URL", "value": f"{app_url.rstrip('/')}/api/v1/zabbix/webhook/alert"}
+    ]
     parameters.append({"name": "Token", "value": webhook_token})
     parameters.extend({"name": k, "value": v} for k, v in _PARAM_MACROS.items())
 
@@ -159,7 +161,10 @@ def _upsert_media_type(api: _Api, *, app_url: str, webhook_token: str) -> str:
         ],
     }
 
-    existing = api.call("mediatype.get", {"filter": {"name": [MEDIA_TYPE_NAME]}, "output": ["mediatypeid"]})
+    existing = api.call(
+        "mediatype.get",
+        {"filter": {"name": [MEDIA_TYPE_NAME]}, "output": ["mediatypeid"]},
+    )
     if existing:
         media_id = str(existing[0]["mediatypeid"])
         api.call("mediatype.update", {"mediatypeid": media_id, **fields})

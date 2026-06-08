@@ -480,10 +480,16 @@ def test_change_plan_page_does_not_price_catalog_upfront(
     from app.services import customer_portal_flow_changes as flow
 
     current_offer = _make_offer(
-        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
     )
     _make_offer(
-        db_session, name="Unlimited Plus", amount=Decimal("200.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
     )
     subscription = _make_subscription(
         db_session,
@@ -512,10 +518,16 @@ def test_get_plan_change_quote_returns_single_quote(
     from app.services import customer_portal_flow_changes as flow
 
     current_offer = _make_offer(
-        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
     )
     target_offer = _make_offer(
-        db_session, name="Unlimited Plus", amount=Decimal("200.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
     )
     subscription = _make_subscription(
         db_session,
@@ -541,10 +553,16 @@ def test_get_plan_change_quote_enforces_ownership(db_session, subscriber):
     from app.services import customer_portal_flow_changes as flow
 
     current_offer = _make_offer(
-        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
     )
     target_offer = _make_offer(
-        db_session, name="Unlimited Plus", amount=Decimal("200.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
     )
     subscription = _make_subscription(
         db_session,
@@ -571,10 +589,16 @@ def test_available_portal_offers_eager_loads_prices(db_session, subscriber):
     from app.services.customer_portal_context import get_available_portal_offers
 
     current_offer = _make_offer(
-        db_session, name="Unlimited Basic", amount=Decimal("100.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
     )
     _make_offer(
-        db_session, name="Unlimited Plus", amount=Decimal("150.00"), plan_family="unlimited"
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("150.00"),
+        plan_family="unlimited",
     )
     subscription = _make_subscription(
         db_session,

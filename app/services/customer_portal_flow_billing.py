@@ -186,15 +186,15 @@ def get_new_arrangement_page(
     # arrange. Without this the template's `{% if not eligible %}` always fired,
     # so every customer saw "Not Eligible" and the form never rendered.
     overdue_invoices = invoices
-    eligible = bool(account_id_str) and outstanding_balance and len(overdue_invoices) > 0
+    eligible = (
+        bool(account_id_str) and outstanding_balance and len(overdue_invoices) > 0
+    )
     ineligible_reason = (
         None
         if eligible
         else "You have no overdue balance that requires a payment arrangement."
     )
-    due_dates = [
-        inv.due_at for inv in overdue_invoices if getattr(inv, "due_at", None)
-    ]
+    due_dates = [inv.due_at for inv in overdue_invoices if getattr(inv, "due_at", None)]
     oldest_due_date = min(due_dates) if due_dates else None
 
     return {
