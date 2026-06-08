@@ -46,6 +46,7 @@ from app.schemas.notification import NotificationRead
 from app.schemas.usage import (
     QuotaBucketRead,
     RadiusAccountingSessionRead,
+    UsageSummaryResponse,
 )
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
@@ -56,6 +57,7 @@ from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import notification as notification_service
 from app.services import usage as usage_service
+from app.services import usage_summary as usage_summary_service
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -514,3 +516,19 @@ def my_accounting_sessions(
     )
 
 
+@router.get("/usage-summary", response_model=UsageSummaryResponse)
+async def my_usage_summary(
+    period: str = Query(default="today", pattern="^(hour|today|week|cycle|all)$"),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Time-windowed data-usage total + bucketed series for the caller.
+
+    period: hour | today | week | cycle | all. The total is billing-grade for
+    cycle (rated quota) and all (session octets), and throughput-integrated for
+    sub-day windows — see total_source / is_authoritative on the response. The
+    window has a defined start/end (unlike the legacy "last 50 sessions" sum)
+    and counts the live session's current octets.
+    """
+    subscriber_id = _subscriber_id(principal)
+    return await usage_summary_service.get_usage_summary(db, subscriber_id, period)

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../models/subscription.dart';
+import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
@@ -43,8 +44,21 @@ class DashboardScreen extends ConsumerWidget {
         : 'NGN';
 
     final sessItems = sessions.asData?.value.items;
-    final dataUsed = sessItems?.fold<int>(
-        0, (s, e) => s + (e.outputOctets ?? 0) + (e.inputOctets ?? 0));
+    // Defined-window total (today) instead of summing the latest 50 sessions.
+    final dataToday =
+        ref.watch(usageSummaryProvider('today')).asData?.value.totalBytes;
+
+    // Connection status: an open RADIUS accounting session (no end) means the
+    // subscriber is currently online; its start gives the uptime.
+    AccountingSession? activeSession;
+    if (sessItems != null) {
+      for (final s in sessItems) {
+        if (s.isActive) {
+          activeSession = s;
+          break;
+        }
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -66,6 +80,7 @@ class DashboardScreen extends ConsumerWidget {
           ref.invalidate(subscriptionsProvider);
           ref.invalidate(invoicesProvider);
           ref.invalidate(accountingSessionsProvider);
+          ref.invalidate(usageSummaryProvider('today'));
           await Future.wait([
             ref.read(subscriptionsProvider.future),
             ref.read(invoicesProvider.future),
@@ -74,6 +89,11 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            _ConnectionBanner(
+              session: activeSession,
+              known: sessions.hasValue,
+            ),
+            const SizedBox(height: 12),
             _StatusBanner(
               suspended: hasSuspended,
               known: subList != null,
@@ -98,8 +118,8 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    label: 'Data used',
-                    value: dataUsed == null ? '—' : Fmt.bytes(dataUsed),
+                    label: 'Data today',
+                    value: dataToday == null ? '—' : Fmt.bytes(dataToday),
                     onTap: () => context.go('/usage'),
                   ),
                 ),
@@ -134,6 +154,65 @@ class DashboardScreen extends ConsumerWidget {
                 ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Network connection status — the headline reason customers open the app.
+/// Derived from whether an open RADIUS accounting session exists.
+class _ConnectionBanner extends StatelessWidget {
+  const _ConnectionBanner({required this.session, required this.known});
+
+  /// The active session, or null when offline. Only meaningful when [known].
+  final AccountingSession? session;
+
+  /// True once the sessions request has resolved with data.
+  final bool known;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Color bg;
+    final Color fg;
+    final IconData icon;
+    final String text;
+
+    if (!known) {
+      bg = scheme.surfaceContainerHighest;
+      fg = scheme.onSurfaceVariant;
+      icon = Icons.wifi_find_outlined;
+      text = 'Checking connection…';
+    } else if (session != null) {
+      final start = session!.sessionStart;
+      bg = scheme.secondaryContainer;
+      fg = scheme.onSecondaryContainer;
+      icon = Icons.wifi;
+      text = start == null
+          ? 'Connected'
+          : 'Connected · session up ${Fmt.uptime(start)}';
+    } else {
+      bg = scheme.errorContainer;
+      fg = scheme.onErrorContainer;
+      icon = Icons.wifi_off_outlined;
+      text = 'Offline';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: fg),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
     );
   }

@@ -108,6 +108,16 @@ final accountingSessionsProvider =
   return ref.watch(usageRepositoryProvider).sessions();
 });
 
+/// Selected window for the Usage tab summary (hour|today|week|cycle|all).
+final selectedUsagePeriodProvider =
+    StateProvider.autoDispose<String>((ref) => 'today');
+
+/// Windowed data-usage summary for a given period.
+final usageSummaryProvider = FutureProvider.autoDispose
+    .family<UsageSummary, String>((ref, period) async {
+  return ref.watch(usageRepositoryProvider).usageSummary(period);
+});
+
 final sessionsProvider =
     FutureProvider.autoDispose<List<AuthSessionInfo>>((ref) async {
   return ref.watch(authRepositoryProvider).sessions();
