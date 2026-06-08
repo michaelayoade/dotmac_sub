@@ -109,10 +109,12 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.account_balance_wallet_outlined,
-                    label: 'Balance',
+                    // Say "Amount due" in words when owing, so the state isn't
+                    // conveyed by the red colour alone (accessibility).
+                    label: (outstanding ?? 0) > 0 ? 'Amount due' : 'Balance',
                     value: outstanding == null
                         ? '—'
-                        : Fmt.money(outstanding, currency),
+                        : Fmt.moneyCompact(outstanding, currency),
                     highlight: (outstanding ?? 0) > 0,
                     onTap: () => context.go('/billing'),
                   ),
@@ -372,13 +374,19 @@ class _StatCard extends StatelessWidget {
             children: [
               Icon(icon, size: 20, color: theme.colorScheme.primary),
               const SizedBox(height: 10),
-              Text(value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: highlight ? theme.colorScheme.error : null,
-                  )),
+              // Scale the figure down to fit the narrow column rather than
+              // truncating it (a cut-off "NGN 1,732,…" is unreadable).
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: highlight ? theme.colorScheme.error : null,
+                    )),
+              ),
               const SizedBox(height: 2),
               Text(label,
                   style: theme.textTheme.bodySmall

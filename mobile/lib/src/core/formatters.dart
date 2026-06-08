@@ -21,6 +21,18 @@ class Fmt {
     return f.format(amount);
   }
 
+  /// Compact currency for tight at-a-glance spots (e.g. dashboard stat cards),
+  /// where a full figure like "NGN 1,732,000.00" overflows a narrow column.
+  /// Abbreviates large amounts ("NGN 1.7M", "NGN 250K") and falls back to the
+  /// full [money] format below 10,000 where precision still fits. The exact
+  /// figure is always available on the screen the card links to.
+  static String moneyCompact(num amount, String currencyCode) {
+    final abs = amount.abs();
+    if (abs < 10000) return money(amount, currencyCode);
+    final sign = amount < 0 ? '-' : '';
+    return '$currencyCode $sign${NumberFormat.compact().format(abs)}';
+  }
+
   /// Human-readable byte size from an octet count.
   static String bytes(int octets) {
     if (octets <= 0) return '0 B';

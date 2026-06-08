@@ -13,6 +13,22 @@ void main() {
     });
   });
 
+  group('Fmt.moneyCompact', () {
+    test('keeps full precision below 10,000', () {
+      expect(Fmt.moneyCompact(1250, 'NGN'), Fmt.money(1250, 'NGN'));
+      expect(Fmt.moneyCompact(0, 'NGN'), Fmt.money(0, 'NGN'));
+    });
+
+    test('abbreviates large figures so they fit a narrow card', () {
+      expect(Fmt.moneyCompact(1732000, 'NGN'), 'NGN 1.73M');
+      expect(Fmt.moneyCompact(250000, 'NGN'), 'NGN 250K');
+    });
+
+    test('keeps a sign for negative amounts', () {
+      expect(Fmt.moneyCompact(-1732000, 'NGN'), 'NGN -1.73M');
+    });
+  });
+
   group('Fmt.uptime', () {
     test('formats a past start as a compact uptime', () {
       final start = DateTime.now().subtract(const Duration(hours: 3));
