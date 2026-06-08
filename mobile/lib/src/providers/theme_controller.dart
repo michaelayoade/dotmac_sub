@@ -20,15 +20,23 @@ class ThemeModeController extends StateNotifier<ThemeMode> {
   bool _userChose = false;
 
   Future<void> _load() async {
-    final stored = _parse(await _storage.readThemeMode());
-    // Don't clobber a choice the user made while the read was in flight.
-    if (!_userChose) state = stored;
+    try {
+      final stored = _parse(await _storage.readThemeMode());
+      // Don't clobber a choice the user made while the read was in flight.
+      if (!_userChose) state = stored;
+    } catch (_) {
+      // A storage read failure just means we keep the default (system).
+    }
   }
 
   Future<void> set(ThemeMode mode) async {
     _userChose = true;
-    state = mode;
-    await _storage.setThemeMode(mode.name);
+    state = mode; // optimistic — the UI updates immediately
+    try {
+      await _storage.setThemeMode(mode.name);
+    } catch (_) {
+      // Persisting failed; the theme still applies for this session.
+    }
   }
 
   static ThemeMode _parse(String? value) => switch (value) {

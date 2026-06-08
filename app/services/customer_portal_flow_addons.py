@@ -191,6 +191,15 @@ def _lock_account(db: Session, account_id) -> None:
         ).with_for_update().first()
 
 
+def _find_key(db: Session, key: str) -> IdempotencyKey | None:
+    return db.scalars(
+        select(IdempotencyKey).where(
+            IdempotencyKey.scope == _IDEMPOTENCY_SCOPE,
+            IdempotencyKey.key == key,
+        )
+    ).first()
+
+
 def _replay_addon_result(db: Session, ref_id: str | None) -> dict:
     sub_add_on = db.get(SubscriptionAddOn, coerce_uuid(ref_id)) if ref_id else None
     return {
@@ -216,18 +225,18 @@ def purchase_addon(
     if subscription is None:
         raise ValueError("Service not found")
 
+    account_id = str(subscription.subscriber_id)
     if idempotency_key:
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == _IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == idempotency_key,
-            )
-        ).first()
+        prior = _find_key(db, idempotency_key)
         if prior is not None:
+            if str(prior.account_id) != account_id:
+                raise ValueError("Idempotency key already used")
             return _replay_addon_result(db, prior.ref_id)
 
-    # Serialize concurrent wallet writes so two different requests can't both
-    # read the same balance and overspend.
+    # Serialize concurrent add-on purchases for this account (Postgres only) so
+    # two requests can't both read the same balance and overspend. NOTE: this
+    # only mutually-excludes other add-on purchases — it does not serialize
+    # against top-up/plan-change/autopay, which don't take this lock.
     _lock_account(db, subscription.subscriber_id)
 
     add_on, unit_amount, currency = _resolve_purchasable(
@@ -285,16 +294,15 @@ def purchase_addon(
     try:
         db.commit()
     except IntegrityError:
-        # A concurrent request with the same key won the race — return its
-        # result instead of double-charging.
         db.rollback()
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == _IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == idempotency_key,
-            )
-        ).first()
-        return _replay_addon_result(db, prior.ref_id if prior else None)
+        # Only a same-key race is a replay: re-fetch the key and, if a
+        # concurrent request committed it, return that result. Any other
+        # integrity failure (FK, constraint) is a real error — re-raise it
+        # rather than reporting a phantom success.
+        prior = _find_key(db, idempotency_key) if idempotency_key else None
+        if prior is not None and prior.ref_id:
+            return _replay_addon_result(db, prior.ref_id)
+        raise
     db.refresh(sub_add_on)
     new_balance = round_money(
         get_account_credit_balance(db, str(subscription.subscriber_id))

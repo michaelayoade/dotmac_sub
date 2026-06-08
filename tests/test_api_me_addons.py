@@ -227,6 +227,36 @@ def test_different_keys_purchase_independently(_setup, db_session, subscriber):
     )
 
 
+def test_idempotency_key_is_scoped_to_the_account(_setup, db_session, subscriber):
+    _subscriber, sub, add_on, customer = _setup
+    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    addons.purchase_addon(
+        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="shared"
+    )
+
+    from app.models.catalog import CatalogOffer
+    from app.models.subscriber import Subscriber
+
+    other = Subscriber(first_name="Other", last_name="User", email="o2@x.io")
+    db_session.add(other)
+    db_session.commit()
+    offer = db_session.get(CatalogOffer, sub.offer_id)
+    other_sub = _make_subscription(db_session, other, offer)
+    _seed_wallet_credit(db_session, other, Decimal("5000.00"))
+    other_customer = {"account_id": str(other.id), "subscriber_id": str(other.id)}
+
+    # Another account reusing the same key must NOT replay the first's purchase.
+    with pytest.raises(ValueError, match="already used"):
+        addons.purchase_addon(
+            db_session,
+            other_customer,
+            str(other_sub.id),
+            str(add_on.id),
+            1,
+            idempotency_key="shared",
+        )
+
+
 def test_purchase_rejected_when_balance_insufficient(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
     _seed_wallet_credit(db_session, subscriber, Decimal("1000.00"))  # < 2000
