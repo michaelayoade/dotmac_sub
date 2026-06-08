@@ -694,6 +694,7 @@ __all__ = [
     "_get_offer_recurring_price",
     "get_offer_price_summary",
     "get_plan_change_copy",
+    "get_plan_change_quote",
     "apply_instant_plan_change",
     "request_plan_migration",
 ]
