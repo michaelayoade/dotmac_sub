@@ -82,6 +82,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/mfa',
         builder: (_, state) => MfaScreen(mfaToken: state.extra as String),
       ),
+      // Full-screen top-up flow — lives on the root navigator (above the
+      // bottom-nav shell), so it is a top-level route rather than a shell child.
+      GoRoute(
+        path: '/topup',
+        builder: (_, __) => const TopUpScreen(),
+      ),
       // Authenticated shell with bottom navigation.
       ShellRoute(
         builder: (_, __, child) => HomeShell(child: child),
@@ -110,11 +116,6 @@ final routerProvider = Provider<GoRouter>((ref) {
             ],
           ),
           GoRoute(path: '/usage', builder: (_, __) => const UsageScreen()),
-          GoRoute(
-            path: '/topup',
-            parentNavigatorKey: rootNavigatorKey,
-            builder: (_, __) => const TopUpScreen(),
-          ),
           GoRoute(
             path: '/support',
             builder: (_, __) => const TicketsScreen(),
