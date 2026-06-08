@@ -1,7 +1,7 @@
 """Add autopay_mandates — per-account opt-in to auto-charge a saved card.
 
 Revision ID: 119_add_autopay_mandates
-Revises: 117_add_payment_webhook_dead_letters
+Revises: 118_add_connector_config_id_to_alert_notification_policies
 Create Date: 2026-06-08
 
 One mandate per account (unique account_id), pointing at the saved card to
@@ -18,7 +18,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "119_add_autopay_mandates"
-down_revision = "117_add_payment_webhook_dead_letters"
+down_revision = "118_add_connector_config_id_to_alert_notification_policies"
 branch_labels = None
 depends_on = None
 
@@ -49,15 +49,9 @@ def upgrade() -> None:
             sa.ForeignKey("payment_methods.id"),
             nullable=True,
         ),
-        sa.Column(
-            "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
-        ),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), nullable=False
-        ),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
 
 

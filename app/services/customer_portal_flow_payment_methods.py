@@ -47,7 +47,7 @@ def payment_method_from_authorization(
     if not code or authorization.get("reusable") is False:
         return None
     return PaymentMethodCreate(
-        account_id=account_id,
+        account_id=coerce_uuid(account_id),
         method_type=PaymentMethodType.card,
         label=card_label(authorization),
         token=code,

@@ -69,7 +69,7 @@ def _offer_links(db: Session, offer_id) -> list[tuple[OfferAddOn, AddOn]]:
         .filter(AddOn.is_active.is_(True))
         .all()
     )
-    return list(rows)
+    return [(link, add_on) for link, add_on in rows]
 
 
 def _serialize_option(link: OfferAddOn, add_on: AddOn) -> dict:
