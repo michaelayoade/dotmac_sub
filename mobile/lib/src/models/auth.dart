@@ -56,6 +56,7 @@ class Me {
     this.phone,
     this.locale,
     this.timezone,
+    this.userType = 'customer',
     this.roles = const [],
     this.scopes = const [],
   });
@@ -70,8 +71,14 @@ class Me {
   final String? phone;
   final String? locale;
   final String? timezone;
+
+  /// Principal kind from the API ("customer" | "reseller"); drives portal
+  /// routing after login.
+  final String userType;
   final List<String> roles;
   final List<String> scopes;
+
+  bool get isReseller => userType == 'reseller';
 
   String get fullName {
     final dn = displayName?.trim();
@@ -97,6 +104,7 @@ class Me {
         phone: json['phone'] as String?,
         locale: json['locale'] as String?,
         timezone: json['timezone'] as String?,
+        userType: json['user_type'] as String? ?? 'customer',
         roles: (json['roles'] as List? ?? const [])
             .map((e) => e.toString())
             .toList(),
