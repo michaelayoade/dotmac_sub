@@ -303,6 +303,18 @@ def submit_change_plan(
     """Submit a plan change request."""
     from app.services import subscription_changes as change_service
 
+    # Ownership check (mirrors get_change_plan_page/get_plan_change_quote): the
+    # subscription must belong to the caller, otherwise a customer could submit a
+    # plan change against another subscriber's service (IDOR).
+    account_id = customer.get("account_id")
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription or not account_id or str(subscription.subscriber_id) != str(
+        account_id
+    ):
+        raise ValueError("Service not found.")
+
     subscriber_id = customer.get("subscriber_id")
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
 

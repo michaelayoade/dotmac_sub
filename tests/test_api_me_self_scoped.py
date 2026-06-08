@@ -191,3 +191,38 @@ def test_my_invoice_detail_404_when_not_owned(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         me_api.my_invoice(invoice_id=str(uuid.uuid4()), db=None, principal=principal)
     assert exc.value.status_code == 404
+
+
+def test_submit_change_plan_rejects_foreign_subscription(monkeypatch):
+    """IDOR guard: submitting a plan change against a subscription owned by
+    another subscriber must be rejected before any change request is created."""
+    from app.services import customer_portal_flow_changes as changes
+    from app.services import subscription_changes as change_service
+
+    class _Sub:
+        subscriber_id = "victim-subscriber-id"
+        offer_id = "offer-1"
+
+    monkeypatch.setattr(
+        changes.catalog_service.subscriptions, "get", lambda **kwargs: _Sub()
+    )
+    created = {"called": False}
+
+    def _create(**kwargs):
+        created["called"] = True
+
+    monkeypatch.setattr(
+        change_service.subscription_change_requests, "create", _create
+    )
+
+    with pytest.raises(ValueError):
+        changes.submit_change_plan(
+            db=None,
+            customer={"account_id": "attacker-id", "subscriber_id": "attacker-id"},
+            subscription_id="victim-subscription-id",
+            offer_id="offer-2",
+            effective_date="2026-12-31",
+            notes=None,
+        )
+    # The change request must NOT have been created for a foreign subscription.
+    assert created["called"] is False
