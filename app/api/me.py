@@ -18,6 +18,7 @@ from app.db import get_db
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
     InvoiceRead,
+    LedgerEntryRead,
     PaymentRead,
     TopupInitiateRequest,
     TopupInitiateResponse,
@@ -107,6 +108,24 @@ def my_payments(
     account_id = _subscriber_id(principal)
     return billing_service.payments.list_response(
         db, account_id, None, status, None, order_by, order_dir, limit, offset
+    )
+
+
+@router.get("/ledger", response_model=ListResponse[LedgerEntryRead])
+def my_ledger(
+    entry_type: str | None = None,
+    source: str | None = None,
+    order_by: str = Query(default="created_at"),
+    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's account ledger — charges, payments, credits, adjustments."""
+    account_id = _subscriber_id(principal)
+    return billing_service.ledger_entries.list_response(
+        db, account_id, entry_type, source, True, order_by, order_dir, limit, offset
     )
 
 

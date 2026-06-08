@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../models/ledger.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/status_chip.dart';
@@ -18,8 +19,11 @@ class InvoicesScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Billing'),
-        bottom:
-            const TabBar(tabs: [Tab(text: 'Invoices'), Tab(text: 'Payments')]),
+        bottom: const TabBar(tabs: [
+          Tab(text: 'Invoices'),
+          Tab(text: 'Payments'),
+          Tab(text: 'Activity'),
+        ]),
       ),
       body: TabBarView(
         children: [
@@ -105,9 +109,63 @@ class InvoicesScreen extends ConsumerWidget {
               },
             ),
           ),
+          RefreshIndicator(
+            onRefresh: () async {
+              ref.invalidate(ledgerProvider);
+              await ref.read(ledgerProvider.future);
+            },
+            child: AsyncValueView(
+              value: ref.watch(ledgerProvider),
+              onRetry: () => ref.invalidate(ledgerProvider),
+              data: (page) {
+                if (page.items.isEmpty) {
+                  return const _ScrollableEmpty(
+                    icon: Icons.receipt_long_outlined,
+                    message: 'No account activity yet.',
+                  );
+                }
+                return ListView.separated(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: page.items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) => _LedgerTile(txn: page.items[i]),
+                );
+              },
+            ),
+          ),
         ],
       ),
     ).withTabs();
+  }
+}
+
+/// One account ledger row: credits (payments/refunds) are green +, debits
+/// (charges) are red −.
+class _LedgerTile extends StatelessWidget {
+  const _LedgerTile({required this.txn});
+  final LedgerTxn txn;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final credit = txn.isCredit;
+    final color = credit ? Colors.green.shade700 : scheme.error;
+    final sign = credit ? '+' : '−';
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          credit ? Icons.south_west : Icons.north_east,
+          color: color,
+        ),
+        title: Text(txn.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text(Fmt.dateTime(txn.createdAt)),
+        trailing: Text(
+          '$sign${Fmt.money(txn.amount, txn.currency)}',
+          style: TextStyle(color: color, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
   }
 }
 
@@ -132,6 +190,6 @@ class _ScrollableEmpty extends StatelessWidget {
 }
 
 extension _Tabbed on Scaffold {
-  /// Wrap the scaffold in a DefaultTabController matching the two tabs above.
-  Widget withTabs() => DefaultTabController(length: 2, child: this);
+  /// Wrap the scaffold in a DefaultTabController matching the three tabs above.
+  Widget withTabs() => DefaultTabController(length: 3, child: this);
 }

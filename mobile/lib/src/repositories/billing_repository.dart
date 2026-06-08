@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../core/http.dart';
 import '../models/invoice.dart';
+import '../models/ledger.dart';
 import '../models/page.dart';
 import '../models/payment_flow.dart';
 import '../models/topup.dart';
@@ -39,6 +40,15 @@ class BillingRepository {
           'offset': offset,
         }));
     return Page.fromJson(data as Map<String, dynamic>, Payment.fromJson);
+  }
+
+  /// GET /me/ledger — the subscriber's account ledger (transaction history).
+  Future<Page<LedgerTxn>> ledger({int limit = 50, int offset = 0}) async {
+    final data = await guard(() => dio.get('/me/ledger', queryParameters: {
+          'limit': limit,
+          'offset': offset,
+        }));
+    return Page.fromJson(data as Map<String, dynamic>, LedgerTxn.fromJson);
   }
 
   /// GET /dashboard — free-form stats map for the current consumer.

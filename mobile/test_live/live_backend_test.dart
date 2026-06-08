@@ -109,6 +109,11 @@ void main() {
     final notifications = await NotificationRepository(api.dio).list(limit: 5);
     print('✅ /me/notifications — count=${notifications.count}');
 
+    final ledger = await billing.ledger(limit: 10);
+    print('✅ /me/ledger — count=${ledger.items.length}'
+        '${ledger.items.isNotEmpty ? ' (e.g. ${ledger.items.first.entryType} '
+            '${ledger.items.first.amount})' : ''}');
+
     final topup = await billing.topupPage();
     print('✅ /me/topup — balance=${topup.prepaidBalance} '
         'presets=${topup.presetAmounts}');
