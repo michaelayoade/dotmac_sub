@@ -57,6 +57,26 @@ class BillingRepository {
     await guard(() => dio.patch('/me/payment-methods/$id/default'));
   }
 
+  /// GET /me/autopay — current autopay status.
+  Future<AutopayStatus> autopayStatus() async {
+    final data = await guard(() => dio.get('/me/autopay'));
+    return AutopayStatus.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// POST /me/autopay — enable autopay (default card unless one is given).
+  Future<AutopayStatus> enableAutopay({String? paymentMethodId}) async {
+    final data = await guard(() => dio.post('/me/autopay', data: {
+          if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
+        }));
+    return AutopayStatus.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// DELETE /me/autopay — disable autopay.
+  Future<AutopayStatus> disableAutopay() async {
+    final data = await guard(() => dio.delete('/me/autopay'));
+    return AutopayStatus.fromJson((data as Map).cast<String, dynamic>());
+  }
+
   /// DELETE /me/payment-methods/{id} — remove a saved card.
   Future<void> removeCard(String id) async {
     await guard(() => dio.delete('/me/payment-methods/$id'));

@@ -1,3 +1,16 @@
+/// Autopay status (GET /me/autopay).
+class AutopayStatus {
+  AutopayStatus({required this.enabled, this.paymentMethodId});
+
+  final bool enabled;
+  final String? paymentMethodId;
+
+  factory AutopayStatus.fromJson(Map<String, dynamic> json) => AutopayStatus(
+        enabled: json['enabled'] as bool? ?? false,
+        paymentMethodId: json['payment_method_id']?.toString(),
+      );
+}
+
 /// A saved card (GET /me/payment-methods). The reusable token is never sent to
 /// the client — only display fields.
 class SavedCard {

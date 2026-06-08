@@ -68,6 +68,11 @@ final paymentMethodsProvider =
   return ref.watch(billingRepositoryProvider).paymentMethods();
 });
 
+final autopayStatusProvider =
+    FutureProvider.autoDispose<AutopayStatus>((ref) async {
+  return ref.watch(billingRepositoryProvider).autopayStatus();
+});
+
 final subscriptionsProvider =
     FutureProvider.autoDispose<Page<Subscription>>((ref) async {
   return ref.watch(catalogRepositoryProvider).subscriptions();

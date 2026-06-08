@@ -18,6 +18,8 @@ from app.db import get_db
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
     AccountBalanceResponse,
+    AutopayEnableRequest,
+    AutopayStatusResponse,
     InvoiceRead,
     LedgerEntryRead,
     MyPaymentMethodRead,
@@ -41,7 +43,11 @@ from app.schemas.catalog import (
 )
 from app.schemas.common import ListResponse
 from app.schemas.notification import NotificationRead
-from app.schemas.usage import QuotaBucketRead, RadiusAccountingSessionRead
+from app.schemas.usage import (
+    QuotaBucketRead,
+    RadiusAccountingSessionRead,
+)
+from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal_flow_addons as customer_addons
@@ -117,6 +123,45 @@ def my_payments(
     return billing_service.payments.list_response(
         db, account_id, None, status, None, order_by, order_dir, limit, offset
     )
+
+
+@router.get("/autopay", response_model=AutopayStatusResponse)
+def my_autopay_status(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Whether the caller has autopay enabled, and on which saved card."""
+    return autopay_service.get_status(db, _subscriber_id(principal))
+
+
+@router.post("/autopay", response_model=AutopayStatusResponse)
+def my_autopay_enable(
+    payload: AutopayEnableRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Enable autopay against a saved card (the default card if unspecified)."""
+    account_id = _subscriber_id(principal)
+    try:
+        autopay_service.enable(
+            db,
+            account_id,
+            str(payload.payment_method_id) if payload.payment_method_id else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return autopay_service.get_status(db, account_id)
+
+
+@router.delete("/autopay", response_model=AutopayStatusResponse)
+def my_autopay_disable(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Turn off autopay for the caller."""
+    account_id = _subscriber_id(principal)
+    autopay_service.disable(db, account_id)
+    return autopay_service.get_status(db, account_id)
 
 
 @router.get("/payment-methods", response_model=list[MyPaymentMethodRead])
@@ -467,3 +512,5 @@ def my_accounting_sessions(
     return usage_service.radius_accounting_sessions.list_response_for_subscriber(
         db, subscriber_id, limit, offset
     )
+
+

@@ -851,3 +851,12 @@ class MyPaymentMethodRead(BaseModel):
     is_default: bool = False
     created_at: datetime
 
+
+class AutopayStatusResponse(BaseModel):
+    enabled: bool = False
+    payment_method_id: UUID | None = None
+
+
+class AutopayEnableRequest(BaseModel):
+    payment_method_id: UUID | None = None
+
