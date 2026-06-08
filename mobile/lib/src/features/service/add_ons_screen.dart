@@ -114,7 +114,8 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
     setState(() => _busy = true);
     try {
       await ref.read(catalogRepositoryProvider).cancelAddon(_subId, addon.id);
-      messenger.showSnackBar(SnackBar(content: Text('${addon.name} cancelled')));
+      messenger
+          .showSnackBar(SnackBar(content: Text('${addon.name} cancelled')));
       await _load();
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
