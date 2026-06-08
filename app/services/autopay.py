@@ -29,6 +29,7 @@ from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentAllocationApply
 from app.services import billing as billing_service
 from app.services import paystack
+from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.common import coerce_uuid, round_money, to_decimal
 
@@ -158,16 +159,6 @@ def _recover_charge(db: Session, reference: str) -> dict | None:
     return tx if str(tx.get("status")) == "success" else None
 
 
-def _lock_account(db: Session, account_id: str) -> None:
-    """Serialize concurrent autopay runs for one account (Postgres only); SQLite
-    serializes writes globally so this is a no-op there."""
-    bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "postgresql":
-        db.query(Subscriber).filter(
-            Subscriber.id == coerce_uuid(account_id)
-        ).with_for_update().first()
-
-
 def run_account_autopay(db: Session, account_id: str) -> dict:
     """Charge the account's saved card for each open invoice. Charges are
     idempotent on a deterministic per-(invoice, amount) reference, so overlapping
@@ -178,7 +169,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
 
     # Serialize concurrent runs for this account so two runs can't both charge
     # the same invoice before either records.
-    _lock_account(db, account_id)
+    lock_account(db, account_id)
 
     token = (
         billing_service.payment_methods.get_decrypted_token(

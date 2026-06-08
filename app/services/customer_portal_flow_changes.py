@@ -547,6 +547,12 @@ def apply_instant_plan_change(
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
 
+    # Serialize the wallet read-modify-write against concurrent add-on/autopay/
+    # plan-change debits so the balance can't be overspent by a race.
+    from app.services.billing._common import lock_account
+
+    lock_account(db, str(subscription.subscriber_id))
+
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
     if not new_offer or not new_offer.is_active:
         raise ValueError("Selected plan is not available")
