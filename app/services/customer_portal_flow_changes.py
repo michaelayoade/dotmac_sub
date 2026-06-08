@@ -310,8 +310,10 @@ def submit_change_plan(
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
     )
-    if not subscription or not account_id or str(subscription.subscriber_id) != str(
-        account_id
+    if (
+        not subscription
+        or not account_id
+        or str(subscription.subscriber_id) != str(account_id)
     ):
         raise ValueError("Service not found.")
 
