@@ -12,7 +12,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -193,13 +193,13 @@ class CRMClient:
             try:
                 cached = redis.get(cache_key)
                 if cached is not None:
-                    return json.loads(cached)
+                    return json.loads(cast("str | bytes | bytearray", cached))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("CRM cache get failed for %s: %s", path, exc)
 
         data = self._request("GET", path, params=params)
 
-        if cache_key is not None:
+        if redis is not None and cache_key is not None:
             try:
                 redis.setex(cache_key, ttl, json.dumps(data))
             except Exception as exc:  # noqa: BLE001

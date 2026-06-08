@@ -54,7 +54,9 @@ def wrap_email_html(
     primary = brand["primary_color"]
     primary_dark = _darken(primary)
     safe_subject = escape(subject)
-    safe_company = escape(company_name if company_name is not None else brand["legal_name"])
+    safe_company = escape(
+        company_name if company_name is not None else brand["legal_name"]
+    )
     safe_support = escape(
         support_email if support_email is not None else brand["support_email"]
     )

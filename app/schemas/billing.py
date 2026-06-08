@@ -859,4 +859,3 @@ class AutopayStatusResponse(BaseModel):
 
 class AutopayEnableRequest(BaseModel):
     payment_method_id: UUID | None = None
-

@@ -71,11 +71,7 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 def _subscriber_tz(db: Session, subscriber_id: str) -> ZoneInfo:
     """The subscriber's timezone, falling back to the deployment default, so
     "today" / daily buckets align to the customer's local day, not UTC."""
-    name = (
-        db.query(Subscriber.timezone)
-        .filter(Subscriber.id == subscriber_id)
-        .scalar()
-    )
+    name = db.query(Subscriber.timezone).filter(Subscriber.id == subscriber_id).scalar()
     if name:
         try:
             return ZoneInfo(name)
@@ -175,8 +171,9 @@ def _raw_samples(
         .all()
     )
     return [
-        (_as_utc(r.sample_at), float(r.rx_bps or 0), float(r.tx_bps or 0))
+        (dt, float(r.rx_bps or 0), float(r.tx_bps or 0))
         for r in rows
+        if (dt := _as_utc(r.sample_at)) is not None
     ]
 
 
@@ -250,8 +247,7 @@ def _current_quota(db: Session, sub_ids: list, now: datetime):
 
 def _series_payload(buckets: dict) -> list[dict]:
     return [
-        {"bucket_start": k, "bytes": int(round(v))}
-        for k, v in sorted(buckets.items())
+        {"bucket_start": k, "bytes": int(round(v))} for k, v in sorted(buckets.items())
     ]
 
 
@@ -286,8 +282,10 @@ async def get_usage_summary(
     if period == "cycle":
         buckets = _current_quota(db, sub_ids, now)
         if buckets:
-            start = min(_as_utc(b.period_start) for b in buckets)
-            end = min(min(_as_utc(b.period_end) for b in buckets), now)
+            starts = [d for b in buckets if (d := _as_utc(b.period_start)) is not None]
+            ends = [d for b in buckets if (d := _as_utc(b.period_end)) is not None]
+            start = min(starts) if starts else now
+            end = min(min(ends), now) if ends else now
             used_gb = sum(float(b.used_gb or 0) for b in buckets)
             total = int(used_gb * _GB_BYTES)
             total_source, authoritative = "quota", True

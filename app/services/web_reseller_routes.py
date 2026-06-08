@@ -31,9 +31,7 @@ def _require_reseller_context(request: Request, db: Session):
 def _profile_context(request: Request, context, **extra):
     subscriber = context["subscriber"]
     mfa_methods = (
-        db_methods
-        if (db_methods := extra.pop("mfa_methods", None)) is not None
-        else []
+        db_methods if (db_methods := extra.pop("mfa_methods", None)) is not None else []
     )
     return {
         "request": request,
