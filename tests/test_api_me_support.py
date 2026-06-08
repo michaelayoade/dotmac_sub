@@ -66,22 +66,16 @@ def test_my_tickets_403_for_non_subscriber():
 def test_my_ticket_returns_own_ticket(monkeypatch):
     principal = _subscriber_principal()
     ticket = types.SimpleNamespace(subscriber_id=principal["subscriber_id"])
-    monkeypatch.setattr(
-        me_api.support_service.tickets, "get", lambda db, tid: ticket
-    )
+    monkeypatch.setattr(me_api.support_service.tickets, "get", lambda db, tid: ticket)
 
-    assert (
-        me_api.my_ticket(ticket_id="t1", db=None, principal=principal) is ticket
-    )
+    assert me_api.my_ticket(ticket_id="t1", db=None, principal=principal) is ticket
 
 
 def test_my_ticket_404_for_other_subscribers_ticket(monkeypatch):
     principal = _subscriber_principal()
     # Ticket owned by someone else — must 404 (not 403) so ids can't be probed.
     other = types.SimpleNamespace(subscriber_id=str(uuid.uuid4()))
-    monkeypatch.setattr(
-        me_api.support_service.tickets, "get", lambda db, tid: other
-    )
+    monkeypatch.setattr(me_api.support_service.tickets, "get", lambda db, tid: other)
 
     with pytest.raises(HTTPException) as exc:
         me_api.my_ticket(ticket_id="t1", db=None, principal=principal)
@@ -114,9 +108,7 @@ def test_my_create_ticket_forces_caller_scope(monkeypatch):
 def test_my_ticket_comments_hide_internal_notes(monkeypatch):
     principal = _subscriber_principal()
     ticket = types.SimpleNamespace(subscriber_id=principal["subscriber_id"])
-    monkeypatch.setattr(
-        me_api.support_service.tickets, "get", lambda db, tid: ticket
-    )
+    monkeypatch.setattr(me_api.support_service.tickets, "get", lambda db, tid: ticket)
     monkeypatch.setattr(
         me_api.support_service.ticket_comments,
         "list",
@@ -137,9 +129,7 @@ def test_my_add_ticket_comment_forces_public(monkeypatch):
     principal = _subscriber_principal()
     ticket = types.SimpleNamespace(subscriber_id=principal["subscriber_id"])
     captured = {}
-    monkeypatch.setattr(
-        me_api.support_service.tickets, "get", lambda db, tid: ticket
-    )
+    monkeypatch.setattr(me_api.support_service.tickets, "get", lambda db, tid: ticket)
 
     def fake_create_comment(db, ticket_id, payload, actor_id=None, request=None):
         captured["payload"] = payload
