@@ -116,9 +116,7 @@ def test_my_notifications_scopes_to_caller(monkeypatch):
         "list_response_for_subscriber",
         fake,
     )
-    me_api.my_notifications(
-        limit=50, offset=0, db=None, principal=principal
-    )
+    me_api.my_notifications(limit=50, offset=0, db=None, principal=principal)
     assert captured["subscriber_id"] == principal["subscriber_id"]
 
 
@@ -211,9 +209,7 @@ def test_submit_change_plan_rejects_foreign_subscription(monkeypatch):
     def _create(**kwargs):
         created["called"] = True
 
-    monkeypatch.setattr(
-        change_service.subscription_change_requests, "create", _create
-    )
+    monkeypatch.setattr(change_service.subscription_change_requests, "create", _create)
 
     with pytest.raises(ValueError):
         changes.submit_change_plan(
