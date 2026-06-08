@@ -180,7 +180,7 @@ def test_get_onu_status_summary_uses_zabbix_directly(db_session, monkeypatch):
     )
     db_session.commit()
 
-    def _fake_zabbix_summary(olt, onts=None):
+    def _fake_zabbix_summary(olt, onts=None, **_kwargs):
         return {
             "total_count": len(onts or []),
             "online_count": 2,
@@ -220,7 +220,7 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatc
     )
     db_session.commit()
 
-    def _fake_zabbix_summary(olt, onts=None):
+    def _fake_zabbix_summary(olt, onts=None, **_kwargs):
         return {
             "total_count": len(onts or []),
             "online_count": 1,

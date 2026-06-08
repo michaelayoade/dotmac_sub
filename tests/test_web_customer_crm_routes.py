@@ -25,13 +25,6 @@ def test_support_detail_redirect_preserves_ticket_next_url() -> None:
     assert '"/portal/auth/login?next=/portal/support/' in source
 
 
-def test_work_order_detail_redirect_preserves_work_order_next_url() -> None:
-    source = _function_source("customer_work_order_detail")
-
-    assert "quote_plus(work_order_id)" in source
-    assert '"/portal/auth/login?next=/portal/work-orders/' in source
-
-
 def test_support_create_failure_preserves_form_and_uses_error_template() -> None:
     source = _function_source("customer_support_create")
 
@@ -49,11 +42,8 @@ def test_support_comment_failure_renders_detail_template_and_success_redirect() 
     assert '"/portal/support/{ticket_id}"' in source
 
 
-def test_support_and_work_order_list_routes_delegate_to_crm_portal() -> None:
+def test_support_list_route_delegates_to_crm_portal() -> None:
     support_source = _function_source("customer_support")
-    work_orders_source = _function_source("customer_work_orders")
 
     assert "crm_portal.tickets_list_context" in support_source
     assert '"customer/support/index.html"' in support_source
-    assert "crm_portal.work_orders_list_context" in work_orders_source
-    assert '"customer/work-orders/index.html"' in work_orders_source

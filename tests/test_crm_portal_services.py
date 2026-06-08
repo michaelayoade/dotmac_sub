@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -8,26 +9,38 @@ from fastapi import Request
 from app.services import crm_portal
 
 
-def test_tickets_list_context_skips_unfiltered_fetch_when_mapping_missing(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
+def _ticket(
+    id="t-1",
+    subscriber_id="sub-1",
+    number="TCK-1",
+    title="Title",
+    description="desc",
+    status="open",
+    priority="normal",
+    created="2026-01-01T00:00:00+00:00",
+    updated="2026-01-02T00:00:00+00:00",
+) -> Mock:
+    """A stand-in for a local support Ticket ORM row."""
+    t = Mock()
+    t.id = id
+    t.subscriber_id = subscriber_id
+    t.number = number
+    t.title = title
+    t.description = description
+    t.status = status
+    t.priority = priority
+    t.created_at = datetime.fromisoformat(created)
+    t.updated_at = datetime.fromisoformat(updated)
+    return t
 
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
-    )
 
-    client = Mock()
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.tickets_list_context(request, Mock(), customer, ["sub-1"])
-
-    assert context["tickets"] == []
-    assert context["crm_error"] is False
-    assert context["priority_display"] == crm_portal.TICKET_PRIORITY_DISPLAY
-    client.list_tickets.assert_not_called()
+def _comment(body="body", is_internal=False, author_person_id=None) -> Mock:
+    c = Mock()
+    c.body = body
+    c.is_internal = is_internal
+    c.author_person_id = author_person_id
+    c.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    return c
 
 
 def test_cache_get_returns_none_when_redis_unavailable(monkeypatch) -> None:
@@ -159,147 +172,115 @@ def test_resolve_crm_subscriber_ids_deduplicates_and_skips_blanks(monkeypatch) -
     assert resolved == ["crm-1", "crm-3"]
 
 
-def test_ticket_detail_context_rejects_access_when_mapping_missing(monkeypatch) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
+# ── Customer Portal: Tickets (sourced from the local support module) ──────
+
+
+def test_tickets_list_context_skips_blank_subscriber_ids(monkeypatch) -> None:
+    called = {"list": False}
+
+    def _list(db, subscriber_id, limit=100):
+        called["list"] = True
+        return []
+
+    monkeypatch.setattr("app.services.support.Tickets.list", _list)
+
+    context = crm_portal.tickets_list_context(
+        Mock(spec=Request), Mock(), {"id": "cust-1"}, ["", "   "]
+    )
+
+    assert context["tickets"] == []
+    assert context["crm_error"] is False
+    assert context["priority_display"] == crm_portal.TICKET_PRIORITY_DISPLAY
+    assert called["list"] is False
+
+
+def test_tickets_list_context_merges_multiple_allowed_accounts(monkeypatch) -> None:
+    by_sid = {"sub-1": [_ticket(id="t-1")], "sub-2": [_ticket(id="t-2")]}
 
     monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
+        "app.services.support.Tickets.list",
+        lambda db, subscriber_id, limit=100: by_sid.get(subscriber_id, []),
     )
 
-    client = Mock()
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.ticket_detail_context(
-        request, Mock(), customer, ["sub-1"], "ticket-1"
+    context = crm_portal.tickets_list_context(
+        Mock(spec=Request), Mock(), {"id": "cust-1"}, ["sub-1", "sub-2"]
     )
 
-    assert context["ticket"] is None
-    assert context["crm_error"] is True
-    assert context["crm_error_message"] == "Ticket not found."
-    client.get_ticket.assert_not_called()
-
-
-def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.get_ticket.return_value = {"id": "ticket-1", "subscriber_id": "crm-sub-2"}
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.ticket_detail_context(
-        request, Mock(), customer, ["sub-1"], "ticket-1"
-    )
-
-    assert context["ticket"] is None
-    assert context["crm_error"] is True
-    assert context["crm_error_message"] == "Ticket not found."
-    client.list_ticket_comments.assert_not_called()
-
-
-def test_handle_ticket_comment_rejects_ticket_with_wrong_subscriber(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.get_ticket.return_value = {"id": "ticket-1", "subscriber_id": "crm-sub-2"}
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    result = crm_portal.handle_ticket_comment(
-        Mock(),
-        {"current_user": {"name": "Customer One"}},
-        ["sub-1"],
-        "ticket-1",
-        "Please update me.",
-    )
-
-    assert result == {"success": False, "error": "Ticket not found."}
-    client.create_ticket_comment.assert_not_called()
-
-
-def test_ticket_detail_context_filters_internal_comments(monkeypatch) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.get_ticket.return_value = {"id": "ticket-1", "subscriber_id": "crm-sub-1"}
-    client.list_ticket_comments.return_value = [
-        {"id": "comment-1", "body": "Visible", "is_internal": False},
-        {"id": "comment-2", "body": "Hidden", "is_internal": True},
-    ]
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.ticket_detail_context(
-        request, Mock(), customer, ["sub-1"], "ticket-1"
-    )
-
-    assert context["ticket"]["id"] == "ticket-1"
-    assert [comment["id"] for comment in context["comments"]] == ["comment-1"]
+    assert sorted(t["id"] for t in context["tickets"]) == ["t-1", "t-2"]
+    assert context["crm_error"] is False
     assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
 
 
-def test_tickets_list_context_returns_error_context_on_crm_failure(monkeypatch) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
+def test_tickets_list_context_returns_error_context_on_failure(monkeypatch) -> None:
+    def _boom(db, subscriber_id, limit=100):
+        raise RuntimeError("db down")
 
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
+    monkeypatch.setattr("app.services.support.Tickets.list", _boom)
+
+    context = crm_portal.tickets_list_context(
+        Mock(spec=Request), Mock(), {"id": "cust-1"}, ["sub-1"]
     )
-
-    client = Mock()
-    client.list_tickets.side_effect = crm_portal.CRMClientError("unavailable")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.tickets_list_context(request, Mock(), customer, ["sub-1"])
 
     assert context["tickets"] == []
     assert context["crm_error"] is True
     assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
 
 
-def test_ticket_detail_context_returns_error_context_on_crm_failure(
+def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(
     monkeypatch,
 ) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
     monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
+        "app.services.support.Tickets.get",
+        lambda db, ticket_id: _ticket(id="ticket-1", subscriber_id="other-sub"),
     )
-
-    client = Mock()
-    client.get_ticket.side_effect = crm_portal.CRMClientError("unavailable")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    comments = Mock()
+    monkeypatch.setattr("app.services.support.TicketComments.list", comments)
 
     context = crm_portal.ticket_detail_context(
-        request, Mock(), customer, ["sub-1"], "ticket-1"
+        Mock(spec=Request), Mock(), {"id": "cust-1"}, ["sub-1"], "ticket-1"
     )
 
     assert context["ticket"] is None
     assert context["crm_error"] is True
-    assert (
-        context["crm_error_message"] == crm_portal._error_context()["crm_error_message"]
+    assert context["crm_error_message"] == "Ticket not found."
+    comments.assert_not_called()
+
+
+def test_ticket_detail_context_returns_not_found_on_lookup_error(monkeypatch) -> None:
+    def _boom(db, ticket_id):
+        raise ValueError("invalid id")
+
+    monkeypatch.setattr("app.services.support.Tickets.get", _boom)
+
+    context = crm_portal.ticket_detail_context(
+        Mock(spec=Request), Mock(), {"id": "cust-1"}, ["sub-1"], "bad-id"
     )
+
+    assert context["ticket"] is None
+    assert context["crm_error"] is True
+    assert context["crm_error_message"] == "Ticket not found."
+
+
+def test_ticket_detail_context_filters_internal_comments(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.support.Tickets.get",
+        lambda db, ticket_id: _ticket(id="ticket-1", subscriber_id="sub-1"),
+    )
+    monkeypatch.setattr(
+        "app.services.support.TicketComments.list",
+        lambda db, ticket_id: [
+            _comment(body="Visible", is_internal=False),
+            _comment(body="Hidden", is_internal=True),
+        ],
+    )
+
+    context = crm_portal.ticket_detail_context(
+        Mock(spec=Request), Mock(), {"id": "cust-1"}, ["sub-1"], "ticket-1"
+    )
+
+    assert context["ticket"]["id"] == "ticket-1"
+    assert [c["body"] for c in context["comments"]] == ["Visible"]
+    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
 
 
 def test_ticket_create_context_exposes_priority_choices() -> None:
@@ -310,44 +291,27 @@ def test_ticket_create_context_exposes_priority_choices() -> None:
 
 
 def test_handle_ticket_create_normalizes_unknown_priority(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
+    sid = str(uuid4())
+    captured: dict[str, str] = {}
 
-    client = Mock()
-    client.create_ticket.return_value = {"id": "ticket-1"}
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    def _create(db, payload, actor_id=None):
+        captured["priority"] = payload.priority
+        return _ticket(id="ticket-1", subscriber_id=sid)
 
-    result = crm_portal.handle_ticket_create(
-        Mock(),
-        {"current_user": {"name": "Customer One"}},
-        "sub-1",
-        "Slow internet",
-        "Please investigate.",
-        "not-a-priority",
-    )
-
-    assert result == {"success": True, "ticket": {"id": "ticket-1"}}
-    payload = client.create_ticket.call_args.args[0]
-    assert payload["priority"] == "normal"
-
-
-def test_handle_ticket_create_returns_link_error_without_crm_mapping(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
-    )
+    monkeypatch.setattr("app.services.support.Tickets.create", _create)
 
     result = crm_portal.handle_ticket_create(
-        Mock(),
-        {"current_user": {"name": "Customer One"}},
-        "sub-1",
-        "Slow internet",
-        "",
-        "normal",
+        Mock(), {}, sid, "Slow internet", "Please investigate.", "not-a-priority"
+    )
+
+    assert result["success"] is True
+    assert result["ticket"]["id"] == "ticket-1"
+    assert captured["priority"] == "normal"
+
+
+def test_handle_ticket_create_returns_link_error_without_valid_subscriber() -> None:
+    result = crm_portal.handle_ticket_create(
+        Mock(), {}, "not-a-uuid", "Slow internet", "", "normal"
     )
 
     assert result == {
@@ -356,23 +320,16 @@ def test_handle_ticket_create_returns_link_error_without_crm_mapping(
     }
 
 
-def test_handle_ticket_create_returns_error_on_crm_failure(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
+def test_handle_ticket_create_returns_error_on_failure(monkeypatch) -> None:
+    sid = str(uuid4())
 
-    client = Mock()
-    client.create_ticket.side_effect = crm_portal.CRMClientError("down")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    def _boom(db, payload, actor_id=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("app.services.support.Tickets.create", _boom)
 
     result = crm_portal.handle_ticket_create(
-        Mock(),
-        {"current_user": {"name": "Customer One"}},
-        "sub-1",
-        "Slow internet",
-        "",
-        "normal",
+        Mock(), {}, sid, "Slow internet", "", "normal"
     )
 
     assert result == {
@@ -381,347 +338,77 @@ def test_handle_ticket_create_returns_error_on_crm_failure(monkeypatch) -> None:
     }
 
 
-def test_handle_ticket_comment_returns_not_found_without_mapped_subscribers(
+def test_handle_ticket_comment_rejects_ticket_with_wrong_subscriber(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
+        "app.services.support.Tickets.get",
+        lambda db, ticket_id: _ticket(id="ticket-1", subscriber_id="other-sub"),
     )
+    create = Mock()
+    monkeypatch.setattr("app.services.support.TicketComments.create", create)
 
     result = crm_portal.handle_ticket_comment(
-        Mock(),
-        {"current_user": {"name": "Customer One"}},
-        ["sub-1"],
-        "ticket-1",
-        "Please update me.",
+        Mock(), {}, ["sub-1"], "ticket-1", "Please update me."
+    )
+
+    assert result == {"success": False, "error": "Ticket not found."}
+    create.assert_not_called()
+
+
+def test_handle_ticket_comment_returns_not_found_on_lookup_error(monkeypatch) -> None:
+    def _boom(db, ticket_id):
+        raise ValueError("invalid id")
+
+    monkeypatch.setattr("app.services.support.Tickets.get", _boom)
+
+    result = crm_portal.handle_ticket_comment(
+        Mock(), {}, ["sub-1"], "ticket-1", "Please update me."
     )
 
     assert result == {"success": False, "error": "Ticket not found."}
 
 
-def test_handle_ticket_comment_success_uses_default_author_name(monkeypatch) -> None:
+def test_handle_ticket_comment_success(monkeypatch) -> None:
+    db = Mock()
     monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
+        "app.services.support.Tickets.get",
+        lambda _db, ticket_id: _ticket(id="ticket-1", subscriber_id="sub-1"),
     )
+    captured: dict[str, object] = {}
 
-    client = Mock()
-    client.get_ticket.return_value = {"id": "ticket-1", "subscriber_id": "crm-sub-1"}
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    def _create(_db, ticket, payload, actor_id=None):
+        captured["body"] = payload.body
+        captured["is_internal"] = payload.is_internal
+
+    monkeypatch.setattr("app.services.support.TicketComments.create", _create)
 
     result = crm_portal.handle_ticket_comment(
-        Mock(),
-        {},
-        ["sub-1"],
-        "ticket-1",
-        "Please update me.",
+        db, {}, ["sub-1"], "ticket-1", "Please update me."
     )
 
     assert result == {"success": True}
-    payload = client.create_ticket_comment.call_args.args[0]
-    assert payload["author_name"] == "Customer"
+    assert captured["body"] == "Please update me."
+    assert captured["is_internal"] is False
+    db.commit.assert_called_once()
 
 
-def test_handle_ticket_comment_returns_error_on_crm_failure(monkeypatch) -> None:
+def test_handle_ticket_comment_returns_error_on_failure(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
+        "app.services.support.Tickets.get",
+        lambda db, ticket_id: _ticket(id="ticket-1", subscriber_id="sub-1"),
     )
 
-    client = Mock()
-    client.get_ticket.side_effect = crm_portal.CRMClientError("down")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+    def _boom(db, ticket, payload, actor_id=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("app.services.support.TicketComments.create", _boom)
 
     result = crm_portal.handle_ticket_comment(
-        Mock(),
-        {"current_user": {"name": "Customer One"}},
-        ["sub-1"],
-        "ticket-1",
-        "Please update me.",
+        Mock(), {}, ["sub-1"], "ticket-1", "Please update me."
     )
 
     assert result == {
         "success": False,
         "error": "Unable to add comment. Please try again later.",
     }
-
-
-def test_work_orders_list_context_skips_unfiltered_fetch_when_mapping_missing(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
-    )
-
-    client = Mock()
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.work_orders_list_context(request, Mock(), customer, ["sub-1"])
-
-    assert context["work_orders"] == []
-    assert context["crm_error"] is False
-    client.list_work_orders.assert_not_called()
-
-
-def test_tickets_list_context_merges_multiple_allowed_accounts(monkeypatch) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    mappings = {"sub-1": "crm-1", "sub-2": "crm-2"}
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda _db, subscriber_id: mappings.get(subscriber_id),
-    )
-
-    client = Mock()
-    client.list_tickets.side_effect = [
-        [{"id": "t-1", "updated_at": "2026-03-18T10:00:00"}],
-        [{"id": "t-2", "updated_at": "2026-03-18T11:00:00"}],
-    ]
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.tickets_list_context(
-        request, Mock(), customer, ["sub-1", "sub-2"]
-    )
-
-    assert [ticket["id"] for ticket in context["tickets"]] == ["t-2", "t-1"]
-
-
-def test_work_orders_list_context_merges_multiple_allowed_accounts(monkeypatch) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    mappings = {"sub-1": "crm-1", "sub-2": "crm-2"}
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda _db, subscriber_id: mappings.get(subscriber_id),
-    )
-
-    client = Mock()
-    client.list_work_orders.side_effect = [
-        [{"id": "wo-1", "updated_at": "2026-03-18T10:00:00"}],
-        [{"id": "wo-2", "updated_at": "2026-03-18T11:00:00"}],
-    ]
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.work_orders_list_context(
-        request, Mock(), customer, ["sub-1", "sub-2"]
-    )
-
-    assert [work_order["id"] for work_order in context["work_orders"]] == [
-        "wo-2",
-        "wo-1",
-    ]
-
-
-def test_work_orders_list_context_returns_error_context_on_crm_failure(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.list_work_orders.side_effect = crm_portal.CRMClientError("unavailable")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.work_orders_list_context(request, Mock(), customer, ["sub-1"])
-
-    assert context["work_orders"] == []
-    assert context["crm_error"] is True
-    assert context["type_display"] == crm_portal.WORK_ORDER_TYPE_DISPLAY
-
-
-def test_work_order_detail_context_returns_not_found_without_mapping(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
-    )
-
-    context = crm_portal.work_order_detail_context(
-        request, Mock(), customer, ["sub-1"], "wo-1"
-    )
-
-    assert context["work_order"] is None
-    assert context["crm_error_message"] == "Work order not found."
-
-
-def test_work_order_detail_context_rejects_work_order_with_wrong_subscriber(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.get_work_order.return_value = {"id": "wo-1", "subscriber_id": "crm-sub-2"}
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.work_order_detail_context(
-        request, Mock(), customer, ["sub-1"], "wo-1"
-    )
-
-    assert context["work_order"] is None
-    assert context["crm_error"] is True
-    assert context["crm_error_message"] == "Work order not found."
-    client.list_work_order_notes.assert_not_called()
-
-
-def test_work_order_detail_context_returns_error_context_on_crm_failure(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-    customer = {"id": "cust-1"}
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.get_work_order.side_effect = crm_portal.CRMClientError("down")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.work_order_detail_context(
-        request, Mock(), customer, ["sub-1"], "wo-1"
-    )
-
-    assert context["work_order"] is None
-    assert context["crm_error"] is True
-
-
-def test_reseller_account_tickets_context_skips_unfiltered_fetch_when_mapping_missing(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: None,
-    )
-
-    client = Mock()
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.reseller_account_tickets_context(
-        request,
-        Mock(),
-        "acct-1",
-        current_user={"id": "user-1"},
-        reseller={"id": "reseller-1"},
-    )
-
-    assert context["tickets"] == []
-    assert context["crm_error"] is False
-    client.list_tickets.assert_not_called()
-
-
-def test_reseller_account_tickets_context_returns_tickets(monkeypatch) -> None:
-    request = Mock(spec=Request)
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.list_tickets.return_value = [{"id": "ticket-1"}]
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.reseller_account_tickets_context(
-        request,
-        Mock(),
-        "acct-1",
-        current_user={"id": "user-1"},
-        reseller={"id": "reseller-1"},
-    )
-
-    assert context["tickets"] == [{"id": "ticket-1"}]
-    assert context["crm_error"] is False
-
-
-def test_reseller_account_tickets_context_returns_error_context_on_crm_failure(
-    monkeypatch,
-) -> None:
-    request = Mock(spec=Request)
-
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-sub-1",
-    )
-
-    client = Mock()
-    client.list_tickets.side_effect = crm_portal.CRMClientError("down")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    context = crm_portal.reseller_account_tickets_context(
-        request,
-        Mock(),
-        "acct-1",
-        current_user={"id": "user-1"},
-        reseller={"id": "reseller-1"},
-    )
-
-    assert context["tickets"] == []
-    assert context["crm_error"] is True
-
-
-def test_reseller_open_tickets_count_counts_only_open_statuses(monkeypatch) -> None:
-    mappings = {"acct-1": "crm-1", "acct-2": "crm-2"}
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda _db, account_id: mappings.get(account_id),
-    )
-
-    client = Mock()
-    client.list_tickets.side_effect = [
-        [
-            {"status": "open"},
-            {"status": "closed"},
-            {"status": "waiting_on_agent"},
-        ],
-        [
-            {"status": "in_progress"},
-            {"status": "resolved"},
-        ],
-    ]
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    count = crm_portal.reseller_open_tickets_count(
-        Mock(), "reseller-1", ["acct-1", "acct-2"]
-    )
-
-    assert count == 3
-
-
-def test_reseller_open_tickets_count_returns_zero_on_crm_failure(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda *_args, **_kwargs: "crm-1",
-    )
-
-    client = Mock()
-    client.list_tickets.side_effect = crm_portal.CRMClientError("down")
-    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
-
-    count = crm_portal.reseller_open_tickets_count(Mock(), "reseller-1", ["acct-1"])
-
-    assert count == 0

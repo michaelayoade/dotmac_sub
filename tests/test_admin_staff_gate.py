@@ -20,9 +20,7 @@ def _router_dependency_calls(router):
 
 def test_admin_router_uses_staff_gate_not_bare_auth():
     calls = _router_dependency_calls(admin_router)
-    assert require_admin_web_auth in calls, (
-        "/admin router must require the staff gate"
-    )
+    assert require_admin_web_auth in calls, "/admin router must require the staff gate"
     # The bare authn-only dependency must not be the admin gate anymore.
     assert require_web_auth not in calls
 
