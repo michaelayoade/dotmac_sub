@@ -1,0 +1,38 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# android/ IS tracked — it carries real config (bundle id io.dotmac.selfcare,
+# app name, INTERNET permission, debug cleartext). Its own android/.gitignore
+# excludes .gradle/local.properties/keystores; build outputs go under build/.
+*.iml
+android/.gradle/
+
+# android/ and ios/ are tracked (real config: bundle id io.dotmac.selfcare,
+# app name, ATS/cleartext). Their own nested .gitignore files exclude
+# Pods/.gradle/ephemeral/keystores; build outputs go under build/.
+
+# Platform folders we don't customise (regenerate with `flutter create .`)
+linux/
+macos/
+windows/
+web/
+
+# Build-time secrets/config (DSNs, base URLs) — supplied via
+# --dart-define-from-file. Keep the real file out of source control.
+dart_defines.json
+
+# Misc
+*.log
+.DS_Store

@@ -1063,3 +1063,32 @@ class ProvisioningLogRead(ProvisioningLogBase):
 
     id: UUID
     created_at: datetime
+
+
+# --- Customer self-service plan change (app/api/me.py) ---------------------
+
+
+class PlanOfferSummary(BaseModel):
+    id: UUID
+    name: str
+    amount: float = 0.0
+    currency: str = "NGN"
+    period_label: str = "/cycle"
+
+
+class PlanChangePageResponse(BaseModel):
+    current_offer: PlanOfferSummary | None = None
+    available_offers: list[PlanOfferSummary] = Field(default_factory=list)
+    wallet_balance: Decimal | None = None
+    next_billing_date: datetime | None = None
+    billing_message: str | None = None
+
+
+class PlanChangeSubmitRequest(BaseModel):
+    offer_id: UUID
+    effective_date: str  # YYYY-MM-DD
+    notes: str | None = None
+
+
+class PlanChangeSubmitResponse(BaseModel):
+    success: bool = True
