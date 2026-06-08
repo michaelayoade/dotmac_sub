@@ -84,6 +84,9 @@ class MeResponse(BaseModel):
     preferred_contact_method: str | None = None
     locale: str | None = None
     timezone: str | None = None
+    # Principal kind, so the client can route to the right portal after login
+    # (e.g. "customer" vs "reseller"). Defaults to "customer".
+    user_type: str = "customer"
     roles: list[str] = Field(default_factory=list)
     scopes: list[str] = Field(default_factory=list)
 
