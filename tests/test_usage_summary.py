@@ -31,9 +31,23 @@ def test_integrate_sums_volume_and_buckets_by_minute():
         (base, 8000.0, 800.0),
         (base + timedelta(seconds=60), 8000.0, 800.0),
     ]
-    buckets = svc._integrate(points, "minute")
+    buckets = svc._integrate(points, "minute", UTC)
     # (8000+800)/8 * 60s = 66000 bytes, attributed to the 12:00 minute bucket.
     assert buckets == {base: 66000.0}
+
+
+def test_integrate_carries_last_rate_to_end_but_caps_it():
+    base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    points = [
+        (base, 8000.0, 0.0),
+        (base + timedelta(seconds=60), 8000.0, 0.0),
+    ]
+    # 60s segment + 60s tail carried to end, both at 8000 bps.
+    near = svc._integrate(points, "minute", UTC, end=base + timedelta(seconds=120))
+    assert sum(near.values()) == 120000.0
+    # A far end exceeds the gap cap, so no phantom tail is fabricated.
+    far = svc._integrate(points, "minute", UTC, end=base + timedelta(seconds=100000))
+    assert sum(far.values()) == 60000.0
 
 
 def test_integrate_skips_gaps_far_above_typical_spacing():
@@ -46,7 +60,7 @@ def test_integrate_skips_gaps_far_above_typical_spacing():
         (base + timedelta(seconds=120), 8000.0, 0.0),
         (base + timedelta(seconds=5120), 8000.0, 0.0),
     ]
-    buckets = svc._integrate(points, "minute")
+    buckets = svc._integrate(points, "minute", UTC)
     # Two kept 60s segments (60000 bytes each); the idle gap is not filled.
     assert sum(buckets.values()) == 120000.0
 
@@ -58,15 +72,15 @@ def test_integrate_keeps_regularly_spaced_coarse_series():
     points = [
         (base + timedelta(hours=h), 8000.0, 0.0) for h in range(4)
     ]
-    buckets = svc._integrate(points, "day")
+    buckets = svc._integrate(points, "day", UTC)
     # 3 one-hour segments at 8000 bps -> 8000/8*3600 = 3.6e6 bytes each.
     assert sum(buckets.values()) == 3 * (8000 / 8 * 3600)
 
 
 def test_truncate_day_and_hour():
     ts = datetime(2026, 6, 1, 13, 37, 5, tzinfo=UTC)
-    assert svc._truncate(ts, "hour") == datetime(2026, 6, 1, 13, 0, tzinfo=UTC)
-    assert svc._truncate(ts, "day") == datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+    assert svc._truncate(ts, "hour", UTC) == datetime(2026, 6, 1, 13, 0, tzinfo=UTC)
+    assert svc._truncate(ts, "day", UTC) == datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
 
 
 # --- service against the DB -----------------------------------------------
@@ -92,8 +106,9 @@ def test_hour_integrates_bandwidth_samples(db_session, subscriber, subscription)
     assert out["bucket"] == "minute"
     assert out["total_source"] == "samples"
     assert out["is_authoritative"] is False
-    assert out["total_bytes"] == 66000  # (8000+800)/8 * 60
-    assert len(out["series"]) == 1
+    # 12:00→12:01 segment plus the tail carried to now (12:02): 2 × 66000.
+    assert out["total_bytes"] == 132000
+    assert len(out["series"]) == 2
     assert out["series"][0]["bytes"] == 66000
 
 

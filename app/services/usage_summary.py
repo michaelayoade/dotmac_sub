@@ -23,13 +23,16 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription
+from app.models.subscriber import Subscriber
 from app.models.usage import QuotaBucket, RadiusAccountingSession
+from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +68,41 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
-def _truncate(ts: datetime, bucket: str) -> datetime:
-    ts = ts.astimezone(UTC)
+def _subscriber_tz(db: Session, subscriber_id: str) -> ZoneInfo:
+    """The subscriber's timezone, falling back to the deployment default, so
+    "today" / daily buckets align to the customer's local day, not UTC."""
+    name = (
+        db.query(Subscriber.timezone)
+        .filter(Subscriber.id == subscriber_id)
+        .scalar()
+    )
+    if name:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return APP_TIMEZONE
+
+
+def _truncate(ts: datetime, bucket: str, tz: ZoneInfo) -> datetime:
+    """Floor ``ts`` to the bucket boundary in ``tz`` (so days/hours align to the
+    subscriber's local clock), returned as the canonical UTC instant."""
+    local = ts.astimezone(tz)
     if bucket == "minute":
-        return ts.replace(second=0, microsecond=0)
-    if bucket == "hour":
-        return ts.replace(minute=0, second=0, microsecond=0)
-    return ts.replace(hour=0, minute=0, second=0, microsecond=0)  # day
+        local = local.replace(second=0, microsecond=0)
+    elif bucket == "hour":
+        local = local.replace(minute=0, second=0, microsecond=0)
+    else:  # day
+        local = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local.astimezone(UTC)
 
 
-def _integrate(points: list[tuple[datetime, float, float]], bucket: str) -> dict:
+def _integrate(
+    points: list[tuple[datetime, float, float]],
+    bucket: str,
+    tz: ZoneInfo,
+    end: datetime | None = None,
+) -> dict:
     """Integrate a throughput series (sample_at, rx_bps, tx_bps) into bytes per
     bucket. Volume in each segment = avg bits/s / 8 * elapsed seconds, attributed
     to the bucket of the segment's start.
@@ -82,6 +110,11 @@ def _integrate(points: list[tuple[datetime, float, float]], bucket: str) -> dict
     Gaps far larger than the series' typical spacing are treated as idle and
     skipped (see _GAP_MULTIPLE) — relative to spacing so regularly-spaced coarse
     series (hourly VM buckets, sparse interims) are kept rather than dropped.
+
+    When ``end`` is given, the last observed rate is carried forward to the
+    window end (same gap cap), so the current bucket reflects usage right up to
+    "now" instead of stopping at the last sample. The cap means a stale last
+    sample (idle/offline) won't fabricate a tail.
     """
     out: dict[datetime, float] = {}
     if len(points) < 2:
@@ -98,14 +131,19 @@ def _integrate(points: list[tuple[datetime, float, float]], bucket: str) -> dict
     typical = gaps[len(gaps) // 2] if gaps else 0.0
     cap = max(typical * _GAP_MULTIPLE, _MIN_GAP_CAP_SECONDS)
 
+    def _add(t0: datetime, rx: float, tx: float, dt: float) -> None:
+        if dt <= 0 or dt > cap:
+            return
+        key = _truncate(t0, bucket, tz)
+        out[key] = out.get(key, 0.0) + (rx + tx) / 8.0 * dt
+
     for i in range(len(points) - 1):
         t0, rx, tx = points[i]
-        dt = (points[i + 1][0] - t0).total_seconds()
-        if dt <= 0 or dt > cap:
-            continue
-        seg_bytes = (rx + tx) / 8.0 * dt
-        key = _truncate(t0, bucket)
-        out[key] = out.get(key, 0.0) + seg_bytes
+        _add(t0, rx, tx, (points[i + 1][0] - t0).total_seconds())
+
+    if end is not None:
+        tl, rx, tx = points[-1]
+        _add(tl, rx, tx, (end - tl).total_seconds())
     return out
 
 
@@ -216,6 +254,7 @@ async def get_usage_summary(
     """Build the usage summary for one window. ``period`` must be in PERIODS."""
     now = now or datetime.now(UTC)
     sub_ids = _subscription_ids(db, subscriber_id)
+    tz = _subscriber_tz(db, subscriber_id)
 
     if period == "all":
         total = _session_octets(db, sub_ids, since=None)
@@ -250,7 +289,9 @@ async def get_usage_summary(
             start, end = now - timedelta(days=30), now
             total = _session_octets(db, sub_ids, since=start)
             total_source, authoritative = "sessions", False
-        series = _integrate(await _vm_points(db, sub_ids, start, end), "day")
+        series = _integrate(
+            await _vm_points(db, sub_ids, start, end), "day", tz, end=end
+        )
         return {
             "period": period,
             "start": start,
@@ -267,16 +308,18 @@ async def get_usage_summary(
         start, end, bucket = now - timedelta(hours=1), now, "minute"
         points = _raw_samples(db, sub_ids, start, end)
     elif period == "today":
-        start = now.astimezone(UTC).replace(
+        # Local midnight in the subscriber's tz, expressed as a UTC instant.
+        local_midnight = now.astimezone(tz).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
+        start = local_midnight.astimezone(UTC)
         end, bucket = now, "hour"
         points = _raw_samples(db, sub_ids, start, end)
     else:  # week
         start, end, bucket = now - timedelta(days=7), now, "day"
         points = await _vm_points(db, sub_ids, start, end)
 
-    series = _integrate(points, bucket)
+    series = _integrate(points, bucket, tz, end=end)
     total = int(round(sum(series.values())))
     total_source, authoritative = "samples", False
     if total == 0 and not series:

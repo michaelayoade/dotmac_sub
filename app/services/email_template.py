@@ -13,6 +13,20 @@ from app.services.branding_config import get_brand
 logger = logging.getLogger(__name__)
 
 
+def _darken(hex_color: str, factor: float = 0.78) -> str:
+    """Return a darker shade of a #rrggbb colour, for an on-brand gradient end
+    stop. Falls back to the input if it isn't a 6-digit hex."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    try:
+        r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return hex_color
+    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def wrap_email_html(
     body_html: str,
     *,
@@ -38,6 +52,7 @@ def wrap_email_html(
     brand = get_brand()
     base = base_url or brand["app_url"]
     primary = brand["primary_color"]
+    primary_dark = _darken(primary)
     safe_subject = escape(subject)
     safe_company = escape(company_name if company_name is not None else brand["legal_name"])
     safe_support = escape(
@@ -53,7 +68,7 @@ def wrap_email_html(
 <style>
 body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; color: #1e293b; }}
 .wrapper {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, {primary} 0%, #6366f1 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
+.header {{ background: linear-gradient(135deg, {primary} 0%, {primary_dark} 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
 .header img {{ height: 40px; width: auto; }}
 .header-fallback {{ color: #ffffff; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }}
 .content {{ background: #ffffff; padding: 32px; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; }}
