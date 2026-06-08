@@ -411,6 +411,16 @@ class AddOn(Base):
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # IP add-on metadata. ip_is_public distinguishes a billable public block
+    # from the default private /32 every account ships with (which is never an
+    # add-on); ip_prefix_length is the block size (e.g. 29, 30, 32).
+    ip_is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    ip_prefix_length: Mapped[int | None] = mapped_column(Integer)
+
+    # Provenance for the Splynx importer — "custom:8" / "one_time:3". Unique so
+    # re-running the import updates rather than duplicates.
+    splynx_source: Mapped[str | None] = mapped_column(String(40), unique=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
