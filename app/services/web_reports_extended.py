@@ -719,9 +719,11 @@ def get_custom_pricing_data(db: Session) -> dict:
             for r in rows
         ]
 
-        # Active add-ons
+        # Active add-ons (SubscriptionAddOn has no is_active column — "active"
+        # means not yet ended).
         addon_stmt = select(func.count(SubscriptionAddOn.id)).where(
-            SubscriptionAddOn.is_active.is_(True)
+            (SubscriptionAddOn.end_at.is_(None))
+            | (SubscriptionAddOn.end_at > datetime.now(UTC))
         )
         addon_count = db.scalar(addon_stmt) or 0
     except Exception as exc:

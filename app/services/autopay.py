@@ -12,6 +12,7 @@ from __future__ import annotations
 import builtins
 import logging
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,6 +21,7 @@ from app.models.autopay import AutopayMandate
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
+    Payment,
     PaymentMethod,
     PaymentMethodType,
     PaymentStatus,
@@ -28,6 +30,7 @@ from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentAllocationApply
 from app.services import billing as billing_service
 from app.services import paystack
+from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.common import coerce_uuid, round_money, to_decimal
 
@@ -127,12 +130,47 @@ def _email(db: Session, account_id: str) -> str:
     return str(getattr(subscriber, "email", "") or "")
 
 
+def _autopay_reference(invoice_id: str, amount_kobo: int) -> str:
+    """Deterministic provider reference for one (invoice, amount) charge.
+
+    Re-using the same reference makes the charge idempotent at Paystack — an
+    overlapping run, or a retry after a record failure, resolves to the SAME
+    transaction instead of capturing the card twice. The amount is in the key so
+    a legitimately re-opened invoice (e.g. after a partial payment) gets a fresh
+    reference.
+    """
+    return f"AUTOPAY-{invoice_id}-{amount_kobo}"
+
+
+def _already_recorded(db: Session, reference: str) -> bool:
+    return (
+        db.scalars(select(Payment).where(Payment.external_id == reference)).first()
+        is not None
+    )
+
+
+def _recover_charge(db: Session, reference: str) -> dict | None:
+    """Best-effort: fetch an existing transaction by reference (used when a
+    charge attempt errored but may already have captured). Returns the tx data
+    or None if it can't be confirmed successful."""
+    try:
+        tx = paystack.verify_transaction(db, reference)
+    except Exception:  # noqa: BLE001 - couldn't confirm; treat as not charged
+        return None
+    return tx if str(tx.get("status")) == "success" else None
+
+
 def run_account_autopay(db: Session, account_id: str) -> dict:
-    """Charge the account's saved card for each open invoice. Idempotency and
-    allocation are handled by the existing payment recorder."""
+    """Charge the account's saved card for each open invoice. Charges are
+    idempotent on a deterministic per-(invoice, amount) reference, so overlapping
+    runs and record-failure retries never capture the card twice."""
     mandate = _mandate(db, account_id)
     if mandate is None or not mandate.is_active:
         return {"charged": 0, "failed": 0, "skipped": "not_enabled"}
+
+    # Serialize concurrent runs for this account so two runs can't both charge
+    # the same invoice before either records.
+    lock_account(db, account_id)
 
     token = (
         billing_service.payment_methods.get_decrypted_token(
@@ -153,25 +191,34 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
         amount = round_money(to_decimal(getattr(invoice, "balance_due", 0)))
         if amount <= Decimal("0.00"):
             continue
-        reference = paystack.generate_reference(
-            getattr(invoice, "invoice_number", None)
-        )
+        amount_kobo = paystack.amount_to_kobo(amount)
+        reference = _autopay_reference(str(invoice.id), amount_kobo)
+
+        # Already charged + recorded this exact (invoice, amount)? Skip — never
+        # capture the card twice for the same balance.
+        if _already_recorded(db, reference):
+            continue
+
+        tx: dict[str, Any] | None
         try:
             tx = paystack.charge_authorization(
                 db,
                 authorization_code=token,
                 email=email,
-                amount_kobo=paystack.amount_to_kobo(amount),
+                amount_kobo=amount_kobo,
                 reference=reference,
                 metadata={"invoice_id": str(invoice.id), "autopay": True},
             )
         except Exception:  # noqa: BLE001 - one bad charge must not abort the run
-            logger.warning(
-                "autopay charge errored for invoice %s", invoice.id, exc_info=True
-            )
+            # The charge may have actually gone through (e.g. a duplicate-reference
+            # error after a prior capture). Recover the existing transaction so we
+            # record it instead of re-charging on the next run.
+            tx = _recover_charge(db, reference)
+
+        if tx is None:
+            logger.warning("autopay charge errored for invoice %s", invoice.id)
             failed += 1
             continue
-
         if str(tx.get("status")) != "success":
             failed += 1
             continue
@@ -184,7 +231,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
                     amount=amount,
                     currency=getattr(invoice, "currency", "NGN"),
                     status=PaymentStatus.succeeded,
-                    external_id=str(tx.get("reference") or reference),
+                    external_id=reference,
                     memo=f"Autopay charge ref: {reference}",
                     allocations=[
                         PaymentAllocationApply(

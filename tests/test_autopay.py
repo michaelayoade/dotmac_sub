@@ -142,3 +142,43 @@ def test_run_all_due_iterates_active_mandates(db_session, subscriber, monkeypatc
     summary = autopay.run_all_due(db_session)
     assert summary["accounts"] == 1
     assert summary["charged"] == 1
+
+
+def test_rerun_does_not_double_charge(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_charge(monkeypatch, status="success")
+
+    first = autopay.run_account_autopay(db_session, str(subscriber.id))
+    second = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert first["charged"] == 1
+    assert second["charged"] == 0  # invoice already settled — not re-charged
+    assert (
+        db_session.query(Payment).filter(Payment.account_id == subscriber.id).count()
+        == 1
+    )
+
+
+def test_recovers_capture_when_charge_errors(db_session, subscriber, monkeypatch):
+    # The charge attempt errors (e.g. a duplicate-reference error after the card
+    # was already captured); recovery via verify_transaction records it instead
+    # of re-charging.
+    _card(db_session, subscriber.id)
+    invoice = _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+
+    def boom(db, **kwargs):
+        raise RuntimeError("Duplicate Transaction Reference")
+
+    monkeypatch.setattr(paystack, "charge_authorization", boom)
+    monkeypatch.setattr(
+        paystack,
+        "verify_transaction",
+        lambda db, ref: {"status": "success", "reference": ref},
+    )
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 1
+    db_session.refresh(invoice)
+    assert Decimal(str(invoice.balance_due)) == Decimal("0.00")

@@ -87,6 +87,25 @@ def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
     return round_money(to_decimal(credit_total) - to_decimal(debit_total))
 
 
+def lock_account(db: Session, account_id: str) -> None:
+    """Serialize wallet read-modify-write for one account so two writers can't
+    both read the same credit balance and overspend it.
+
+    Any code that reads ``get_account_credit_balance`` and then writes a debit
+    based on it (plan change, add-on purchase, autopay) must call this first.
+    Postgres takes a row lock on the subscriber; SQLite serializes writes
+    globally so it is a no-op there.
+    """
+    from app.models.subscriber import Subscriber
+    from app.services.common import coerce_uuid
+
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        db.query(Subscriber).filter(
+            Subscriber.id == coerce_uuid(account_id)
+        ).with_for_update().first()
+
+
 def _validate_invoice_totals(data: dict):
     """Validate invoice monetary totals are consistent."""
     subtotal = data.get("subtotal")

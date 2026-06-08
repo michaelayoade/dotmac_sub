@@ -29,9 +29,8 @@ from app.models.catalog import (
     SubscriptionAddOn,
 )
 from app.models.idempotency import IdempotencyKey
-from app.models.subscriber import Subscriber
 from app.services import catalog as catalog_service
-from app.services.billing._common import get_account_credit_balance
+from app.services.billing._common import get_account_credit_balance, lock_account
 from app.services.common import coerce_uuid, round_money, to_decimal
 
 
@@ -181,16 +180,6 @@ def get_addon_quote(
 _IDEMPOTENCY_SCOPE = "addon_purchase"
 
 
-def _lock_account(db: Session, account_id) -> None:
-    """Serialize concurrent wallet writes for an account (Postgres only); on
-    SQLite writes are already globally serialized so this is a no-op."""
-    bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "postgresql":
-        db.query(Subscriber).filter(
-            Subscriber.id == coerce_uuid(account_id)
-        ).with_for_update().first()
-
-
 def _find_key(db: Session, key: str) -> IdempotencyKey | None:
     return db.scalars(
         select(IdempotencyKey).where(
@@ -233,11 +222,10 @@ def purchase_addon(
                 raise ValueError("Idempotency key already used")
             return _replay_addon_result(db, prior.ref_id)
 
-    # Serialize concurrent add-on purchases for this account (Postgres only) so
-    # two requests can't both read the same balance and overspend. NOTE: this
-    # only mutually-excludes other add-on purchases — it does not serialize
-    # against top-up/plan-change/autopay, which don't take this lock.
-    _lock_account(db, subscription.subscriber_id)
+    # Serialize the wallet read-modify-write against concurrent add-on/autopay/
+    # plan-change debits so two writers can't both read the same balance and
+    # overspend it.
+    lock_account(db, str(subscription.subscriber_id))
 
     add_on, unit_amount, currency = _resolve_purchasable(
         db, subscription, add_on_id, quantity
