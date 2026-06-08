@@ -437,6 +437,23 @@ def my_addon_purchase(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete(
+    "/subscriptions/{subscription_id}/add-ons/{sub_add_on_id}",
+    status_code=204,
+)
+def my_addon_cancel(
+    subscription_id: str,
+    sub_add_on_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Cancel one of the caller's add-ons (stops billing from the next cycle)."""
+    if not customer_addons.cancel_addon(
+        db, _customer(db, principal), subscription_id, sub_add_on_id
+    ):
+        raise HTTPException(status_code=404, detail="Add-on not found")
+
+
 @router.get("/topup", response_model=TopupPageResponse)
 def my_topup_page(
     db: Session = Depends(get_db),

@@ -87,6 +87,12 @@ class CatalogRepository {
     return AddonPurchaseResult.fromJson(data as Map<String, dynamic>);
   }
 
+  /// DELETE …/add-ons/{id} — cancel an add-on (stops billing next cycle).
+  Future<void> cancelAddon(String subscriptionId, String subAddOnId) async {
+    await guard(() =>
+        dio.delete('/me/subscriptions/$subscriptionId/add-ons/$subAddOnId'));
+  }
+
   /// POST …/plan-change — submit a plan-change request.
   Future<void> submitPlanChange(
     String subscriptionId, {

@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import Subscription, SubscriptionAddOn, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.events import emit_event
@@ -455,6 +455,16 @@ def cancel_subscription(
     subscription.status = SubscriptionStatus.canceled
     subscription.canceled_at = datetime.now(UTC)
     subscription.cancel_reason = cancel_reason
+
+    # End any active add-ons so they stop billing once the service is canceled.
+    for sub_addon in db.scalars(
+        select(SubscriptionAddOn).where(
+            SubscriptionAddOn.subscription_id == subscription.id,
+            SubscriptionAddOn.end_at.is_(None),
+        )
+    ).all():
+        sub_addon.end_at = subscription.canceled_at
+
     db.flush()
 
     # Generate credit note for unused portion of the billing period.
