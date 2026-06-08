@@ -1,7 +1,7 @@
 """Add connector_config_id to alert_notification_policies.
 
 Revision ID: 118_add_connector_config_id_to_alert_notification_policies
-Revises: 120_add_idempotency_keys
+Revises: 117_add_payment_webhook_dead_letters
 Create Date: 2026-06-07
 
 AlertNotificationPolicyCreate accepts connector_config_id (so an alert policy can
@@ -20,7 +20,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "118_add_connector_config_id_to_alert_notification_policies"
-down_revision = "120_add_idempotency_keys"
+down_revision = "117_add_payment_webhook_dead_letters"
 branch_labels = None
 depends_on = None
 

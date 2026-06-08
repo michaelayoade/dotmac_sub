@@ -221,8 +221,8 @@ def get_change_plan_page(
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
     wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
-    # Plan-change quotes are computed lazily - one per offer the customer
-    # selects - via get_plan_change_quote(). Pricing the whole catalog here ran a
+    # Plan-change quotes are computed lazily — one per offer the customer
+    # selects — via get_plan_change_quote(). Pricing the whole catalog here ran a
     # proration calc per available offer, making this page take ~46s for large
     # catalogs and time out on submit (which could saturate workers / crash the app).
     quote_map: dict[str, dict[str, object]] = {}
@@ -302,6 +302,20 @@ def submit_change_plan(
 ) -> dict:
     """Submit a plan change request."""
     from app.services import subscription_changes as change_service
+
+    # Ownership check (mirrors get_change_plan_page/get_plan_change_quote): the
+    # subscription must belong to the caller, otherwise a customer could submit a
+    # plan change against another subscriber's service (IDOR).
+    account_id = customer.get("account_id")
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if (
+        not subscription
+        or not account_id
+        or str(subscription.subscriber_id) != str(account_id)
+    ):
+        raise ValueError("Service not found.")
 
     subscriber_id = customer.get("subscriber_id")
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
