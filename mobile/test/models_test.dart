@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:dotmac_portal/src/config/env.dart';
 import 'package:dotmac_portal/src/models/auth.dart';
 import 'package:dotmac_portal/src/models/invoice.dart';
+import 'package:dotmac_portal/src/models/ledger.dart';
 import 'package:dotmac_portal/src/models/notification.dart';
 import 'package:dotmac_portal/src/models/page.dart';
 import 'package:dotmac_portal/src/models/payment_flow.dart';
@@ -212,6 +213,35 @@ void main() {
         'shortfall': 3000.0,
       });
       expect(q.needsTopUp, isTrue);
+    });
+  });
+
+  group('LedgerTxn', () {
+    test('credit entry: sign/colour flag + payment title', () {
+      final t = LedgerTxn.fromJson({
+        'id': 'l1',
+        'entry_type': 'credit',
+        'source': 'payment',
+        'amount': '52000.00',
+        'currency': 'NGN',
+        'memo': 'Zenith 461 Bank',
+        'created_at': '2026-03-15T10:00:00Z',
+      });
+      expect(t.isCredit, isTrue);
+      expect(t.amount, 52000.0);
+      expect(t.title, 'Zenith 461 Bank');
+    });
+
+    test('debit falls back to source label when memo is empty', () {
+      final t = LedgerTxn.fromJson({
+        'id': 'l2',
+        'entry_type': 'debit',
+        'source': 'invoice',
+        'amount': 56437.5,
+        'currency': 'NGN',
+      });
+      expect(t.isCredit, isFalse);
+      expect(t.title, 'Charge');
     });
   });
 
