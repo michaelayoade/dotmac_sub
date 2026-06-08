@@ -58,9 +58,9 @@ def _safe_form_error(exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return str(exc)
     logger.exception("Admin customer form action failed")
-    return (
-        "Something went wrong. Please try again or contact support if it persists."
-    )
+    return "Something went wrong. Please try again or contact support if it persists."
+
+
 contacts_router = APIRouter(prefix="/contacts", tags=["web-admin-contacts"])
 _ALLOWED_USAGE_PERIODS = {"current", "last"}
 
