@@ -91,7 +91,8 @@ void main() {
         );
 
     test('billing-flavoured notifications deep-link to /billing', () {
-      expect(notificationRoute(n(subject: 'Your invoice is ready')), '/billing');
+      expect(
+          notificationRoute(n(subject: 'Your invoice is ready')), '/billing');
       expect(notificationRoute(n(eventType: 'service_suspended')), '/billing');
       expect(notificationRoute(n(subject: 'Payment received')), '/billing');
     });
@@ -107,8 +108,7 @@ void main() {
   });
 
   group('pickCurrentService', () {
-    Subscription sub(String id,
-            {required String status, DateTime? startAt}) =>
+    Subscription sub(String id, {required String status, DateTime? startAt}) =>
         Subscription(
           id: id,
           accountId: 'acct',

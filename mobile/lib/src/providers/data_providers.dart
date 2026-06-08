@@ -132,8 +132,7 @@ Subscription pickCurrentService(List<Subscription> services) {
 /// Subscription the dashboard "Current service" card shows. Null = follow
 /// [pickCurrentService]; set to a subscription id when the user picks one from
 /// the switcher. Kept alive so the choice survives leaving and returning.
-final selectedServiceIdProvider =
-    StateProvider.autoDispose<String?>((ref) {
+final selectedServiceIdProvider = StateProvider.autoDispose<String?>((ref) {
   cacheFor(ref);
   return null;
 });
@@ -177,8 +176,7 @@ final accountingSessionsProvider =
 });
 
 /// Selected window for the Usage tab summary (hour|today|week|cycle|all).
-final selectedUsagePeriodProvider =
-    StateProvider.autoDispose<String>((ref) {
+final selectedUsagePeriodProvider = StateProvider.autoDispose<String>((ref) {
   cacheFor(ref);
   return 'today';
 });

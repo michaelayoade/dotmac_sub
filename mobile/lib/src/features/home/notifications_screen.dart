@@ -13,9 +13,8 @@ import '../../widgets/skeleton.dart';
 /// event type / category / subject (the API carries no explicit resource link).
 /// Returns null when there's nothing actionable to open.
 String? notificationRoute(AppNotification n) {
-  final hay =
-      '${n.eventType ?? ''} ${n.category ?? ''} ${n.subject ?? ''}'
-          .toLowerCase();
+  final hay = '${n.eventType ?? ''} ${n.category ?? ''} ${n.subject ?? ''}'
+      .toLowerCase();
   bool has(List<String> words) => words.any(hay.contains);
 
   if (has(['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {

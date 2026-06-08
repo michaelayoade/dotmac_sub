@@ -63,9 +63,8 @@ class InvoicesScreen extends ConsumerWidget {
                     ],
                     _InvoiceFilterBar(
                       selected: filter,
-                      onChanged: (f) => ref
-                          .read(invoiceFilterProvider.notifier)
-                          .state = f,
+                      onChanged: (f) =>
+                          ref.read(invoiceFilterProvider.notifier).state = f,
                     ),
                     const SizedBox(height: 12),
                     if (items.isEmpty)
@@ -263,8 +262,7 @@ class _InvoiceTile extends StatelessWidget {
                   Text(Fmt.money(inv.total, inv.currency),
                       style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
-                  StatusChip.forInvoice(
-                      inv.isOverdue ? 'overdue' : inv.status),
+                  StatusChip.forInvoice(inv.isOverdue ? 'overdue' : inv.status),
                 ],
               ),
               if (!inv.isPaid) ...[
