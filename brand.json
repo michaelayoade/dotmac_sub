@@ -1,0 +1,17 @@
+{
+  "_comment": "Single source of white-label brand config, shared by the web backend (read via app/services/branding_config.py) and the Flutter mobile app (flutter build --dart-define-from-file=../brand.json). Override per deployment; any key may also be overridden by an environment variable of the same name. App identity (Android applicationId, iOS bundle id, launcher icon) is build-native and set via Flutter flavors, not here.",
+  "BRAND_NAME": "DotMac",
+  "BRAND_PRODUCT_NAME": "DotMac Subs",
+  "BRAND_LEGAL_NAME": "Dotmac Technologies",
+  "BRAND_TAGLINE": "Sign in to manage your service",
+  "BRAND_PRIMARY_COLOR": "#3b82f6",
+  "BRAND_SUPPORT_EMAIL": "support@dotmac.ng",
+  "BRAND_FROM_EMAIL": "noreply@dotmac.ng",
+  "BRAND_FROM_NAME": "DotMac Selfcare",
+  "BRAND_APP_URL": "https://selfcare.dotmac.io",
+  "BRAND_MOBILE_APP_NAME": "DotMac Self-Care",
+  "BRAND_PAYMENT_SCHEME": "dotmacpay",
+  "API_BASE_URL": "http://10.0.2.2:8000",
+  "GLITCHTIP_DSN": "",
+  "GLITCHTIP_ENVIRONMENT": "production"
+}

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'config/env.dart';
 import 'router/app_router.dart';
 
 class DotMacApp extends ConsumerWidget {
@@ -9,10 +10,10 @@ class DotMacApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
-    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF1565C0));
+    final scheme = ColorScheme.fromSeed(seedColor: Brand.primaryColor);
 
     return MaterialApp.router(
-      title: 'DotMac Self-Care',
+      title: Brand.name,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: scheme,
