@@ -77,6 +77,8 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
+    # Customer self-care: self-scoped reads, auth-only (no staff permission).
+    ("app.api.me", "router", "api", "user"),
     ("app.api.rbac", "router", "api", "user"),
     ("app.api.customers", "router", "api", "user"),
     ("app.api.subscribers", "router", "api", "user"),

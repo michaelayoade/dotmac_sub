@@ -1,0 +1,10 @@
+{
+  "_comment": "Local dev overrides. Copy to dart_defines.json (gitignored) and fill in. Build/run with: flutter run --dart-define-from-file=dart_defines.json. For white-label production builds, use the shared brand config at the repo root instead: flutter build apk --release --dart-define-from-file=../brand.json (brand.json carries the BRAND_* keys below plus API_BASE_URL).",
+  "API_BASE_URL": "https://selfcare.dotmac.io",
+  "GLITCHTIP_DSN": "",
+  "GLITCHTIP_ENVIRONMENT": "production",
+  "BRAND_MOBILE_APP_NAME": "DotMac Self-Care",
+  "BRAND_TAGLINE": "Sign in to manage your service",
+  "BRAND_PRIMARY_COLOR": "#3b82f6",
+  "BRAND_PAYMENT_SCHEME": "dotmacpay"
+}

@@ -265,7 +265,7 @@ module = [
 disable_error_code = ["override"]
 
 [tool.bandit]
-exclude_dirs = ["tests", "alembic", "scripts"]
+exclude_dirs = ["tests", "alembic", "scripts", "mobile"]
 skips = [
     "B101",  # assert_used: handled by mypy/pytest; legacy/assertive code paths remain
     "B105",  # hardcoded_password_string: false positives on field names/placeholders

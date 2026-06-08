@@ -1,0 +1,48 @@
+name: dotmac_portal
+description: DotMac customer self-care mobile app (Flutter).
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # State management + DI
+  flutter_riverpod: ^2.5.1
+
+  # Networking
+  dio: ^5.5.0
+
+  # Routing
+  go_router: ^14.2.0
+
+  # Secure token storage
+  flutter_secure_storage: ^9.2.2
+
+  # In-app provider checkout (Paystack / Flutterwave inline)
+  webview_flutter: ^4.8.0
+
+  # Avatar image picking (gallery / camera)
+  image_picker: ^1.1.2
+
+  # Crash reporting to your self-hosted GlitchTip (Sentry-protocol compatible).
+  # Pure-Dart client (no native plugin); inert unless a GLITCHTIP_DSN is set.
+  sentry: ^8.9.0
+
+  # Charts (pure Dart — no native plugin)
+  fl_chart: ^0.69.0
+
+  # Formatting (dates, currency)
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

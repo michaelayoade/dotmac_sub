@@ -49,7 +49,7 @@ from app.services.customer_notification_policy import (
     resolve_notification_category,
     resolve_subscriber_id_for_recipient,
 )
-from app.services.response import ListResponseMixin
+from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +348,22 @@ class Notifications(ListResponseMixin):
             {"created_at": Notification.created_at, "status": Notification.status},
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_subscriber(db, subscriber_id, limit, offset):
+        """Active notifications addressed to one subscriber, newest first."""
+        query = (
+            db.query(Notification)
+            .filter(Notification.subscriber_id == subscriber_id)
+            .filter(Notification.is_active.is_(True))
+            .order_by(Notification.created_at.desc())
+        )
+        return apply_pagination(query, limit, offset).all()
+
+    @classmethod
+    def list_response_for_subscriber(cls, db, subscriber_id, limit, offset):
+        items = cls.list_for_subscriber(db, subscriber_id, limit, offset)
+        return list_response(items, limit, offset)
 
     @staticmethod
     def count(
