@@ -8,6 +8,7 @@ import '../../core/api_exception.dart';
 import '../../models/auth.dart';
 import '../../providers/auth_controller.dart';
 import '../billing/payment_methods_screen.dart';
+import '../settings/settings_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -92,6 +93,17 @@ class ProfileScreen extends ConsumerWidget {
                     title: const Text('Active sessions'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => context.go('/profile/sessions'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.settings_outlined),
+                    title: const Text('Settings'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),

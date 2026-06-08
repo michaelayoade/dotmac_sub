@@ -14,6 +14,7 @@ class TokenStorage {
   static const _kAccess = 'access_token';
   static const _kRefresh = 'refresh_token';
   static const _kBiometric = 'biometric_lock_enabled';
+  static const _kThemeMode = 'theme_mode';
 
   Future<void> save({required String accessToken, String? refreshToken}) async {
     await _storage.write(key: _kAccess, value: accessToken);
@@ -35,6 +36,13 @@ class TokenStorage {
 
   Future<bool> isBiometricEnabled() async =>
       (await _storage.read(key: _kBiometric)) == 'true';
+
+  /// Theme preference ('system' | 'light' | 'dark'). A device setting — kept out
+  /// of [clear] so it survives logout.
+  Future<void> setThemeMode(String mode) =>
+      _storage.write(key: _kThemeMode, value: mode);
+
+  Future<String?> readThemeMode() => _storage.read(key: _kThemeMode);
 
   Future<void> clear() async {
     await _storage.delete(key: _kAccess);

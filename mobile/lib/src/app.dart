@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'config/env.dart';
 import 'providers/auth_controller.dart';
+import 'providers/theme_controller.dart';
 import 'router/app_router.dart';
 
 class DotMacApp extends ConsumerStatefulWidget {
@@ -44,19 +45,25 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
-    final scheme = ColorScheme.fromSeed(seedColor: Brand.primaryColor);
+
+    ThemeData themeFor(Brightness brightness) => ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Brand.primaryColor,
+            brightness: brightness,
+          ),
+          useMaterial3: true,
+          appBarTheme: const AppBarTheme(centerTitle: false),
+          inputDecorationTheme: const InputDecorationTheme(
+            border: OutlineInputBorder(),
+          ),
+        );
 
     return MaterialApp.router(
       title: Brand.name,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: scheme,
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(centerTitle: false),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
-      ),
+      theme: themeFor(Brightness.light),
+      darkTheme: themeFor(Brightness.dark),
+      themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
     );
   }

@@ -64,6 +64,18 @@ class Brand {
     defaultValue: 'Sign in to manage your service',
   );
 
+  /// Support contact + legal name shown on the About screen. From the shared
+  /// brand.json (BRAND_SUPPORT_EMAIL / BRAND_LEGAL_NAME).
+  static const String supportEmail =
+      String.fromEnvironment('BRAND_SUPPORT_EMAIL', defaultValue: '');
+
+  static const String legalName =
+      String.fromEnvironment('BRAND_LEGAL_NAME', defaultValue: '');
+
+  /// App version label for the About screen (set per release build).
+  static const String version =
+      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
+
   /// Hex brand colour (e.g. `#3b82f6`) used as the Material seed colour.
   static const String _primaryColorHex =
       String.fromEnvironment('BRAND_PRIMARY_COLOR', defaultValue: '#3b82f6');
