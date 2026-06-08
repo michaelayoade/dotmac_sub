@@ -18,6 +18,7 @@ from app.tasks.bandwidth import (
 from app.tasks.billing import run_invoice_cycle
 from app.tasks.catalog import expire_subscriptions
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
+from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.events import (
     cleanup_old_events,
     mark_stale_processing_events,
@@ -149,6 +150,7 @@ __all__ = [
     "expire_subscriptions",
     "run_dunning",
     "run_prepaid_enforcement",
+    "push_crm_subscriber_change",
     "run_scheduled_export",
     "run_export_job",
     "retry_failed_events",

@@ -9,17 +9,22 @@ from starlette.responses import Response
 from app.main import csrf_middleware
 
 
-def _build_request(*, path: str = "/admin/billing") -> Request:
+def _build_request(
+    *,
+    path: str = "/admin/billing",
+    method: str = "GET",
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> Request:
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
         "http_version": "1.1",
-        "method": "GET",
+        "method": method,
         "scheme": "http",
         "path": path,
         "raw_path": path.encode("utf-8"),
         "query_string": b"",
-        "headers": [],
+        "headers": headers or [],
         "client": ("127.0.0.1", 12345),
         "server": ("testserver", 80),
     }
@@ -70,3 +75,15 @@ def test_csrf_middleware_returns_204_for_actual_disconnect(monkeypatch):
     response = _run_async(csrf_middleware(request, call_next))
 
     assert response.status_code == 204
+
+
+def test_csrf_middleware_exempts_customer_logout_without_token():
+    request = _build_request(path="/portal/auth/logout", method="POST")
+
+    async def call_next(_request: Request) -> Response:
+        return Response(status_code=303, headers={"location": "/portal/auth/login"})
+
+    response = _run_async(csrf_middleware(request, call_next))
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/portal/auth/login"

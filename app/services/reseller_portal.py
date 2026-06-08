@@ -457,6 +457,23 @@ def list_accounts(
     return results
 
 
+def count_accounts(
+    db: Session,
+    reseller_id: str,
+    search: str | None = None,
+) -> int:
+    query = _customer_accounts_query(db, reseller_id)
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(
+            (Subscriber.first_name.ilike(pattern))
+            | (Subscriber.last_name.ilike(pattern))
+            | (Subscriber.email.ilike(pattern))
+            | (Subscriber.account_number.ilike(pattern))
+        )
+    return query.with_entities(func.count(Subscriber.id)).scalar() or 0
+
+
 def get_dashboard_summary(
     db: Session,
     reseller_id: str,

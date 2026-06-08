@@ -47,8 +47,12 @@ class Env {
 ///   flutter build apk --dart-define-from-file=../brand.json
 ///
 /// Keys mirror the backend's brand.json so a single file drives web and mobile.
-/// App identity (applicationId / bundle id / launcher icon) is native build
-/// config set via Flutter flavors, not here.
+///
+/// Note: native app identity (applicationId / bundle id / launcher icon /
+/// launcher label) is NOT configured here. Each organization is its own
+/// deployment — it provisions its own domain and its own native app identity as
+/// part of that setup. `Brand.name` here is only the in-app display name (the
+/// MaterialApp title / login heading), not the OS launcher label.
 class Brand {
   const Brand._();
 
@@ -59,6 +63,18 @@ class Brand {
     'BRAND_TAGLINE',
     defaultValue: 'Sign in to manage your service',
   );
+
+  /// Support contact + legal name shown on the About screen. From the shared
+  /// brand.json (BRAND_SUPPORT_EMAIL / BRAND_LEGAL_NAME).
+  static const String supportEmail =
+      String.fromEnvironment('BRAND_SUPPORT_EMAIL', defaultValue: '');
+
+  static const String legalName =
+      String.fromEnvironment('BRAND_LEGAL_NAME', defaultValue: '');
+
+  /// App version label for the About screen (set per release build).
+  static const String version =
+      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
 
   /// Hex brand colour (e.g. `#3b82f6`) used as the Material seed colour.
   static const String _primaryColorHex =

@@ -1,0 +1,253 @@
+"""Tests for the time-windowed /me/usage-summary endpoint and service.
+
+Covers the correctness the legacy "sum the last 50 sessions" path lacked: a
+defined window, byte integration from throughput samples, and authoritative
+totals for cycle (quota) and all (session octets).
+"""
+
+import asyncio
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
+from fastapi import HTTPException
+
+from app.api import me as me_api
+from app.models.bandwidth import BandwidthSample
+from app.models.usage import AccountingStatus, QuotaBucket, RadiusAccountingSession
+from app.services import usage_summary as svc
+
+
+def _run_async(coro):
+    # Run in a dedicated thread to avoid nested event loops. Project convention
+    # (see tests/test_main_domain_routing.py): async-def tests marked
+    # @pytest.mark.asyncio conflict with the suite's already-running loop in CI.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
+
+
+# --- pure helpers ----------------------------------------------------------
+
+
+def test_integrate_sums_volume_and_buckets_by_minute():
+    base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    points = [
+        (base, 8000.0, 800.0),
+        (base + timedelta(seconds=60), 8000.0, 800.0),
+    ]
+    buckets = svc._integrate(points, "minute", UTC)
+    # (8000+800)/8 * 60s = 66000 bytes, attributed to the 12:00 minute bucket.
+    assert buckets == {base: 66000.0}
+
+
+def test_integrate_carries_last_rate_to_end_but_caps_it():
+    base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    points = [
+        (base, 8000.0, 0.0),
+        (base + timedelta(seconds=60), 8000.0, 0.0),
+    ]
+    # 60s segment + 60s tail carried to end, both at 8000 bps.
+    near = svc._integrate(points, "minute", UTC, end=base + timedelta(seconds=120))
+    assert sum(near.values()) == 120000.0
+    # A far end exceeds the gap cap, so no phantom tail is fabricated.
+    far = svc._integrate(points, "minute", UTC, end=base + timedelta(seconds=100000))
+    assert sum(far.values()) == 60000.0
+
+
+def test_integrate_skips_gaps_far_above_typical_spacing():
+    base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    # Three 60s-spaced points then a 5000s idle gap. The 60s spacing is typical,
+    # so only the anomalous gap is dropped (its 5,000,000-byte segment excluded).
+    points = [
+        (base, 8000.0, 0.0),
+        (base + timedelta(seconds=60), 8000.0, 0.0),
+        (base + timedelta(seconds=120), 8000.0, 0.0),
+        (base + timedelta(seconds=5120), 8000.0, 0.0),
+    ]
+    buckets = svc._integrate(points, "minute", UTC)
+    # Two kept 60s segments (60000 bytes each); the idle gap is not filled.
+    assert sum(buckets.values()) == 120000.0
+
+
+def test_integrate_keeps_regularly_spaced_coarse_series():
+    # Hourly VM buckets (>30-day cycle): a fixed 15-min cap would drop every
+    # segment. Spacing-relative keeps them.
+    base = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+    points = [(base + timedelta(hours=h), 8000.0, 0.0) for h in range(4)]
+    buckets = svc._integrate(points, "day", UTC)
+    # 3 one-hour segments at 8000 bps -> 8000/8*3600 = 3.6e6 bytes each.
+    assert sum(buckets.values()) == 3 * (8000 / 8 * 3600)
+
+
+def test_truncate_day_and_hour():
+    ts = datetime(2026, 6, 1, 13, 37, 5, tzinfo=UTC)
+    assert svc._truncate(ts, "hour", UTC) == datetime(2026, 6, 1, 13, 0, tzinfo=UTC)
+    assert svc._truncate(ts, "day", UTC) == datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+
+
+def test_truncate_is_dst_safe():
+    ny = ZoneInfo("America/New_York")
+    # Spring-forward day: the afternoon is EDT (-4) but that day's midnight is
+    # still EST (-5), so local midnight is 05:00 UTC, not 04:00.
+    afternoon = datetime(2025, 3, 9, 15, 0, tzinfo=ny)
+    assert svc._truncate(afternoon, "day", ny) == datetime(2025, 3, 9, 5, 0, tzinfo=UTC)
+    # Fall-back day: 01:30 occurs twice (EDT then EST). Both must collapse to a
+    # single canonical hour bucket rather than two same-labelled bars.
+    first = datetime(2025, 11, 2, 1, 30, fold=0, tzinfo=ny)
+    second = datetime(2025, 11, 2, 1, 30, fold=1, tzinfo=ny)
+    assert svc._truncate(first, "hour", ny) == svc._truncate(second, "hour", ny)
+    assert svc._truncate(second, "hour", ny) == datetime(2025, 11, 2, 5, 0, tzinfo=UTC)
+
+
+# --- service against the DB -----------------------------------------------
+
+
+def test_hour_integrates_bandwidth_samples(db_session, subscriber, subscription):
+    base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    for offset in (0, 60):
+        db_session.add(
+            BandwidthSample(
+                subscription_id=subscription.id,
+                rx_bps=8000,
+                tx_bps=800,
+                sample_at=base + timedelta(seconds=offset),
+            )
+        )
+    db_session.commit()
+
+    now = base + timedelta(seconds=120)
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "hour", now=now)
+    )
+
+    assert out["period"] == "hour"
+    assert out["bucket"] == "minute"
+    assert out["total_source"] == "samples"
+    assert out["is_authoritative"] is False
+    # 12:00→12:01 segment plus the tail carried to now (12:02): 2 × 66000.
+    assert out["total_bytes"] == 132000
+    assert len(out["series"]) == 2
+    assert out["series"][0]["bytes"] == 66000
+
+
+def test_all_sums_session_octets_including_active(db_session, subscriber, subscription):
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="closed-1",
+            status_type=AccountingStatus.stop,
+            session_start=now - timedelta(days=2),
+            session_end=now - timedelta(days=2, hours=-1),
+            input_octets=1000,
+            output_octets=500,
+        )
+    )
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="active-1",
+            status_type=AccountingStatus.interim,
+            session_start=now - timedelta(hours=3),
+            session_end=None,  # live session, octets are current
+            input_octets=2000,
+            output_octets=300,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "all", now=now)
+    )
+
+    assert out["total_source"] == "sessions"
+    assert out["is_authoritative"] is True
+    assert out["bucket"] is None
+    assert out["series"] == []
+    assert out["total_bytes"] == 1000 + 500 + 2000 + 300  # includes active
+
+
+def test_cycle_uses_rated_quota_bucket(db_session, subscriber, subscription):
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=5),
+            period_end=now + timedelta(days=25),
+            used_gb=2,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+
+    assert out["total_source"] == "quota"
+    assert out["is_authoritative"] is True
+    assert out["total_bytes"] == 2 * (1024**3)
+    assert out["bucket"] == "day"
+
+
+def test_window_with_no_data_falls_back_without_false_zero(
+    db_session, subscriber, subscription
+):
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    # A session today but no bandwidth samples: total must not be a false 0.
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="today-1",
+            status_type=AccountingStatus.stop,
+            session_start=now - timedelta(hours=1),
+            session_end=now,
+            input_octets=4000,
+            output_octets=1000,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "today", now=now)
+    )
+    assert out["series"] == []
+    assert out["total_source"] == "sessions"
+    assert out["total_bytes"] == 5000
+
+
+# --- endpoint scoping ------------------------------------------------------
+
+
+def test_usage_summary_403_for_non_subscriber():
+    principal = {"principal_type": "system_user", "subscriber_id": str(uuid.uuid4())}
+    with pytest.raises(HTTPException) as exc:
+        _run_async(
+            me_api.my_usage_summary(period="today", db=None, principal=principal)
+        )
+    assert exc.value.status_code == 403
+
+
+def test_usage_summary_scopes_to_caller(monkeypatch):
+    principal = {"principal_type": "subscriber", "subscriber_id": str(uuid.uuid4())}
+    captured = {}
+
+    async def fake(db, subscriber_id, period, now=None):
+        captured["subscriber_id"] = subscriber_id
+        captured["period"] = period
+        return {
+            "period": period,
+            "start": datetime.now(UTC),
+            "end": datetime.now(UTC),
+            "total_bytes": 0,
+            "total_source": "samples",
+            "is_authoritative": False,
+            "bucket": None,
+            "series": [],
+        }
+
+    monkeypatch.setattr(svc, "get_usage_summary", fake)
+    _run_async(me_api.my_usage_summary(period="week", db=None, principal=principal))
+    assert captured["subscriber_id"] == principal["subscriber_id"]
+    assert captured["period"] == "week"

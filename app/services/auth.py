@@ -343,12 +343,12 @@ class Sessions(ListResponseMixin):
     def list(
         db: Session,
         subscriber_id: str | None = None,
-        person_id: str | None = None,
         status: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "desc",
         limit: int = 50,
         offset: int = 0,
+        person_id: str | None = None,
     ):
         query = db.query(AuthSession)
         resolved_subscriber_id = subscriber_id or person_id

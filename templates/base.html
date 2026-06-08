@@ -4,7 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="htmx-config" content='{"defaultSwapStyle":"innerHTML","globalViewTransitions":true}' />
-    <title>{% block title %}{{ title | default("DotMac Subs") }}{% endblock %}</title>
+    {% set brand_product_name = (brand.product_name if brand is defined and brand else "DotMac Subs") %}
+    {% set brand_primary_color = (brand.primary_color if brand is defined and brand else "#3b82f6") %}
+    <title>{% block title %}{{ title | default(brand_product_name) }}{% endblock %}</title>
     {% set resolved_favicon = (
         sidebar_stats.favicon_url
         if sidebar_stats is defined and sidebar_stats and sidebar_stats.favicon_url
@@ -15,8 +17,9 @@
     <link rel="icon" href="{{ resolved_favicon }}" />
     <link rel="shortcut icon" href="{{ resolved_favicon }}" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/branding/favicon/apple-touch-icon.png" />
-    <link rel="manifest" href="/static/manifest.json" />
-    <meta name="theme-color" content="#3b82f6" />
+    <link rel="manifest" href="/branding/manifest.webmanifest" />
+    <meta name="theme-color" content="{{ brand_primary_color }}" />
+    <style>:root { --brand-primary: {{ brand_primary_color }}; }</style>
     {% block meta_social %}
     <meta property="og:type" content="website" />
     <meta property="og:title" content="{% block og_title %}{{ self.title() }}{% endblock %}" />

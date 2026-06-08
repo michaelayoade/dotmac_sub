@@ -7,6 +7,8 @@ import '../../config/env.dart';
 import '../../core/api_exception.dart';
 import '../../models/auth.dart';
 import '../../providers/auth_controller.dart';
+import '../billing/payment_methods_screen.dart';
+import '../settings/settings_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -75,12 +77,37 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 Card(
                   child: ListTile(
+                    leading: const Icon(Icons.credit_card_outlined),
+                    title: const Text('Payment methods'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                          builder: (_) => const PaymentMethodsScreen()),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
                     leading: const Icon(Icons.devices_outlined),
                     title: const Text('Active sessions'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => context.go('/profile/sessions'),
                   ),
                 ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.settings_outlined),
+                    title: const Text('Settings'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const _BiometricToggle(),
                 const SizedBox(height: 24),
                 FilledButton.tonalIcon(
                   style: FilledButton.styleFrom(
@@ -237,6 +264,89 @@ class _AvatarEditorState extends ConsumerState<_AvatarEditor> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Opt-in toggle for the biometric app-lock. Enabling requires a successful
+/// biometric check first (proves the user can satisfy the lock). When the
+/// device has no usable biometrics the tile is shown disabled with a reason.
+class _BiometricToggle extends ConsumerStatefulWidget {
+  const _BiometricToggle();
+
+  @override
+  ConsumerState<_BiometricToggle> createState() => _BiometricToggleState();
+}
+
+class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
+  bool _loading = true;
+  bool _available = false;
+  bool _enabled = false;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final controller = ref.read(authControllerProvider.notifier);
+    final available = await controller.biometricAvailable();
+    final enabled = await controller.isBiometricLockEnabled();
+    if (!mounted) return;
+    setState(() {
+      _available = available;
+      _enabled = enabled;
+      _loading = false;
+    });
+  }
+
+  Future<void> _toggle(bool value) async {
+    final controller = ref.read(authControllerProvider.notifier);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      if (value) {
+        final ok = await controller.enableBiometricLock();
+        if (!mounted) return;
+        if (ok) {
+          setState(() => _enabled = true);
+        } else {
+          messenger.showSnackBar(const SnackBar(
+              content: Text('Could not enable biometric unlock')));
+        }
+      } else {
+        await controller.disableBiometricLock();
+        if (!mounted) return;
+        setState(() => _enabled = false);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const SizedBox.shrink();
+    if (!_available) {
+      return const Card(
+        child: ListTile(
+          enabled: false,
+          leading: Icon(Icons.fingerprint),
+          title: Text('Biometric unlock'),
+          subtitle: Text('Not available on this device'),
+        ),
+      );
+    }
+    return Card(
+      child: SwitchListTile(
+        secondary: const Icon(Icons.fingerprint),
+        title: const Text('Biometric unlock'),
+        subtitle: const Text('Require Face ID / fingerprint to open the app'),
+        value: _enabled,
+        onChanged: _busy ? null : _toggle,
+      ),
     );
   }
 }

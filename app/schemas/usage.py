@@ -86,6 +86,29 @@ class RadiusAccountingSessionRead(RadiusAccountingSessionBase):
     created_at: datetime
 
 
+class UsageSeriesPoint(BaseModel):
+    bucket_start: datetime
+    bytes: int
+
+
+class UsageSummaryResponse(BaseModel):
+    """Time-windowed data-usage summary for GET /me/usage-summary."""
+
+    period: str = Field(description="hour | today | week | cycle | all")
+    start: datetime
+    end: datetime
+    total_bytes: int
+    # Where the headline total came from: "samples" (integrated throughput),
+    # "sessions" (RADIUS accounting octets), or "quota" (rated billing usage).
+    total_source: str
+    # True when the total is billing-grade (quota / session octets) rather than
+    # reconstructed from the throughput series.
+    is_authoritative: bool
+    # Bucket width of the series: "minute" | "hour" | "day" | None (no chart).
+    bucket: str | None = None
+    series: list[UsageSeriesPoint] = Field(default_factory=list)
+
+
 class UsageRecordBase(BaseModel):
     subscription_id: UUID
     quota_bucket_id: UUID | None = None

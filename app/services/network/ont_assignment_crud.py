@@ -17,7 +17,7 @@ from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
 )
-from app.services.query_builders import apply_optional_equals
+from app.services.query_builders import apply_active_state, apply_optional_equals
 
 
 def _validate_assignment_target(
@@ -206,21 +206,27 @@ class OntAssignments(CRUDManager[OntAssignment]):
     @staticmethod
     def list(
         db: Session,
-        ont_unit_id: str | None,
-        pon_port_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        pon_port_id: str | None = None,
+        subscriber_id: str | None = None,
+        subscription_id: str | None = None,
+        active: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+        ont_unit_id: str | None = None,
     ) -> list[OntAssignment]:
+        del subscription_id  # No subscription_id column; ONTs are subscriber-scoped.
         stmt = select(OntAssignment)
         stmt = apply_optional_equals(
             stmt,
             {
                 OntAssignment.ont_unit_id: ont_unit_id,
                 OntAssignment.pon_port_id: pon_port_id,
+                OntAssignment.subscriber_id: subscriber_id,
             },
         )
+        stmt = apply_active_state(stmt, OntAssignment.active, active)
         stmt = _apply_ordering(
             stmt,
             order_by,

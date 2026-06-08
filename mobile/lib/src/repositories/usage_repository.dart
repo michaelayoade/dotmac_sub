@@ -34,4 +34,12 @@ class UsageRepository {
     return Page.fromJson(
         data as Map<String, dynamic>, AccountingSession.fromJson);
   }
+
+  /// GET /me/usage-summary?period=… — windowed total + bucketed series, with a
+  /// defined time window (unlike summing the latest sessions).
+  Future<UsageSummary> usageSummary(String period) async {
+    final data = await guard(() =>
+        dio.get('/me/usage-summary', queryParameters: {'period': period}));
+    return UsageSummary.fromJson(data as Map<String, dynamic>);
+  }
 }

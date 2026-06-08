@@ -5,16 +5,59 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.stored_file import StoredFile
+from app.services.branding_config import get_brand
 from app.services.file_storage import file_uploads
 from app.services.object_storage import ObjectNotFoundError
 from app.services.public_branding import is_configured_favicon_url
 
 router = APIRouter(prefix="/branding", tags=["public-branding"])
+
+
+@router.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest():
+    """Brand-driven PWA manifest (name/short_name/theme_color from brand.json)."""
+    brand = get_brand()
+    manifest = {
+        "name": f"{brand['name']} Selfcare",
+        "short_name": brand["name"],
+        "description": "Manage your internet subscription, billing, and support",
+        "start_url": "/portal/",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": brand["primary_color"],
+        "icons": [
+            {
+                "src": "/static/branding/favicon/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+            },
+            {
+                "src": "/static/branding/favicon/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+            },
+            {
+                "src": "/static/branding/favicon/apple-touch-icon.png",
+                "sizes": "180x180",
+                "type": "image/png",
+            },
+        ],
+    }
+    return JSONResponse(
+        manifest,
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/assets/{file_id}")

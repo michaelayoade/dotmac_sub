@@ -42,7 +42,15 @@ class CrmSyncHandler:
             )
 
     def _dispatch(self, db: Session, event: Event) -> None:
-        from app.services.crm_webhook import push_service_activation, push_status_change
+        from app.config import settings
+        from app.services.crm_webhook import (
+            service_activation_payload,
+            status_change_payload,
+        )
+
+        # No CRM configured → nothing to push (and nothing to retry).
+        if not settings.crm_base_url:
+            return
 
         # Resolve subscriber and Splynx ID
         subscriber_id = event.account_id or event.payload.get("account_id")
@@ -65,7 +73,7 @@ class CrmSyncHandler:
                 if event.event_type == EventType.subscriber_suspended
                 else "active"
             )
-            push_status_change(splynx_id, status, name)
+            self._enqueue(splynx_id, status_change_payload(status, name), event)
 
         elif event.event_type in (
             EventType.subscription_activated,
@@ -85,8 +93,10 @@ class CrmSyncHandler:
             service_speed = ""
             if subscription and subscription.offer:
                 service_name = subscription.offer.name
-                if subscription.offer.speed_download_mbps:
-                    service_speed = f"{subscription.offer.speed_download_mbps}/{subscription.offer.speed_upload_mbps} Mbps"
+                down = subscription.offer.speed_download_mbps
+                up = subscription.offer.speed_upload_mbps
+                if down and up:
+                    service_speed = f"{down}/{up} Mbps"
 
             status_map = {
                 EventType.subscription_activated: "active",
@@ -97,4 +107,17 @@ class CrmSyncHandler:
                 EventType.subscription_downgraded: "active",
             }
             status = status_map.get(event.event_type, "active")
-            push_service_activation(splynx_id, service_name, service_speed, status)
+            payload = service_activation_payload(service_name, service_speed, status)
+            self._enqueue(splynx_id, payload, event)
+
+    def _enqueue(self, splynx_id: int, payload: dict, event: Event) -> None:
+        """Queue the outbound CRM push so it never blocks the request thread."""
+        from app.services.queue_adapter import enqueue_task
+        from app.tasks.crm_sync import push_subscriber_change
+
+        enqueue_task(
+            push_subscriber_change,
+            args=[splynx_id, payload],
+            correlation_id=f"crm_sync:{event.event_id}",
+            source="crm_sync_handler",
+        )

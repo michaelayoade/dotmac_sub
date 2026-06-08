@@ -114,6 +114,10 @@ void main() {
         '${ledger.items.isNotEmpty ? ' (e.g. ${ledger.items.first.entryType} '
             '${ledger.items.first.amount})' : ''}');
 
+    final balance = await billing.balance();
+    print('✅ /me/balance — credit=${balance.creditBalance} '
+        '${balance.currency}');
+
     final topup = await billing.topupPage();
     print('✅ /me/topup — balance=${topup.prepaidBalance} '
         'presets=${topup.presetAmounts}');
@@ -123,6 +127,10 @@ void main() {
       final opts = await catalog.planChangeOptions(subs.items.first.id);
       print('✅ /me/.../plan-change — current=${opts.currentOffer?.name} '
           'available=${opts.availableOffers.length}');
+
+      final addons = await catalog.addons(subs.items.first.id);
+      print('✅ /me/.../add-ons — available=${addons.available.length} '
+          'active=${addons.active.length} wallet=${addons.walletBalance}');
     }
   }, timeout: const Timeout(Duration(seconds: 30)), skip: _user.isEmpty);
 

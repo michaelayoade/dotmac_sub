@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry/sentry.dart';
 
+import '../config/env.dart';
 import '../core/api_client.dart';
+import '../core/biometric_service.dart';
 import '../core/observability.dart';
 import '../core/token_storage.dart';
 import '../models/auth.dart';
@@ -10,16 +12,23 @@ import '../repositories/auth_repository.dart';
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
 class AuthState {
-  const AuthState({required this.status, this.me});
+  const AuthState({required this.status, this.me, this.locked = false});
 
   final AuthStatus status;
   final Me? me;
 
+  /// True when the session is valid but held behind the biometric app-lock.
+  /// The router keeps such a session on `/lock` until [AuthController.unlock].
+  final bool locked;
+
   bool get isAuthenticated => status == AuthStatus.authenticated;
   bool get isKnown => status != AuthStatus.unknown;
 
-  AuthState copyWith({AuthStatus? status, Me? me}) =>
-      AuthState(status: status ?? this.status, me: me ?? this.me);
+  AuthState copyWith({AuthStatus? status, Me? me, bool? locked}) => AuthState(
+        status: status ?? this.status,
+        me: me ?? this.me,
+        locked: locked ?? this.locked,
+      );
 
   static const unknown = AuthState(status: AuthStatus.unknown);
   static const signedOut = AuthState(status: AuthStatus.unauthenticated);
@@ -28,6 +37,9 @@ class AuthState {
 // --- Infrastructure providers ---------------------------------------------
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
+
+final biometricServiceProvider =
+    Provider<BiometricService>((ref) => BiometricService());
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   final client = ApiClient(
@@ -67,6 +79,11 @@ class AuthController extends StateNotifier<AuthState> {
 
   AuthRepository get _repo => _ref.read(authRepositoryProvider);
   TokenStorage get _storage => _ref.read(tokenStorageProvider);
+  BiometricService get _biometric => _ref.read(biometricServiceProvider);
+
+  /// True while a biometric prompt is on screen. Resume-lock checks this so the
+  /// prompt's own lifecycle transitions can't re-arm the lock under itself.
+  bool _promptActive = false;
 
   /// Restore a previous session on cold start.
   Future<void> bootstrap() async {
@@ -77,12 +94,74 @@ class AuthController extends StateNotifier<AuthState> {
     }
     try {
       final me = await _repo.me();
-      state = AuthState(status: AuthStatus.authenticated, me: me);
+      state = AuthState(
+        status: AuthStatus.authenticated,
+        me: me,
+        locked: await _shouldLockOnLaunch(),
+      );
     } catch (_) {
       await _storage.clear();
       state = AuthState.signedOut;
     }
   }
+
+  /// Lock on launch only when the user opted in AND biometrics are still
+  /// usable. If biometrics were removed since opt-in we proceed unlocked rather
+  /// than stranding the user.
+  Future<bool> _shouldLockOnLaunch() async {
+    if (!await _storage.isBiometricEnabled()) return false;
+    return _biometric.isAvailable();
+  }
+
+  // --- Biometric app-lock --------------------------------------------------
+
+  /// Prompt to unlock a locked session. On success the router redirects off
+  /// `/lock`. Does not store or replay any credential — it only reveals the
+  /// session tokens already held in secure storage.
+  Future<bool> unlock() async {
+    _promptActive = true;
+    try {
+      final ok = await _biometric.authenticate(reason: 'Unlock ${Brand.name}');
+      if (ok) state = state.copyWith(locked: false);
+      return ok;
+    } finally {
+      _promptActive = false;
+    }
+  }
+
+  /// Re-arm the lock when the app returns from the background. No-op unless the
+  /// session is authenticated, currently unlocked, opted-in, and biometrics are
+  /// available — and never while a prompt is already showing.
+  Future<void> lockOnResume() async {
+    if (_promptActive || state.locked || !state.isAuthenticated) return;
+    if (!await _storage.isBiometricEnabled()) return;
+    if (!await _biometric.isAvailable()) return;
+    // Re-check after the awaits in case state changed meanwhile.
+    if (_promptActive || state.locked || !state.isAuthenticated) return;
+    state = state.copyWith(locked: true);
+  }
+
+  Future<bool> biometricAvailable() => _biometric.isAvailable();
+
+  Future<bool> isBiometricLockEnabled() => _storage.isBiometricEnabled();
+
+  /// Turn the lock on. Requires a successful biometric check first so the user
+  /// proves they can satisfy the lock before we enable it. Returns false if
+  /// unavailable or the check was cancelled/failed.
+  Future<bool> enableBiometricLock() async {
+    if (!await _biometric.isAvailable()) return false;
+    _promptActive = true;
+    try {
+      final ok = await _biometric.authenticate(
+          reason: 'Confirm to enable biometric unlock');
+      if (ok) await _storage.setBiometricEnabled(true);
+      return ok;
+    } finally {
+      _promptActive = false;
+    }
+  }
+
+  Future<void> disableBiometricLock() => _storage.setBiometricEnabled(false);
 
   /// Returns the [LoginResult] so the UI can branch into the MFA flow.
   /// Breadcrumbs the attempt/outcome (provider only — never the credentials).
@@ -137,6 +216,9 @@ class AuthController extends StateNotifier<AuthState> {
   Future<void> logout() async {
     Log.breadcrumb('logout', category: 'auth');
     await _repo.logout();
+    // Explicit sign-out is a full reset: drop the biometric opt-in so the next
+    // user starts from a clean password login.
+    await _storage.setBiometricEnabled(false);
     state = AuthState.signedOut;
     await Sentry.configureScope((scope) => scope.setUser(null));
   }

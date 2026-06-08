@@ -1,4 +1,6 @@
-/// Mirrors QuotaBucketRead from app/schemas/usage.py.
+// Mirrors QuotaBucketRead from app/schemas/usage.py.
+import '../core/parsers.dart';
+
 class QuotaBucket {
   QuotaBucket({
     required this.id,
@@ -46,10 +48,10 @@ class QuotaBucket {
         subscriptionId: json['subscription_id'].toString(),
         periodStart: DateTime.parse(json['period_start'].toString()).toLocal(),
         periodEnd: DateTime.parse(json['period_end'].toString()).toLocal(),
-        includedGb: _toDoubleOrNull(json['included_gb']),
-        usedGb: _toDouble(json['used_gb']),
-        rolloverGb: _toDouble(json['rollover_gb']),
-        overageGb: _toDouble(json['overage_gb']),
+        includedGb: asDoubleOrNull(json['included_gb']),
+        usedGb: asDouble(json['used_gb']),
+        rolloverGb: asDouble(json['rollover_gb']),
+        overageGb: asDouble(json['overage_gb']),
       );
 }
 
@@ -97,16 +99,55 @@ class AccountingSession {
       );
 }
 
-double _toDouble(dynamic v) {
-  if (v == null) return 0;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString()) ?? 0;
+/// One bar of the usage chart. Mirrors UsageSeriesPoint from schemas/usage.py.
+class UsageSeriesPoint {
+  UsageSeriesPoint({required this.bucketStart, required this.bytes});
+
+  final DateTime bucketStart;
+  final int bytes;
+
+  factory UsageSeriesPoint.fromJson(Map<String, dynamic> json) =>
+      UsageSeriesPoint(
+        bucketStart: DateTime.parse(json['bucket_start'].toString()).toLocal(),
+        bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+      );
 }
 
-double? _toDoubleOrNull(dynamic v) {
-  if (v == null) return null;
-  if (v is num) return v.toDouble();
-  return double.tryParse(v.toString());
+/// Windowed data-usage summary. Mirrors UsageSummaryResponse from
+/// schemas/usage.py (GET /me/usage-summary).
+class UsageSummary {
+  UsageSummary({
+    required this.period,
+    required this.start,
+    required this.end,
+    required this.totalBytes,
+    required this.totalSource,
+    required this.isAuthoritative,
+    this.bucket,
+    this.series = const [],
+  });
+
+  final String period; // hour | today | week | cycle | all
+  final DateTime start;
+  final DateTime end;
+  final int totalBytes;
+  final String totalSource; // samples | sessions | quota
+  final bool isAuthoritative;
+  final String? bucket; // minute | hour | day | null
+  final List<UsageSeriesPoint> series;
+
+  factory UsageSummary.fromJson(Map<String, dynamic> json) => UsageSummary(
+        period: json['period'].toString(),
+        start: DateTime.parse(json['start'].toString()).toLocal(),
+        end: DateTime.parse(json['end'].toString()).toLocal(),
+        totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
+        totalSource: json['total_source'].toString(),
+        isAuthoritative: json['is_authoritative'] as bool? ?? false,
+        bucket: json['bucket'] as String?,
+        series: (json['series'] as List? ?? const [])
+            .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 }
 
 DateTime? _toDate(dynamic v) {

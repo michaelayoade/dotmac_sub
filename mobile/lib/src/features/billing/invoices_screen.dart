@@ -112,23 +112,36 @@ class InvoicesScreen extends ConsumerWidget {
           RefreshIndicator(
             onRefresh: () async {
               ref.invalidate(ledgerProvider);
+              ref.invalidate(balanceProvider);
               await ref.read(ledgerProvider.future);
             },
             child: AsyncValueView(
               value: ref.watch(ledgerProvider),
               onRetry: () => ref.invalidate(ledgerProvider),
               data: (page) {
-                if (page.items.isEmpty) {
-                  return const _ScrollableEmpty(
-                    icon: Icons.receipt_long_outlined,
-                    message: 'No account activity yet.',
-                  );
-                }
-                return ListView.separated(
+                final balance = ref.watch(balanceProvider);
+                return ListView(
                   padding: const EdgeInsets.all(12),
-                  itemCount: page.items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) => _LedgerTile(txn: page.items[i]),
+                  children: [
+                    balance.maybeWhen(
+                      data: (b) => _BalanceCard(balance: b),
+                      orElse: () => const SizedBox.shrink(),
+                    ),
+                    const SizedBox(height: 8),
+                    if (page.items.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 80),
+                        child: EmptyState(
+                          icon: Icons.receipt_long_outlined,
+                          message: 'No account activity yet.',
+                        ),
+                      )
+                    else
+                      for (final t in page.items) ...[
+                        _LedgerTile(txn: t),
+                        const SizedBox(height: 8),
+                      ],
+                  ],
                 );
               },
             ),
@@ -136,6 +149,41 @@ class InvoicesScreen extends ConsumerWidget {
         ],
       ),
     ).withTabs();
+  }
+}
+
+/// Wallet/credit balance header for the Activity tab.
+class _BalanceCard extends StatelessWidget {
+  const _BalanceCard({required this.balance});
+  final AccountBalance balance;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (label, color) = balance.owes
+        ? ('Balance due', scheme.error)
+        : balance.inCredit
+            ? ('Account credit', Colors.green.shade700)
+            : ('Balance', scheme.onSurface);
+    return Card(
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              Fmt.money(balance.creditBalance.abs(), balance.currency),
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(color: color, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

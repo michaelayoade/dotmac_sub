@@ -232,14 +232,14 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
     @staticmethod
     def list(
         db: Session,
+        subscriber_id: str | None = None,
+        subscription_id: str | None = None,
+        status: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "desc",
         limit: int = 20,
         offset: int = 0,
-        subscriber_id: str | None = None,
         account_id: str | None = None,
-        subscription_id: str | None = None,
-        status: str | None = None,
     ):
         query = db.query(ServiceOrder)
         if account_id and not subscriber_id:

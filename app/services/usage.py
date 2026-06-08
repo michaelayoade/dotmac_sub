@@ -896,12 +896,12 @@ class UsageRecords(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        subscription_id: str | None,
-        quota_bucket_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        subscription_id: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+        quota_bucket_id: str | None = None,
     ):
         query = db.query(UsageRecord)
         if subscription_id:
@@ -950,13 +950,14 @@ class UsageCharges(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        subscription_id: str | None,
-        subscriber_id: str | None,
-        status: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        subscription_id: str | None = None,
+        is_posted: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+        subscriber_id: str | None = None,
+        status: str | None = None,
         period_start: object | None = None,
         period_end: object | None = None,
     ):
@@ -965,6 +966,11 @@ class UsageCharges(ListResponseMixin):
             query = query.filter(UsageCharge.subscription_id == subscription_id)
         if subscriber_id:
             query = query.filter(UsageCharge.subscriber_id == subscriber_id)
+        if is_posted is not None:
+            if is_posted:
+                query = query.filter(UsageCharge.status == UsageChargeStatus.posted)
+            else:
+                query = query.filter(UsageCharge.status != UsageChargeStatus.posted)
         if status:
             query = query.filter(
                 UsageCharge.status == validate_enum(status, UsageChargeStatus, "status")

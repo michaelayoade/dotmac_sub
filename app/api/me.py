@@ -17,8 +17,12 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
+    AccountBalanceResponse,
+    AutopayEnableRequest,
+    AutopayStatusResponse,
     InvoiceRead,
     LedgerEntryRead,
+    MyPaymentMethodRead,
     PaymentRead,
     TopupInitiateRequest,
     TopupInitiateResponse,
@@ -27,6 +31,10 @@ from app.schemas.billing import (
     TopupVerifyResponse,
 )
 from app.schemas.catalog import (
+    AddonPurchaseRequest,
+    AddonPurchaseResponse,
+    AddonQuoteResponse,
+    AddonsAvailableResponse,
     PlanChangePageResponse,
     PlanChangeSubmitRequest,
     PlanChangeSubmitResponse,
@@ -35,13 +43,21 @@ from app.schemas.catalog import (
 )
 from app.schemas.common import ListResponse
 from app.schemas.notification import NotificationRead
-from app.schemas.usage import QuotaBucketRead, RadiusAccountingSessionRead
+from app.schemas.usage import (
+    QuotaBucketRead,
+    RadiusAccountingSessionRead,
+    UsageSummaryResponse,
+)
+from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
+from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
+from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import notification as notification_service
 from app.services import usage as usage_service
+from app.services import usage_summary as usage_summary_service
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -108,6 +124,97 @@ def my_payments(
     account_id = _subscriber_id(principal)
     return billing_service.payments.list_response(
         db, account_id, None, status, None, order_by, order_dir, limit, offset
+    )
+
+
+@router.get("/autopay", response_model=AutopayStatusResponse)
+def my_autopay_status(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Whether the caller has autopay enabled, and on which saved card."""
+    return autopay_service.get_status(db, _subscriber_id(principal))
+
+
+@router.post("/autopay", response_model=AutopayStatusResponse)
+def my_autopay_enable(
+    payload: AutopayEnableRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Enable autopay against a saved card (the default card if unspecified)."""
+    account_id = _subscriber_id(principal)
+    try:
+        autopay_service.enable(
+            db,
+            account_id,
+            str(payload.payment_method_id) if payload.payment_method_id else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return autopay_service.get_status(db, account_id)
+
+
+@router.delete("/autopay", response_model=AutopayStatusResponse)
+def my_autopay_disable(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Turn off autopay for the caller."""
+    account_id = _subscriber_id(principal)
+    autopay_service.disable(db, account_id)
+    return autopay_service.get_status(db, account_id)
+
+
+@router.get("/payment-methods", response_model=list[MyPaymentMethodRead])
+def my_payment_methods(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's saved cards (tokens never exposed)."""
+    account_id = _subscriber_id(principal)
+    return customer_cards.list_for_account(db, account_id)
+
+
+@router.patch(
+    "/payment-methods/{method_id}/default", response_model=MyPaymentMethodRead
+)
+def my_set_default_card(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Make one of the caller's own saved cards the default."""
+    account_id = _subscriber_id(principal)
+    method = customer_cards.set_default(db, account_id, method_id)
+    if method is None:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return method
+
+
+@router.delete("/payment-methods/{method_id}", status_code=204)
+def my_remove_card(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Remove one of the caller's own saved cards."""
+    account_id = _subscriber_id(principal)
+    if not customer_cards.remove(db, account_id, method_id):
+        raise HTTPException(status_code=404, detail="Payment method not found")
+
+
+@router.get("/balance", response_model=AccountBalanceResponse)
+def my_balance(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's wallet/credit balance (positive = credit on file)."""
+    from app.services.billing._common import get_account_credit_balance
+
+    account_id = _subscriber_id(principal)
+    return AccountBalanceResponse(
+        credit_balance=get_account_credit_balance(db, account_id)
     )
 
 
@@ -230,7 +337,16 @@ def my_plan_change_submit(
 ):
     """Submit a plan-change request for the caller's own service."""
     customer = _customer(db, principal)
-    # Ownership is enforced inside the service (account_id == subscriber).
+    # submit_change_plan does NOT verify ownership, so guard it here: the
+    # subscription must belong to the caller (prevents changing another
+    # customer's plan via a guessed subscription id).
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription or str(subscription.subscriber_id) != str(
+        customer["account_id"]
+    ):
+        raise HTTPException(status_code=404, detail="Service not found")
     try:
         result = customer_changes.submit_change_plan(
             db,
@@ -243,6 +359,71 @@ def my_plan_change_submit(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PlanChangeSubmitResponse(success=bool(result.get("success", True)))
+
+
+@router.get(
+    "/subscriptions/{subscription_id}/add-ons",
+    response_model=AddonsAvailableResponse,
+)
+def my_addons(
+    subscription_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Add-ons the caller can buy for this service, plus their active ones."""
+    result = customer_addons.list_available_addons(
+        db, _customer(db, principal), subscription_id
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return result
+
+
+@router.get(
+    "/subscriptions/{subscription_id}/add-ons/quote",
+    response_model=AddonQuoteResponse,
+)
+def my_addon_quote(
+    subscription_id: str,
+    add_on_id: str,
+    quantity: int = Query(default=1, ge=1),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Cost of buying an add-on, against the wallet balance."""
+    try:
+        quote = customer_addons.get_addon_quote(
+            db, _customer(db, principal), subscription_id, add_on_id, quantity
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if quote is None:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return quote
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/add-ons",
+    response_model=AddonPurchaseResponse,
+)
+def my_addon_purchase(
+    subscription_id: str,
+    payload: AddonPurchaseRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Buy an add-on, charged from the caller's wallet balance."""
+    try:
+        return customer_addons.purchase_addon(
+            db,
+            _customer(db, principal),
+            subscription_id,
+            str(payload.add_on_id),
+            payload.quantity,
+            idempotency_key=payload.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/topup", response_model=TopupPageResponse)
@@ -300,6 +481,10 @@ def my_topup_verify(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.save_card:
+        customer_cards.capture_card_after_payment(
+            db, customer["account_id"], payload.reference, None
+        )
     return TopupVerifyResponse(
         reference=payload.reference,
         amount=Decimal(str(result.get("amount") or "0")),
@@ -339,3 +524,21 @@ def my_accounting_sessions(
     return usage_service.radius_accounting_sessions.list_response_for_subscriber(
         db, subscriber_id, limit, offset
     )
+
+
+@router.get("/usage-summary", response_model=UsageSummaryResponse)
+async def my_usage_summary(
+    period: str = Query(default="today", pattern="^(hour|today|week|cycle|all)$"),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Time-windowed data-usage total + bucketed series for the caller.
+
+    period: hour | today | week | cycle | all. The total is billing-grade for
+    cycle (rated quota) and all (session octets), and throughput-integrated for
+    sub-day windows — see total_source / is_authoritative on the response. The
+    window has a defined start/end (unlike the legacy "last 50 sessions" sum)
+    and counts the live session's current octets.
+    """
+    subscriber_id = _subscriber_id(principal)
+    return await usage_summary_service.get_usage_summary(db, subscriber_id, period)

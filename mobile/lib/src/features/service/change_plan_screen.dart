@@ -90,7 +90,10 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
             offerId: offer.id,
             effectiveDate: _today,
           );
+      // A prepaid change debits the wallet — refresh balance + ledger too.
       ref.invalidate(subscriptionsProvider);
+      ref.invalidate(balanceProvider);
+      ref.invalidate(ledgerProvider);
       messenger.showSnackBar(
         SnackBar(content: Text('Plan change to ${offer.name} requested')),
       );

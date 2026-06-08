@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.models.auth import MFAMethod
+from app.services import auth_flow as auth_flow_service
 from app.services import crm_portal, customer_portal, reseller_portal
 from app.web.reseller.branding import get_reseller_templates
 
@@ -23,6 +26,35 @@ def _require_reseller_context(request: Request, db: Session):
     if not context:
         return None
     return context
+
+
+def _profile_context(request: Request, context, **extra):
+    subscriber = context["subscriber"]
+    mfa_methods = (
+        db_methods if (db_methods := extra.pop("mfa_methods", None)) is not None else []
+    )
+    return {
+        "request": request,
+        "active_page": "profile",
+        "current_user": context["current_user"],
+        "reseller": context["reseller"],
+        "subscriber": subscriber,
+        "mfa_methods": mfa_methods,
+        "mfa_enabled": any(
+            bool(method.enabled and method.is_active) for method in mfa_methods
+        ),
+        **extra,
+    }
+
+
+def _reseller_mfa_methods(db: Session, subscriber_id) -> list[MFAMethod]:
+    return (
+        db.query(MFAMethod)
+        .filter(MFAMethod.subscriber_id == subscriber_id)
+        .filter(MFAMethod.is_active.is_(True))
+        .order_by(MFAMethod.created_at.desc())
+        .all()
+    )
 
 
 def reseller_home(request: Request, db: Session):
@@ -89,6 +121,13 @@ def reseller_accounts(
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
+    total = reseller_portal.count_accounts(
+        db,
+        reseller_id=str(context["reseller"].id),
+        search=search,
+    )
+    total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
+    page = min(page, total_pages)
     offset = (page - 1) * per_page
     accounts = reseller_portal.list_accounts(
         db,
@@ -108,6 +147,10 @@ def reseller_accounts(
             "page": page,
             "per_page": per_page,
             "search": search or "",
+            "total": total,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
         },
     )
 
@@ -275,7 +318,7 @@ def reseller_revenue_report(request: Request, db: Session):
         "reseller/reports/revenue.html",
         {
             "request": request,
-            "active_page": "reports",
+            "active_page": "billing",
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
@@ -288,14 +331,10 @@ def reseller_profile(request: Request, db: Session):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
+    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
     return templates.TemplateResponse(
         "reseller/profile/index.html",
-        {
-            "request": request,
-            "active_page": "profile",
-            "current_user": context["current_user"],
-            "reseller": context["reseller"],
-        },
+        _profile_context(request, context, mfa_methods=mfa_methods),
     )
 
 
@@ -319,16 +358,75 @@ def reseller_profile_update(
         reseller.notes = notes.strip() or None
     db.commit()
     db.refresh(reseller)
+    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
 
     return templates.TemplateResponse(
         "reseller/profile/index.html",
+        _profile_context(
+            request,
+            {**context, "reseller": reseller},
+            mfa_methods=mfa_methods,
+            success="Profile updated successfully.",
+        ),
+    )
+
+
+def reseller_mfa_setup(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    setup = auth_flow_service.auth_flow.mfa_setup(
+        db, str(context["subscriber"].id), "Authenticator app"
+    )
+    return templates.TemplateResponse(
+        "reseller/profile/mfa_setup.html",
         {
             "request": request,
             "active_page": "profile",
             "current_user": context["current_user"],
-            "reseller": reseller,
-            "success": "Profile updated successfully.",
+            "reseller": context["reseller"],
+            "method_id": setup["method_id"],
+            "secret_key": setup["secret"],
+            "otpauth_uri": setup["otpauth_uri"],
         },
+    )
+
+
+def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: str):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    try:
+        auth_flow_service.auth_flow.mfa_confirm(
+            db, method_id, code.strip(), str(context["subscriber"].id)
+        )
+    except Exception:
+        return templates.TemplateResponse(
+            "reseller/profile/mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "profile",
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "error": "Invalid verification code. Please try again.",
+            },
+            status_code=401,
+        )
+
+    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    return templates.TemplateResponse(
+        "reseller/profile/index.html",
+        _profile_context(
+            request,
+            context,
+            mfa_methods=mfa_methods,
+            success="Two-factor authentication enabled.",
+        ),
     )
 
 

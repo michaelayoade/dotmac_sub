@@ -366,6 +366,7 @@ class PaymentInitiateResponse(BaseModel):
 class PaymentVerifyRequest(BaseModel):
     reference: str = Field(min_length=1)
     provider: str | None = None
+    save_card: bool = False
 
 
 class PaymentVerifyResponse(BaseModel):
@@ -408,6 +409,7 @@ class TopupInitiateResponse(BaseModel):
 
 class TopupVerifyRequest(BaseModel):
     reference: str = Field(min_length=1)
+    save_card: bool = False
 
 
 class TopupVerifyResponse(BaseModel):
@@ -825,3 +827,35 @@ class BillingAccountStatement(BaseModel):
     recent_payments_total: int = 0
     total_outstanding: Decimal
     unallocated_balance: Decimal
+
+
+class AccountBalanceResponse(BaseModel):
+    """Customer wallet/credit balance (positive = credit on file)."""
+
+    credit_balance: Decimal = Decimal("0.00")
+    currency: str = "NGN"
+
+
+class MyPaymentMethodRead(BaseModel):
+    """Customer-facing saved card — never exposes the reusable token."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    method_type: PaymentMethodType
+    label: str | None = None
+    last4: str | None = None
+    brand: str | None = None
+    expires_month: int | None = None
+    expires_year: int | None = None
+    is_default: bool = False
+    created_at: datetime
+
+
+class AutopayStatusResponse(BaseModel):
+    enabled: bool = False
+    payment_method_id: UUID | None = None
+
+
+class AutopayEnableRequest(BaseModel):
+    payment_method_id: UUID | None = None

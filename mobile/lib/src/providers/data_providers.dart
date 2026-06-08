@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
+import '../models/payment_method.dart';
 import '../models/session.dart';
 import '../models/page.dart';
 import '../models/subscription.dart';
@@ -58,6 +59,20 @@ final ledgerProvider = FutureProvider.autoDispose<Page<LedgerTxn>>((ref) async {
   return ref.watch(billingRepositoryProvider).ledger();
 });
 
+final balanceProvider = FutureProvider.autoDispose<AccountBalance>((ref) async {
+  return ref.watch(billingRepositoryProvider).balance();
+});
+
+final paymentMethodsProvider =
+    FutureProvider.autoDispose<List<SavedCard>>((ref) async {
+  return ref.watch(billingRepositoryProvider).paymentMethods();
+});
+
+final autopayStatusProvider =
+    FutureProvider.autoDispose<AutopayStatus>((ref) async {
+  return ref.watch(billingRepositoryProvider).autopayStatus();
+});
+
 final subscriptionsProvider =
     FutureProvider.autoDispose<Page<Subscription>>((ref) async {
   return ref.watch(catalogRepositoryProvider).subscriptions();
@@ -91,6 +106,16 @@ final quotaBucketsProvider =
 final accountingSessionsProvider =
     FutureProvider.autoDispose<Page<AccountingSession>>((ref) async {
   return ref.watch(usageRepositoryProvider).sessions();
+});
+
+/// Selected window for the Usage tab summary (hour|today|week|cycle|all).
+final selectedUsagePeriodProvider =
+    StateProvider.autoDispose<String>((ref) => 'today');
+
+/// Windowed data-usage summary for a given period.
+final usageSummaryProvider = FutureProvider.autoDispose
+    .family<UsageSummary, String>((ref, period) async {
+  return ref.watch(usageRepositoryProvider).usageSummary(period);
 });
 
 final sessionsProvider =

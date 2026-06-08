@@ -37,4 +37,18 @@ class Fmt {
 
   static String gb(num value) =>
       '${value.toStringAsFixed(value >= 100 ? 0 : 1)} GB';
+
+  /// Coarse, single-unit duration for status text (e.g. "3h", "12m", "2d").
+  static String compactDuration(Duration d) {
+    if (d.inDays >= 1) return '${d.inDays}d';
+    if (d.inHours >= 1) return '${d.inHours}h';
+    if (d.inMinutes >= 1) return '${d.inMinutes}m';
+    return 'just now';
+  }
+
+  /// How long ago [since] was, as a compact uptime label.
+  static String uptime(DateTime since) {
+    final d = DateTime.now().difference(since);
+    return d.isNegative ? 'just now' : compactDuration(d);
+  }
 }

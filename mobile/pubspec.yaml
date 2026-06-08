@@ -23,6 +23,9 @@ dependencies:
   # Secure token storage
   flutter_secure_storage: ^9.2.2
 
+  # Biometric app-lock (Face ID / fingerprint) gating the stored session
+  local_auth: ^2.3.0
+
   # In-app provider checkout (Paystack / Flutterwave inline)
   webview_flutter: ^4.8.0
 
@@ -46,3 +49,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # White-label brand assets. Drop a per-organization `login_logo.png` here to
+  # replace the default placeholder icon on the login screen (see login_screen.dart).
+  assets:
+    - assets/images/

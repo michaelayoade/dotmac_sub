@@ -43,11 +43,14 @@ logs/
 
 # Secrets
 .env
+.env.bak.*
 .env.local
 .env.*.local
 *.pem
 *.key
 secrets/
+*_backup.json
+*.bak.*
 
 # Coverage
 htmlcov/
@@ -76,3 +79,10 @@ scripts/export_wifi_credentials.py
 # OLT CLI capture samples (auto-generated)
 data/olt_samples/
 .playwright-mcp/
+
+# Runtime-uploaded avatars (keep the dir, ignore the uploads)
+/static/avatars/*
+!/static/avatars/.gitkeep
+
+# Stray local screenshot capture at repo root
+/login.png

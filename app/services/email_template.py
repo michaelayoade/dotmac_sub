@@ -8,10 +8,23 @@ from __future__ import annotations
 
 import logging
 
+from app.services.branding_config import get_brand
+
 logger = logging.getLogger(__name__)
 
-# Base URL for static assets in emails — must be absolute
-_DEFAULT_BASE_URL = "https://subscription.dotmac.io"
+
+def _darken(hex_color: str, factor: float = 0.78) -> str:
+    """Return a darker shade of a #rrggbb colour, for an on-brand gradient end
+    stop. Falls back to the input if it isn't a 6-digit hex."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    try:
+        r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return hex_color
+    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def wrap_email_html(
@@ -19,8 +32,8 @@ def wrap_email_html(
     *,
     subject: str = "",
     base_url: str = "",
-    company_name: str = "Dotmac Technologies",
-    support_email: str = "support@dotmac.ng",
+    company_name: str | None = None,
+    support_email: str | None = None,
 ) -> str:
     """Wrap email body HTML in a branded template with header and footer.
 
@@ -36,10 +49,17 @@ def wrap_email_html(
     """
     from html import escape
 
-    base = base_url or _DEFAULT_BASE_URL
+    brand = get_brand()
+    base = base_url or brand["app_url"]
+    primary = brand["primary_color"]
+    primary_dark = _darken(primary)
     safe_subject = escape(subject)
-    safe_company = escape(company_name)
-    safe_support = escape(support_email)
+    safe_company = escape(
+        company_name if company_name is not None else brand["legal_name"]
+    )
+    safe_support = escape(
+        support_email if support_email is not None else brand["support_email"]
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -50,13 +70,13 @@ def wrap_email_html(
 <style>
 body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; color: #1e293b; }}
 .wrapper {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
+.header {{ background: linear-gradient(135deg, {primary} 0%, {primary_dark} 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
 .header img {{ height: 40px; width: auto; }}
 .header-fallback {{ color: #ffffff; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }}
 .content {{ background: #ffffff; padding: 32px; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; }}
 .footer {{ background: #f1f5f9; border-radius: 0 0 12px 12px; padding: 24px 32px; text-align: center; border: 1px solid #e2e8f0; border-top: none; }}
 .footer p {{ margin: 4px 0; font-size: 12px; color: #64748b; }}
-.footer a {{ color: #3b82f6; text-decoration: none; }}
+.footer a {{ color: {primary}; text-decoration: none; }}
 </style>
 </head>
 <body>

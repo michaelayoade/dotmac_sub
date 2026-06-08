@@ -2,10 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dotmac_portal/src/config/env.dart';
 import 'package:dotmac_portal/src/models/auth.dart';
+import 'package:dotmac_portal/src/models/addon.dart';
 import 'package:dotmac_portal/src/models/invoice.dart';
 import 'package:dotmac_portal/src/models/ledger.dart';
 import 'package:dotmac_portal/src/models/notification.dart';
 import 'package:dotmac_portal/src/models/page.dart';
+import 'package:dotmac_portal/src/models/payment_method.dart';
 import 'package:dotmac_portal/src/models/payment_flow.dart';
 import 'package:dotmac_portal/src/models/plan_change.dart';
 import 'package:dotmac_portal/src/models/session.dart';
@@ -242,6 +244,81 @@ void main() {
       });
       expect(t.isCredit, isFalse);
       expect(t.title, 'Charge');
+    });
+  });
+
+  group('AccountBalance', () {
+    test('positive credit / negative owes', () {
+      expect(AccountBalance.fromJson({'credit_balance': '2071.49'}).inCredit,
+          isTrue);
+      expect(AccountBalance.fromJson({'credit_balance': -500}).owes, isTrue);
+      final zero = AccountBalance.fromJson({'credit_balance': '0.00'});
+      expect(zero.inCredit, isFalse);
+      expect(zero.owes, isFalse);
+    });
+  });
+
+  group('Add-ons', () {
+    test('AddonsAvailable parses options + wallet (Decimal-as-string)', () {
+      final d = AddonsAvailable.fromJson({
+        'available': [
+          {
+            'add_on_id': 'a1',
+            'name': 'Static IP',
+            'addon_type': 'static_ip',
+            'amount': 2000.0,
+            'currency': 'NGN',
+            'min_quantity': 1,
+            'max_quantity': 3,
+          }
+        ],
+        'active': [
+          {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2}
+        ],
+        'wallet_balance': '2071.49',
+        'currency': 'NGN',
+      });
+      expect(d.available.single.maxQuantity, 3);
+      expect(d.active.single.quantity, 2);
+      expect(d.walletBalance, 2071.49);
+    });
+
+    test('AddonPurchaseResult flags insufficient balance', () {
+      final r = AddonPurchaseResult.fromJson({
+        'success': false,
+        'reason': 'insufficient_balance',
+        'charge': '4000.00',
+        'shortfall': '2000.00',
+        'currency': 'NGN',
+      });
+      expect(r.success, isFalse);
+      expect(r.insufficient, isTrue);
+      expect(r.shortfall, 2000.0);
+    });
+  });
+
+  group('SavedCard', () {
+    test('derives title and expiry, defaults', () {
+      final c = SavedCard.fromJson({
+        'id': 'p1',
+        'method_type': 'card',
+        'label': 'Visa •••• 4081',
+        'last4': '4081',
+        'brand': 'visa',
+        'expires_month': 8,
+        'expires_year': 2030,
+        'is_default': true,
+      });
+      expect(c.title, 'Visa •••• 4081');
+      expect(c.expiry, '08/30');
+      expect(c.isDefault, isTrue);
+    });
+
+    test('falls back to brand + last4 when no label', () {
+      final c = SavedCard.fromJson(
+          {'id': 'p2', 'brand': 'mastercard', 'last4': '1234'});
+      expect(c.title, 'mastercard •••• 1234');
+      expect(c.expiry, isNull);
     });
   });
 

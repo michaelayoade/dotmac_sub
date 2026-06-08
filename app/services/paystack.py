@@ -119,6 +119,62 @@ def initialize_transaction(
     return data["data"]
 
 
+def charge_authorization(
+    db: Session,
+    *,
+    authorization_code: str,
+    email: str,
+    amount_kobo: int,
+    reference: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Charge a previously-saved card authorization (server-to-server).
+
+    Used for autopay: charges a stored ``authorization_code`` without the
+    customer present. Returns the transaction ``data`` (``status`` is
+    "success" / "failed", plus ``reference``, ``amount`` …).
+
+    Args:
+        db: Database session for settings resolution.
+        authorization_code: Reusable card token from a prior charge.
+        email: Customer email the authorization belongs to.
+        amount_kobo: Amount in kobo (NGN × 100).
+        reference: Unique transaction reference.
+        metadata: Optional metadata dict.
+
+    Raises:
+        httpx.HTTPStatusError: On non-2xx response from Paystack.
+        ValueError: If the secret key is missing or the API reports failure.
+    """
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError("Paystack secret key is not configured")
+
+    payload: dict[str, Any] = {
+        "authorization_code": authorization_code,
+        "email": email,
+        "amount": amount_kobo,
+        "reference": reference,
+    }
+    if metadata:
+        payload["metadata"] = metadata
+
+    resp = httpx.post(
+        f"{PAYSTACK_API_BASE}/transaction/charge_authorization",
+        json=payload,
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    if not data.get("status"):
+        logger.error("Paystack charge_authorization failed: %s", data.get("message"))
+        raise ValueError(data.get("message", "Paystack charge failed"))
+
+    return data["data"]
+
+
 def verify_transaction(db: Session, reference: str) -> dict[str, Any]:
     """Verify a Paystack transaction by reference.
 
