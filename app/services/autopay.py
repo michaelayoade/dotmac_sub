@@ -12,6 +12,7 @@ from __future__ import annotations
 import builtins
 import logging
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -198,6 +199,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
         if _already_recorded(db, reference):
             continue
 
+        tx: dict[str, Any] | None
         try:
             tx = paystack.charge_authorization(
                 db,
@@ -212,13 +214,11 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
             # error after a prior capture). Recover the existing transaction so we
             # record it instead of re-charging on the next run.
             tx = _recover_charge(db, reference)
-            if tx is None:
-                logger.warning(
-                    "autopay charge errored for invoice %s", invoice.id, exc_info=True
-                )
-                failed += 1
-                continue
 
+        if tx is None:
+            logger.warning("autopay charge errored for invoice %s", invoice.id)
+            failed += 1
+            continue
         if str(tx.get("status")) != "success":
             failed += 1
             continue

@@ -251,8 +251,7 @@ def _bill_recurring_addons(
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
         .filter(SubscriptionAddOn.subscription_id == subscription.id)
         .filter(
-            (SubscriptionAddOn.end_at.is_(None))
-            | (SubscriptionAddOn.end_at > run_at)
+            (SubscriptionAddOn.end_at.is_(None)) | (SubscriptionAddOn.end_at > run_at)
         )
         .all()
     )
