@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry/sentry.dart';
 
 import '../config/env.dart';
 import '../core/api_client.dart';
+import '../core/api_exception.dart';
 import '../core/biometric_service.dart';
 import '../core/observability.dart';
 import '../core/token_storage.dart';
@@ -86,22 +89,70 @@ class AuthController extends StateNotifier<AuthState> {
   bool _promptActive = false;
 
   /// Restore a previous session on cold start.
+  ///
+  /// Optimistic: if we hold a cached profile we render straight to the
+  /// authenticated app and refresh `/auth/me` behind it, so the splash isn't
+  /// blocked on a (potentially slow) network round-trip. We only force the user
+  /// back to login when the server actively rejects the session (401/403) — a
+  /// transient network failure keeps the cached session rather than logging a
+  /// connected user out because their signal dropped.
   Future<void> bootstrap() async {
     final token = await _storage.readAccessToken();
     if (token == null) {
       state = AuthState.signedOut;
       return;
     }
+
+    final locked = await _shouldLockOnLaunch();
+    final cached = await _readCachedProfile();
+    if (cached != null) {
+      state = AuthState(
+        status: AuthStatus.authenticated,
+        me: cached,
+        locked: locked,
+      );
+    }
+
     try {
       final me = await _repo.me();
+      await _persistProfile(me);
       state = AuthState(
         status: AuthStatus.authenticated,
         me: me,
-        locked: await _shouldLockOnLaunch(),
+        locked: locked,
       );
+    } on ApiException catch (e) {
+      final rejected = e.statusCode == 401 || e.statusCode == 403;
+      if (rejected || cached == null) {
+        // Either the session is genuinely invalid, or we have no cached
+        // identity to fall back on — send the user to login.
+        await _storage.clear();
+        state = AuthState.signedOut;
+      }
+      // Otherwise: keep the optimistic cached session (offline / server down).
     } catch (_) {
-      await _storage.clear();
-      state = AuthState.signedOut;
+      if (cached == null) {
+        await _storage.clear();
+        state = AuthState.signedOut;
+      }
+    }
+  }
+
+  Future<Me?> _readCachedProfile() async {
+    final raw = await _storage.readProfile();
+    if (raw == null) return null;
+    try {
+      return Me.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _persistProfile(Me me) async {
+    try {
+      await _storage.saveProfile(jsonEncode(me.toJson()));
+    } catch (_) {
+      // Caching the profile is best-effort; never fail bootstrap over it.
     }
   }
 
@@ -201,6 +252,7 @@ class AuthController extends StateNotifier<AuthState> {
 
   Future<void> _loadMe() async {
     final me = await _repo.me();
+    await _persistProfile(me);
     state = AuthState(status: AuthStatus.authenticated, me: me);
     await Sentry.configureScope(
         (scope) => scope.setUser(SentryUser(id: me.id)));

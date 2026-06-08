@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
-import '../../models/invoice.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
-import 'payment_webview_screen.dart';
+import 'invoice_pay_button.dart';
 
 class InvoiceDetailScreen extends ConsumerWidget {
   const InvoiceDetailScreen({super.key, required this.invoiceId});
@@ -23,6 +22,7 @@ class InvoiceDetailScreen extends ConsumerWidget {
       body: AsyncValueView(
         value: invoice,
         onRetry: () => ref.invalidate(invoiceProvider(invoiceId)),
+        skeleton: const ListSkeleton(rows: 4),
         data: (inv) => ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -81,85 +81,11 @@ class InvoiceDetailScreen extends ConsumerWidget {
             ],
             if (!inv.isPaid) ...[
               const SizedBox(height: 24),
-              _PayButton(invoice: inv),
+              InvoicePayButton(invoice: inv),
             ],
           ],
         ),
       ),
-    );
-  }
-}
-
-/// Runs the full pay flow: initiate hosted checkout → provider WebView →
-/// verify → refresh the affected invoice/list providers.
-class _PayButton extends ConsumerStatefulWidget {
-  const _PayButton({required this.invoice});
-  final Invoice invoice;
-
-  @override
-  ConsumerState<_PayButton> createState() => _PayButtonState();
-}
-
-class _PayButtonState extends ConsumerState<_PayButton> {
-  bool _busy = false;
-
-  Future<void> _pay() async {
-    final inv = widget.invoice;
-    final repo = ref.read(billingRepositoryProvider);
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-
-    setState(() => _busy = true);
-    try {
-      final initiation = await repo.initiatePayment(inv.id);
-
-      if (!mounted) return;
-      final reference = await navigator.push<String>(
-        MaterialPageRoute(
-          builder: (_) =>
-              PaymentWebViewScreen(args: CheckoutArgs.invoice(initiation)),
-        ),
-      );
-      if (reference == null) return; // cancelled
-
-      final result = await repo.verifyPayment(
-        reference,
-        provider: initiation.providerType,
-      );
-
-      // Refresh anything that reflects the new payment.
-      ref.invalidate(invoiceProvider(inv.id));
-      ref.invalidate(invoicesProvider);
-      ref.invalidate(paymentsProvider);
-
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(result.succeeded
-              ? 'Payment of ${Fmt.money(result.amount, result.currency)} received'
-              : 'Payment recorded (${result.status})'),
-        ),
-      );
-    } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Payment failed: $e')));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final inv = widget.invoice;
-    return FilledButton.icon(
-      icon: _busy
-          ? const SizedBox(
-              height: 18,
-              width: 18,
-              child: CircularProgressIndicator(strokeWidth: 2))
-          : const Icon(Icons.payment),
-      label: Text('Pay ${Fmt.money(inv.balanceDue, inv.currency)}'),
-      onPressed: _busy ? null : _pay,
     );
   }
 }

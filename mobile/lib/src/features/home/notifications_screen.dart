@@ -1,11 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../models/notification.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/skeleton.dart';
+
+/// Best-effort deep-link target for a notification, derived from its
+/// event type / category / subject (the API carries no explicit resource link).
+/// Returns null when there's nothing actionable to open.
+String? notificationRoute(AppNotification n) {
+  final hay =
+      '${n.eventType ?? ''} ${n.category ?? ''} ${n.subject ?? ''}'
+          .toLowerCase();
+  bool has(List<String> words) => words.any(hay.contains);
+
+  if (has(['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {
+    return '/billing';
+  }
+  if (has(['ticket', 'support'])) return '/support';
+  if (has(['usage', 'quota', 'data', 'cap'])) return '/usage';
+  return null;
+}
 
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
@@ -43,6 +62,7 @@ class NotificationsScreen extends ConsumerWidget {
         child: AsyncValueView(
           value: notifications,
           onRetry: () => ref.invalidate(notificationsProvider),
+          skeleton: const ListSkeleton(hasLeading: true),
           data: (page) {
             if (page.items.isEmpty) {
               return ListView(
@@ -61,12 +81,15 @@ class NotificationsScreen extends ConsumerWidget {
               separatorBuilder: (_, __) => const SizedBox(height: 8),
               itemBuilder: (_, i) {
                 final n = page.items[i];
+                final route = notificationRoute(n);
                 return _NotificationCard(
                   n: n,
                   unread: !readIds.contains(n.id),
-                  onTap: () => ref
-                      .read(readNotificationsProvider.notifier)
-                      .markRead(n.id),
+                  hasAction: route != null,
+                  onTap: () {
+                    ref.read(readNotificationsProvider.notifier).markRead(n.id);
+                    if (route != null) context.go(route);
+                  },
                 );
               },
             );
@@ -81,10 +104,14 @@ class _NotificationCard extends StatelessWidget {
   const _NotificationCard({
     required this.n,
     required this.unread,
+    required this.hasAction,
     required this.onTap,
   });
   final AppNotification n;
   final bool unread;
+
+  /// Whether tapping opens a related screen (vs. just marking read).
+  final bool hasAction;
   final VoidCallback onTap;
 
   IconData get _icon => switch (n.channel) {
@@ -101,7 +128,7 @@ class _NotificationCard extends StatelessWidget {
     return Card(
       margin: EdgeInsets.zero,
       child: InkWell(
-        onTap: unread ? onTap : null,
+        onTap: (unread || hasAction) ? onTap : null,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(14),
@@ -151,6 +178,12 @@ class _NotificationCard extends StatelessWidget {
                     color: theme.colorScheme.primary,
                     shape: BoxShape.circle,
                   ),
+                ),
+              if (hasAction)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Icon(Icons.chevron_right,
+                      size: 18, color: theme.colorScheme.outline),
                 ),
             ],
           ),

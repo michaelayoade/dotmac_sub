@@ -7,6 +7,7 @@ import '../../models/session.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/skeleton.dart';
 
 class SessionsScreen extends ConsumerWidget {
   const SessionsScreen({super.key});
@@ -60,6 +61,7 @@ class SessionsScreen extends ConsumerWidget {
       body: AsyncValueView(
         value: sessions,
         onRetry: () => ref.invalidate(sessionsProvider),
+        skeleton: const ListSkeleton(hasLeading: true),
         data: (list) {
           final hasOthers = list.any((s) => !s.isCurrent);
           return RefreshIndicator(

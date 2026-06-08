@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/formatters.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 
 class TicketsScreen extends ConsumerWidget {
@@ -29,6 +30,7 @@ class TicketsScreen extends ConsumerWidget {
         child: AsyncValueView(
           value: tickets,
           onRetry: () => ref.invalidate(ticketsProvider),
+          skeleton: const ListSkeleton(),
           data: (page) {
             if (page.items.isEmpty) {
               return ListView(
