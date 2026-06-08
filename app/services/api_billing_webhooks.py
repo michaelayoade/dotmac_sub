@@ -281,9 +281,7 @@ def list_payment_webhook_dead_letters(
     """List parked webhook events, newest first. For the ops replay surface."""
     query = db.query(PaymentWebhookDeadLetter)
     if provider_type:
-        query = query.filter(
-            PaymentWebhookDeadLetter.provider_type == provider_type
-        )
+        query = query.filter(PaymentWebhookDeadLetter.provider_type == provider_type)
     if status:
         try:
             status_enum = PaymentWebhookDeadLetterStatus(status)

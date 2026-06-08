@@ -721,15 +721,11 @@ def olts_list_page_data(
                 "runtime_snmp_state": snmp_state,
                 "runtime_source": zabbix_health.get("runtime_source", "Local"),
                 "runtime_last_seen_at": zabbix_health.get("runtime_last_seen_at"),
-                "runtime_trigger_summary": zabbix_health.get(
-                    "runtime_trigger_summary"
-                ),
+                "runtime_trigger_summary": zabbix_health.get("runtime_trigger_summary"),
                 "runtime_ont_online": zabbix_health.get("runtime_ont_online"),
                 "runtime_ont_offline": zabbix_health.get("runtime_ont_offline"),
                 "runtime_ont_total": zabbix_health.get("runtime_ont_total"),
-                "runtime_ont_online_pct": zabbix_health.get(
-                    "runtime_ont_online_pct"
-                ),
+                "runtime_ont_online_pct": zabbix_health.get("runtime_ont_online_pct"),
                 "runtime_low_signal": zabbix_health.get("runtime_low_signal"),
                 "runtime_pon_up": zabbix_health.get("runtime_pon_up"),
                 "runtime_pon_total": zabbix_health.get("runtime_pon_total"),
@@ -775,19 +771,13 @@ def olts_list_page_data(
         ]
 
     attention_items = [
-        item
-        for item in olts
-        if item.get("runtime_health_state") == "attention"
+        item for item in olts if item.get("runtime_health_state") == "attention"
     ]
     healthy_count = sum(
-        1
-        for item in olts
-        if item.get("runtime_health_state") == "healthy"
+        1 for item in olts if item.get("runtime_health_state") == "healthy"
     )
     unmonitored_count = sum(
-        1
-        for item in olts
-        if item.get("runtime_health_state") == "unknown"
+        1 for item in olts if item.get("runtime_health_state") == "unknown"
     )
     total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 

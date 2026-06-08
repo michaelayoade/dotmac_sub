@@ -320,11 +320,7 @@ def _default_reseller_id(db: Session):
     own reseller row, which migration 116 guarantees exists. Falls back to any
     reseller so creation never hard-fails on a misconfigured deployment.
     """
-    house = (
-        db.query(Reseller.id)
-        .filter(Reseller.is_house.is_(True))
-        .first()
-    )
+    house = db.query(Reseller.id).filter(Reseller.is_house.is_(True)).first()
     if house:
         return house[0]
     any_reseller = db.query(Reseller.id).order_by(Reseller.created_at).first()
