@@ -19,6 +19,40 @@ from app.services.response import ListResponseMixin, list_response
 logger = logging.getLogger(__name__)
 
 
+def to_subscriber_directions(rx_bps, tx_bps) -> tuple[float, float]:
+    """Map raw NAS-interface throughput to subscriber-facing (download, upload).
+
+    bandwidth_samples store rx = NAS ingress = the subscriber's UPLOAD and
+    tx = NAS egress = the subscriber's DOWNLOAD. This is the single place that
+    encodes that convention — subscriber-facing code must never read
+    rx_bps/tx_bps directly to mean download/upload.
+    """
+    return float(tx_bps or 0), float(rx_bps or 0)
+
+
+def with_subscriber_directions(stats: dict) -> dict:
+    """Add explicit download_bps/upload_bps (+ peak/total) to a samples-based
+    stats dict, derived from its rx/tx fields via to_subscriber_directions."""
+    stats["download_bps"], stats["upload_bps"] = to_subscriber_directions(
+        stats.get("current_rx_bps", 0), stats.get("current_tx_bps", 0)
+    )
+    stats["peak_download_bps"], stats["peak_upload_bps"] = to_subscriber_directions(
+        stats.get("peak_rx_bps", 0), stats.get("peak_tx_bps", 0)
+    )
+    stats["total_download_bytes"] = int(stats.get("total_tx_bytes", 0) or 0)
+    stats["total_upload_bytes"] = int(stats.get("total_rx_bytes", 0) or 0)
+    return stats
+
+
+def add_directions_to_series(result: dict) -> dict:
+    """Add download_bps/upload_bps to each point of a samples-based series."""
+    for point in result.get("data", []) or []:
+        point["download_bps"], point["upload_bps"] = to_subscriber_directions(
+            point.get("rx_bps", 0), point.get("tx_bps", 0)
+        )
+    return result
+
+
 class BandwidthSamples(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: BandwidthSampleCreate):
@@ -407,6 +441,36 @@ class BandwidthSamples(ListResponseMixin):
         return {"data": data, "total": len(data), "source": source}
 
     @staticmethod
+    def _estimate_total_bytes_from_samples(
+        db: Session, subscription_id: str | UUID, start: datetime
+    ) -> tuple[int, int]:
+        """Approximate total bytes by integrating average throughput over the
+        sampled window (avg bits/s / 8 * span seconds).
+
+        Used when the metrics store has no byte totals but PostgreSQL has
+        samples — these totals were previously reported as 0.
+        """
+        row = (
+            db.query(
+                func.avg(BandwidthSample.rx_bps).label("avg_rx"),
+                func.avg(BandwidthSample.tx_bps).label("avg_tx"),
+                func.min(BandwidthSample.sample_at).label("first_at"),
+                func.max(BandwidthSample.sample_at).label("last_at"),
+            )
+            .filter(
+                BandwidthSample.subscription_id == subscription_id,
+                BandwidthSample.sample_at >= start,
+            )
+            .first()
+        )
+        if not row or not row.first_at or not row.last_at:
+            return 0, 0
+        span_seconds = max((row.last_at - row.first_at).total_seconds(), 0.0)
+        rx = int(float(row.avg_rx or 0) / 8 * span_seconds)
+        tx = int(float(row.avg_tx or 0) / 8 * span_seconds)
+        return rx, tx
+
+    @staticmethod
     async def get_bandwidth_stats(
         db: Session,
         subscription_id: str | UUID,
@@ -495,15 +559,28 @@ class BandwidthSamples(ListResponseMixin):
                     peak_rx_bps = float(pg_stats.peak_rx or 0)
                     peak_tx_bps = float(pg_stats.peak_tx or 0)
 
-            return {
-                "current_rx_bps": current_rx_bps,
-                "current_tx_bps": current_tx_bps,
-                "peak_rx_bps": peak_rx_bps,
-                "peak_tx_bps": peak_tx_bps,
-                "total_rx_bytes": total["rx_bytes"],
-                "total_tx_bytes": total["tx_bytes"],
-                "sample_count": sample_count_value,
-            }
+            total_rx_bytes = int(total.get("rx_bytes") or 0)
+            total_tx_bytes = int(total.get("tx_bytes") or 0)
+            # The metrics store often has no byte totals even when PostgreSQL
+            # has samples; integrate the samples rather than report 0.
+            if not total_rx_bytes and not total_tx_bytes and sample_count_value > 0:
+                total_rx_bytes, total_tx_bytes = (
+                    BandwidthSamples._estimate_total_bytes_from_samples(
+                        db, subscription_id, start
+                    )
+                )
+
+            return with_subscriber_directions(
+                {
+                    "current_rx_bps": current_rx_bps,
+                    "current_tx_bps": current_tx_bps,
+                    "peak_rx_bps": peak_rx_bps,
+                    "peak_tx_bps": peak_tx_bps,
+                    "total_rx_bytes": total_rx_bytes,
+                    "total_tx_bytes": total_tx_bytes,
+                    "sample_count": sample_count_value,
+                }
+            )
 
         except Exception as exc:
             logger.error(
@@ -533,15 +610,22 @@ class BandwidthSamples(ListResponseMixin):
                 .first()
             )
 
-            return {
-                "current_rx_bps": float(latest.rx_bps if latest else 0),
-                "current_tx_bps": float(latest.tx_bps if latest else 0),
-                "peak_rx_bps": float(stats.peak_rx or 0),
-                "peak_tx_bps": float(stats.peak_tx or 0),
-                "total_rx_bytes": 0,  # Can't easily calculate without VM
-                "total_tx_bytes": 0,
-                "sample_count": stats.count or 0,
-            }
+            total_rx_bytes, total_tx_bytes = (
+                BandwidthSamples._estimate_total_bytes_from_samples(
+                    db, subscription_id, start
+                )
+            )
+            return with_subscriber_directions(
+                {
+                    "current_rx_bps": float(latest.rx_bps if latest else 0),
+                    "current_tx_bps": float(latest.tx_bps if latest else 0),
+                    "peak_rx_bps": float(stats.peak_rx or 0),
+                    "peak_tx_bps": float(stats.peak_tx or 0),
+                    "total_rx_bytes": total_rx_bytes,
+                    "total_tx_bytes": total_tx_bytes,
+                    "sample_count": stats.count or 0,
+                }
+            )
 
     @staticmethod
     async def get_top_users(

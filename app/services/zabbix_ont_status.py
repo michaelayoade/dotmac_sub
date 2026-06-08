@@ -157,6 +157,10 @@ def _snapshot_cache_key_for_olt(olt_id: object) -> str:
     return app_cache.cache_key("ont-zabbix-snapshot", olt_id)
 
 
+def _summary_cache_key_for_olt(olt_id: object) -> str:
+    return app_cache.cache_key("ont-zabbix-summary", olt_id)
+
+
 def _serialize_snapshot(
     snapshot: dict[str, OntSignalData],
 ) -> dict[str, dict[str, object]]:
@@ -550,8 +554,14 @@ def refresh_all_olt_snapshots_cache(db: Session) -> dict[str, int]:
 def get_olt_ont_summary_from_zabbix(
     olt: OLTDevice,
     onts: list[OntUnit] | None = None,
+    *,
+    refresh: bool = False,
 ) -> dict[str, int | str]:
-    """Get online/offline ONT counts directly from Zabbix."""
+    """Get online/offline ONT counts directly from Zabbix.
+
+    ``refresh=True`` bypasses the cache read and forces a live fetch (and a
+    fresh cache write), so the background warmer keeps the TTL from lapsing.
+    """
     if not zabbix_configured() or not getattr(olt, "zabbix_host_id", None):
         return {
             "online_count": 0,
@@ -560,6 +570,15 @@ def get_olt_ont_summary_from_zabbix(
             "low_signal_count": 0,
             "error": "Zabbix not configured for this OLT",
         }
+
+    # Per-OLT summary cache: the monitoring dashboard fans this out across every
+    # OLT, and each live Zabbix call is slow; without caching that serialized to
+    # ~70s. The warmer (refresh=True) re-fetches so the cache never goes cold.
+    summary_cache_key = _summary_cache_key_for_olt(getattr(olt, "id", None))
+    if not refresh:
+        cached_summary = app_cache.get_json(summary_cache_key)
+        if isinstance(cached_summary, dict):
+            return cached_summary  # type: ignore[return-value]
 
     try:
         client = ZabbixClient.from_env()
@@ -631,4 +650,5 @@ def get_olt_ont_summary_from_zabbix(
         result["low_signal_count"] = low_signal
     elif result["total_count"] <= 0:
         result["total_count"] = result["online_count"] + result["offline_count"]
+    app_cache.set_json(summary_cache_key, result, _ont_snapshot_cache_ttl_seconds())
     return result  # type: ignore[return-value]

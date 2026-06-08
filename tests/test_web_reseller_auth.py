@@ -132,3 +132,30 @@ def test_reseller_login_returns_error_when_reset_token_not_generated(monkeypatch
 
     assert response.status_code == 401
     assert "Password reset required" in response.body.decode()
+
+
+def test_reseller_login_error_hides_http_status_prefix(monkeypatch):
+    request = _request()
+    db = object()
+
+    def _raise_invalid_credentials(*_args, **_kwargs):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    monkeypatch.setattr(
+        web_reseller_auth_service.reseller_portal,
+        "login",
+        _raise_invalid_credentials,
+    )
+
+    response = web_reseller_auth_service.reseller_login_submit(
+        request,
+        db,
+        "reseller@example.com",
+        "wrong-password",
+        remember=False,
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 401
+    assert "Wrong email/username or password." in body
+    assert "401: Invalid credentials" not in body

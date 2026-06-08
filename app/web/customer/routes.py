@@ -17,7 +17,7 @@ from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
-from app.services.bandwidth import bandwidth_samples
+from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_portal_context import (
     emit_customer_event,
     get_dashboard_template_context,
@@ -77,6 +77,11 @@ def _load_initial_bandwidth_stats(
         "current_tx_formatted": _format_bps(stats.get("current_tx_bps")),
         "peak_rx_formatted": _format_bps(stats.get("peak_rx_bps")),
         "peak_tx_formatted": _format_bps(stats.get("peak_tx_bps")),
+        # Explicit subscriber-perspective fields the templates bind to.
+        "current_download_formatted": _format_bps(stats.get("download_bps")),
+        "current_upload_formatted": _format_bps(stats.get("upload_bps")),
+        "peak_download_formatted": _format_bps(stats.get("peak_download_bps")),
+        "peak_upload_formatted": _format_bps(stats.get("peak_upload_bps")),
     }
 
 
@@ -243,42 +248,6 @@ def customer_support_add_comment(
 
 
 # ── Work Orders (CRM-backed) ─────────────────────────────────────────────
-
-
-@router.get("/work-orders", response_class=HTMLResponse)
-def customer_work_orders(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> Response:
-    """Customer work orders list (CRM-backed)."""
-    customer = get_current_customer_from_request(request, db)
-    if not customer:
-        return RedirectResponse(
-            url="/portal/auth/login?next=/portal/work-orders", status_code=303
-        )
-    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
-    context = crm_portal.work_orders_list_context(request, db, customer, subscriber_ids)
-    return templates.TemplateResponse("customer/work-orders/index.html", context)
-
-
-@router.get("/work-orders/{work_order_id}", response_class=HTMLResponse)
-def customer_work_order_detail(
-    request: Request,
-    work_order_id: str,
-    db: Session = Depends(get_db),
-) -> Response:
-    """Customer work order detail (CRM-backed)."""
-    customer = get_current_customer_from_request(request, db)
-    if not customer:
-        return RedirectResponse(
-            url=f"/portal/auth/login?next=/portal/work-orders/{quote_plus(work_order_id)}",
-            status_code=303,
-        )
-    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
-    context = crm_portal.work_order_detail_context(
-        request, db, customer, subscriber_ids, work_order_id
-    )
-    return templates.TemplateResponse("customer/work-orders/detail.html", context)
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -505,6 +474,8 @@ def customer_bandwidth_series(
                         ),
                         "rx_bps": point["download_bps"],
                         "tx_bps": point["upload_bps"],
+                        "download_bps": point["download_bps"],
+                        "upload_bps": point["upload_bps"],
                     }
                     for point in cached["graph"]
                 ],
@@ -526,7 +497,7 @@ def customer_bandwidth_series(
         end_at,
         interval,
     )
-    return JSONResponse(content=jsonable_encoder(result))
+    return JSONResponse(content=jsonable_encoder(add_directions_to_series(result)))
 
 
 @router.get("/bandwidth/my/stats")
@@ -583,6 +554,24 @@ def customer_bandwidth_stats(
                 ),
                 "sample_count": len(graph),
                 "source": "zabbix",
+                # Zabbix data is already subscriber-perspective (its rx is the
+                # subscriber's download); expose the explicit fields the UI reads.
+                "download_bps": float(latest.get("download_bps") or 0),
+                "upload_bps": float(latest.get("upload_bps") or 0),
+                "peak_download_bps": max(
+                    (float(point.get("download_bps") or 0) for point in graph),
+                    default=0,
+                ),
+                "peak_upload_bps": max(
+                    (float(point.get("upload_bps") or 0) for point in graph),
+                    default=0,
+                ),
+                "total_download_bytes": int(
+                    float(cached.get("totalDownloadGB") or 0) * (1024**3)
+                ),
+                "total_upload_bytes": int(
+                    float(cached.get("totalUploadGB") or 0) * (1024**3)
+                ),
             }
             return JSONResponse(stats)
     except Exception:
@@ -1527,6 +1516,29 @@ def customer_change_plan(
             "active_page": "services",
         },
     )
+
+
+@router.get("/services/{subscription_id}/change/quote", response_class=JSONResponse)
+def customer_change_plan_quote(
+    request: Request,
+    subscription_id: UUID,
+    offer_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Lazily compute the prorated plan-change quote for one target offer.
+
+    The change-plan page fetches this on offer selection instead of pricing the
+    whole catalog up front (which timed out for large catalogs).
+    """
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    quote = customer_portal.get_plan_change_quote(
+        db, customer, str(subscription_id), offer_id
+    )
+    if quote is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({"quote": quote})
 
 
 @router.post("/services/{subscription_id}/change", response_class=HTMLResponse)

@@ -132,11 +132,38 @@ def _ensure_reseller_setup(
         db.close()
 
 
+# Production hosts this destructive E2E suite must never run against. The tests
+# create and modify real data (offers, customers, subscriptions) through the live
+# UI/API, and have polluted prod before (the "E2E Phase 1" catalog offers + e2e
+# test subscribers on selfcare.dotmac.io). Configurable via env; override the
+# block only deliberately with PLAYWRIGHT_ALLOW_PRODUCTION=1.
+_PRODUCTION_HOSTS = {
+    h.strip().lower()
+    for h in os.getenv(
+        "PLAYWRIGHT_PRODUCTION_HOSTS", "selfcare.dotmac.io,selfcare1.dotmac.io"
+    ).split(",")
+    if h.strip()
+}
+
+
+def _guard_not_production(base_url: str) -> None:
+    host = (urlparse(base_url).hostname or "").lower()
+    if host in _PRODUCTION_HOSTS and os.getenv("PLAYWRIGHT_ALLOW_PRODUCTION") != "1":
+        pytest.fail(
+            f"Refusing to run the E2E suite against production host {host!r}: these "
+            "tests create and modify real data (offers, customers, subscriptions). "
+            "Point PLAYWRIGHT_BASE_URL at a disposable test/staging environment. "
+            "Override only deliberately with PLAYWRIGHT_ALLOW_PRODUCTION=1.",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(scope="session")
 def settings() -> E2ESettings:
     if os.getenv("PLAYWRIGHT_BASE_URL") is None:
         pytest.skip("Set PLAYWRIGHT_BASE_URL to run Playwright E2E tests.")
     settings = E2ESettings.from_env()
+    _guard_not_production(settings.base_url)
     expect.set_options(timeout=settings.expect_timeout_ms)
     return settings
 

@@ -12,9 +12,7 @@ from app.services import zabbix as zabbix_service
 
 def test_missing_token_config_fails_closed(monkeypatch):
     """Unconfigured secret -> 503, never silent acceptance of anonymous calls."""
-    monkeypatch.setattr(
-        zabbix_webhook, "get_zabbix_webhook_token", lambda: ""
-    )
+    monkeypatch.setattr(zabbix_webhook, "get_zabbix_webhook_token", lambda: "")
     with pytest.raises(HTTPException) as exc:
         zabbix_webhook._require_zabbix_webhook_token("anything")
     assert exc.value.status_code == 503

@@ -854,6 +854,42 @@ def test_list_accounts_pagination(db_session, reseller, subscriber):
     assert page1_ids.isdisjoint(page2_ids)
 
 
+def test_count_accounts_with_search_and_reseller_user_filter(db_session, reseller):
+    """Test count_accounts matches the filtered account list."""
+    from app.models.subscriber import Subscriber, UserType
+
+    db_session.add_all(
+        [
+            Subscriber(
+                first_name="Alice",
+                last_name="Account",
+                email="alice-count@example.com",
+                reseller_id=reseller.id,
+            ),
+            Subscriber(
+                first_name="Bob",
+                last_name="Account",
+                email="bob-count@example.com",
+                reseller_id=reseller.id,
+            ),
+            Subscriber(
+                first_name="Alice",
+                last_name="Portal",
+                email="alice-portal@example.com",
+                reseller_id=reseller.id,
+                user_type=UserType.reseller,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assert reseller_portal.count_accounts(db_session, str(reseller.id)) == 2
+    assert (
+        reseller_portal.count_accounts(db_session, str(reseller.id), search="Alice")
+        == 1
+    )
+
+
 # =============================================================================
 # Dashboard Summary Tests
 # =============================================================================

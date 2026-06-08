@@ -212,6 +212,14 @@ class PortVlanRead(PortVlanBase):
 
 
 class IPAssignmentBase(BaseModel):
+    # Accept BOTH the field name (subscriber_id) and the alias (account_id) on
+    # input. Without this, constructing by field name — e.g.
+    # IPAssignmentCreate(subscriber_id=...) in provisioning_helpers — silently
+    # dropped the value (validation_alias requires the alias), producing an
+    # IP assignment with subscriber_id=None and a NOT NULL violation that
+    # poisoned the event-dispatch session.
+    model_config = ConfigDict(populate_by_name=True)
+
     subscriber_id: UUID | None = Field(
         default=None,
         validation_alias="account_id",
@@ -245,6 +253,8 @@ class IPAssignmentCreate(IPAssignmentBase):
 
 
 class IPAssignmentUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )

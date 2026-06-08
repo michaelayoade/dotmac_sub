@@ -7,15 +7,17 @@ Tests the operation tracker on a fast-loading page.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://127.0.0.1:8001"
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+# Admin credentials — provide via env; never hardcode (esp. prod secrets).
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
 
 def get_session_cookie() -> str | None:

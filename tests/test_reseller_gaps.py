@@ -6,6 +6,7 @@ event system integration, revenue summary, and route registration.
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from app.services.events.types import EventType
@@ -437,6 +438,28 @@ class TestResellerProfile:
         db_session.commit()
         db_session.refresh(reseller)
         assert reseller.contact_email == "new@example.com"
+
+
+class TestResellerNavigation:
+    def test_nav_exposes_billing_and_profile_links(self) -> None:
+        layout = Path("templates/layouts/reseller.html").read_text()
+
+        assert 'href="/reseller/billing"' in layout
+        assert 'href="/reseller/profile"' in layout
+        assert "Profile Settings" in layout
+
+    def test_billing_links_to_revenue_summary(self) -> None:
+        billing = Path("templates/reseller/billing/index.html").read_text()
+        revenue = Path("templates/reseller/reports/revenue.html").read_text()
+
+        assert 'href="/reseller/reports/revenue"' in billing
+        assert 'href="/reseller/billing"' in revenue
+
+    def test_billing_does_not_show_generic_pay_now(self) -> None:
+        billing = Path("templates/reseller/billing/index.html").read_text()
+
+        assert "/reseller/billing/pay/intent" not in billing
+        assert "Pay now" not in billing
 
     def test_profile_update_changes_phone(self, db_session) -> None:
         from app.models.subscriber import Reseller

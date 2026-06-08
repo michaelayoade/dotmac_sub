@@ -10,6 +10,7 @@
         <form method="get" action="/reseller/accounts" class="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
             <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             <input type="text" name="search" value="{{ search }}" placeholder="Search accounts..." class="w-48 border-0 bg-transparent text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-0 dark:text-white dark:placeholder-slate-500">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
         </form>
     </div>
 </div>
@@ -122,6 +123,53 @@
                 </tbody>
             </table>
         </div>
+        {% if total_pages and total_pages > 1 %}
+        {% set search_param = '&search=' ~ (search | urlencode) if search else '' %}
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60 sm:flex-row">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Showing
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ ((page - 1) * per_page) + 1 }}</span>
+                to
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ [page * per_page, total] | min }}</span>
+                of
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span>
+                accounts
+            </p>
+            <div class="flex flex-wrap items-center justify-center gap-4">
+                <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                    <span>Show</span>
+                    <select onchange="window.location.href='/reseller/accounts?page=1&per_page=' + this.value + '{{ search_param }}'"
+                            class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 dark:bg-slate-700 dark:text-slate-300">
+                        {% for size in [10, 20, 50, 100] %}
+                        <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
+                        {% endfor %}
+                    </select>
+                    <span>rows</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    {% if has_prev %}
+                    <a href="/reseller/accounts?page={{ page - 1 }}&per_page={{ per_page }}{{ search_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
+                        Previous
+                    </a>
+                    {% endif %}
+                    <span class="text-sm text-slate-500 dark:text-slate-400">
+                        Page <span class="font-semibold text-slate-700 dark:text-slate-300">{{ page }}</span> of <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total_pages }}</span>
+                    </span>
+                    {% if has_next %}
+                    <a href="/reseller/accounts?page={{ page + 1 }}&per_page={{ per_page }}{{ search_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        Next
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

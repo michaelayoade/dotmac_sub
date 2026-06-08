@@ -1,6 +1,7 @@
 """Service helpers for reseller auth routes."""
 
 import logging
+import re
 from urllib.parse import urlencode
 
 from fastapi import Request
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 templates = get_reseller_templates()
 _RESELLER_RESET_LOGIN_PATH = "/reseller/auth/login?next=/reseller/dashboard"
+_HTTP_ERROR_PREFIX_RE = re.compile(r"^\d{3}:\s*")
 
 
 def _password_reset_email_for_identifier(db: Session, identifier: str) -> str:
@@ -53,6 +55,14 @@ def reseller_login_page(request: Request, error: str | None = None):
         "reseller/auth/login.html",
         {"request": request, "error": error},
     )
+
+
+def _login_error_message(exc: Exception) -> str:
+    error_msg = str(exc) if str(exc) else "Invalid credentials"
+    error_msg = _HTTP_ERROR_PREFIX_RE.sub("", error_msg, count=1)
+    if error_msg == "Invalid credentials":
+        return "Wrong email/username or password."
+    return error_msg
 
 
 def reseller_login_submit(
@@ -133,7 +143,7 @@ def reseller_login_submit(
                         url=f"/auth/reset-password?{query}",
                         status_code=303,
                     )
-        error_msg = str(exc) if str(exc) else "Invalid credentials"
+        error_msg = _login_error_message(exc)
         return templates.TemplateResponse(
             "reseller/auth/login.html",
             {"request": request, "error": error_msg},

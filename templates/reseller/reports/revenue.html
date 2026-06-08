@@ -3,7 +3,13 @@
 {% block page_header %}
 <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
     <div>
-        <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Revenue Summary</h1>
+        <div class="mb-2">
+            <a href="/reseller/billing" class="inline-flex items-center gap-1 text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                Billing
+            </a>
+        </div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Revenue summary</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Billing performance for <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ reseller.name }}</span></p>
     </div>
 </div>

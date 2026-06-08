@@ -486,12 +486,12 @@ class CPEDevices(CRUDManager[CPEDevice]):
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        subscriber_id: str | None = None,
         subscription_id: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         del subscription_id  # Reserved for legacy callers; CPEs are subscriber-scoped.
         query = db.query(CPEDevice).options(selectinload(CPEDevice.subscriber))
@@ -580,12 +580,12 @@ class Ports(CRUDManager[Port]):
     @staticmethod
     def list(
         db: Session,
+        device_id: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
         olt_id: str | None = None,
-        device_id: str | None = None,
         port_type: str | None = None,
         status: str | None = None,
         is_active: bool | None = None,
@@ -753,12 +753,12 @@ class PortVlans(CRUDManager[PortVlan]):
     @staticmethod
     def list(
         db: Session,
-        port_id: str | None,
-        vlan_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        port_id: str | None = None,
+        vlan_id: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(PortVlan)
         query = apply_optional_equals(

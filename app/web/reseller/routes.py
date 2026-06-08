@@ -109,6 +109,23 @@ def reseller_profile_update(
     )
 
 
+@router.post("/profile/mfa/setup", response_class=HTMLResponse)
+def reseller_mfa_setup(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_mfa_setup(request, db)
+
+
+@router.post("/profile/mfa/confirm", response_class=HTMLResponse)
+def reseller_mfa_confirm(
+    request: Request,
+    method_id: str = Form(...),
+    code: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_mfa_confirm(
+        request, db, method_id, code
+    )
+
+
 @router.get("/accounts/{account_id}/tickets", response_class=HTMLResponse)
 def reseller_account_tickets(
     request: Request,

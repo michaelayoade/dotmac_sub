@@ -6,10 +6,10 @@
 <div class="space-y-6" x-data='{
     selectedOlt: "{{ form_values.olt_device_id if form_values is defined and form_values else (item.olt_device_id|string if item and item.olt_device_id else '') }}",
     autoAuthorize: {{ 'true' if (form_values is defined and form_values and form_values.auto_authorize) or (item and item.auto_authorize) else 'false' }},
-    vlans: {{ vlans|map(attribute="__dict__")|list|tojson if vlans else "[]" }},
+    vlans: {{ vlans_json|tojson if vlans_json else "[]" }},
     filteredVlans() {
         if (!this.selectedOlt) return [];
-        return {{ vlans|selectattr("olt_device_id")|map(attribute="id")|list|tojson }}.length > 0 ?
+        return {{ vlans_json|selectattr("olt_device_id")|map(attribute="id")|list|tojson }}.length > 0 ?
             this.vlans.filter(v => v.olt_device_id === this.selectedOlt || !v.olt_device_id) : this.vlans;
     }
 }'>

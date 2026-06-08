@@ -1010,16 +1010,30 @@ class AlertRules(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        metric_type: str | None,
-        device_id: str | None,
-        interface_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        scope: str | None = None,
+        severity: str | None = None,
+        is_active: bool | None = None,
+        order_by: str = "name",
+        order_dir: str = "asc",
+        limit: int = 50,
+        offset: int = 0,
+        metric_type: str | None = None,
+        device_id: str | None = None,
+        interface_id: str | None = None,
     ):
         stmt = select(AlertRule)
+        if scope == "device":
+            stmt = stmt.where(AlertRule.device_id.isnot(None))
+        elif scope == "interface":
+            stmt = stmt.where(AlertRule.interface_id.isnot(None))
+        elif scope == "global":
+            stmt = stmt.where(
+                AlertRule.device_id.is_(None), AlertRule.interface_id.is_(None)
+            )
+        if severity:
+            stmt = stmt.where(
+                AlertRule.severity == validate_enum(severity, AlertSeverity, "severity")
+            )
         if metric_type:
             stmt = stmt.where(
                 AlertRule.metric_type
@@ -1245,8 +1259,11 @@ class AlertEvents(ListResponseMixin):
         return list(db.scalars(stmt).all())
 
 
-def get_onu_status_summary(db: Session) -> dict[str, int]:
+def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, int]:
     """Aggregate binary ONT monitoring status directly from Zabbix.
+
+    ``refresh=True`` forces a live per-OLT fetch (used by the background warmer)
+    instead of reading the per-OLT summary cache.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
@@ -1282,7 +1299,7 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
             .all()
         )
         monitored_ont_ids.update(str(ont.id) for ont in onts)
-        summary = get_olt_ont_summary_from_zabbix(olt, onts)
+        summary = get_olt_ont_summary_from_zabbix(olt, onts, refresh=refresh)
         if summary.get("total_count", 0):
             online += int(summary.get("online_count", 0) or 0)
             offline += int(summary.get("offline_count", 0) or 0)
@@ -1341,7 +1358,10 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
     ont_ids = [assignment.ont_unit_id for assignment in assignments]
     onts = db.query(OntUnit).filter(OntUnit.id.in_(ont_ids)).all() if ont_ids else []
     ont_by_id = {ont.id: ont for ont in onts}
-    snapshots = get_ont_snapshots_from_zabbix(db, onts)
+    # Page-render path: read cached snapshots only. A cold cache returns no
+    # outages rather than blocking the dashboard on a per-OLT live Zabbix
+    # fan-out; the cache is warmed by the snapshot/refresh paths.
+    snapshots = get_ont_snapshots_from_zabbix(db, onts, cached_only=True)
 
     port_offline: dict[str, list[dict]] = {}
     total_per_port: dict[str, int] = {}

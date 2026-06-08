@@ -170,12 +170,12 @@ class OltCardPorts(CRUDManager[OltCardPort]):
     @staticmethod
     def list(
         db: Session,
-        card_id: str | None,
-        port_type: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        card_id: str | None = None,
+        order_by: str = "port_number",
+        order_dir: str = "asc",
+        limit: int = 50,
+        offset: int = 0,
+        port_type: str | None = None,
     ) -> list[OltCardPort]:
         stmt = select(OltCardPort)
         stmt = apply_optional_equals(stmt, {OltCardPort.card_id: card_id})

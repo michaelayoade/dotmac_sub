@@ -669,6 +669,7 @@ async def domain_routing_middleware(request: Request, call_next):
 # CSRF Protection paths - protect all web portals and auth forms
 _CSRF_PROTECTED_PATHS = ["/admin/", "/web/", "/portal/", "/reseller/", "/auth/"]
 _CSRF_EXEMPT_PATHS = ["/api/", "/health", "/metrics", "/static/"]
+_CSRF_EXEMPT_EXACT_PATHS = {"/portal/auth/logout"}
 _WEB_AUTH_REFRESH_PATHS = ("/admin/", "/web/")
 _WEB_AUTH_REFRESH_EXEMPT_PATHS = (
     "/auth/",
@@ -779,7 +780,9 @@ async def csrf_middleware(request: Request, call_next):
     method = request.method.upper()
 
     # Skip CSRF for exempt paths
-    if any(path.startswith(exempt) for exempt in _CSRF_EXEMPT_PATHS):
+    if path in _CSRF_EXEMPT_EXACT_PATHS or any(
+        path.startswith(exempt) for exempt in _CSRF_EXEMPT_PATHS
+    ):
         try:
             return await call_next(request)
         except RuntimeError as exc:

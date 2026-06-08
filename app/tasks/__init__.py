@@ -35,6 +35,7 @@ from app.tasks.monitoring_cleanup import (
 from app.tasks.monitoring_cleanup import (
     sync_nas_to_monitoring as sync_nas_devices_to_monitoring,
 )
+from app.tasks.monitoring_warm import warm_monitoring_caches
 from app.tasks.mrr import snapshot_mrr
 from app.tasks.nas import (
     check_nas_health,
@@ -219,4 +220,5 @@ __all__ = [
     "process_deferred_olt_operations",
     "retry_failed_operations",
     "execute_due_profile_sync_tasks",
+    "warm_monitoring_caches",
 ]

@@ -1,16 +1,17 @@
 """Capture screenshots for the DotMac Sub user guide using Playwright."""
 
+import os
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8001")
 OUT_DIR = Path("docs/guide_screenshots")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Admin credentials
-ADMIN_USER = "admin"
-ADMIN_PASS = "admin123"
+# Admin credentials — provide via env; never hardcode (esp. prod secrets).
+ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "")
 
 
 def capture(page, name: str, url: str, *, wait: int = 1500, full_page: bool = False):

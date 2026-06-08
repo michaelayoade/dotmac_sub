@@ -140,12 +140,12 @@ class FiberSpliceClosures(CRUDManager[FiberSpliceClosure]):
     @staticmethod
     def list(
         db: Session,
+        is_active: bool | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
         name: str | None = None,
-        is_active: bool | None = None,
     ):
         query = db.query(FiberSpliceClosure)
         query = apply_optional_ilike(query, {FiberSpliceClosure.name: name})
@@ -182,16 +182,28 @@ class FiberSplices(CRUDManager[FiberSplice]):
     @staticmethod
     def list(
         db: Session,
+        closure_id: str | None = None,
+        strand_id: str | None = None,
         order_by: str = "created_at",
-        order_dir: str = "asc",
+        order_dir: str = "desc",
         limit: int = 20,
         offset: int = 0,
         tray_id: str | None = None,
     ):
         query = db.query(FiberSplice)
         query = apply_optional_equals(
-            query, {FiberSplice.tray_id: coerce_uuid(tray_id)}
+            query,
+            {
+                FiberSplice.tray_id: coerce_uuid(tray_id),
+                FiberSplice.closure_id: coerce_uuid(closure_id),
+            },
         )
+        if strand_id:
+            strand_uuid = coerce_uuid(strand_id)
+            query = query.filter(
+                (FiberSplice.from_strand_id == strand_uuid)
+                | (FiberSplice.to_strand_id == strand_uuid)
+            )
         query = apply_ordering(
             query,
             order_by,
@@ -256,11 +268,11 @@ class FiberSpliceTrays(CRUDManager[FiberSpliceTray]):
     @staticmethod
     def list(
         db: Session,
+        closure_id: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
-        closure_id: str | None = None,
     ):
         query = db.query(FiberSpliceTray)
         query = apply_optional_equals(
@@ -299,12 +311,12 @@ class FiberTerminationPoints(CRUDManager[FiberTerminationPoint]):
     @staticmethod
     def list(
         db: Session,
+        endpoint_type: str | None = None,
+        is_active: bool | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
-        endpoint_type: str | None = None,
-        is_active: bool | None = None,
     ):
         query = db.query(FiberTerminationPoint)
         if endpoint_type:

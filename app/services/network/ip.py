@@ -69,18 +69,21 @@ class IPAssignments(CRUDManager[IPAssignment]):
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        subscriber_id: str | None = None,
+        subscription_id: str | None = None,
+        ip_version: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+        is_active: bool | None = None,
     ):
         query = db.query(IPAssignment)
         query = apply_optional_equals(
             query,
             {
                 IPAssignment.subscriber_id: subscriber_id,
+                IPAssignment.ip_version: ip_version,
             },
         )
         query = apply_active_state(query, IPAssignment.is_active, is_active)
@@ -232,12 +235,12 @@ class IPv4Addresses(CRUDManager[IPv4Address]):
     @staticmethod
     def list(
         db: Session,
-        pool_id: str | None,
-        is_reserved: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        pool_id: str | None = None,
+        is_reserved: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(IPv4Address)
         query = apply_optional_equals(
@@ -275,12 +278,12 @@ class IPv6Addresses(CRUDManager[IPv6Address]):
     @staticmethod
     def list(
         db: Session,
-        pool_id: str | None,
-        is_reserved: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        pool_id: str | None = None,
+        is_reserved: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(IPv6Address)
         query = apply_optional_equals(

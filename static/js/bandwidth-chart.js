@@ -57,12 +57,12 @@ function bandwidthChart(config = {}) {
 
         // Data
         seriesData: [],
-        currentRx: 0,
-        currentTx: 0,
-        peakRx: 0,
-        peakTx: 0,
-        totalRx: 0,
-        totalTx: 0,
+        currentDownload: 0,
+        currentUpload: 0,
+        peakDownload: 0,
+        peakUpload: 0,
+        totalDownload: 0,
+        totalUpload: 0,
 
         // Time range
         timeRange: '24h',
@@ -74,12 +74,12 @@ function bandwidthChart(config = {}) {
         ],
 
         // Computed
-        get currentRxFormatted() { return formatBps(this.currentRx); },
-        get currentTxFormatted() { return formatBps(this.currentTx); },
-        get peakRxFormatted() { return formatBps(this.peakRx); },
-        get peakTxFormatted() { return formatBps(this.peakTx); },
-        get totalRxFormatted() { return formatBytes(this.totalRx); },
-        get totalTxFormatted() { return formatBytes(this.totalTx); },
+        get currentDownloadFormatted() { return formatBps(this.currentDownload); },
+        get currentUploadFormatted() { return formatBps(this.currentUpload); },
+        get peakDownloadFormatted() { return formatBps(this.peakDownload); },
+        get peakUploadFormatted() { return formatBps(this.peakUpload); },
+        get totalDownloadFormatted() { return formatBytes(this.totalDownload); },
+        get totalUploadFormatted() { return formatBytes(this.totalUpload); },
 
         formatTimeLabel(timestamp) {
             const dt = new Date(timestamp);
@@ -173,12 +173,12 @@ function bandwidthChart(config = {}) {
                 const statsResponse = await fetch(statsUrl);
                 if (statsResponse.ok) {
                     const stats = await statsResponse.json();
-                    this.currentRx = stats.current_rx_bps || 0;
-                    this.currentTx = stats.current_tx_bps || 0;
-                    this.peakRx = stats.peak_rx_bps || 0;
-                    this.peakTx = stats.peak_tx_bps || 0;
-                    this.totalRx = stats.total_rx_bytes || 0;
-                    this.totalTx = stats.total_tx_bytes || 0;
+                    this.currentDownload = stats.download_bps || 0;
+                    this.currentUpload = stats.upload_bps || 0;
+                    this.peakDownload = stats.peak_download_bps || 0;
+                    this.peakUpload = stats.peak_upload_bps || 0;
+                    this.totalDownload = stats.total_download_bytes || 0;
+                    this.totalUpload = stats.total_upload_bytes || 0;
                 }
 
                 this.loading = false;
@@ -207,8 +207,9 @@ function bandwidthChart(config = {}) {
 
             // Prepare data
             const labels = this.seriesData.map(d => this.formatTimeLabel(d.timestamp));
-            const rxData = this.seriesData.map(d => d.rx_bps / 1000000); // Convert to Mbps
-            const txData = this.seriesData.map(d => d.tx_bps / 1000000);
+            // API provides explicit subscriber-perspective download/upload.
+            const downloadData = this.seriesData.map(d => (d.download_bps || 0) / 1000000); // Mbps
+            const uploadData = this.seriesData.map(d => (d.upload_bps || 0) / 1000000);
             const sparseSeries = labels.length <= 1;
 
             const data = {
@@ -216,7 +217,7 @@ function bandwidthChart(config = {}) {
                 datasets: [
                     {
                         label: 'Download',
-                        data: rxData,
+                        data: downloadData,
                         color: DotmacCharts.colors.accent[500],
                         fillColor: DotmacCharts.colors.accent[500] + '40',
                         fill: true,
@@ -224,7 +225,7 @@ function bandwidthChart(config = {}) {
                     },
                     {
                         label: 'Upload',
-                        data: txData,
+                        data: uploadData,
                         color: DotmacCharts.colors.primary[500],
                         fillColor: DotmacCharts.colors.primary[500] + '40',
                         fill: true,
@@ -298,12 +299,12 @@ function bandwidthChart(config = {}) {
                     if (this.isDestroyed || this.eventSource !== source) return;
                     const data = parseSsePayload(event.data);
                     if (!data) return;
-                    this.currentRx = data.rx_bps || 0;
-                    this.currentTx = data.tx_bps || 0;
+                    this.currentDownload = data.download_bps || 0;
+                    this.currentUpload = data.upload_bps || 0;
 
                     // Update peak if necessary
-                    if (this.currentRx > this.peakRx) this.peakRx = this.currentRx;
-                    if (this.currentTx > this.peakTx) this.peakTx = this.currentTx;
+                    if (this.currentDownload > this.peakDownload) this.peakDownload = this.currentDownload;
+                    if (this.currentUpload > this.peakUpload) this.peakUpload = this.currentUpload;
 
                     // Add new point to chart
                     if (this.chart && this.chart.data.labels) {
@@ -315,8 +316,8 @@ function bandwidthChart(config = {}) {
                         }
                         const now = new Date();
                         this.chart.data.labels.push(this.formatTimeLabel(now));
-                        this.chart.data.datasets[0].data.push(this.currentRx / 1000000);
-                        this.chart.data.datasets[1].data.push(this.currentTx / 1000000);
+                        this.chart.data.datasets[0].data.push(this.currentDownload / 1000000);
+                        this.chart.data.datasets[1].data.push(this.currentUpload / 1000000);
 
                         // Keep chart lightweight to avoid client-side rendering loops.
                         const maxPoints = 900;
@@ -372,8 +373,8 @@ function bandwidthWidget(config = {}) {
         apiBasePath: config.apiBasePath || '/api/v1/bandwidth',
         useMyEndpoints: config.useMyEndpoints || false,
 
-        currentRx: 0,
-        currentTx: 0,
+        currentDownload: 0,
+        currentUpload: 0,
         loading: true,
         eventSource: null,
         reconnectTimer: null,
@@ -381,8 +382,8 @@ function bandwidthWidget(config = {}) {
         consecutiveErrors: 0,
         maxConsecutiveErrors: 3,
 
-        get currentRxFormatted() { return formatBps(this.currentRx); },
-        get currentTxFormatted() { return formatBps(this.currentTx); },
+        get currentDownloadFormatted() { return formatBps(this.currentDownload); },
+        get currentUploadFormatted() { return formatBps(this.currentUpload); },
 
         async init() {
             this.isDestroyed = false;
@@ -422,8 +423,8 @@ function bandwidthWidget(config = {}) {
                 const response = await fetch(endpoint);
                 if (response.ok) {
                     const stats = await response.json();
-                    this.currentRx = stats.current_rx_bps || 0;
-                    this.currentTx = stats.current_tx_bps || 0;
+                    this.currentDownload = stats.download_bps || 0;
+                    this.currentUpload = stats.upload_bps || 0;
                     this.loading = false;
                     return true;
                 }
@@ -451,8 +452,8 @@ function bandwidthWidget(config = {}) {
                     if (this.isDestroyed || this.eventSource !== source) return;
                     const data = parseSsePayload(event.data);
                     if (!data) return;
-                    this.currentRx = data.rx_bps || 0;
-                    this.currentTx = data.tx_bps || 0;
+                    this.currentDownload = data.download_bps || 0;
+                    this.currentUpload = data.upload_bps || 0;
                     this.consecutiveErrors = 0;
                 });
 

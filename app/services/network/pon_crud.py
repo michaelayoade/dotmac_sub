@@ -155,13 +155,13 @@ class PonPorts(CRUDManager[PonPort]):
     @staticmethod
     def list(
         db: Session,
+        olt_id: str | None = None,
+        is_active: bool | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
         card_id: str | None = None,
-        olt_id: str | None = None,
-        is_active: bool | None = None,
     ) -> list[PonPort]:
         stmt = select(PonPort)
         if card_id:

@@ -827,6 +827,22 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(ont_snapshot_cache_seconds, 60),
         )
+        # Keep the per-OLT Zabbix summary cache the monitoring dashboard reads
+        # hot. Default 120s, below the 180s snapshot/summary cache TTL, so a
+        # viewer never lands on a cold cache and pays the live per-OLT fan-out.
+        monitoring_summary_warm_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_summary_warm_interval_seconds",
+            120,
+        )
+        _sync_scheduled_task(
+            session,
+            name="monitoring_summary_cache_warm",
+            task_name="app.tasks.monitoring_warm.warm_monitoring_caches",
+            enabled=True,
+            interval_seconds=max(monitoring_summary_warm_seconds, 30),
+        )
         _retire_scheduled_task(
             session,
             "app.tasks.ont_discovery.discover_all_olt_onts",

@@ -1,15 +1,17 @@
 """Capture screenshots for the Admin Operations Guide with highlighted areas."""
 
+import os
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8001")
 OUT_DIR = Path("docs/guide_screenshots/ops")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-ADMIN_USER = "admin"
-ADMIN_PASS = "admin123"
+# Admin credentials — provide via env; never hardcode (esp. prod secrets).
+ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "")
 
 
 def capture(page, name, url, *, wait=2000, full_page=True, highlight_selectors=None):

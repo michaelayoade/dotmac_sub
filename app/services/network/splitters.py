@@ -46,12 +46,12 @@ class FdhCabinets(CRUDManager[FdhCabinet]):
     @staticmethod
     def list(
         db: Session,
+        region_id: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
         name: str | None = None,
-        region_id: str | None = None,
         is_active: bool | None = None,
     ):
         query = db.query(FdhCabinet)
@@ -89,14 +89,13 @@ class Splitters(CRUDManager[Splitter]):
     @staticmethod
     def list(
         db: Session,
+        fdh_id: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
         name: str | None = None,
         fdh_cabinet_id: str | None = None,
-        # Backwards-compat alias used by older tests/callers.
-        fdh_id: str | None = None,
         is_active: bool | None = None,
     ):
         if fdh_id and not fdh_cabinet_id:
@@ -137,12 +136,12 @@ class SplitterPorts(CRUDManager[SplitterPort]):
     @staticmethod
     def list(
         db: Session,
+        splitter_id: str | None = None,
+        port_type: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "asc",
         limit: int = 20,
         offset: int = 0,
-        splitter_id: str | None = None,
-        port_type: str | None = None,
         is_active: bool | None = None,
     ):
         query = db.query(SplitterPort)

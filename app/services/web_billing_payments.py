@@ -1104,6 +1104,32 @@ def process_payment_update_with_audit(
     return result
 
 
+def process_payment_refund_with_audit(db: Session, request, *, payment_id: str) -> None:
+    """Mark a succeeded payment as refunded and recompute the linked invoice(s).
+
+    Powers the one-click Refund button. mark_status recomputes the allocated
+    invoices, so the invoice reverts from paid to issued/overdue automatically.
+    """
+    from fastapi import HTTPException
+
+    payment = billing_service.payments.get(db=db, payment_id=payment_id)
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if payment.status != PaymentStatus.succeeded:
+        raise HTTPException(
+            status_code=400, detail="Only succeeded payments can be refunded"
+        )
+    billing_service.payments.mark_status(db, payment_id, PaymentStatus.refunded)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="refund",
+        entity_type="payment",
+        entity_id=payment_id,
+        actor_id=_actor_id(request),
+    )
+
+
 def process_payment_import_payload_with_audit(
     db: Session,
     request,
