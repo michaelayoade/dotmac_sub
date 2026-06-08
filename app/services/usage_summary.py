@@ -86,15 +86,22 @@ def _subscriber_tz(db: Session, subscriber_id: str) -> ZoneInfo:
 
 def _truncate(ts: datetime, bucket: str, tz: ZoneInfo) -> datetime:
     """Floor ``ts`` to the bucket boundary in ``tz`` (so days/hours align to the
-    subscriber's local clock), returned as the canonical UTC instant."""
+    subscriber's local clock), returned as the canonical UTC instant.
+
+    DST-safe: the boundary is built as a *naive* local wall time and then
+    localized fresh, so its UTC offset is resolved for the boundary itself rather
+    than carried over from ``ts`` (which can differ across a transition, e.g. an
+    afternoon in DST vs. that day's standard-time midnight). ``fold=0`` collapses
+    an ambiguous wall time — the hour repeated at a fall-back transition — to a
+    single canonical bucket instead of two same-labelled bars."""
     local = ts.astimezone(tz)
     if bucket == "minute":
-        local = local.replace(second=0, microsecond=0)
+        wall = local.replace(second=0, microsecond=0, tzinfo=None)
     elif bucket == "hour":
-        local = local.replace(minute=0, second=0, microsecond=0)
+        wall = local.replace(minute=0, second=0, microsecond=0, tzinfo=None)
     else:  # day
-        local = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    return local.astimezone(UTC)
+        wall = local.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    return wall.replace(tzinfo=tz, fold=0).astimezone(UTC)
 
 
 def _integrate(

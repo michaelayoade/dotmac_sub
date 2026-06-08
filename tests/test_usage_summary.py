@@ -8,6 +8,7 @@ totals for cycle (quota) and all (session octets).
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import HTTPException
@@ -81,6 +82,24 @@ def test_truncate_day_and_hour():
     ts = datetime(2026, 6, 1, 13, 37, 5, tzinfo=UTC)
     assert svc._truncate(ts, "hour", UTC) == datetime(2026, 6, 1, 13, 0, tzinfo=UTC)
     assert svc._truncate(ts, "day", UTC) == datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+
+
+def test_truncate_is_dst_safe():
+    ny = ZoneInfo("America/New_York")
+    # Spring-forward day: the afternoon is EDT (-4) but that day's midnight is
+    # still EST (-5), so local midnight is 05:00 UTC, not 04:00.
+    afternoon = datetime(2025, 3, 9, 15, 0, tzinfo=ny)
+    assert svc._truncate(afternoon, "day", ny) == datetime(
+        2025, 3, 9, 5, 0, tzinfo=UTC
+    )
+    # Fall-back day: 01:30 occurs twice (EDT then EST). Both must collapse to a
+    # single canonical hour bucket rather than two same-labelled bars.
+    first = datetime(2025, 11, 2, 1, 30, fold=0, tzinfo=ny)
+    second = datetime(2025, 11, 2, 1, 30, fold=1, tzinfo=ny)
+    assert svc._truncate(first, "hour", ny) == svc._truncate(second, "hour", ny)
+    assert svc._truncate(second, "hour", ny) == datetime(
+        2025, 11, 2, 5, 0, tzinfo=UTC
+    )
 
 
 # --- service against the DB -----------------------------------------------
