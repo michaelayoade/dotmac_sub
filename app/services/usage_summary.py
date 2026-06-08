@@ -35,9 +35,16 @@ logger = logging.getLogger(__name__)
 
 PERIODS = ("hour", "today", "week", "cycle", "all")
 
-# Don't fill a gap between samples longer than this with a flat throughput
-# estimate — a long quiet stretch means no traffic, not sustained traffic.
-_MAX_GAP_SECONDS = 900
+# A gap between consecutive points beyond this multiple of the series' typical
+# (median) spacing is treated as idle and skipped rather than filled with a flat
+# throughput estimate. Relative to spacing — not a fixed cap — so coarse sources
+# aren't wrongly dropped: VictoriaMetrics uses an hourly step for >30-day windows
+# and RADIUS interim intervals can be 15-30 min, both of which a fixed 15-min cap
+# would silently discard (blank chart / undercount).
+_GAP_MULTIPLE = 3.0
+# ...but never skip gaps shorter than this, so dense (1s/1m) sampling isn't
+# fragmented by brief quiet stretches.
+_MIN_GAP_CAP_SECONDS = 900
 _GB_BYTES = 1024**3
 
 
@@ -70,14 +77,31 @@ def _truncate(ts: datetime, bucket: str) -> datetime:
 def _integrate(points: list[tuple[datetime, float, float]], bucket: str) -> dict:
     """Integrate a throughput series (sample_at, rx_bps, tx_bps) into bytes per
     bucket. Volume in each segment = avg bits/s / 8 * elapsed seconds, attributed
-    to the bucket of the segment's start. Gaps over the cap are skipped.
+    to the bucket of the segment's start.
+
+    Gaps far larger than the series' typical spacing are treated as idle and
+    skipped (see _GAP_MULTIPLE) — relative to spacing so regularly-spaced coarse
+    series (hourly VM buckets, sparse interims) are kept rather than dropped.
     """
     out: dict[datetime, float] = {}
+    if len(points) < 2:
+        return out
+
+    gaps = sorted(
+        dt
+        for dt in (
+            (points[i + 1][0] - points[i][0]).total_seconds()
+            for i in range(len(points) - 1)
+        )
+        if dt > 0
+    )
+    typical = gaps[len(gaps) // 2] if gaps else 0.0
+    cap = max(typical * _GAP_MULTIPLE, _MIN_GAP_CAP_SECONDS)
+
     for i in range(len(points) - 1):
         t0, rx, tx = points[i]
-        t1 = points[i + 1][0]
-        dt = (t1 - t0).total_seconds()
-        if dt <= 0 or dt > _MAX_GAP_SECONDS:
+        dt = (points[i + 1][0] - t0).total_seconds()
+        if dt <= 0 or dt > cap:
             continue
         seg_bytes = (rx + tx) / 8.0 * dt
         key = _truncate(t0, bucket)

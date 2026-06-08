@@ -36,13 +36,31 @@ def test_integrate_sums_volume_and_buckets_by_minute():
     assert buckets == {base: 66000.0}
 
 
-def test_integrate_skips_long_gaps():
+def test_integrate_skips_gaps_far_above_typical_spacing():
     base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    # Three 60s-spaced points then a 5000s idle gap. The 60s spacing is typical,
+    # so only the anomalous gap is dropped (its 5,000,000-byte segment excluded).
     points = [
         (base, 8000.0, 0.0),
-        (base + timedelta(seconds=5000), 8000.0, 0.0),  # > _MAX_GAP_SECONDS
+        (base + timedelta(seconds=60), 8000.0, 0.0),
+        (base + timedelta(seconds=120), 8000.0, 0.0),
+        (base + timedelta(seconds=5120), 8000.0, 0.0),
     ]
-    assert svc._integrate(points, "minute") == {}
+    buckets = svc._integrate(points, "minute")
+    # Two kept 60s segments (60000 bytes each); the idle gap is not filled.
+    assert sum(buckets.values()) == 120000.0
+
+
+def test_integrate_keeps_regularly_spaced_coarse_series():
+    # Hourly VM buckets (>30-day cycle): a fixed 15-min cap would drop every
+    # segment. Spacing-relative keeps them.
+    base = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
+    points = [
+        (base + timedelta(hours=h), 8000.0, 0.0) for h in range(4)
+    ]
+    buckets = svc._integrate(points, "day")
+    # 3 one-hour segments at 8000 bps -> 8000/8*3600 = 3.6e6 bytes each.
+    assert sum(buckets.values()) == 3 * (8000 / 8 * 3600)
 
 
 def test_truncate_day_and_hour():
