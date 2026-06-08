@@ -1259,8 +1259,11 @@ class AlertEvents(ListResponseMixin):
         return list(db.scalars(stmt).all())
 
 
-def get_onu_status_summary(db: Session) -> dict[str, int]:
+def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, int]:
     """Aggregate binary ONT monitoring status directly from Zabbix.
+
+    ``refresh=True`` forces a live per-OLT fetch (used by the background warmer)
+    instead of reading the per-OLT summary cache.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
@@ -1296,7 +1299,7 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
             .all()
         )
         monitored_ont_ids.update(str(ont.id) for ont in onts)
-        summary = get_olt_ont_summary_from_zabbix(olt, onts)
+        summary = get_olt_ont_summary_from_zabbix(olt, onts, refresh=refresh)
         if summary.get("total_count", 0):
             online += int(summary.get("online_count", 0) or 0)
             offline += int(summary.get("offline_count", 0) or 0)
