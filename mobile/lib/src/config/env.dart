@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+
 /// Runtime configuration.
 ///
 /// Override the API base URL at build/run time, e.g.:
@@ -37,5 +39,45 @@ class Env {
       return pathOrUrl;
     }
     return '$apiBaseUrl$pathOrUrl';
+  }
+}
+
+/// White-label brand config, supplied at build time from the shared
+/// `brand.json` at the repo root:
+///   flutter build apk --dart-define-from-file=../brand.json
+///
+/// Keys mirror the backend's brand.json so a single file drives web and mobile.
+/// App identity (applicationId / bundle id / launcher icon) is native build
+/// config set via Flutter flavors, not here.
+class Brand {
+  const Brand._();
+
+  static const String name = String.fromEnvironment('BRAND_MOBILE_APP_NAME',
+      defaultValue: 'DotMac Self-Care');
+
+  static const String tagline = String.fromEnvironment(
+    'BRAND_TAGLINE',
+    defaultValue: 'Sign in to manage your service',
+  );
+
+  /// Hex brand colour (e.g. `#3b82f6`) used as the Material seed colour.
+  static const String _primaryColorHex =
+      String.fromEnvironment('BRAND_PRIMARY_COLOR', defaultValue: '#3b82f6');
+
+  /// Custom URL scheme the payment WebView uses for success/cancel callbacks
+  /// (e.g. `dotmacpay`). Kept unique per brand so two white-label apps on one
+  /// device don't collide.
+  static const String paymentScheme =
+      String.fromEnvironment('BRAND_PAYMENT_SCHEME', defaultValue: 'dotmacpay');
+
+  /// Parsed seed colour; falls back to a blue if the hex is malformed.
+  static Color get primaryColor => _parseHexColor(_primaryColorHex);
+
+  static Color _parseHexColor(String hex) {
+    var value = hex.trim();
+    if (value.startsWith('#')) value = value.substring(1);
+    if (value.length == 6) value = 'FF$value';
+    final parsed = int.tryParse(value, radix: 16);
+    return Color(parsed ?? 0xFF3B82F6);
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../config/env.dart';
 import '../../models/payment_flow.dart';
 import '../../models/topup.dart';
 
@@ -52,8 +53,9 @@ class CheckoutArgs {
 
 /// Hosts the payment provider's inline checkout (Paystack or Flutterwave) in a
 /// WebView. On a successful charge the provider callback redirects to a
-/// `dotmacpay://` sentinel which we intercept; the screen then pops the
-/// reference back to the caller (which verifies it). Pops `null` on cancel.
+/// brand-specific `<scheme>://` sentinel (see [Brand.paymentScheme]) which we
+/// intercept; the screen then pops the reference back to the caller (which
+/// verifies it). Pops `null` on cancel.
 class PaymentWebViewScreen extends StatefulWidget {
   const PaymentWebViewScreen({super.key, required this.args});
 
@@ -88,13 +90,13 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
 
   NavigationDecision _handleNavigation(NavigationRequest request) {
     final url = request.url;
-    if (url.startsWith('dotmacpay://success')) {
+    if (url.startsWith('${Brand.paymentScheme}://success')) {
       final reference =
           Uri.parse(url).queryParameters['reference'] ?? widget.args.reference;
       Navigator.of(context).pop(reference);
       return NavigationDecision.prevent;
     }
-    if (url.startsWith('dotmacpay://cancel')) {
+    if (url.startsWith('${Brand.paymentScheme}://cancel')) {
       Navigator.of(context).pop();
       return NavigationDecision.prevent;
     }
@@ -139,9 +141,9 @@ String _checkoutHtml(CheckoutArgs a) {
     customer: { email: "$email" },
     meta: $meta,
     callback: function(data){
-      window.location.href = "dotmacpay://success?reference=" + (data.tx_ref || "$ref");
+      window.location.href = "${Brand.paymentScheme}://success?reference=" + (data.tx_ref || "$ref");
     },
-    onclose: function(){ window.location.href = "dotmacpay://cancel"; }
+    onclose: function(){ window.location.href = "${Brand.paymentScheme}://cancel"; }
   });
 </script></body></html>''';
   }
@@ -160,9 +162,9 @@ String _checkoutHtml(CheckoutArgs a) {
     currency: "$currency",
     metadata: $meta,
     callback: function(response){
-      window.location.href = "dotmacpay://success?reference=" + response.reference;
+      window.location.href = "${Brand.paymentScheme}://success?reference=" + response.reference;
     },
-    onClose: function(){ window.location.href = "dotmacpay://cancel"; }
+    onClose: function(){ window.location.href = "${Brand.paymentScheme}://cancel"; }
   });
   handler.openIframe();
 </script></body></html>''';

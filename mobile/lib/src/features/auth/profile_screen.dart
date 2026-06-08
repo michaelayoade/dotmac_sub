@@ -16,7 +16,21 @@ class ProfileScreen extends ConsumerWidget {
     final me = ref.watch(currentUserProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile')),
+      appBar: AppBar(
+        title: const Text('Profile'),
+        actions: [
+          if (me != null)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: 'Edit profile',
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => _EditProfileSheet(me: me),
+              ),
+            ),
+        ],
+      ),
       body: me == null
           ? const Center(child: CircularProgressIndicator())
           : ListView(
@@ -240,6 +254,108 @@ class _Tile extends StatelessWidget {
         child: Text(value,
             textAlign: TextAlign.end,
             style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+      ),
+    );
+  }
+}
+
+/// Edit the customer's contact details (PATCH /auth/me). Email is read-only —
+/// it identifies the account and changing it needs verification elsewhere.
+class _EditProfileSheet extends ConsumerStatefulWidget {
+  const _EditProfileSheet({required this.me});
+  final Me me;
+
+  @override
+  ConsumerState<_EditProfileSheet> createState() => _EditProfileSheetState();
+}
+
+class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
+  late final _firstName = TextEditingController(text: widget.me.firstName);
+  late final _lastName = TextEditingController(text: widget.me.lastName);
+  late final _phone = TextEditingController(text: widget.me.phone ?? '');
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _firstName.dispose();
+    _lastName.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ref.read(authRepositoryProvider).updateProfile({
+        'first_name': _firstName.text.trim(),
+        'last_name': _lastName.text.trim(),
+        'phone': _phone.text.trim(),
+      });
+      await ref.read(authControllerProvider.notifier).reloadProfile();
+      navigator.pop();
+      messenger.showSnackBar(const SnackBar(content: Text('Profile updated')));
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final insets = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 16, 16, insets + 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 16),
+          if (_error != null) ...[
+            Text(_error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            const SizedBox(height: 8),
+          ],
+          TextField(
+            controller: _firstName,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(labelText: 'First name'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _lastName,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(labelText: 'Last name'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _phone,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(labelText: 'Phone'),
+          ),
+          const SizedBox(height: 8),
+          Text('Email: ${widget.me.email}',
+              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _busy ? null : _save,
+            child: _busy
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Save'),
+          ),
+        ],
       ),
     );
   }

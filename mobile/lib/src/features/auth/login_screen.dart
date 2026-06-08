@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../config/env.dart';
 import '../../core/api_exception.dart';
 import '../../providers/auth_controller.dart';
 
@@ -16,7 +17,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _username = TextEditingController();
   final _password = TextEditingController();
-  String _provider = 'local'; // 'local' | 'radius'
   bool _obscure = true;
   bool _submitting = false;
   String? _error;
@@ -35,10 +35,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     try {
+      // Customers authenticate against their portal credential; the backend
+      // resolves the identifier by username, account number, or email.
       final result = await ref.read(authControllerProvider.notifier).login(
             username: _username.text.trim(),
             password: _password.text,
-            provider: _provider,
+            provider: 'local',
           );
       if (!mounted) return;
       if (result.mfaRequired && result.mfaToken != null) {
@@ -74,11 +76,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     Icon(Icons.wifi,
                         size: 56, color: Theme.of(context).colorScheme.primary),
                     const SizedBox(height: 12),
-                    Text('DotMac Self-Care',
+                    Text(Brand.name,
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 4),
-                    Text('Sign in to manage your service',
+                    Text(Brand.tagline,
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium),
                     const SizedBox(height: 32),
@@ -91,8 +93,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       autocorrect: false,
                       enableSuggestions: false,
                       textInputAction: TextInputAction.next,
+                      keyboardType: TextInputType.emailAddress,
                       decoration: const InputDecoration(
-                        labelText: 'Username or email',
+                        labelText: 'Email or username',
                         prefixIcon: Icon(Icons.person_outline),
                       ),
                       validator: (v) =>
@@ -115,16 +118,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                       validator: (v) =>
                           (v == null || v.isEmpty) ? 'Required' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    SegmentedButton<String>(
-                      segments: const [
-                        ButtonSegment(value: 'local', label: Text('Local')),
-                        ButtonSegment(value: 'radius', label: Text('RADIUS')),
-                      ],
-                      selected: {_provider},
-                      onSelectionChanged: (s) =>
-                          setState(() => _provider = s.first),
                     ),
                     const SizedBox(height: 24),
                     FilledButton(
