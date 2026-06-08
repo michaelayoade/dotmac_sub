@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import logging
 
-logger = logging.getLogger(__name__)
+from app.services.branding_config import get_brand
 
-# Base URL for static assets in emails — must be absolute
-_DEFAULT_BASE_URL = "https://subscription.dotmac.io"
+logger = logging.getLogger(__name__)
 
 
 def wrap_email_html(
@@ -19,8 +18,8 @@ def wrap_email_html(
     *,
     subject: str = "",
     base_url: str = "",
-    company_name: str = "Dotmac Technologies",
-    support_email: str = "support@dotmac.ng",
+    company_name: str | None = None,
+    support_email: str | None = None,
 ) -> str:
     """Wrap email body HTML in a branded template with header and footer.
 
@@ -36,10 +35,14 @@ def wrap_email_html(
     """
     from html import escape
 
-    base = base_url or _DEFAULT_BASE_URL
+    brand = get_brand()
+    base = base_url or brand["app_url"]
+    primary = brand["primary_color"]
     safe_subject = escape(subject)
-    safe_company = escape(company_name)
-    safe_support = escape(support_email)
+    safe_company = escape(company_name if company_name is not None else brand["legal_name"])
+    safe_support = escape(
+        support_email if support_email is not None else brand["support_email"]
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -50,13 +53,13 @@ def wrap_email_html(
 <style>
 body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; color: #1e293b; }}
 .wrapper {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
+.header {{ background: linear-gradient(135deg, {primary} 0%, #6366f1 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
 .header img {{ height: 40px; width: auto; }}
 .header-fallback {{ color: #ffffff; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }}
 .content {{ background: #ffffff; padding: 32px; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; }}
 .footer {{ background: #f1f5f9; border-radius: 0 0 12px 12px; padding: 24px 32px; text-align: center; border: 1px solid #e2e8f0; border-top: none; }}
 .footer p {{ margin: 4px 0; font-size: 12px; color: #64748b; }}
-.footer a {{ color: #3b82f6; text-decoration: none; }}
+.footer a {{ color: {primary}; text-decoration: none; }}
 </style>
 </head>
 <body>

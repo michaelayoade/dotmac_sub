@@ -47,8 +47,12 @@ class Env {
 ///   flutter build apk --dart-define-from-file=../brand.json
 ///
 /// Keys mirror the backend's brand.json so a single file drives web and mobile.
-/// App identity (applicationId / bundle id / launcher icon) is native build
-/// config set via Flutter flavors, not here.
+///
+/// Note: native app identity (applicationId / bundle id / launcher icon /
+/// launcher label) is NOT configured here. Each organization is its own
+/// deployment — it provisions its own domain and its own native app identity as
+/// part of that setup. `Brand.name` here is only the in-app display name (the
+/// MaterialApp title / login heading), not the OS launcher label.
 class Brand {
   const Brand._();
 

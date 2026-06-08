@@ -20,6 +20,7 @@ from app.models.notification import (
 )
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services.branding_config import get_brand
 from app.services.domain_settings import notification_settings
 from app.services.settings_spec import resolve_value
 
@@ -230,7 +231,7 @@ def list_smtp_senders(db: Session | None) -> list[dict[str, Any]]:
                 "password": None,  # nosec
                 "has_password": False,  # nosec
                 "from_email": "",
-                "from_name": "Dotmac Selfcare",
+                "from_name": get_brand()["from_name"],
                 "use_tls": True,
                 "use_ssl": False,
                 "is_active": True,
@@ -354,7 +355,7 @@ def upsert_smtp_sender(
         "from_email": (SettingValueType.string, from_email.strip(), None, False),
         "from_name": (
             SettingValueType.string,
-            (from_name or "Dotmac Selfcare").strip() or "Dotmac Selfcare",
+            (from_name or get_brand()["from_name"]).strip() or get_brand()["from_name"],
             None,
             False,
         ),
@@ -690,7 +691,7 @@ def send_email_with_config(
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = (
-        f"{config.get('from_name', 'Dotmac Selfcare')} <{config.get('from_email', 'noreply@example.com')}>"
+        f"{config.get('from_name') or get_brand()['from_name']} <{config.get('from_email') or get_brand()['from_email']}>"
     )
     msg["To"] = to_email
 
@@ -965,7 +966,7 @@ def send_password_reset_email(
     company_name = _get_company_name(db)
     logo_url = _get_email_branding_logo_url(db)
     support_email = (
-        _setting_value(db, "smtp_from_email") or "support@dotmac.ng"
+        _setting_value(db, "smtp_from_email") or get_brand()["support_email"]
     ).strip()
 
     subject = "Password Reset Request"
@@ -1055,7 +1056,7 @@ def send_user_invite_email(
     company_name = _get_company_name(db)
     logo_url = _get_email_branding_logo_url(db)
     support_email = (
-        _setting_value(db, "smtp_from_email") or "support@dotmac.ng"
+        _setting_value(db, "smtp_from_email") or get_brand()["support_email"]
     ).strip()
 
     subject = f"You're invited to {company_name}"

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/observability.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/billing/topup_screen.dart';
+import '../features/auth/lock_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/mfa_screen.dart';
 import '../features/auth/profile_screen.dart';
@@ -56,13 +57,18 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (!auth.isAuthenticated) {
         return publicPaths.contains(loc) ? null : '/login';
       }
-      // Authenticated: leave the splash/login behind.
-      if (loc == '/splash' || loc == '/login') return '/dashboard';
+      // Authenticated but held behind the biometric lock: stay on /lock.
+      if (auth.locked) return loc == '/lock' ? null : '/lock';
+      // Authenticated and unlocked: leave the splash/login/lock behind.
+      if (loc == '/splash' || loc == '/login' || loc == '/lock') {
+        return '/dashboard';
+      }
       return null;
     },
     routes: [
       GoRoute(path: '/splash', builder: (_, __) => const SplashScreen()),
       GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(path: '/lock', builder: (_, __) => const LockScreen()),
       GoRoute(
         path: '/forgot-password',
         builder: (_, __) => const ForgotPasswordScreen(),

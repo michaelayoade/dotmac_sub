@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -43,6 +44,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             provider: 'local',
           );
       if (!mounted) return;
+      // Let the OS offer to save the just-used credentials (iOS Keychain etc.).
+      TextInput.finishAutofillContext();
       if (result.mfaRequired && result.mfaToken != null) {
         context.go('/mfa', extra: result.mfaToken);
       }
@@ -50,7 +53,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     } on ApiException catch (e) {
       setState(() => _error = e.isPasswordResetRequired
           ? 'Password reset required. Please reset your password on the web portal.'
-          : e.message);
+          : e.isUnauthorized
+              ? 'Incorrect username or password.'
+              : e.message);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -60,6 +65,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -67,72 +73,111 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
-              child: Form(
-                key: _formKey,
+              child: AutofillGroup(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 24),
-                    Icon(Icons.wifi,
-                        size: 56, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(height: 12),
+                    // Per-organization logo if supplied (assets/images/login_logo.png),
+                    // otherwise a neutral placeholder icon.
+                    Image.asset(
+                      'assets/images/login_logo.png',
+                      height: 72,
+                      errorBuilder: (_, __, ___) => Icon(Icons.wifi,
+                          size: 72, color: theme.colorScheme.primary),
+                    ),
+                    const SizedBox(height: 16),
                     Text(Brand.name,
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.headlineSmall),
+                        style: theme.textTheme.headlineSmall),
                     const SizedBox(height: 4),
                     Text(Brand.tagline,
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant)),
                     const SizedBox(height: 32),
-                    if (_error != null) ...[
-                      _ErrorBanner(_error!),
-                      const SizedBox(height: 16),
-                    ],
-                    TextFormField(
-                      controller: _username,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      textInputAction: TextInputAction.next,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Email or username',
-                        prefixIcon: Icon(Icons.person_outline),
-                      ),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty) ? 'Required' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _password,
-                      obscureText: _obscure,
-                      onFieldSubmitted: (_) => _submit(),
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        prefixIcon: const Icon(Icons.lock_outline),
-                        suffixIcon: IconButton(
-                          icon: Icon(_obscure
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined),
-                          onPressed: () => setState(() => _obscure = !_obscure),
+                    Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (_error != null) ...[
+                                _ErrorBanner(_error!),
+                                const SizedBox(height: 16),
+                              ],
+                              TextFormField(
+                                controller: _username,
+                                enabled: !_submitting,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                textInputAction: TextInputAction.next,
+                                keyboardType: TextInputType.emailAddress,
+                                autofillHints: const [
+                                  AutofillHints.username,
+                                  AutofillHints.email,
+                                ],
+                                decoration: const InputDecoration(
+                                  labelText: 'Email or username',
+                                  prefixIcon: Icon(Icons.person_outline),
+                                ),
+                                validator: (v) =>
+                                    (v == null || v.trim().isEmpty)
+                                        ? 'Required'
+                                        : null,
+                              ),
+                              const SizedBox(height: 16),
+                              TextFormField(
+                                controller: _password,
+                                enabled: !_submitting,
+                                obscureText: _obscure,
+                                textInputAction: TextInputAction.done,
+                                autofillHints: const [AutofillHints.password],
+                                onFieldSubmitted: (_) => _submit(),
+                                decoration: InputDecoration(
+                                  labelText: 'Password',
+                                  prefixIcon: const Icon(Icons.lock_outline),
+                                  suffixIcon: IconButton(
+                                    icon: Icon(_obscure
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined),
+                                    onPressed: _submitting
+                                        ? null
+                                        : () => setState(
+                                            () => _obscure = !_obscure),
+                                  ),
+                                ),
+                                validator: (v) => (v == null || v.isEmpty)
+                                    ? 'Required'
+                                    : null,
+                              ),
+                              const SizedBox(height: 24),
+                              FilledButton(
+                                onPressed: _submitting ? null : _submit,
+                                child: _submitting
+                                    ? const SizedBox(
+                                        height: 20,
+                                        width: 20,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2),
+                                      )
+                                    : const Text('Sign in'),
+                              ),
+                              TextButton(
+                                onPressed: _submitting
+                                    ? null
+                                    : () => context.go('/forgot-password'),
+                                child: const Text('Forgot password?'),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      validator: (v) =>
-                          (v == null || v.isEmpty) ? 'Required' : null,
-                    ),
-                    const SizedBox(height: 24),
-                    FilledButton(
-                      onPressed: _submitting ? null : _submit,
-                      child: _submitting
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Sign in'),
-                    ),
-                    TextButton(
-                      onPressed: () => context.go('/forgot-password'),
-                      child: const Text('Forgot password?'),
                     ),
                   ],
                 ),

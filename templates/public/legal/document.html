@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ document.title if document else fallback_title }} - Dotmac</title>
+    <title>{{ document.title if document else fallback_title }} - {{ brand.name if brand is defined and brand else "Dotmac" }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -51,7 +51,7 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                             </svg>
                         </div>
-                        <span class="text-lg font-semibold text-slate-900 dark:text-white">Dotmac</span>
+                        <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ brand.name if brand is defined and brand else "Dotmac" }}</span>
                     </a>
                     <nav class="flex items-center gap-4">
                         <a href="/portal" class="text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">Customer Portal</a>
@@ -130,7 +130,7 @@
                         <a href="/legal/privacy" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Privacy Policy</a>
                         <a href="/legal/acceptable-use" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Acceptable Use</a>
                     </div>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">&copy; 2025 Dotmac. All rights reserved.</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">&copy; 2025 {{ brand.legal_name if brand is defined and brand else "Dotmac" }}. All rights reserved.</p>
                 </div>
             </div>
         </footer>
