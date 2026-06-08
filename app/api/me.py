@@ -10,12 +10,14 @@ Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 """
 
 from decimal import Decimal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.subscriber import Subscriber
+from app.models.support import TicketChannel
 from app.schemas.billing import (
     AccountBalanceResponse,
     AutopayEnableRequest,
@@ -43,6 +45,14 @@ from app.schemas.catalog import (
 )
 from app.schemas.common import ListResponse
 from app.schemas.notification import NotificationRead
+from app.schemas.support import (
+    MySupportCommentCreate,
+    MySupportTicketCreate,
+    TicketCommentCreate,
+    TicketCommentRead,
+    TicketCreate,
+    TicketRead,
+)
 from app.schemas.usage import (
     QuotaBucketRead,
     RadiusAccountingSessionRead,
@@ -56,6 +66,7 @@ from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import notification as notification_service
+from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
 from app.services.auth_dependencies import require_user_auth
@@ -542,3 +553,127 @@ async def my_usage_summary(
     """
     subscriber_id = _subscriber_id(principal)
     return await usage_summary_service.get_usage_summary(db, subscriber_id, period)
+
+
+# --- Support tickets (self-scoped) ---------------------------------------------
+#
+# The staff endpoints in app/api/support.py are gated by
+# require_permission("support:ticket:*"), which a subscriber token (no scopes)
+# can never satisfy — so the customer app got 403 on every Support call. These
+# mirror the /me pattern: auth-only, forced to the caller's own subscriber_id,
+# with ownership checks (no IDOR) and internal staff notes filtered out.
+
+
+def _owned_ticket(db: Session, subscriber_id: str, ticket_id: str):
+    """Fetch a ticket and 404 unless it belongs to the calling subscriber.
+
+    Returns 404 (not 403) for someone else's ticket so a customer can't probe
+    which ticket ids exist.
+    """
+    ticket = support_service.tickets.get(db, ticket_id)
+    if str(ticket.subscriber_id or "") != subscriber_id:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return ticket
+
+
+@router.get("/support/tickets", response_model=ListResponse[TicketRead])
+def my_tickets(
+    status: str | None = None,
+    order_by: str = Query(default="created_at"),
+    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's own support tickets, newest first."""
+    subscriber_id = _subscriber_id(principal)
+    return support_service.tickets.list_response(
+        db,
+        status=status,
+        subscriber_id=subscriber_id,
+        order_by=order_by,
+        order_dir=order_dir,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/support/tickets/{ticket_id}", response_model=TicketRead)
+def my_ticket(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    return _owned_ticket(db, _subscriber_id(principal), ticket_id)
+
+
+@router.post("/support/tickets", response_model=TicketRead, status_code=201)
+def my_create_ticket(
+    payload: MySupportTicketCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Raise a ticket on the caller's own account. Identity/assignment fields
+    are not accepted from the client — subscriber_id is forced to the caller."""
+    subscriber_id = _subscriber_id(principal)
+    ticket_payload = TicketCreate(
+        title=payload.title,
+        description=payload.description,
+        priority=payload.priority,
+        ticket_type=payload.ticket_type,
+        channel=TicketChannel.web,
+        subscriber_id=UUID(subscriber_id),
+    )
+    return support_service.tickets.create(
+        db, ticket_payload, actor_id=subscriber_id, request=request
+    )
+
+
+@router.get(
+    "/support/tickets/{ticket_id}/comments",
+    response_model=ListResponse[TicketCommentRead],
+)
+def my_ticket_comments(
+    ticket_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Replies on the caller's own ticket. Staff-internal notes are stripped."""
+    _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    items = [
+        c
+        for c in support_service.ticket_comments.list(
+            db, ticket_id, limit=limit, offset=offset
+        )
+        if not c.is_internal
+    ]
+    return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+
+@router.post(
+    "/support/tickets/{ticket_id}/comments",
+    response_model=TicketCommentRead,
+    status_code=201,
+)
+def my_add_ticket_comment(
+    ticket_id: str,
+    payload: MySupportCommentCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Reply to the caller's own ticket. is_internal is forced False so a
+    customer can never create a staff-only note."""
+    subscriber_id = _subscriber_id(principal)
+    _owned_ticket(db, subscriber_id, ticket_id)
+    return support_service.tickets.create_comment(
+        db,
+        ticket_id,
+        TicketCommentCreate(body=payload.body, is_internal=False),
+        actor_id=subscriber_id,
+        request=request,
+    )

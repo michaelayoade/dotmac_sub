@@ -193,6 +193,26 @@ class TicketCommentRead(BaseModel):
     created_at: datetime
 
 
+class MySupportTicketCreate(BaseModel):
+    """Customer self-care ticket creation. Deliberately omits every identity /
+    assignment field of [TicketCreate] — the `/me` endpoint forces
+    `subscriber_id` to the caller, so a customer can never raise a ticket on
+    another account or self-assign it to staff."""
+
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    priority: str = TicketPriority.normal.value
+    ticket_type: str | None = Field(default=None, max_length=80)
+
+
+class MySupportCommentCreate(BaseModel):
+    """Customer self-care reply. Only the body is accepted; the `/me` endpoint
+    forces `is_internal=False` so customers can never post (or, by reading the
+    filtered list, see) staff-internal notes."""
+
+    body: str = Field(min_length=1)
+
+
 class TicketSlaEventBase(BaseModel):
     event_type: str = Field(min_length=1, max_length=80)
     expected_at: datetime | None = None
