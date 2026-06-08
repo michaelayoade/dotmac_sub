@@ -608,9 +608,7 @@ def my_ticket(
     return _owned_ticket(db, _subscriber_id(principal), ticket_id)
 
 
-@router.post(
-    "/support/tickets", response_model=TicketRead, status_code=201
-)
+@router.post("/support/tickets", response_model=TicketRead, status_code=201)
 def my_create_ticket(
     payload: MySupportTicketCreate,
     request: Request,
