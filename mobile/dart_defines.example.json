@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy to dart_defines.json (gitignored) and fill in. Build/run with: flutter run --dart-define-from-file=dart_defines.json",
+  "API_BASE_URL": "https://selfcare.dotmac.io",
+  "GLITCHTIP_DSN": "",
+  "GLITCHTIP_ENVIRONMENT": "production"
+}

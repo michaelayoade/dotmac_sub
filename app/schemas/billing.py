@@ -341,6 +341,84 @@ class PaymentRead(PaymentBase):
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
 
+# --- Customer-initiated online payment (hosted checkout) ------------------
+# These power the self-care mobile/SPA flow: the client initiates a provider
+# checkout for one of *its own* invoices, completes payment with the provider
+# SDK using the returned public key + reference, then asks the server to verify
+# and record it. Scoping is by the authenticated principal, not a permission.
+
+
+class PaymentInitiateRequest(BaseModel):
+    invoice_id: UUID
+
+
+class PaymentInitiateResponse(BaseModel):
+    invoice_id: UUID
+    invoice_number: str | None = None
+    amount: Decimal
+    currency: str = "NGN"
+    provider_type: str
+    provider_public_key: str | None = None
+    payment_reference: str
+    customer_email: str | None = None
+
+
+class PaymentVerifyRequest(BaseModel):
+    reference: str = Field(min_length=1)
+    provider: str | None = None
+
+
+class PaymentVerifyResponse(BaseModel):
+    reference: str
+    payment_id: UUID
+    invoice_id: UUID | None = None
+    amount: Decimal
+    currency: str = "NGN"
+    status: str
+    already_recorded: bool = False
+
+
+# --- Prepaid account top-up (hosted checkout) -----------------------------
+
+
+class TopupPageResponse(BaseModel):
+    provider_type: str
+    provider_public_key: str | None = None
+    currency: str = "NGN"
+    prepaid_balance: Decimal | None = None
+    min_amount: int
+    max_amount: int
+    preset_amounts: list[int] = Field(default_factory=list)
+    customer_email: str | None = None
+
+
+class TopupInitiateRequest(BaseModel):
+    amount: Decimal = Field(gt=0)
+
+
+class TopupInitiateResponse(BaseModel):
+    intent_id: str
+    provider_type: str
+    provider_public_key: str | None = None
+    payment_reference: str
+    amount: Decimal
+    currency: str = "NGN"
+    customer_email: str | None = None
+
+
+class TopupVerifyRequest(BaseModel):
+    reference: str = Field(min_length=1)
+
+
+class TopupVerifyResponse(BaseModel):
+    reference: str
+    amount: Decimal
+    currency: str = "NGN"
+    already_recorded: bool = False
+    available_balance: Decimal | None = None
+    credit_added: Decimal | None = None
+
+
 class PaymentAllocationBase(BaseModel):
     payment_id: UUID
     invoice_id: UUID

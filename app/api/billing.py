@@ -1,6 +1,7 @@
+from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -48,6 +49,8 @@ from app.schemas.billing import (
     PaymentChannelRead,
     PaymentChannelUpdate,
     PaymentCreate,
+    PaymentInitiateRequest,
+    PaymentInitiateResponse,
     PaymentMethodCreate,
     PaymentMethodRead,
     PaymentMethodUpdate,
@@ -58,6 +61,8 @@ from app.schemas.billing import (
     PaymentProviderUpdate,
     PaymentRead,
     PaymentUpdate,
+    PaymentVerifyRequest,
+    PaymentVerifyResponse,
     PaymentWebhookDeadLetterRead,
     TaxRateCreate,
     TaxRateRead,
@@ -67,7 +72,8 @@ from app.schemas.common import ListResponse
 from app.services import api_billing_webhooks as api_billing_webhooks_service
 from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
-from app.services.auth_dependencies import require_permission
+from app.services import customer_portal_flow_payments as customer_payments
+from app.services.auth_dependencies import require_permission, require_user_auth
 
 router = APIRouter()
 
@@ -1109,6 +1115,102 @@ def delete_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
 )
 def create_payment(payload: PaymentCreate, db: Session = Depends(get_db)):
     return billing_service.payments.create(db, payload)
+
+
+# --- Customer-initiated online payment (hosted checkout) ------------------
+# Self-scoped to the authenticated subscriber; intentionally NOT gated by a
+# billing:* permission so a customer can pay their own invoice from the mobile
+# app / self-care SPA. Routes are declared before "/payments/{payment_id}" so
+# the static "initiate"/"verify" segments are not captured as a payment id.
+
+
+def _customer_from_principal(principal: dict) -> dict:
+    """Adapt a bearer-auth principal to the `customer` dict the portal payment
+    services expect. account_id == subscriber_id == Subscriber.id."""
+    subscriber_id = principal.get("subscriber_id")
+    return {
+        "account_id": subscriber_id,
+        "subscriber_id": subscriber_id,
+        "username": "",
+    }
+
+
+def _require_subscriber(principal: dict) -> dict:
+    if principal.get("principal_type") != "subscriber":
+        raise HTTPException(status_code=403, detail="A customer account is required")
+    return _customer_from_principal(principal)
+
+
+@router.post(
+    "/payments/initiate",
+    response_model=PaymentInitiateResponse,
+    tags=["payments"],
+)
+def initiate_payment(
+    payload: PaymentInitiateRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Begin a hosted-checkout payment for one of the caller's own invoices.
+
+    Returns the provider public key + reference the client uses to complete
+    checkout with the provider SDK, after which it calls ``/payments/verify``.
+    """
+    customer = _require_subscriber(principal)
+    context = customer_payments.get_payment_page(db, customer, str(payload.invoice_id))
+    if context is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Invoice not found, not payable, or not on your account",
+        )
+    invoice = context["invoice"]
+    raw_amount = getattr(invoice, "balance_due", None)
+    if raw_amount is None:
+        raw_amount = getattr(invoice, "total", 0)
+    return PaymentInitiateResponse(
+        invoice_id=invoice.id,
+        invoice_number=getattr(invoice, "invoice_number", None),
+        amount=Decimal(str(raw_amount or 0)),
+        currency=getattr(invoice, "currency", "NGN"),
+        provider_type=context["provider_type"],
+        provider_public_key=context.get("provider_public_key"),
+        payment_reference=context["payment_reference"],
+        customer_email=context.get("customer_email"),
+    )
+
+
+@router.post(
+    "/payments/verify",
+    response_model=PaymentVerifyResponse,
+    tags=["payments"],
+)
+def verify_payment(
+    payload: PaymentVerifyRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Verify a provider transaction and record the payment against the
+    caller's invoice. Idempotent on the provider's external transaction id."""
+    customer = _require_subscriber(principal)
+    try:
+        result = customer_payments.verify_and_record_payment(
+            db, customer, payload.reference, provider=payload.provider
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payment = result["payment"]
+    invoice = result.get("invoice")
+    raw_status = getattr(payment, "status", "succeeded")
+    return PaymentVerifyResponse(
+        reference=payload.reference,
+        payment_id=payment.id,
+        invoice_id=getattr(invoice, "id", None),
+        amount=Decimal(str(result.get("amount") or getattr(payment, "amount", 0) or 0)),
+        currency=getattr(payment, "currency", "NGN"),
+        status=getattr(raw_status, "value", str(raw_status)),
+        already_recorded=result.get("already_recorded", False),
+    )
 
 
 @router.get(

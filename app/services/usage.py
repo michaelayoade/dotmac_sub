@@ -53,7 +53,7 @@ from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
-from app.services.response import ListResponseMixin
+from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
 
@@ -702,6 +702,33 @@ class QuotaBuckets(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_subscriber(
+        db: Session, subscriber_id: str, limit: int, offset: int
+    ) -> builtins.list:
+        """Quota buckets across every subscription owned by ``subscriber_id``."""
+        sub_ids = [
+            row[0]
+            for row in db.query(Subscription.id)
+            .filter(Subscription.subscriber_id == subscriber_id)
+            .all()
+        ]
+        if not sub_ids:
+            return []
+        query = (
+            db.query(QuotaBucket)
+            .filter(QuotaBucket.subscription_id.in_(sub_ids))
+            .order_by(QuotaBucket.period_start.desc())
+        )
+        return apply_pagination(query, limit, offset).all()
+
+    @classmethod
+    def list_response_for_subscriber(
+        cls, db: Session, subscriber_id: str, limit: int, offset: int
+    ) -> dict:
+        items = cls.list_for_subscriber(db, subscriber_id, limit, offset)
+        return list_response(items, limit, offset)
+
+    @staticmethod
     def update(db: Session, bucket_id: str, payload: QuotaBucketUpdate):
         bucket = db.get(QuotaBucket, bucket_id)
         if not bucket:
@@ -773,6 +800,33 @@ class RadiusAccountingSessions(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_subscriber(
+        db: Session, subscriber_id: str, limit: int, offset: int
+    ) -> builtins.list:
+        """Accounting sessions across every subscription owned by the caller."""
+        sub_ids = [
+            row[0]
+            for row in db.query(Subscription.id)
+            .filter(Subscription.subscriber_id == subscriber_id)
+            .all()
+        ]
+        if not sub_ids:
+            return []
+        query = (
+            db.query(RadiusAccountingSession)
+            .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
+            .order_by(RadiusAccountingSession.session_start.desc().nullslast())
+        )
+        return apply_pagination(query, limit, offset).all()
+
+    @classmethod
+    def list_response_for_subscriber(
+        cls, db: Session, subscriber_id: str, limit: int, offset: int
+    ) -> dict:
+        items = cls.list_for_subscriber(db, subscriber_id, limit, offset)
+        return list_response(items, limit, offset)
 
     @staticmethod
     def update(db: Session, session_id: str, payload: RadiusAccountingSessionUpdate):
