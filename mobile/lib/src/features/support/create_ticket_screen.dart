@@ -32,14 +32,12 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
     try {
-      final accountId = ref.read(accountIdProvider);
       final ticket = await ref.read(supportRepositoryProvider).createTicket(
             title: _title.text.trim(),
             description: _description.text.trim().isEmpty
                 ? null
                 : _description.text.trim(),
             priority: _priority,
-            subscriberId: accountId,
           );
       ref.invalidate(ticketsProvider);
       if (!mounted) return;
