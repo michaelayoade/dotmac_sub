@@ -18,10 +18,20 @@ PLAYWRIGHT_BASE_URL plus admin credentials so the reseller identity can be seede
 
 from __future__ import annotations
 
+import os
 import re
 
 import pytest
 from playwright.sync_api import Page, expect
+
+# Reseller MFA setup (/reseller/profile/mfa/setup) returns HTTP 500
+# ("TOTP encryption key not configured") unless TOTP_ENCRYPTION_KEY is set, so
+# skip the MFA journeys when the app has not been configured with one. The test
+# process env is expected to mirror the app's (see tests/playwright/README.md).
+requires_totp_key = pytest.mark.skipif(
+    not os.getenv("TOTP_ENCRYPTION_KEY"),
+    reason="TOTP_ENCRYPTION_KEY not configured; reseller MFA setup returns 500.",
+)
 
 from tests.playwright.pages.reseller import (
     ResellerAccountDetailPage,
@@ -247,11 +257,13 @@ class TestResellerProfile:
         page.expect_loaded()
         expect(reseller_page.locator("#contact_phone")).to_have_value("+1 555 0100")
 
+    @requires_totp_key
     def test_mfa_setup_page_loads(self, reseller_page: Page, settings):
         page = ResellerMfaSetupPage(reseller_page, settings.base_url)
         page.goto()
         page.expect_loaded()
 
+    @requires_totp_key
     def test_mfa_confirm_rejects_invalid_code(self, reseller_page: Page, settings):
         """An invalid TOTP code does not enable MFA; the user stays in setup."""
         page = ResellerMfaSetupPage(reseller_page, settings.base_url)

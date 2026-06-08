@@ -43,6 +43,12 @@ Optional:
 - `E2E_AGENT_PASSWORD` (default: `AgentPass123!`)
 - `E2E_USER_USERNAME` (default: `e2e.user`)
 - `E2E_USER_PASSWORD` (default: `UserPass123!`)
+- `TOTP_ENCRYPTION_KEY` - Fernet key the app uses to encrypt TOTP secrets. Required
+  for the reseller MFA journeys: without it `/reseller/profile/mfa/setup` returns
+  HTTP 500 ("TOTP encryption key not configured"), so `test_mfa_setup_page_loads`
+  and `test_mfa_confirm_rejects_invalid_code` are skipped. Set the same value the
+  app process uses. Generate one with
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 
 The suite will create agent/user identities via the admin API when they do not exist.
 
