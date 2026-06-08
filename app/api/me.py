@@ -20,6 +20,7 @@ from app.schemas.billing import (
     AccountBalanceResponse,
     InvoiceRead,
     LedgerEntryRead,
+    MyPaymentMethodRead,
     PaymentRead,
     TopupInitiateRequest,
     TopupInitiateResponse,
@@ -45,6 +46,7 @@ from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
+from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import notification as notification_service
 from app.services import usage as usage_service
@@ -115,6 +117,44 @@ def my_payments(
     return billing_service.payments.list_response(
         db, account_id, None, status, None, order_by, order_dir, limit, offset
     )
+
+
+@router.get("/payment-methods", response_model=list[MyPaymentMethodRead])
+def my_payment_methods(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's saved cards (tokens never exposed)."""
+    account_id = _subscriber_id(principal)
+    return customer_cards.list_for_account(db, account_id)
+
+
+@router.patch(
+    "/payment-methods/{method_id}/default", response_model=MyPaymentMethodRead
+)
+def my_set_default_card(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Make one of the caller's own saved cards the default."""
+    account_id = _subscriber_id(principal)
+    method = customer_cards.set_default(db, account_id, method_id)
+    if method is None:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return method
+
+
+@router.delete("/payment-methods/{method_id}", status_code=204)
+def my_remove_card(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Remove one of the caller's own saved cards."""
+    account_id = _subscriber_id(principal)
+    if not customer_cards.remove(db, account_id, method_id):
+        raise HTTPException(status_code=404, detail="Payment method not found")
 
 
 @router.get("/balance", response_model=AccountBalanceResponse)
@@ -384,6 +424,10 @@ def my_topup_verify(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.save_card:
+        customer_cards.capture_card_after_payment(
+            db, customer["account_id"], payload.reference, None
+        )
     return TopupVerifyResponse(
         reference=payload.reference,
         amount=Decimal(str(result.get("amount") or "0")),

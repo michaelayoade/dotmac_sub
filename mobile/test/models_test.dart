@@ -7,6 +7,7 @@ import 'package:dotmac_portal/src/models/invoice.dart';
 import 'package:dotmac_portal/src/models/ledger.dart';
 import 'package:dotmac_portal/src/models/notification.dart';
 import 'package:dotmac_portal/src/models/page.dart';
+import 'package:dotmac_portal/src/models/payment_method.dart';
 import 'package:dotmac_portal/src/models/payment_flow.dart';
 import 'package:dotmac_portal/src/models/plan_change.dart';
 import 'package:dotmac_portal/src/models/session.dart';
@@ -293,6 +294,31 @@ void main() {
       expect(r.success, isFalse);
       expect(r.insufficient, isTrue);
       expect(r.shortfall, 2000.0);
+    });
+  });
+
+  group('SavedCard', () {
+    test('derives title and expiry, defaults', () {
+      final c = SavedCard.fromJson({
+        'id': 'p1',
+        'method_type': 'card',
+        'label': 'Visa •••• 4081',
+        'last4': '4081',
+        'brand': 'visa',
+        'expires_month': 8,
+        'expires_year': 2030,
+        'is_default': true,
+      });
+      expect(c.title, 'Visa •••• 4081');
+      expect(c.expiry, '08/30');
+      expect(c.isDefault, isTrue);
+    });
+
+    test('falls back to brand + last4 when no label', () {
+      final c = SavedCard.fromJson(
+          {'id': 'p2', 'brand': 'mastercard', 'last4': '1234'});
+      expect(c.title, 'mastercard •••• 1234');
+      expect(c.expiry, isNull);
     });
   });
 

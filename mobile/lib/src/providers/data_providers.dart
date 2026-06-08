@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
+import '../models/payment_method.dart';
 import '../models/session.dart';
 import '../models/page.dart';
 import '../models/subscription.dart';
@@ -60,6 +61,11 @@ final ledgerProvider = FutureProvider.autoDispose<Page<LedgerTxn>>((ref) async {
 
 final balanceProvider = FutureProvider.autoDispose<AccountBalance>((ref) async {
   return ref.watch(billingRepositoryProvider).balance();
+});
+
+final paymentMethodsProvider =
+    FutureProvider.autoDispose<List<SavedCard>>((ref) async {
+  return ref.watch(billingRepositoryProvider).paymentMethods();
 });
 
 final subscriptionsProvider =

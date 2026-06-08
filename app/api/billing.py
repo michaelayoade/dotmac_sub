@@ -1199,6 +1199,15 @@ def verify_payment(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if payload.save_card:
+        from app.services import (
+            customer_portal_flow_payment_methods as customer_cards,
+        )
+
+        customer_cards.capture_card_after_payment(
+            db, customer["account_id"], payload.reference, payload.provider
+        )
+
     payment = result["payment"]
     invoice = result.get("invoice")
     raw_status = getattr(payment, "status", "succeeded")
