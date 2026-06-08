@@ -18,7 +18,7 @@ class PlanOffer {
   factory PlanOffer.fromJson(Map<String, dynamic> json) => PlanOffer(
         id: json['id'].toString(),
         name: json['name'] as String? ?? 'Plan',
-        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        amount: _toDouble(json['amount']) ?? 0,
         currency: json['currency'] as String? ?? 'NGN',
         periodLabel: json['period_label'] as String? ?? '/cycle',
       );

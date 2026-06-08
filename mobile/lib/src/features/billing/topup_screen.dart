@@ -83,7 +83,10 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
       final result =
           await ref.read(billingRepositoryProvider).verifyTopup(reference);
-      ref.invalidate(invoicesProvider); // balance/credit may change billing
+      // Top-up credits the wallet — refresh balance + ledger + invoices.
+      ref.invalidate(invoicesProvider);
+      ref.invalidate(balanceProvider);
+      ref.invalidate(ledgerProvider);
       messenger.showSnackBar(SnackBar(
         content: Text(result.availableBalance != null
             ? 'Topped up — balance ${Fmt.money(result.availableBalance!, page.currency)}'

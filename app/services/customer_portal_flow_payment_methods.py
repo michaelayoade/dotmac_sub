@@ -11,11 +11,13 @@ from __future__ import annotations
 import builtins
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import PaymentMethod, PaymentMethodType
 from app.schemas.billing import PaymentMethodCreate, PaymentMethodUpdate
 from app.services import billing as billing_service
+from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +62,26 @@ def save_card_from_authorization(
     db: Session, account_id: str, authorization: dict | None
 ) -> PaymentMethod | None:
     """Persist a saved card from a Paystack authorization, de-duplicating on the
-    token. No-op (returns existing/None) when there is nothing reusable to save."""
+    card fingerprint. No-op (returns existing/None) when there is nothing
+    reusable to save."""
     payload = payment_method_from_authorization(authorization, account_id)
     if payload is None:
         return None
-    # De-dup: same card (token) already saved for this account.
+    # De-dup on (last4, brand, expiry) — already on the row, so we avoid
+    # fetching + decrypting every stored token on the payment path.
+    fingerprint = (
+        payload.last4,
+        payload.brand,
+        payload.expires_month,
+        payload.expires_year,
+    )
     for existing in list_for_account(db, account_id):
         if (
-            billing_service.payment_methods.get_decrypted_token(db, str(existing.id))
-            == payload.token
-        ):
+            existing.last4,
+            existing.brand,
+            existing.expires_month,
+            existing.expires_year,
+        ) == fingerprint:
             return existing
     return billing_service.payment_methods.create(db, payload)
 
@@ -120,4 +132,15 @@ def remove(db: Session, account_id: str, method_id: str) -> bool:
     if _owned(db, account_id, method_id) is None:
         return False
     billing_service.payment_methods.delete(db, method_id)
+    # Don't leave autopay pointing at a card the customer just removed — the
+    # token would still be chargeable. Deactivate any mandate on this card.
+    from app.models.autopay import AutopayMandate
+
+    for mandate in db.scalars(
+        select(AutopayMandate).where(
+            AutopayMandate.payment_method_id == coerce_uuid(method_id)
+        )
+    ).all():
+        mandate.is_active = False
+    db.commit()
     return True

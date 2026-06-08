@@ -80,6 +80,10 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
           content: Text(
               'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
         ));
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Could not add this add-on')),
+        );
       }
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
@@ -280,8 +284,11 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
             if (q != null && !affordable)
               FilledButton.tonalIcon(
                 onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).push(
+                  // Capture the navigator before popping the sheet — using the
+                  // sheet's context after pop targets a defunct element.
+                  final navigator = Navigator.of(context);
+                  navigator.pop();
+                  navigator.push(
                       MaterialPageRoute(builder: (_) => const TopUpScreen()));
                 },
                 icon: const Icon(Icons.add_card_outlined),

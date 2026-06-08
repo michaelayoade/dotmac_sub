@@ -176,22 +176,36 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
             failed += 1
             continue
 
-        billing_adapter.record_payment(
-            db,
-            PaymentIntent(
-                account_id=coerce_uuid(str(invoice.account_id)),
-                amount=amount,
-                currency=getattr(invoice, "currency", "NGN"),
-                status=PaymentStatus.succeeded,
-                external_id=str(tx.get("reference") or reference),
-                memo=f"Autopay charge ref: {reference}",
-                allocations=[
-                    PaymentAllocationApply(
-                        invoice_id=coerce_uuid(str(invoice.id)), amount=amount
-                    )
-                ],
-            ),
-        )
+        try:
+            billing_adapter.record_payment(
+                db,
+                PaymentIntent(
+                    account_id=coerce_uuid(str(invoice.account_id)),
+                    amount=amount,
+                    currency=getattr(invoice, "currency", "NGN"),
+                    status=PaymentStatus.succeeded,
+                    external_id=str(tx.get("reference") or reference),
+                    memo=f"Autopay charge ref: {reference}",
+                    allocations=[
+                        PaymentAllocationApply(
+                            invoice_id=coerce_uuid(str(invoice.id)), amount=amount
+                        )
+                    ],
+                ),
+            )
+        except Exception:  # noqa: BLE001 - the card was already charged
+            # The charge succeeded at the provider but recording failed. Do NOT
+            # let the next run re-charge: log loudly for manual reconciliation
+            # (the provider reference uniquely identifies the captured payment).
+            logger.error(
+                "AUTOPAY RECONCILE: charged ref=%s for invoice=%s but failed to "
+                "record the payment",
+                str(tx.get("reference") or reference),
+                invoice.id,
+                exc_info=True,
+            )
+            failed += 1
+            continue
         charged += 1
         total += amount
 
@@ -205,8 +219,16 @@ def run_all_due(db: Session) -> dict:
     ).all()
     summary = {"accounts": 0, "charged": 0, "failed": 0}
     for mandate in mandates:
-        result = run_account_autopay(db, str(mandate.account_id))
         summary["accounts"] += 1
+        try:
+            result = run_account_autopay(db, str(mandate.account_id))
+        except Exception:  # noqa: BLE001 - one account must not abort the batch
+            logger.error(
+                "autopay failed for account %s", mandate.account_id, exc_info=True
+            )
+            db.rollback()
+            summary["failed"] += 1
+            continue
         summary["charged"] += result.get("charged", 0)
         summary["failed"] += result.get("failed", 0)
     return summary

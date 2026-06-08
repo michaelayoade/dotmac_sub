@@ -122,6 +122,17 @@ def test_run_noop_when_not_enabled(db_session, subscriber, monkeypatch):
     assert result.get("skipped") == "not_enabled"
 
 
+def test_removing_the_card_disables_autopay(db_session, subscriber):
+    from app.services import customer_portal_flow_payment_methods as cards
+
+    card = _card(db_session, subscriber.id)
+    autopay.enable(db_session, str(subscriber.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["enabled"] is True
+
+    cards.remove(db_session, str(subscriber.id), str(card.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["enabled"] is False
+
+
 def test_run_all_due_iterates_active_mandates(db_session, subscriber, monkeypatch):
     _card(db_session, subscriber.id)
     _open_invoice(db_session, subscriber.id, Decimal("2500.00"))

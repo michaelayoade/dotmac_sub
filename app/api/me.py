@@ -337,7 +337,16 @@ def my_plan_change_submit(
 ):
     """Submit a plan-change request for the caller's own service."""
     customer = _customer(db, principal)
-    # Ownership is enforced inside the service (account_id == subscriber).
+    # submit_change_plan does NOT verify ownership, so guard it here: the
+    # subscription must belong to the caller (prevents changing another
+    # customer's plan via a guessed subscription id).
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription or str(subscription.subscriber_id) != str(
+        customer["account_id"]
+    ):
+        raise HTTPException(status_code=404, detail="Service not found")
     try:
         result = customer_changes.submit_change_plan(
             db,
