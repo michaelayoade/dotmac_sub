@@ -132,9 +132,10 @@ class TestResponseCache:
             calls["n"] += 1
             return [{"id": "wo1", "subscriber_id": "s1"}]
 
-        with patch(
-            "app.services.session_store.get_session_redis", return_value=fake
-        ), patch.object(c, "_request", side_effect=fake_request):
+        with (
+            patch("app.services.session_store.get_session_redis", return_value=fake),
+            patch.object(c, "_request", side_effect=fake_request),
+        ):
             r1 = c.list_work_orders(subscriber_id="s1")
             r2 = c.list_work_orders(subscriber_id="s1")
 
@@ -151,9 +152,10 @@ class TestResponseCache:
             calls["n"] += 1
             return []
 
-        with patch(
-            "app.services.session_store.get_session_redis", return_value=fake
-        ), patch.object(c, "_request", side_effect=fake_request):
+        with (
+            patch("app.services.session_store.get_session_redis", return_value=fake),
+            patch.object(c, "_request", side_effect=fake_request),
+        ):
             c.list_work_orders(subscriber_id="s1")
             c.list_work_orders(subscriber_id="s2")
 
@@ -167,9 +169,10 @@ class TestResponseCache:
             calls["n"] += 1
             return []
 
-        with patch(
-            "app.services.session_store.get_session_redis", return_value=None
-        ), patch.object(c, "_request", side_effect=fake_request):
+        with (
+            patch("app.services.session_store.get_session_redis", return_value=None),
+            patch.object(c, "_request", side_effect=fake_request),
+        ):
             c.list_work_orders(subscriber_id="s1")
             c.list_work_orders(subscriber_id="s1")
 

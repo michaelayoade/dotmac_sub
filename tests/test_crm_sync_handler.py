@@ -81,9 +81,10 @@ class TestPayloadBuilders:
 class TestCrmSyncHandler:
     def _handle(self, event, db):
         """Run the handler with enqueue + HTTP mocked; return (enqueue_mock, http_mock)."""
-        with patch(
-            "app.services.queue_adapter.enqueue_task"
-        ) as enqueue, patch("app.services.crm_webhook.post") as http:
+        with (
+            patch("app.services.queue_adapter.enqueue_task") as enqueue,
+            patch("app.services.crm_webhook.post") as http,
+        ):
             CrmSyncHandler().handle(db, event)
         return enqueue, http
 
@@ -221,9 +222,12 @@ class TestCrmSyncHandler:
             payload={"to_status": "blocked"},
             account_id=uuid.uuid4(),
         )
-        with crm_base_url("https://crm.example"), patch(
-            "app.services.queue_adapter.enqueue_task",
-            side_effect=RuntimeError("broker down"),
+        with (
+            crm_base_url("https://crm.example"),
+            patch(
+                "app.services.queue_adapter.enqueue_task",
+                side_effect=RuntimeError("broker down"),
+            ),
         ):
             # handle() wraps _dispatch in try/except — must not raise.
             CrmSyncHandler().handle(db, event)

@@ -116,9 +116,7 @@ def test_my_notifications_scopes_to_caller(monkeypatch):
         "list_response_for_subscriber",
         fake,
     )
-    me_api.my_notifications(
-        limit=50, offset=0, db=None, principal=principal
-    )
+    me_api.my_notifications(limit=50, offset=0, db=None, principal=principal)
     assert captured["subscriber_id"] == principal["subscriber_id"]
 
 
