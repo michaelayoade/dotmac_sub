@@ -825,3 +825,11 @@ class BillingAccountStatement(BaseModel):
     recent_payments_total: int = 0
     total_outstanding: Decimal
     unallocated_balance: Decimal
+
+
+class AccountBalanceResponse(BaseModel):
+    """Customer wallet/credit balance (positive = credit on file)."""
+
+    credit_balance: Decimal = Decimal("0.00")
+    currency: str = "NGN"
+

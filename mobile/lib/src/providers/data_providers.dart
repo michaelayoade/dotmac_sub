@@ -58,6 +58,10 @@ final ledgerProvider = FutureProvider.autoDispose<Page<LedgerTxn>>((ref) async {
   return ref.watch(billingRepositoryProvider).ledger();
 });
 
+final balanceProvider = FutureProvider.autoDispose<AccountBalance>((ref) async {
+  return ref.watch(billingRepositoryProvider).balance();
+});
+
 final subscriptionsProvider =
     FutureProvider.autoDispose<Page<Subscription>>((ref) async {
   return ref.watch(catalogRepositoryProvider).subscriptions();

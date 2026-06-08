@@ -42,6 +42,12 @@ class BillingRepository {
     return Page.fromJson(data as Map<String, dynamic>, Payment.fromJson);
   }
 
+  /// GET /me/balance — the subscriber's wallet/credit balance.
+  Future<AccountBalance> balance() async {
+    final data = await guard(() => dio.get('/me/balance'));
+    return AccountBalance.fromJson((data as Map).cast<String, dynamic>());
+  }
+
   /// GET /me/ledger — the subscriber's account ledger (transaction history).
   Future<Page<LedgerTxn>> ledger({int limit = 50, int offset = 0}) async {
     final data = await guard(() => dio.get('/me/ledger', queryParameters: {

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
+    AccountBalanceResponse,
     InvoiceRead,
     LedgerEntryRead,
     PaymentRead,
@@ -108,6 +109,20 @@ def my_payments(
     account_id = _subscriber_id(principal)
     return billing_service.payments.list_response(
         db, account_id, None, status, None, order_by, order_dir, limit, offset
+    )
+
+
+@router.get("/balance", response_model=AccountBalanceResponse)
+def my_balance(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's wallet/credit balance (positive = credit on file)."""
+    from app.services.billing._common import get_account_credit_balance
+
+    account_id = _subscriber_id(principal)
+    return AccountBalanceResponse(
+        credit_balance=get_account_credit_balance(db, account_id)
     )
 
 

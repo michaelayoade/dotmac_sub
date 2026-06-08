@@ -245,6 +245,17 @@ void main() {
     });
   });
 
+  group('AccountBalance', () {
+    test('positive credit / negative owes', () {
+      expect(AccountBalance.fromJson({'credit_balance': '2071.49'}).inCredit,
+          isTrue);
+      expect(AccountBalance.fromJson({'credit_balance': -500}).owes, isTrue);
+      final zero = AccountBalance.fromJson({'credit_balance': '0.00'});
+      expect(zero.inCredit, isFalse);
+      expect(zero.owes, isFalse);
+    });
+  });
+
   group('AppNotification', () {
     test('uses the subject as the title', () {
       final n = AppNotification.fromJson({

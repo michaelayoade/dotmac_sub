@@ -55,6 +55,23 @@ class LedgerTxn {
       );
 }
 
+/// The customer's wallet/credit balance (GET /me/balance). Positive means
+/// credit on file; negative means an outstanding amount.
+class AccountBalance {
+  AccountBalance({required this.creditBalance, required this.currency});
+
+  final double creditBalance;
+  final String currency;
+
+  bool get inCredit => creditBalance > 0;
+  bool get owes => creditBalance < 0;
+
+  factory AccountBalance.fromJson(Map<String, dynamic> json) => AccountBalance(
+        creditBalance: _toDouble(json['credit_balance']),
+        currency: json['currency'] as String? ?? 'NGN',
+      );
+}
+
 double _toDouble(dynamic v) {
   if (v is num) return v.toDouble();
   return double.tryParse(v?.toString() ?? '') ?? 0;

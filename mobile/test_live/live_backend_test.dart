@@ -114,6 +114,10 @@ void main() {
         '${ledger.items.isNotEmpty ? ' (e.g. ${ledger.items.first.entryType} '
             '${ledger.items.first.amount})' : ''}');
 
+    final balance = await billing.balance();
+    print('✅ /me/balance — credit=${balance.creditBalance} '
+        '${balance.currency}');
+
     final topup = await billing.topupPage();
     print('✅ /me/topup — balance=${topup.prepaidBalance} '
         'presets=${topup.presetAmounts}');
