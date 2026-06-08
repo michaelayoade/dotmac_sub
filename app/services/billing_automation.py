@@ -18,11 +18,14 @@ from app.models.billing import (
     TaxApplication,
 )
 from app.models.catalog import (
+    AddOn,
+    AddOnPrice,
     BillingCycle,
     OfferPrice,
     OfferVersionPrice,
     PriceType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
@@ -213,6 +216,74 @@ def _prorated_amount(
         Decimal(str(usage_seconds)) / Decimal(str(period_seconds)), Decimal("1.00")
     )
     return round_money(full_amount * ratio)
+
+
+def _addon_recurring_price(db: Session, add_on_id) -> tuple[Decimal, str] | None:
+    """Active recurring price for an add-on -> (amount, currency), or None when
+    it has no recurring price (one-time/usage add-ons don't bill on the cycle)."""
+    price = (
+        db.query(AddOnPrice)
+        .filter(AddOnPrice.add_on_id == add_on_id)
+        .filter(AddOnPrice.is_active.is_(True))
+        .filter(AddOnPrice.price_type == PriceType.recurring)
+        .first()
+    )
+    if price is None:
+        return None
+    return round_money(price.amount or 0), str(price.currency or "NGN")
+
+
+def _bill_recurring_addons(
+    db: Session,
+    invoice: Invoice,
+    subscription: Subscription,
+    period_start: datetime,
+    period_end: datetime,
+    tax_rate_id,
+    run_at: datetime,
+) -> int:
+    """Add an invoice line per active recurring add-on on this subscription, so
+    the monthly bill is base plan + recurring add-ons (e.g. extra IP blocks).
+    Returns the number of lines added. One-time add-ons are skipped (no recurring
+    price); add-ons in a different currency than the invoice are skipped."""
+    rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .filter(
+            (SubscriptionAddOn.end_at.is_(None))
+            | (SubscriptionAddOn.end_at > run_at)
+        )
+        .all()
+    )
+    added = 0
+    for sub_addon, add_on in rows:
+        priced = _addon_recurring_price(db, add_on.id)
+        if priced is None:
+            continue
+        unit, currency = priced
+        if currency != (invoice.currency or "NGN"):
+            continue
+        qty = Decimal(str(sub_addon.quantity or 1))
+        amount = round_money(unit * qty)
+        if amount <= Decimal("0.00"):
+            continue
+        db.add(
+            InvoiceLine(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description=(
+                    f"{add_on.name} ({period_start.date()} - {period_end.date()})"
+                ),
+                quantity=qty,
+                unit_price=unit,
+                amount=amount,
+                tax_rate_id=tax_rate_id,
+                tax_application=TaxApplication.exclusive,
+            )
+        )
+        added += 1
+    return added
 
 
 def _activate_pending_subscription(
@@ -689,6 +760,10 @@ def run_invoice_cycle(
         db.add(line)
         summary["subscriptions_billed"] += 1
         summary["lines_created"] += 1
+        # Bill active recurring add-ons (e.g. extra IP blocks) on the same invoice.
+        summary["lines_created"] += _bill_recurring_addons(
+            db, invoice, subscription, period_start, period_end, tax_rate_id, run_at
+        )
         subscription.next_billing_at = period_end
 
     if dry_run:
