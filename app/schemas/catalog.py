@@ -1137,11 +1137,15 @@ class AddonQuoteResponse(BaseModel):
 class AddonPurchaseRequest(BaseModel):
     add_on_id: UUID
     quantity: int = Field(default=1, ge=1)
+    # Client-supplied key (re-sent on retry) so a double-submit doesn't charge
+    # the wallet twice.
+    idempotency_key: str | None = Field(default=None, max_length=120)
 
 
 class AddonPurchaseResponse(BaseModel):
     success: bool
     reason: str | None = None
+    replayed: bool = False
     subscription_add_on_id: UUID | None = None
     add_on_name: str | None = None
     quantity: int | None = None

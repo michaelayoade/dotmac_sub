@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -26,6 +28,8 @@ from app.models.catalog import (
     PriceType,
     SubscriptionAddOn,
 )
+from app.models.idempotency import IdempotencyKey
+from app.models.subscriber import Subscriber
 from app.services import catalog as catalog_service
 from app.services.billing._common import get_account_credit_balance
 from app.services.common import coerce_uuid, round_money, to_decimal
@@ -174,18 +178,57 @@ def get_addon_quote(
     }
 
 
+_IDEMPOTENCY_SCOPE = "addon_purchase"
+
+
+def _lock_account(db: Session, account_id) -> None:
+    """Serialize concurrent wallet writes for an account (Postgres only); on
+    SQLite writes are already globally serialized so this is a no-op."""
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        db.query(Subscriber).filter(
+            Subscriber.id == coerce_uuid(account_id)
+        ).with_for_update().first()
+
+
+def _replay_addon_result(db: Session, ref_id: str | None) -> dict:
+    sub_add_on = db.get(SubscriptionAddOn, coerce_uuid(ref_id)) if ref_id else None
+    return {
+        "success": True,
+        "replayed": True,
+        "subscription_add_on_id": ref_id,
+        "quantity": int(getattr(sub_add_on, "quantity", 1) or 1),
+    }
+
+
 def purchase_addon(
     db: Session,
     customer: dict,
     subscription_id: str,
     add_on_id: str,
     quantity: int = 1,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Buy an add-on, charged from the wallet balance. Rejects (without any
-    write) when the balance is insufficient."""
+    write) when the balance is insufficient. Idempotent on ``idempotency_key``:
+    a replay returns the original purchase instead of charging again."""
     subscription = _owned_subscription(db, customer, subscription_id)
     if subscription is None:
         raise ValueError("Service not found")
+
+    if idempotency_key:
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == idempotency_key,
+            )
+        ).first()
+        if prior is not None:
+            return _replay_addon_result(db, prior.ref_id)
+
+    # Serialize concurrent wallet writes so two different requests can't both
+    # read the same balance and overspend.
+    _lock_account(db, subscription.subscriber_id)
 
     add_on, unit_amount, currency = _resolve_purchasable(
         db, subscription, add_on_id, quantity
@@ -228,7 +271,30 @@ def purchase_addon(
             )
         )
 
-    db.commit()
+    if idempotency_key:
+        db.flush()  # assign sub_add_on.id before referencing it
+        db.add(
+            IdempotencyKey(
+                scope=_IDEMPOTENCY_SCOPE,
+                key=idempotency_key,
+                account_id=subscription.subscriber_id,
+                ref_id=str(sub_add_on.id),
+            )
+        )
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent request with the same key won the race — return its
+        # result instead of double-charging.
+        db.rollback()
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == idempotency_key,
+            )
+        ).first()
+        return _replay_addon_result(db, prior.ref_id if prior else None)
     db.refresh(sub_add_on)
     new_balance = round_money(
         get_account_credit_balance(db, str(subscription.subscriber_id))

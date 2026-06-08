@@ -420,6 +420,7 @@ def my_addon_purchase(
             subscription_id,
             str(payload.add_on_id),
             payload.quantity,
+            idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

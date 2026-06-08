@@ -177,6 +177,56 @@ def test_purchase_charges_wallet_and_links_addon(_setup, db_session, subscriber)
     assert links[0].quantity == 2
 
 
+def test_purchase_is_idempotent_on_key(_setup, db_session, subscriber):
+    _subscriber, sub, add_on, customer = _setup
+    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+
+    first = addons.purchase_addon(
+        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="k1"
+    )
+    assert first["success"] is True
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "3000.00"
+    )
+
+    # Replay with the same key — no second charge, same add-on returned.
+    again = addons.purchase_addon(
+        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="k1"
+    )
+    assert again["success"] is True
+    assert again["replayed"] is True
+    assert again["subscription_add_on_id"] == first["subscription_add_on_id"]
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "3000.00"
+    )
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == sub.id)
+        .count()
+        == 1
+    )
+
+
+def test_different_keys_purchase_independently(_setup, db_session, subscriber):
+    _subscriber, sub, add_on, customer = _setup
+    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    addons.purchase_addon(
+        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="a"
+    )
+    addons.purchase_addon(
+        db_session, customer, str(sub.id), str(add_on.id), 1, idempotency_key="b"
+    )
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == sub.id)
+        .count()
+        == 2
+    )
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "1000.00"
+    )
+
+
 def test_purchase_rejected_when_balance_insufficient(_setup, db_session, subscriber):
     _subscriber, sub, add_on, customer = _setup
     _seed_wallet_credit(db_session, subscriber, Decimal("1000.00"))  # < 2000

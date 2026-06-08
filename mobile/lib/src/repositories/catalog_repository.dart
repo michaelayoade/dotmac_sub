@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:dio/dio.dart';
 
 import '../core/http.dart';
@@ -67,12 +69,20 @@ class CatalogRepository {
     return AddonQuote.fromJson(data as Map<String, dynamic>);
   }
 
-  /// POST …/add-ons — buy an add-on, charged from the wallet balance.
+  /// POST …/add-ons — buy an add-on, charged from the wallet balance. A fresh
+  /// idempotency key is built into the request so a transport-level retry
+  /// (e.g. the 401-refresh replay) can't charge the wallet twice.
   Future<AddonPurchaseResult> purchaseAddon(
       String subscriptionId, String addOnId, int quantity) async {
+    final key = 'addon-${DateTime.now().microsecondsSinceEpoch}-'
+        '${Random().nextInt(1 << 32)}';
     final data = await guard(() => dio.post(
           '/me/subscriptions/$subscriptionId/add-ons',
-          data: {'add_on_id': addOnId, 'quantity': quantity},
+          data: {
+            'add_on_id': addOnId,
+            'quantity': quantity,
+            'idempotency_key': key,
+          },
         ));
     return AddonPurchaseResult.fromJson(data as Map<String, dynamic>);
   }
