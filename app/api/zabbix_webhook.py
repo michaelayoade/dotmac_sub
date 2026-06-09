@@ -115,8 +115,11 @@ class ZabbixAlertPayload(BaseModel):
     item_value: str | None = Field(default=None, alias="itemValue")
     item_key: str | None = Field(default=None, alias="itemKey")
 
-    # Tags (optional, passed as JSON string or dict)
-    tags: dict[str, str] | None = None
+    # Tags (optional). Zabbix 7.0 sends a list of {tag, value} objects (with
+    # possible duplicate keys); older/alternate configs may send a flat dict.
+    # Accept both — tags are not consumed downstream, this only unblocks
+    # validation so real alerts aren't rejected.
+    tags: list[dict[str, str]] | dict[str, str] | None = None
 
     # Acknowledge info (for OK/resolved)
     ack_message: str | None = Field(default=None, alias="ackMessage")

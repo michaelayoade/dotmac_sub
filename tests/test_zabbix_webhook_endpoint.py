@@ -94,3 +94,54 @@ def test_authenticated_valid_payload_creates_alert(client):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["alert_id"]
+
+
+# Real captured Zabbix 7.0 payload: `tags` is a list of {tag, value} objects
+# (with duplicate keys), which previously 422'd against a dict-typed field.
+_REAL_ZABBIX_PAYLOAD = {
+    "triggerId": "31354",
+    "triggerName": "High ICMP ping response time",
+    "triggerStatus": "OK",
+    "triggerSeverity": "Warning",
+    "triggerUrl": "",
+    "hostId": "10752",
+    "hostName": "Apapa Access",
+    "hostIp": "102.220.189.249",
+    "eventId": "4005952",
+    "eventTime": "11:56:31",
+    "eventDate": "2026.06.09",
+    "eventValue": "0",
+    "itemId": "65673",
+    "itemName": "ICMP response time",
+    "itemValue": "232ms",
+    "itemKey": "icmppingsec",
+    "tags": [
+        {"tag": "scope", "value": "availability"},
+        {"tag": "scope", "value": "performance"},
+        {"tag": "component", "value": "health"},
+        {"tag": "class", "value": "network"},
+    ],
+}
+
+
+def test_real_zabbix_payload_with_list_tags_is_accepted(client):
+    """Zabbix 7.0 list-of-objects tags must validate (was the cause of the
+    422 storm on production)."""
+    resp = client.post(
+        _URL,
+        content=json.dumps(_REAL_ZABBIX_PAYLOAD),
+        headers={"X-Zabbix-Token": _SECRET, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "ok"
+
+
+def test_dict_tags_still_accepted(client):
+    """Flat-dict tags (legacy/alternate configs) remain valid."""
+    payload = {**_VALID_PAYLOAD, "tags": {"scope": "availability"}}
+    resp = client.post(
+        _URL,
+        content=json.dumps(payload),
+        headers={"X-Zabbix-Token": _SECRET, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text
