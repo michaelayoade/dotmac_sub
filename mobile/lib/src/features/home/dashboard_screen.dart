@@ -34,8 +34,23 @@ class DashboardScreen extends ConsumerWidget {
 
     // --- Summary values (null while loading) ---
     final subList = subs.asData?.value.items;
-    final activeServices = subList?.where((s) => s.isActive).length;
-    final hasSuspended = subList?.any((s) => !s.isActive) ?? false;
+    // Services the customer can fix by paying (blocked/suspended). The
+    // provider already drops terminated plans, so this can't false-alarm
+    // on history.
+    final needsPayment = subList?.where((s) => s.needsPayment).toList() ??
+        const <Subscription>[];
+
+    // The service the dashboard is "about": the user's switcher pick, else
+    // the shared current-service rule. Drives the days-left stat and the
+    // Current service card below.
+    Subscription? currentService;
+    if (subList != null && subList.isNotEmpty) {
+      final selectedId = ref.watch(selectedServiceIdProvider);
+      currentService = subList.firstWhere(
+        (s) => s.id == selectedId,
+        orElse: () => pickCurrentService(subList),
+      );
+    }
 
     final invItems = invoices.asData?.value.items;
     final outstanding = invItems
@@ -95,13 +110,20 @@ class DashboardScreen extends ConsumerWidget {
             _ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
+              ipAddress: currentService?.ipv4Address,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
-              suspended: hasSuspended,
+              suspendedMessage: _suspendedMessage(
+                needsPayment,
+                outstanding: outstanding,
+                currency: currency,
+              ),
               known: subList != null,
-              // A suspended service is resolved by paying — deep-link to billing.
-              onTap: hasSuspended ? () => context.go('/billing') : null,
+              // A blocked/suspended service is resolved by paying — deep-link
+              // to billing.
+              onTap:
+                  needsPayment.isNotEmpty ? () => context.go('/billing') : null,
             ),
             if (fup?.needsAttention ?? false) ...[
               const SizedBox(height: 12),
@@ -137,9 +159,11 @@ class DashboardScreen extends ConsumerWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _StatCard(
-                    icon: Icons.router_outlined,
-                    label: 'Services',
-                    value: activeServices?.toString() ?? '—',
+                    icon: Icons.hourglass_bottom_outlined,
+                    label: 'Days left',
+                    value: _daysLeftLabel(subList, currentService),
+                    // Urgent when expiring within 3 days or already expired.
+                    highlight: (currentService?.daysUntilExpiry ?? 99) <= 3,
                     onTap: () => context.go('/billing'),
                   ),
                 ),
@@ -207,16 +231,55 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
+/// Days-left figure for the stat row: '—' while loading or when the service
+/// has no known expiry, otherwise the (urgency-worded) day count.
+String _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
+  if (subList == null) return '—';
+  final days = service?.daysUntilExpiry;
+  return switch (days) {
+    null => '—',
+    < 0 => 'Expired',
+    0 => 'Today',
+    _ => '$days',
+  };
+}
+
+/// Status-banner copy when service(s) are blocked/suspended: names the plan
+/// and, when we know the amount due, makes the ask concrete. Null = all good.
+String? _suspendedMessage(
+  List<Subscription> needsPayment, {
+  required double? outstanding,
+  required String currency,
+}) {
+  if (needsPayment.isEmpty) return null;
+  final action = (outstanding != null && outstanding > 0)
+      ? 'pay ${Fmt.moneyCompact(outstanding, currency)} to restore'
+      : 'tap to pay';
+  if (needsPayment.length > 1) {
+    return '${needsPayment.length} services suspended — $action';
+  }
+  final service = needsPayment.first;
+  final word = service.status == 'blocked' ? 'blocked' : 'suspended';
+  return '${service.displayName} $word — $action';
+}
+
 /// Network connection status — the headline reason customers open the app.
 /// Derived from whether an open RADIUS accounting session exists.
 class _ConnectionBanner extends StatelessWidget {
-  const _ConnectionBanner({required this.session, required this.known});
+  const _ConnectionBanner({
+    required this.session,
+    required this.known,
+    this.ipAddress,
+  });
 
   /// The active session, or null when offline. Only meaningful when [known].
   final AccountingSession? session;
 
   /// True once the sessions request has resolved with data.
   final bool known;
+
+  /// The current service's IPv4 address, when assigned.
+  final String? ipAddress;
 
   @override
   Widget build(BuildContext context) {
@@ -233,12 +296,15 @@ class _ConnectionBanner extends StatelessWidget {
       text = 'Checking connection…';
     } else if (session != null) {
       final start = session!.sessionStart;
+      final ip = ipAddress;
       bg = scheme.secondaryContainer;
       fg = scheme.onSecondaryContainer;
       icon = Icons.wifi;
-      text = start == null
-          ? 'Connected'
-          : 'Connected · session up ${Fmt.uptime(start)}';
+      text = [
+        'Connected',
+        if (start != null) 'up ${Fmt.uptime(start)}',
+        if (ip != null && ip.isNotEmpty) ip,
+      ].join(' · ');
     } else {
       bg = scheme.errorContainer;
       fg = scheme.onErrorContainer;
@@ -268,11 +334,14 @@ class _ConnectionBanner extends StatelessWidget {
 
 class _StatusBanner extends StatelessWidget {
   const _StatusBanner({
-    required this.suspended,
+    required this.suspendedMessage,
     required this.known,
     this.onTap,
   });
-  final bool suspended;
+
+  /// Concrete attention message ("Unlimited Lite blocked — pay ₦5k to
+  /// restore"); null when every service is in good standing.
+  final String? suspendedMessage;
   final bool known;
   final VoidCallback? onTap;
 
@@ -286,12 +355,12 @@ class _StatusBanner extends StatelessWidget {
             Icons.hourglass_empty,
             'Loading your account…'
           )
-        : suspended
+        : suspendedMessage != null
             ? (
                 scheme.errorContainer,
                 scheme.onErrorContainer,
                 Icons.warning_amber_rounded,
-                'A service is suspended — tap to pay'
+                suspendedMessage!
               )
             : (
                 scheme.primaryContainer,

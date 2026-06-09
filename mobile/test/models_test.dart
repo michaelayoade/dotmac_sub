@@ -184,6 +184,43 @@ void main() {
       expect(s.daysUntilExpiry, isNotNull);
       expect(s.daysUntilExpiry! < 0, isTrue);
     });
+
+    Subscription withStatus(String status) => Subscription(
+          id: 's',
+          accountId: 'a',
+          offerId: 'o',
+          status: status,
+          billingMode: 'prepaid',
+        );
+
+    test('isCurrent excludes terminal/historical statuses', () {
+      for (final status in [
+        'pending',
+        'active',
+        'blocked',
+        'suspended',
+        'stopped'
+      ]) {
+        expect(withStatus(status).isCurrent, isTrue, reason: status);
+      }
+      for (final status in [
+        'disabled',
+        'canceled',
+        'expired',
+        'hidden',
+        'archived'
+      ]) {
+        expect(withStatus(status).isCurrent, isFalse, reason: status);
+      }
+    });
+
+    test('needsPayment only for blocked and suspended', () {
+      expect(withStatus('blocked').needsPayment, isTrue);
+      expect(withStatus('suspended').needsPayment, isTrue);
+      for (final status in ['active', 'pending', 'stopped', 'disabled']) {
+        expect(withStatus(status).needsPayment, isFalse, reason: status);
+      }
+    });
   });
 
   group('PlanChangeQuote', () {

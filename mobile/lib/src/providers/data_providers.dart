@@ -128,7 +128,19 @@ final autopayStatusProvider =
 final subscriptionsProvider =
     FutureProvider.autoDispose<Page<Subscription>>((ref) async {
   cacheFor(ref);
-  return ref.watch(catalogRepositoryProvider).subscriptions();
+  final page = await ref.watch(catalogRepositoryProvider).subscriptions();
+  // The API returns the subscriber's full history, including terminated
+  // plans (disabled/canceled/hidden). The app only ever presents
+  // operationally-current services, so drop the rest here — otherwise a
+  // historical plan haunts the dashboard switcher and trips the
+  // "service suspended" banner forever.
+  final current = page.items.where((s) => s.isCurrent).toList();
+  return Page(
+    items: current,
+    count: current.length,
+    limit: page.limit,
+    offset: page.offset,
+  );
 });
 
 /// The customer's single *current* service: prefer an active subscription, then

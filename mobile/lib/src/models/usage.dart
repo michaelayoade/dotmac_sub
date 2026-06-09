@@ -67,6 +67,7 @@ class AccountingSession {
     required this.statusType,
     this.sessionStart,
     this.sessionEnd,
+    this.lastUpdateAt,
     this.inputOctets,
     this.outputOctets,
     this.terminateCause,
@@ -78,6 +79,11 @@ class AccountingSession {
   final String statusType;
   final DateTime? sessionStart;
   final DateTime? sessionEnd;
+
+  /// Most recent accounting observation (interim update or stop). For an
+  /// active session this is when it was last seen alive — connect time alone
+  /// can be days old on a healthy always-on PPPoE session.
+  final DateTime? lastUpdateAt;
   final int? inputOctets;
   final int? outputOctets;
   final String? terminateCause;
@@ -88,6 +94,8 @@ class AccountingSession {
 
   bool get isActive => sessionEnd == null;
 
+  DateTime? get lastSeenAt => lastUpdateAt ?? sessionEnd ?? sessionStart;
+
   factory AccountingSession.fromJson(Map<String, dynamic> json) =>
       AccountingSession(
         id: json['id'].toString(),
@@ -96,6 +104,7 @@ class AccountingSession {
         statusType: json['status_type'].toString(),
         sessionStart: _toDate(json['session_start']),
         sessionEnd: _toDate(json['session_end']),
+        lastUpdateAt: _toDate(json['last_update_at']),
         inputOctets: (json['input_octets'] as num?)?.toInt(),
         outputOctets: (json['output_octets'] as num?)?.toInt(),
         terminateCause: json['terminate_cause'] as String?,
