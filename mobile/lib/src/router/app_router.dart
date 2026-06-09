@@ -121,102 +121,116 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
         ],
       ),
-      // Authenticated shell with bottom navigation.
-      ShellRoute(
-        builder: (_, __, child) => HomeShell(child: child),
-        routes: [
-          GoRoute(
-            path: '/dashboard',
-            builder: (_, __) => const DashboardScreen(),
-            routes: [
-              GoRoute(
-                path: 'notifications',
-                builder: (_, __) => const NotificationsScreen(),
-              ),
-            ],
-          ),
-          GoRoute(
-            path: '/billing',
-            builder: (_, __) => const InvoicesScreen(),
-            routes: [
-              GoRoute(
-                path: 'invoices/:id',
-                builder: (_, state) =>
-                    InvoiceDetailScreen(invoiceId: state.pathParameters['id']!),
-              ),
-            ],
-          ),
-          GoRoute(path: '/usage', builder: (_, __) => const UsageScreen()),
-          GoRoute(
-            path: '/support',
-            builder: (_, __) => const TicketsScreen(),
-            routes: [
-              GoRoute(
-                path: 'new',
-                builder: (_, __) => const CreateTicketScreen(),
-              ),
-              GoRoute(
-                path: ':id',
-                builder: (_, state) =>
-                    TicketDetailScreen(ticketId: state.pathParameters['id']!),
-              ),
-            ],
-          ),
-          GoRoute(
-            path: '/profile',
-            builder: (_, __) => const ProfileScreen(),
-            routes: [
-              GoRoute(
-                path: 'sessions',
-                builder: (_, __) => const SessionsScreen(),
-              ),
-              GoRoute(
-                path: 'payment-methods',
-                builder: (_, __) => const PaymentMethodsScreen(),
-              ),
-              GoRoute(
-                path: 'settings',
-                builder: (_, __) => const SettingsScreen(),
-              ),
-            ],
-          ),
-          // Service drill-down + its sub-screens. The originating screen
-          // passes the Subscription via `extra`; deep links resolve the id
-          // from the subscriptions cache (see ServiceRoute).
-          GoRoute(
-            path: '/service/:id',
-            builder: (_, state) => ServiceRoute(
-              id: state.pathParameters['id']!,
-              initial: state.extra as Subscription?,
-              builder: (s) => ServiceDetailScreen(service: s),
+      // Authenticated shell with bottom navigation. An indexed-stack shell
+      // keeps every tab's navigation stack and widget state alive across tab
+      // switches (scroll positions, the Billing sub-tabs, filters).
+      StatefulShellRoute.indexedStack(
+        builder: (_, __, navigationShell) =>
+            HomeShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/dashboard',
+              builder: (_, __) => const DashboardScreen(),
+              routes: [
+                GoRoute(
+                  path: 'notifications',
+                  builder: (_, __) => const NotificationsScreen(),
+                ),
+              ],
             ),
-            routes: [
-              GoRoute(
-                path: 'change-plan',
-                builder: (_, state) => ServiceRoute(
-                  id: state.pathParameters['id']!,
-                  initial: state.extra as Subscription?,
-                  builder: (s) => ChangePlanScreen(service: s),
-                ),
+            // Service drill-down + its sub-screens, in the Home branch (it is
+            // entered from the dashboard). The originating screen passes the
+            // Subscription via `extra`; deep links resolve the id from the
+            // subscriptions cache (see ServiceRoute).
+            GoRoute(
+              path: '/service/:id',
+              builder: (_, state) => ServiceRoute(
+                id: state.pathParameters['id']!,
+                initial: state.extra as Subscription?,
+                builder: (s) => ServiceDetailScreen(service: s),
               ),
-              GoRoute(
-                path: 'addons',
-                builder: (_, state) => ServiceRoute(
-                  id: state.pathParameters['id']!,
-                  initial: state.extra as Subscription?,
-                  builder: (s) => AddOnsScreen(service: s),
+              routes: [
+                GoRoute(
+                  path: 'change-plan',
+                  builder: (_, state) => ServiceRoute(
+                    id: state.pathParameters['id']!,
+                    initial: state.extra as Subscription?,
+                    builder: (s) => ChangePlanScreen(service: s),
+                  ),
                 ),
-              ),
-              GoRoute(
-                path: 'buy-data',
-                builder: (_, state) => ServiceRoute(
-                  id: state.pathParameters['id']!,
-                  initial: state.extra as Subscription?,
-                  builder: (s) => DataBundleScreen(service: s),
+                GoRoute(
+                  path: 'addons',
+                  builder: (_, state) => ServiceRoute(
+                    id: state.pathParameters['id']!,
+                    initial: state.extra as Subscription?,
+                    builder: (s) => AddOnsScreen(service: s),
+                  ),
                 ),
-              ),
-            ],
-          ),
+                GoRoute(
+                  path: 'buy-data',
+                  builder: (_, state) => ServiceRoute(
+                    id: state.pathParameters['id']!,
+                    initial: state.extra as Subscription?,
+                    builder: (s) => DataBundleScreen(service: s),
+                  ),
+                ),
+              ],
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/billing',
+              builder: (_, __) => const InvoicesScreen(),
+              routes: [
+                GoRoute(
+                  path: 'invoices/:id',
+                  builder: (_, state) => InvoiceDetailScreen(
+                      invoiceId: state.pathParameters['id']!),
+                ),
+              ],
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(path: '/usage', builder: (_, __) => const UsageScreen()),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/support',
+              builder: (_, __) => const TicketsScreen(),
+              routes: [
+                GoRoute(
+                  path: 'new',
+                  builder: (_, __) => const CreateTicketScreen(),
+                ),
+                GoRoute(
+                  path: ':id',
+                  builder: (_, state) =>
+                      TicketDetailScreen(ticketId: state.pathParameters['id']!),
+                ),
+              ],
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/profile',
+              builder: (_, __) => const ProfileScreen(),
+              routes: [
+                GoRoute(
+                  path: 'sessions',
+                  builder: (_, __) => const SessionsScreen(),
+                ),
+                GoRoute(
+                  path: 'payment-methods',
+                  builder: (_, __) => const PaymentMethodsScreen(),
+                ),
+                GoRoute(
+                  path: 'settings',
+                  builder: (_, __) => const SettingsScreen(),
+                ),
+              ],
+            ),
+          ]),
         ],
       ),
     ],
