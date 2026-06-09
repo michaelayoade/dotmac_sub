@@ -18,8 +18,32 @@
 
 {% block content %}
 <div class="mt-6 space-y-6 lg:space-y-8 stagger-children">
+    {% set search_param = '&search=' ~ (search | urlencode) if search else '' %}
     <!-- Accounts Table -->
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+        {% if total_pages and total_pages > 1 %}
+        <div class="flex flex-col items-center justify-between gap-4 border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60 sm:flex-row">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Showing
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ ((page - 1) * per_page) + 1 }}</span>
+                to
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ [page * per_page, total] | min }}</span>
+                of
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span>
+                accounts
+            </p>
+            <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <span>Show</span>
+                <select onchange="window.location.href='/reseller/accounts?page=1&per_page=' + this.value + '{{ search_param }}'"
+                        class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 dark:bg-slate-700 dark:text-slate-300">
+                    {% for size in [10, 20, 50, 100] %}
+                    <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
+                    {% endfor %}
+                </select>
+                <span>rows</span>
+            </div>
+        </div>
+        {% endif %}
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200/60 dark:divide-slate-700/60">
                 <thead>
@@ -124,29 +148,8 @@
             </table>
         </div>
         {% if total_pages and total_pages > 1 %}
-        {% set search_param = '&search=' ~ (search | urlencode) if search else '' %}
-        <div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60 sm:flex-row">
-            <p class="text-sm text-slate-500 dark:text-slate-400">
-                Showing
-                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ ((page - 1) * per_page) + 1 }}</span>
-                to
-                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ [page * per_page, total] | min }}</span>
-                of
-                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span>
-                accounts
-            </p>
-            <div class="flex flex-wrap items-center justify-center gap-4">
-                <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                    <span>Show</span>
-                    <select onchange="window.location.href='/reseller/accounts?page=1&per_page=' + this.value + '{{ search_param }}'"
-                            class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 dark:bg-slate-700 dark:text-slate-300">
-                        {% for size in [10, 20, 50, 100] %}
-                        <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
-                        {% endfor %}
-                    </select>
-                    <span>rows</span>
-                </div>
-                <div class="flex items-center gap-2">
+        <div class="flex items-center justify-center border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <div class="flex items-center gap-2">
                     {% if has_prev %}
                     <a href="/reseller/accounts?page={{ page - 1 }}&per_page={{ per_page }}{{ search_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -167,7 +170,6 @@
                     </a>
                     {% endif %}
                 </div>
-            </div>
         </div>
         {% endif %}
     </div>

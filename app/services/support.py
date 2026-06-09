@@ -19,6 +19,7 @@ from app.models.support import (
     TicketAssignee,
     TicketChannel,
     TicketComment,
+    TicketCommentAuthorType,
     TicketLink,
     TicketMerge,
     TicketSlaEvent,
@@ -80,6 +81,24 @@ def _coerce_subscriber_uuid(db: Session, value: str | UUID | None) -> UUID | Non
     if not uid:
         return None
     return uid if db.get(Subscriber, uid) else None
+
+
+def _coerce_system_user_uuid(db: Session, value: str | UUID | None) -> UUID | None:
+    """Return the UUID only when it points at a real system user row."""
+    from app.models.system_user import SystemUser
+
+    uid = _coerce_uuid(str(value)) if value is not None else None
+    if not uid:
+        return None
+    return uid if db.get(SystemUser, uid) else None
+
+
+def _normalize_comment_author_type(value: object) -> str:
+    if hasattr(value, "value"):
+        value = value.value
+    text = str(value or "").strip()
+    allowed = {item.value for item in TicketCommentAuthorType}
+    return text if text in allowed else TicketCommentAuthorType.system.value
 
 
 def _ensure_not_merged_source(ticket: Ticket) -> None:
@@ -324,9 +343,24 @@ class TicketComments:
         request=None,
     ) -> TicketComment:
         _ensure_not_merged_source(ticket)
+        author_type = _normalize_comment_author_type(payload.author_type)
+        author_person_id = _coerce_subscriber_uuid(db, payload.author_person_id)
+        author_system_user_id = _coerce_system_user_uuid(
+            db, payload.author_system_user_id
+        )
+        if author_type == TicketCommentAuthorType.customer.value:
+            author_system_user_id = None
+        elif author_type == TicketCommentAuthorType.staff.value:
+            author_person_id = None
+        else:
+            author_person_id = None
+            author_system_user_id = None
+
         comment = TicketComment(
             ticket_id=ticket.id,
-            author_person_id=_coerce_subscriber_uuid(db, payload.author_person_id),
+            author_person_id=author_person_id,
+            author_type=author_type,
+            author_system_user_id=author_system_user_id,
             body=payload.body.strip(),
             is_internal=payload.is_internal,
             attachments=[item.model_dump() for item in payload.attachments],

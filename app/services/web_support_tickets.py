@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
-from app.models.support import Ticket, TicketChannel
+from app.models.support import Ticket, TicketChannel, TicketCommentAuthorType
 from app.schemas.support import (
     AttachmentMeta,
     TicketCommentCreate,
@@ -438,7 +438,8 @@ def build_ticket_comment_payload(
     return TicketCommentCreate(
         body=body,
         is_internal=is_internal,
-        author_person_id=parse_uuid_or_none(actor_id),
+        author_type=TicketCommentAuthorType.staff,
+        author_system_user_id=parse_uuid_or_none(actor_id),
         attachments=[AttachmentMeta(**item) for item in uploaded],
     )
 
@@ -786,6 +787,9 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    comments = support_service.ticket_comments.list(
+        db, str(ticket.id), limit=500, offset=0
+    )
     status_options = _append_missing_option(status_options, ticket.status)
     priority_options = _append_missing_option(priority_options, ticket.priority)
     staff = support_service.list_assignment_people(
@@ -797,6 +801,11 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
                 ticket.ticket_manager_person_id,
                 ticket.site_coordinator_person_id,
                 *[row.person_id for row in (ticket.assignees or [])],
+                *[
+                    comment.author_system_user_id
+                    for comment in comments
+                    if getattr(comment, "author_system_user_id", None)
+                ],
             ]
         ),
     )
@@ -807,14 +816,17 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
                 ticket.customer_person_id,
                 ticket.customer_account_id,
                 ticket.subscriber_id,
+                *[
+                    comment.author_person_id
+                    for comment in comments
+                    if getattr(comment, "author_person_id", None)
+                ],
             ]
         ),
     )
     return {
         "ticket": ticket,
-        "comments": support_service.ticket_comments.list(
-            db, str(ticket.id), limit=500, offset=0
-        ),
+        "comments": comments,
         "sla_events": support_service.ticket_sla_events.list(
             db, str(ticket.id), limit=200, offset=0
         ),

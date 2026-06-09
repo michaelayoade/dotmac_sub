@@ -461,6 +461,12 @@ class TestResellerNavigation:
         assert "/reseller/billing/pay/intent" not in billing
         assert "Pay now" not in billing
 
+    def test_billing_shows_view_as_customer_action(self) -> None:
+        billing = Path("templates/reseller/billing/index.html").read_text()
+
+        assert "/reseller/accounts/{{ s.subscriber_id }}/view" in billing
+        assert "View as customer" in billing
+
     def test_profile_update_changes_phone(self, db_session) -> None:
         from app.models.subscriber import Reseller
 

@@ -21,6 +21,40 @@ def _request() -> Request:
     )
 
 
+def test_invalidate_session_revokes_backing_auth_session(db_session, person):
+    """Logout revokes the underlying auth_flow session, not just the local one."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+    from app.services import reseller_portal
+
+    auth_session = AuthSession(
+        subscriber_id=person.id,
+        status=SessionStatus.active,
+        token_hash="reseller-logout-token",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    db_session.add(auth_session)
+    db_session.commit()
+
+    token = reseller_portal._create_session(
+        username="reseller@example.com",
+        subscriber_id=str(person.id),
+        reseller_id=str(person.id),
+        remember=False,
+        db=db_session,
+        auth_session_id=str(auth_session.id),
+    )
+
+    reseller_portal.invalidate_session(token, db_session)
+
+    db_session.refresh(auth_session)
+    assert auth_session.status == SessionStatus.revoked
+    # Local portal session is gone too.
+    assert reseller_portal._get_session(token) is None
+
+
 def test_password_reset_email_for_identifier_uses_local_username(db_session, person):
     from app.models.auth import AuthProvider, UserCredential
 

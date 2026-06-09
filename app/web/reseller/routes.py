@@ -8,7 +8,19 @@ from app.db import get_db
 from app.services import web_reseller_billing as web_reseller_billing_service
 from app.services import web_reseller_routes as web_reseller_routes_service
 
-router = APIRouter(prefix="/reseller", tags=["web-reseller"])
+
+def _reseller_auth_guard(request: Request, db: Session = Depends(get_db)):
+    # Thin wrapper so the guard resolves at request time, avoiding the
+    # import cycle that referencing the service attribute at module load
+    # (in dependencies=) would trigger via the shared branding/app.web chain.
+    return web_reseller_routes_service.require_reseller_context(request, db)
+
+
+router = APIRouter(
+    prefix="/reseller",
+    tags=["web-reseller"],
+    dependencies=[Depends(_reseller_auth_guard)],
+)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -111,6 +123,11 @@ def reseller_profile_update(
 
 @router.post("/profile/mfa/setup", response_class=HTMLResponse)
 def reseller_mfa_setup(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_mfa_setup(request, db)
+
+
+@router.get("/profile/mfa/setup", response_class=HTMLResponse)
+def reseller_mfa_setup_page(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_mfa_setup(request, db)
 
 

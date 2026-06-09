@@ -43,11 +43,20 @@
                 <article class="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-600 dark:bg-slate-700/30">
                     <div class="mb-2 flex items-center justify-between gap-2">
                         <div class="flex items-center gap-2">
+                            {% set author_type = comment.author_type or 'system' %}
+                            {% set author_label = 'System' %}
+                            {% if author_type == 'customer' and comment.author_person_id %}
+                                {% set author_label = subscriber_lookup.get(comment.author_person_id|string, comment.author_person_id|string) %}
+                            {% elif author_type == 'staff' and comment.author_system_user_id %}
+                                {% set author_label = staff_lookup.get(comment.author_system_user_id|string, comment.author_system_user_id|string) %}
+                            {% elif comment.author_person_id %}
+                                {% set author_label = subscriber_lookup.get(comment.author_person_id|string, comment.author_person_id|string) %}
+                            {% endif %}
                             <div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-                                {{ (comment.author_person_id|string)[:2]|upper if comment.author_person_id else 'SY' }}
+                                {{ author_label[:2]|upper }}
                             </div>
                             <div>
-                                <p class="text-xs font-semibold text-slate-800 dark:text-slate-100">{{ comment.author_person_id or 'System' }}</p>
+                                <p class="text-xs font-semibold text-slate-800 dark:text-slate-100">{{ author_label }}</p>
                                 <p class="text-[11px] text-slate-500 dark:text-slate-400">{{ comment.created_at.strftime('%Y-%m-%d %H:%M') if comment.created_at else '' }}</p>
                             </div>
                             {% if comment.is_internal %}<span class="rounded-lg bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Internal Note</span>{% endif %}

@@ -164,25 +164,10 @@ def _build_migration_options(
     db: Session,
     subscription: Subscription,
 ) -> list[dict[str, str]]:
-    current_offer = (
-        db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
-    )
-    if not current_offer:
-        return []
-
-    all_portal_offers = get_available_portal_offers(db)
     options: list[dict[str, str]] = []
     seen: set[str] = set()
-    for offer in all_portal_offers:
+    for offer in _build_migration_offers(db, subscription):
         family = str(offer.plan_family or "").strip().lower()
-        if not family or family == str(current_offer.plan_family or "").strip().lower():
-            continue
-        if offer.service_type != current_offer.service_type:
-            continue
-        if offer.billing_mode != current_offer.billing_mode:
-            continue
-        if str(offer.region_zone_id or "") != str(current_offer.region_zone_id or ""):
-            continue
         if family in seen:
             continue
         seen.add(family)
@@ -195,6 +180,32 @@ def _build_migration_options(
             }
         )
     return options
+
+
+def _build_migration_offers(
+    db: Session,
+    subscription: Subscription,
+) -> list[CatalogOffer]:
+    current_offer = (
+        db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
+    )
+    if not current_offer:
+        return []
+
+    all_portal_offers = get_available_portal_offers(db)
+    offers: list[CatalogOffer] = []
+    for offer in all_portal_offers:
+        family = str(offer.plan_family or "").strip().lower()
+        if not family or family == str(current_offer.plan_family or "").strip().lower():
+            continue
+        if offer.service_type != current_offer.service_type:
+            continue
+        if offer.billing_mode != current_offer.billing_mode:
+            continue
+        if str(offer.region_zone_id or "") != str(current_offer.region_zone_id or ""):
+            continue
+        offers.append(offer)
+    return offers
 
 
 def get_change_plan_page(
@@ -226,6 +237,7 @@ def get_change_plan_page(
     # proration calc per available offer, making this page take ~46s for large
     # catalogs and time out on submit (which could saturate workers / crash the app).
     quote_map: dict[str, dict[str, object]] = {}
+    migration_offers = _build_migration_offers(db, subscription)
 
     return {
         "subscription": subscription,
@@ -235,6 +247,10 @@ def get_change_plan_page(
             str(offer.id): get_offer_price_summary(offer) for offer in available_offers
         },
         "available_offers": available_offers,
+        "migration_offers": migration_offers,
+        "migration_offer_summaries": {
+            str(offer.id): get_offer_price_summary(offer) for offer in migration_offers
+        },
         "available_offer_change_quotes": quote_map,
         "current_wallet_balance": wallet_balance,
         "migration_options": _build_migration_options(db, subscription),
@@ -356,6 +372,7 @@ def get_change_plan_error_context(
         else None
     )
     available_offers = get_available_portal_offers(db, subscription)
+    migration_offers = _build_migration_offers(db, subscription) if subscription else []
     current_offer = (
         db.get(CatalogOffer, subscription.offer_id)
         if subscription and subscription.offer_id
@@ -372,6 +389,10 @@ def get_change_plan_error_context(
             str(offer.id): get_offer_price_summary(offer) for offer in available_offers
         },
         "available_offers": available_offers,
+        "migration_offers": migration_offers,
+        "migration_offer_summaries": {
+            str(offer.id): get_offer_price_summary(offer) for offer in migration_offers
+        },
         "available_offer_change_quotes": (
             page_data.get("available_offer_change_quotes", {})
             if page_data is not None
