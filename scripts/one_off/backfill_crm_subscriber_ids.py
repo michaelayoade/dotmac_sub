@@ -56,6 +56,7 @@ def backfill(db, client: CRMClient, *, dry_run: bool = False) -> dict[str, int]:
     stats = {
         "splynx_linked": 0,
         "erpnext_linked": 0,
+        "alias_linked": 0,
         "already_linked": 0,
         "conflicts": 0,
         "ambiguous_names": 0,
@@ -68,19 +69,32 @@ def backfill(db, client: CRMClient, *, dry_run: bool = False) -> dict[str, int]:
             Subscriber.crm_subscriber_id.isnot(None)
         )
     }
+    # Mirrors would-be column state so dry runs see the same collisions a live
+    # run does (the CRM holds many customers twice: splynx + erpnext records).
+    assigned: dict[UUID, UUID] = {}
+
+    def _add_alias(subscriber: Subscriber, crm_id: UUID) -> bool:
+        metadata = dict(subscriber.metadata_ or {})
+        aliases = [str(a) for a in metadata.get("crm_alias_ids") or []]
+        if str(crm_id) in aliases:
+            return False
+        aliases.append(str(crm_id))
+        if not dry_run:
+            metadata["crm_alias_ids"] = aliases
+            subscriber.metadata_ = metadata
+        return True
 
     def link(subscriber: Subscriber, crm_id: UUID, bucket: str) -> None:
-        if subscriber.crm_subscriber_id:
-            if subscriber.crm_subscriber_id == crm_id:
+        current = subscriber.crm_subscriber_id or assigned.get(subscriber.id)
+        if current:
+            if current == crm_id:
                 stats["already_linked"] += 1
+            elif _add_alias(subscriber, crm_id):
+                # Same customer, second CRM record: keep as an alias so
+                # tickets attached to either CRM record map locally.
+                stats["alias_linked"] += 1
             else:
-                stats["conflicts"] += 1
-                logger.warning(
-                    "subscriber %s already linked to CRM %s, CRM offered %s",
-                    subscriber.id,
-                    subscriber.crm_subscriber_id,
-                    crm_id,
-                )
+                stats["already_linked"] += 1
             return
         if crm_id in taken_crm_ids:
             stats["conflicts"] += 1
@@ -92,6 +106,7 @@ def backfill(db, client: CRMClient, *, dry_run: bool = False) -> dict[str, int]:
             return
         if not dry_run:
             subscriber.crm_subscriber_id = crm_id
+        assigned[subscriber.id] = crm_id
         taken_crm_ids.add(crm_id)
         stats[bucket] += 1
 

@@ -212,15 +212,35 @@ def _find_local_subscriber_id_from_ticket_text(
 
 
 def load_local_crm_id_map(db: Session) -> dict[str, UUID]:
-    """Map stored CRM subscriber UUIDs to local subscriber IDs."""
-    return {
-        str(crm_subscriber_id): subscriber_id
-        for crm_subscriber_id, subscriber_id in db.query(
-            Subscriber.crm_subscriber_id, Subscriber.id
-        )
-        .filter(Subscriber.crm_subscriber_id.isnot(None))
+    """Map stored CRM subscriber UUIDs (and aliases) to local subscriber IDs.
+
+    The CRM holds some customers twice (a splynx-sourced and an erpnext-sourced
+    record). The primary link lives in crm_subscriber_id; duplicate CRM ids are
+    kept in metadata crm_alias_ids so tickets attached to either record map to
+    the same local subscriber.
+    """
+    mapping: dict[str, UUID] = {}
+    for subscriber_id, metadata in (
+        db.query(Subscriber.id, Subscriber.metadata_)
+        .filter(Subscriber.metadata_.isnot(None))
         .all()
-    }
+    ):
+        for alias in (metadata or {}).get("crm_alias_ids") or []:
+            alias_key = str(alias).strip()
+            if alias_key:
+                mapping[alias_key] = subscriber_id
+    # Primary links win over aliases on any key collision.
+    mapping.update(
+        {
+            str(crm_subscriber_id): subscriber_id
+            for crm_subscriber_id, subscriber_id in db.query(
+                Subscriber.crm_subscriber_id, Subscriber.id
+            )
+            .filter(Subscriber.crm_subscriber_id.isnot(None))
+            .all()
+        }
+    )
+    return mapping
 
 
 def _persist_crm_subscriber_id(
