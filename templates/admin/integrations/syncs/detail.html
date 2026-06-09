@@ -1,0 +1,262 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ job.name }} - Syncs{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/integrations/syncs" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ job.name }}</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ job.adapter_key or 'custom' }} / {{ job.action or 'unconfigured' }}</p>
+            </div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            {% if job.adapter_key == 'crm' and job.action == 'pull_tickets' and not records %}
+            <form method="post" action="/admin/integrations/syncs/{{ job.id }}/backfill-crm-history">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Backfill History
+                </button>
+            </form>
+            {% endif %}
+            <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Run Now
+                </button>
+            </form>
+        </div>
+    </div>
+
+    {% if request.query_params.get('queued') %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Sync run queued.
+    </div>
+    {% endif %}
+    {% if request.query_params.get('saved') %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Sync profile updated.
+    </div>
+    {% endif %}
+    {% if request.query_params.get('backfilled') %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Existing CRM ticket import history backfilled.
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Configuration</h2>
+            <dl class="mt-4 space-y-3 text-sm">
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Target</dt><dd class="text-right text-slate-900 dark:text-white">{{ job.target.name if job.target else '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Connector</dt><dd class="text-right text-slate-900 dark:text-white">{{ job.target.connector_config.name if job.target and job.target.connector_config else '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Direction</dt><dd class="text-right text-slate-900 dark:text-white">{{ (job.direction or 'sync') | title }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Entity</dt><dd class="text-right text-slate-900 dark:text-white">{{ (job.entity_type or '-') | title }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Conflict Policy</dt><dd class="text-right text-slate-900 dark:text-white">{{ (job.conflict_policy or '-') | replace('_', ' ') | title }}</dd></div>
+            </dl>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 lg:col-span-2">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Mapping</h2>
+            <div class="mt-4 grid gap-4 sm:grid-cols-3">
+                <div>
+                    <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Primary</p>
+                    <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ (job.mapping_config or {}).get('primary', '-') }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Fallback</p>
+                    <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ (job.mapping_config or {}).get('fallback', '-') }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Ambiguous</p>
+                    <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ (job.mapping_config or {}).get('ambiguous', '-') }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <form method="post" action="/admin/integrations/syncs/{{ job.id }}/configure" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% include "components/forms/csrf_input.html" %}
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Manage Profile</h2>
+        <div class="mt-5 grid gap-5 sm:grid-cols-2">
+            <div>
+                <label for="schedule_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Schedule</label>
+                <select name="schedule_type" id="schedule_type"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="manual" {% if not job.schedule_type or job.schedule_type.value == 'manual' %}selected{% endif %}>Manual</option>
+                    <option value="interval" {% if job.schedule_type and job.schedule_type.value == 'interval' %}selected{% endif %}>Interval</option>
+                </select>
+            </div>
+            <div>
+                <label for="interval_minutes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Interval Minutes</label>
+                <input type="number" name="interval_minutes" id="interval_minutes" min="1" step="1" value="{{ job.interval_minutes or '' }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="trigger_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Trigger Mode</label>
+                <select name="trigger_mode" id="trigger_mode"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for mode in ['manual', 'schedule', 'event', 'webhook'] %}
+                    <option value="{{ mode }}" {% if job.trigger_mode == mode %}selected{% endif %}>{{ mode | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="conflict_policy" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Conflict Policy</label>
+                <select name="conflict_policy" id="conflict_policy"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for policy in ['remote_wins', 'local_wins', 'newest_wins', 'manual_review'] %}
+                    <option value="{{ policy }}" {% if job.conflict_policy == policy %}selected{% endif %}>{{ policy | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% if job.adapter_key == 'crm' and job.action == 'pull_tickets' %}
+            {% set filters = job.filter_config or {} %}
+            {% set mapping = job.mapping_config or {} %}
+            <div>
+                <label for="page_size" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Batch Size</label>
+                <input type="number" name="page_size" id="page_size" min="1" max="200" step="1" value="{{ filters.get('page_size', 200) }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="max_pages" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Max Pages</label>
+                <input type="number" name="max_pages" id="max_pages" min="1" step="1" value="{{ filters.get('max_pages', 50) }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="flex items-center gap-2 pt-7">
+                    <input type="checkbox" name="sync_comments" value="true" {% if filters.get('sync_comments', True) %}checked{% endif %}
+                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Pull Comments</span>
+                </label>
+            </div>
+            <div>
+                <label for="mapping_ambiguous" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Ambiguous Match Policy</label>
+                <select name="mapping_ambiguous" id="mapping_ambiguous"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for policy in ['skip', 'manual_review'] %}
+                    <option value="{{ policy }}" {% if mapping.get('ambiguous', 'skip') == policy %}selected{% endif %}>{{ policy | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="sm:col-span-2">
+                <label for="mapping_primary" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Primary Mapping</label>
+                <input type="text" name="mapping_primary" id="mapping_primary" value="{{ mapping.get('primary', '') }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-2">
+                <label for="mapping_fallback" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Fallback Mapping</label>
+                <input type="text" name="mapping_fallback" id="mapping_fallback" value="{{ mapping.get('fallback', '') }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            {% else %}
+            <div class="sm:col-span-2">
+                <label for="mapping_config" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Mapping Config (JSON)</label>
+                <textarea name="mapping_config" id="mapping_config" rows="4"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ (job.mapping_config or {}) | tojson }}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+                <label for="filter_config" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Filter Config (JSON)</label>
+                <textarea name="filter_config" id="filter_config" rows="4"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ (job.filter_config or {}) | tojson }}</textarea>
+            </div>
+            {% endif %}
+            <div>
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" name="is_active" value="true" {% if job.is_active %}checked{% endif %}
+                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                </label>
+            </div>
+        </div>
+        <div class="mt-6 flex justify-end">
+            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Profile</button>
+        </div>
+    </form>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Run History</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Started</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Trigger</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Metrics</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Error</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for run in runs %}
+                    {% set status_val = run.status.value if run.status else 'running' %}
+                    {% set metrics = run.metrics or {} %}
+                    <tr>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ run.started_at.strftime('%b %d %H:%M:%S') if run.started_at else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ (run.trigger or '-') | title }}</td>
+                        <td class="px-6 py-4">
+                            {% if status_val == 'success' %}
+                            {{ status_badge("Success", "active", size="sm") }}
+                            {% elif status_val == 'partial' %}
+                            <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Partial</span>
+                            {% elif status_val == 'failed' %}
+                            {{ status_badge("Failed", "inactive", size="sm") }}
+                            {% else %}
+                            <span class="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Running</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-xs text-slate-600 dark:text-slate-300">
+                            fetched {{ metrics.get('fetched', 0) }},
+                            created {{ metrics.get('created', 0) }},
+                            updated {{ metrics.get('updated', 0) }},
+                            skipped {{ metrics.get('skipped_unmapped_subscribers', 0) }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-red-600 dark:text-red-400">{{ run.error or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500">No runs yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Recent Records</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Record</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Action</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Reason</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for record in records %}
+                    <tr>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ record.remote_number or record.remote_id or '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ record.action | replace('_', ' ') | title }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ record.status | title }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ record.reason or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500">No record history yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

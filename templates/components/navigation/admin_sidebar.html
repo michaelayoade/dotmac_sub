@@ -187,7 +187,7 @@
     {{ nav_link("GIS / Map", "/admin/gis", icon_gis, "gis") }}
     {% endif %}
     {% if module_states.get('integrations', True) %}
-    {{ nav_link("Integrations", "/admin/integrations/connectors", icon_integrations, "integrations") }}
+    {{ nav_link("Integrations", "/admin/integrations", icon_integrations, "integrations") }}
     {% endif %}
     {% if module_states.get('notifications', True) %}
     {{ nav_link("Notifications", "/admin/notifications/templates", icon_notifications, "notifications") }}

@@ -11,6 +11,7 @@ from app.db import get_db
 from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import integration_hooks as integration_hooks_service
+from app.services import web_integration_syncs as web_integration_syncs_service
 from app.services import web_integrations as web_integrations_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
@@ -35,7 +36,140 @@ def _base_context(
     }
 
 
-# ==================== Connectors ====================
+# ==================== Overview ====================
+
+
+@router.get(
+    "/",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def integrations_overview(request: Request, db: Session = Depends(get_db)):
+    """Main integrations page with connector inventory and integration actions."""
+    state = web_integrations_service.build_connectors_list_data(db)
+
+    context = _base_context(request, db, active_page="integrations")
+    context.update(
+        {
+            **state,
+            "page_title": "Integrations",
+            "page_subtitle": "Manage integrations, connectors, syncs, and external system access",
+            "table_title": "Connectors",
+            "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/integrations/connectors/index.html", context
+    )
+
+
+# ==================== Syncs ====================
+
+
+@router.get(
+    "/syncs",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def syncs_list(request: Request, db: Session = Depends(get_db)):
+    """Generic sync profiles across external systems."""
+    state = web_integration_syncs_service.build_syncs_index_data(db)
+    context = _base_context(request, db, active_page="syncs")
+    context.update(
+        {
+            **state,
+            "recent_activities": recent_activity_for_paths(
+                db, ["/admin/integrations/syncs"]
+            ),
+        }
+    )
+    return templates.TemplateResponse("admin/integrations/syncs/index.html", context)
+
+
+@router.get(
+    "/syncs/{job_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def sync_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
+    """Sync profile detail and run history."""
+    try:
+        state = web_integration_syncs_service.build_sync_detail_data(db, job_id)
+    except ValueError:
+        context = _base_context(request, db, active_page="syncs")
+        context["message"] = "The sync profile you are looking for does not exist."
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
+    context = _base_context(request, db, active_page="syncs")
+    context.update(state)
+    return templates.TemplateResponse("admin/integrations/syncs/detail.html", context)
+
+
+@router.post(
+    "/syncs/{job_id}/run",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def sync_run(job_id: str):
+    """Queue a manual sync run."""
+    web_integration_syncs_service.trigger_sync_job(job_id)
+    return RedirectResponse(
+        url=f"/admin/integrations/syncs/{job_id}?queued=1", status_code=303
+    )
+
+
+@router.post(
+    "/syncs/{job_id}/configure",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def sync_configure(
+    job_id: str,
+    schedule_type: str = Form("manual"),
+    interval_minutes: str | None = Form(None),
+    trigger_mode: str | None = Form(None),
+    mapping_config: str | None = Form(None),
+    filter_config: str | None = Form(None),
+    page_size: str | None = Form(None),
+    max_pages: str | None = Form(None),
+    sync_comments: bool = Form(False),
+    mapping_primary: str | None = Form(None),
+    mapping_fallback: str | None = Form(None),
+    mapping_ambiguous: str | None = Form(None),
+    conflict_policy: str | None = Form(None),
+    is_active: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    web_integration_syncs_service.update_sync_profile(
+        db,
+        job_id,
+        schedule_type=schedule_type,
+        interval_minutes=interval_minutes,
+        trigger_mode=trigger_mode,
+        mapping_config=mapping_config,
+        filter_config=filter_config,
+        page_size=page_size,
+        max_pages=max_pages,
+        sync_comments=sync_comments,
+        mapping_primary=mapping_primary,
+        mapping_fallback=mapping_fallback,
+        mapping_ambiguous=mapping_ambiguous,
+        conflict_policy=conflict_policy,
+        is_active=is_active,
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/syncs/{job_id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/syncs/{job_id}/backfill-crm-history",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def sync_backfill_crm_history(job_id: str, db: Session = Depends(get_db)):
+    web_integration_syncs_service.backfill_crm_ticket_import_history(db, job_id)
+    return RedirectResponse(
+        url=f"/admin/integrations/syncs/{job_id}?backfilled=1", status_code=303
+    )
 
 
 @router.get(
@@ -329,9 +463,46 @@ def connector_detail(
         )
 
     context = _base_context(request, db, active_page="connectors")
-    context.update({"connector": connector})
+    context.update(
+        {"connector": connector, **web_integrations_service.connector_form_options()}
+    )
     return templates.TemplateResponse(
         "admin/integrations/connectors/detail.html", context
+    )
+
+
+@router.post(
+    "/connectors/{connector_id}",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def connector_update(
+    connector_id: str,
+    base_url: str | None = Form(None),
+    auth_type: str = Form("none"),
+    timeout_sec: str | None = Form(None),
+    auth_config: str | None = Form(None),
+    headers: str | None = Form(None),
+    retry_policy: str | None = Form(None),
+    metadata: str | None = Form(None),
+    notes: str | None = Form(None),
+    is_active: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    web_integrations_service.update_connector_config(
+        db,
+        connector_id,
+        base_url=base_url,
+        auth_type=auth_type,
+        timeout_sec=timeout_sec,
+        auth_config=auth_config,
+        headers=headers,
+        retry_policy=retry_policy,
+        metadata=metadata,
+        notes=notes,
+        is_active=is_active,
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/connectors/{connector_id}?saved=1", status_code=303
     )
 
 
@@ -481,6 +652,14 @@ def job_create(
     job_type: str = Form("sync"),
     schedule_type: str = Form("manual"),
     interval_minutes: str | None = Form(None),
+    adapter_key: str | None = Form(None),
+    action: str | None = Form(None),
+    entity_type: str | None = Form(None),
+    direction: str | None = Form(None),
+    trigger_mode: str | None = Form(None),
+    mapping_config: str | None = Form(None),
+    filter_config: str | None = Form(None),
+    conflict_policy: str | None = Form(None),
     notes: str | None = Form(None),
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
@@ -493,6 +672,14 @@ def job_create(
             job_type=job_type,
             schedule_type=schedule_type,
             interval_minutes=interval_minutes,
+            adapter_key=adapter_key,
+            action=action,
+            entity_type=entity_type,
+            direction=direction,
+            trigger_mode=trigger_mode,
+            mapping_config=mapping_config,
+            filter_config=filter_config,
+            conflict_policy=conflict_policy,
             notes=notes,
             is_active=is_active,
         )
@@ -507,6 +694,14 @@ def job_create(
                     job_type=job_type,
                     schedule_type=schedule_type,
                     interval_minutes=interval_minutes,
+                    adapter_key=adapter_key,
+                    action=action,
+                    entity_type=entity_type,
+                    direction=direction,
+                    trigger_mode=trigger_mode,
+                    mapping_config=mapping_config,
+                    filter_config=filter_config,
+                    conflict_policy=conflict_policy,
                     notes=notes,
                     is_active=is_active,
                 ),
@@ -546,6 +741,18 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="jobs")
     context.update({"job": job, "runs": runs})
     return templates.TemplateResponse("admin/integrations/jobs/detail.html", context)
+
+
+@router.post(
+    "/jobs/{job_id}/run",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def job_run(job_id: str):
+    """Queue a manual integration job run."""
+    web_integration_syncs_service.trigger_sync_job(job_id)
+    return RedirectResponse(
+        url=f"/admin/integrations/jobs/{job_id}?queued=1", status_code=303
+    )
 
 
 # ==================== Hooks ====================

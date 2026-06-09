@@ -259,19 +259,31 @@ class IntegrationJobs(ListResponseMixin):
         db.commit()
 
     @staticmethod
-    def run(db: Session, job_id: str):
+    def run(
+        db: Session,
+        job_id: str,
+        *,
+        trigger: str = "schedule",
+        requested_by: str | None = None,
+    ):
         job = db.get(IntegrationJob, coerce_uuid(job_id))
         if not job:
             raise HTTPException(status_code=404, detail="Integration job not found")
         if not job.is_active:
             logger.info("EMAIL_POLL_EXIT reason=job_disabled job_id=%s", job_id)
-        run = IntegrationRun(job_id=job.id, status=IntegrationRunStatus.running)
+        run = IntegrationRun(
+            job_id=job.id,
+            status=IntegrationRunStatus.running,
+            trigger=trigger,
+            requested_by=requested_by,
+        )
         db.add(run)
         db.commit()
         db.refresh(run)
         try:
-            metrics = None
-            # Email polling via CRM inbox removed
+            from app.services.integration_sync import run_sync_job
+
+            metrics = run_sync_job(db, job, run.id)
             run.status = IntegrationRunStatus.success
             run.metrics = metrics
         except Exception as exc:
@@ -325,9 +337,44 @@ class IntegrationRuns(ListResponseMixin):
         return run
 
 
+class IntegrationRecords(ListResponseMixin):
+    @staticmethod
+    def list(
+        db: Session,
+        run_id: str | None,
+        entity_type: str | None,
+        status: str | None,
+        order_by: str,
+        order_dir: str,
+        limit: int,
+        offset: int,
+    ):
+        from app.models.integration import IntegrationRecord
+
+        query = db.query(IntegrationRecord)
+        if run_id:
+            query = query.filter(IntegrationRecord.run_id == coerce_uuid(run_id))
+        if entity_type:
+            query = query.filter(IntegrationRecord.entity_type == entity_type)
+        if status:
+            query = query.filter(IntegrationRecord.status == status)
+        query = apply_ordering(
+            query,
+            order_by,
+            order_dir,
+            {
+                "created_at": IntegrationRecord.created_at,
+                "status": IntegrationRecord.status,
+                "action": IntegrationRecord.action,
+            },
+        )
+        return apply_pagination(query, limit, offset).all()
+
+
 integration_targets = IntegrationTargets()
 integration_jobs = IntegrationJobs()
 integration_runs = IntegrationRuns()
+integration_records = IntegrationRecords()
 
 
 def list_interval_jobs(db: Session) -> list[IntegrationJob]:

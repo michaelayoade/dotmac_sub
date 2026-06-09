@@ -160,6 +160,7 @@ from app.models.gis import (  # noqa: F401
 from app.models.integration import (  # noqa: F401
     IntegrationJob,
     IntegrationJobType,
+    IntegrationRecord,
     IntegrationRun,
     IntegrationRunStatus,
     IntegrationScheduleType,

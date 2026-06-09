@@ -81,6 +81,14 @@ class IntegrationJob(Base):
     )
     interval_minutes: Mapped[int | None] = mapped_column(Integer)
     interval_seconds: Mapped[int | None] = mapped_column(Integer)
+    adapter_key: Mapped[str | None] = mapped_column(String(80))
+    action: Mapped[str | None] = mapped_column(String(80))
+    entity_type: Mapped[str | None] = mapped_column(String(80))
+    direction: Mapped[str | None] = mapped_column(String(24))
+    trigger_mode: Mapped[str | None] = mapped_column(String(24))
+    mapping_config: Mapped[dict | None] = mapped_column(JSON)
+    filter_config: Mapped[dict | None] = mapped_column(JSON)
+    conflict_policy: Mapped[str | None] = mapped_column(String(40))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
@@ -114,6 +122,8 @@ class IntegrationRun(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trigger: Mapped[str | None] = mapped_column(String(32))
+    requested_by: Mapped[str | None] = mapped_column(String(160))
     error: Mapped[str | None] = mapped_column(Text)
     metrics: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
@@ -121,3 +131,29 @@ class IntegrationRun(Base):
     )
 
     job = relationship("IntegrationJob", back_populates="runs")
+    records = relationship("IntegrationRecord", back_populates="run")
+
+
+class IntegrationRecord(Base):
+    __tablename__ = "integration_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_runs.id"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    direction: Mapped[str] = mapped_column(String(24), nullable=False)
+    local_id: Mapped[str | None] = mapped_column(String(120))
+    remote_id: Mapped[str | None] = mapped_column(String(120))
+    remote_number: Mapped[str | None] = mapped_column(String(120))
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    payload_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    run = relationship("IntegrationRun", back_populates="records")

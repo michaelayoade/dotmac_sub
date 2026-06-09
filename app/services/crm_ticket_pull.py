@@ -1,0 +1,565 @@
+"""Pull support tickets from DotMac Omni CRM into local support tickets."""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, Callable
+from uuid import UUID
+
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from app.models.subscriber import Subscriber
+from app.models.support import Ticket, TicketChannel, TicketComment
+from app.services.crm_client import CRMClient, CRMClientError, get_crm_client
+from app.services.support import _coerce_uuid
+
+logger = logging.getLogger(__name__)
+_CUSTOMER_ID_PAIR_RE = re.compile(r"\((\d{6,12})\s*-\s*([\d\s\u200b]+)\)")
+CrmTicketRecordCallback = Callable[
+    [dict[str, Any], str, int, str | None, UUID | None], None
+]
+
+
+@dataclass
+class CrmTicketPullResult:
+    fetched: int = 0
+    created: int = 0
+    updated: int = 0
+    skipped_leads: int = 0
+    skipped_unmapped_subscribers: int = 0
+    comments_created: int = 0
+    errors: list[dict[str, str]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "fetched": self.fetched,
+            "created": self.created,
+            "updated": self.updated,
+            "skipped_leads": self.skipped_leads,
+            "skipped_unmapped_subscribers": self.skipped_unmapped_subscribers,
+            "comments_created": self.comments_created,
+            "errors": self.errors,
+        }
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _enum_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        value = value.value
+    text = str(value).strip()
+    return text or None
+
+
+def _safe_channel(value: Any) -> str:
+    text = _enum_value(value) or TicketChannel.api.value
+    allowed = {item.value for item in TicketChannel}
+    return text if text in allowed else TicketChannel.api.value
+
+
+def _clean_tags(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    tags: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            tags.append(text)
+    return tags
+
+
+def _clean_attachments(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _metadata(ticket: dict[str, Any]) -> dict[str, Any]:
+    source_metadata = ticket.get("metadata") or ticket.get("metadata_") or {}
+    if not isinstance(source_metadata, dict):
+        source_metadata = {}
+    merged = dict(source_metadata)
+    merged.update(
+        {
+            "sync_source": "crm",
+            "crm_ticket_id": str(ticket.get("id") or ""),
+            "crm_ticket_number": str(ticket.get("number") or ""),
+            "crm_updated_at": ticket.get("updated_at"),
+            "crm_created_at": ticket.get("created_at"),
+            "crm_lead_id": str(ticket.get("lead_id") or "") or None,
+            "crm_customer_person_id": str(ticket.get("customer_person_id") or "")
+            or None,
+            "crm_created_by_person_id": str(ticket.get("created_by_person_id") or "")
+            or None,
+            "crm_assigned_to_person_id": str(ticket.get("assigned_to_person_id") or "")
+            or None,
+            "crm_ticket_manager_person_id": str(
+                ticket.get("ticket_manager_person_id") or ""
+            )
+            or None,
+            "crm_service_team_id": str(ticket.get("service_team_id") or "") or None,
+        }
+    )
+    return {key: value for key, value in merged.items() if value is not None}
+
+
+def _crm_ticket_id_filter(crm_ticket_id: str):
+    return Ticket.metadata_["crm_ticket_id"].as_string() == crm_ticket_id
+
+
+def _find_existing_ticket(db: Session, ticket: dict[str, Any]) -> Ticket | None:
+    crm_ticket_id = str(ticket.get("id") or "").strip()
+    number = str(ticket.get("number") or "").strip()
+    query = db.query(Ticket)
+    filters = []
+    if number:
+        filters.append(Ticket.number == number)
+    if crm_ticket_id:
+        filters.append(_crm_ticket_id_filter(crm_ticket_id))
+    if not filters:
+        return None
+    return query.filter(or_(*filters)).first()
+
+
+def _find_local_subscriber_id(
+    db: Session, client: CRMClient, crm_subscriber_id: str | None
+) -> UUID | None:
+    if not crm_subscriber_id:
+        return None
+    try:
+        crm_subscriber = client.get_subscriber(crm_subscriber_id)
+    except CRMClientError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("CRM subscriber lookup failed id=%s: %s", crm_subscriber_id, exc)
+        return None
+
+    external_system = str(crm_subscriber.get("external_system") or "").lower()
+    external_id = str(crm_subscriber.get("external_id") or "").strip()
+    if external_system != "splynx" or not external_id:
+        return None
+    try:
+        splynx_customer_id = int(external_id)
+    except ValueError:
+        return None
+    subscriber = (
+        db.query(Subscriber)
+        .filter(Subscriber.splynx_customer_id == splynx_customer_id)
+        .first()
+    )
+    return subscriber.id if subscriber else None
+
+
+def _extract_customer_id_pair_matches(text: Any) -> set[int]:
+    if not text:
+        return set()
+    matches: set[int] = set()
+    for match in _CUSTOMER_ID_PAIR_RE.finditer(str(text)):
+        short_id = re.sub(r"\D", "", match.group(2))
+        if not short_id:
+            continue
+        try:
+            matches.add(int(short_id))
+        except ValueError:
+            continue
+    return matches
+
+
+def _find_local_subscriber_id_from_ticket_text(
+    crm_ticket: dict[str, Any],
+    local_by_splynx: dict[int, UUID] | None,
+) -> UUID | None:
+    if not local_by_splynx:
+        return None
+
+    for field in ("title", "description"):
+        matched_ids = {
+            customer_id
+            for customer_id in _extract_customer_id_pair_matches(crm_ticket.get(field))
+            if customer_id in local_by_splynx
+        }
+        if len(matched_ids) == 1:
+            return local_by_splynx[next(iter(matched_ids))]
+        if len(matched_ids) > 1:
+            return None
+    return None
+
+
+def build_subscriber_cache(
+    db: Session,
+    client: CRMClient,
+    *,
+    max_pages: int = 200,
+) -> dict[str, UUID]:
+    """Map CRM subscriber UUIDs to local subscribers via Splynx external IDs."""
+    return build_subscriber_cache_from_map(
+        load_local_subscriber_map(db),
+        client,
+        max_pages=max_pages,
+    )
+
+
+def load_local_subscriber_map(db: Session) -> dict[int, UUID]:
+    """Map Splynx customer IDs to local subscriber IDs."""
+    return {
+        int(splynx_customer_id): subscriber_id
+        for splynx_customer_id, subscriber_id in db.query(
+            Subscriber.splynx_customer_id, Subscriber.id
+        )
+        .filter(Subscriber.splynx_customer_id.isnot(None))
+        .all()
+    }
+
+
+def build_subscriber_cache_from_map(
+    local_by_splynx: dict[int, UUID],
+    client: CRMClient,
+    *,
+    max_pages: int = 200,
+) -> dict[str, UUID]:
+    """Map CRM subscriber UUIDs to local subscribers without touching the DB."""
+    if not local_by_splynx:
+        return {}
+
+    cache: dict[str, UUID] = {}
+    for page in range(1, max(max_pages, 1) + 1):
+        items = client.list_subscribers(
+            external_system="splynx", page=page, per_page=100, use_cache=False
+        )
+        if not items:
+            break
+        for item in items:
+            crm_id = str(item.get("id") or "").strip()
+            external_id = str(item.get("external_id") or "").strip()
+            if not crm_id or not external_id:
+                continue
+            try:
+                splynx_id = int(external_id)
+            except ValueError:
+                continue
+            local_subscriber_id = local_by_splynx.get(splynx_id)
+            if local_subscriber_id:
+                cache[crm_id] = local_subscriber_id
+        if len(items) < 100:
+            break
+    return cache
+
+
+def _apply_ticket_fields(
+    ticket: Ticket,
+    crm_ticket: dict[str, Any],
+    subscriber_id: UUID,
+) -> None:
+    ticket.subscriber_id = subscriber_id
+    ticket.customer_account_id = subscriber_id
+    ticket.number = str(crm_ticket.get("number") or "").strip() or None
+    ticket.title = str(crm_ticket.get("title") or "").strip() or "CRM ticket"
+    ticket.description = crm_ticket.get("description")
+    ticket.region = crm_ticket.get("region")
+    ticket.status = _enum_value(crm_ticket.get("status")) or "open"
+    ticket.priority = _enum_value(crm_ticket.get("priority")) or "normal"
+    ticket.ticket_type = crm_ticket.get("ticket_type")
+    ticket.channel = _safe_channel(crm_ticket.get("channel"))
+    ticket.tags = _clean_tags(crm_ticket.get("tags"))
+    ticket.metadata_ = _metadata(crm_ticket)
+    ticket.attachments = _clean_attachments(crm_ticket.get("attachments"))
+    ticket.due_at = _parse_datetime(crm_ticket.get("due_at"))
+    ticket.resolved_at = _parse_datetime(crm_ticket.get("resolved_at"))
+    ticket.closed_at = _parse_datetime(crm_ticket.get("closed_at"))
+    ticket.is_active = bool(crm_ticket.get("is_active", True))
+    created_at = _parse_datetime(crm_ticket.get("created_at"))
+    if created_at and not ticket.created_at:
+        ticket.created_at = created_at
+
+
+def _comment_exists(db: Session, crm_comment_id: str) -> bool:
+    if not crm_comment_id:
+        return False
+    return (
+        db.query(TicketComment.id)
+        .filter(TicketComment.metadata_["crm_comment_id"].as_string() == crm_comment_id)
+        .first()
+        is not None
+    )
+
+
+def _sync_comments(
+    db: Session,
+    client: CRMClient,
+    local_ticket: Ticket,
+    crm_ticket_id: str,
+) -> int:
+    created = 0
+    for comment in client.list_ticket_comments(crm_ticket_id, use_cache=False):
+        crm_comment_id = str(comment.get("id") or "").strip()
+        if not crm_comment_id or _comment_exists(db, crm_comment_id):
+            continue
+        db.add(
+            TicketComment(
+                ticket_id=local_ticket.id,
+                author_person_id=None,
+                author_type="system",
+                body=str(comment.get("body") or "").strip() or "(empty comment)",
+                is_internal=bool(comment.get("is_internal", False)),
+                attachments=_clean_attachments(comment.get("attachments")),
+                metadata_={
+                    "sync_source": "crm",
+                    "crm_comment_id": crm_comment_id,
+                    "crm_ticket_id": crm_ticket_id,
+                    "crm_author_person_id": str(comment.get("author_person_id") or "")
+                    or None,
+                },
+                created_at=_parse_datetime(comment.get("created_at"))
+                or datetime.now(UTC),
+            )
+        )
+        created += 1
+    return created
+
+
+def sync_ticket(
+    db: Session,
+    crm_ticket: dict[str, Any],
+    *,
+    client: CRMClient | None = None,
+    sync_comments: bool = True,
+    subscriber_cache: dict[str, UUID] | None = None,
+    local_by_splynx: dict[int, UUID] | None = None,
+) -> tuple[str, int, Ticket | None]:
+    client = client or get_crm_client()
+    crm_ticket_id = str(crm_ticket.get("id") or "").strip()
+    if not crm_ticket_id:
+        raise ValueError("CRM ticket id is required")
+    if crm_ticket.get("lead_id") and not crm_ticket.get("subscriber_id"):
+        return "skipped_lead", 0, None
+
+    crm_subscriber_id = str(crm_ticket.get("subscriber_id") or "").strip() or None
+    subscriber_id = (
+        subscriber_cache.get(crm_subscriber_id)
+        if subscriber_cache is not None and crm_subscriber_id
+        else _find_local_subscriber_id(db, client, crm_subscriber_id)
+    )
+    if not subscriber_id:
+        subscriber_id = _find_local_subscriber_id_from_ticket_text(
+            crm_ticket,
+            local_by_splynx,
+        )
+    if not subscriber_id:
+        return "skipped_unmapped_subscriber", 0, None
+
+    existing = _find_existing_ticket(db, crm_ticket)
+    if existing:
+        local_ticket = existing
+        outcome = "updated"
+    else:
+        local_ticket = Ticket(title="CRM ticket")
+        db.add(local_ticket)
+        db.flush()
+        outcome = "created"
+
+    _apply_ticket_fields(local_ticket, crm_ticket, subscriber_id)
+    comments_created = 0
+    if sync_comments:
+        comments_created = _sync_comments(db, client, local_ticket, crm_ticket_id)
+    db.flush()
+    return outcome, comments_created, local_ticket
+
+
+def sync_ticket_by_id(
+    db: Session,
+    crm_ticket_id: str,
+    *,
+    client: CRMClient | None = None,
+    sync_comments: bool = True,
+) -> CrmTicketPullResult:
+    client = client or get_crm_client()
+    result = CrmTicketPullResult()
+    crm_ticket = client.get_ticket(crm_ticket_id)
+    subscriber_cache = build_subscriber_cache(db, client)
+    local_by_splynx = load_local_subscriber_map(db)
+    result.fetched = 1
+    outcome, comments_created, local_ticket = sync_ticket(
+        db,
+        crm_ticket,
+        client=client,
+        sync_comments=sync_comments,
+        subscriber_cache=subscriber_cache,
+        local_by_splynx=local_by_splynx,
+    )
+    if outcome == "created":
+        result.created += 1
+    elif outcome == "updated":
+        result.updated += 1
+    elif outcome == "skipped_lead":
+        result.skipped_leads += 1
+    elif outcome == "skipped_unmapped_subscriber":
+        result.skipped_unmapped_subscribers += 1
+    result.comments_created += comments_created
+    return result
+
+
+def pull_tickets(
+    db: Session,
+    *,
+    client: CRMClient | None = None,
+    limit: int = 200,
+    max_pages: int = 50,
+    sync_comments: bool = True,
+    subscriber_cache: dict[str, UUID] | None = None,
+    local_by_splynx: dict[int, UUID] | None = None,
+    record_callback: CrmTicketRecordCallback | None = None,
+) -> CrmTicketPullResult:
+    client = client or get_crm_client()
+    page_size = min(max(limit, 1), 200)
+    result = CrmTicketPullResult()
+    local_by_splynx = local_by_splynx or load_local_subscriber_map(db)
+    subscriber_cache = subscriber_cache or build_subscriber_cache_from_map(
+        local_by_splynx, client
+    )
+    for page in range(max(max_pages, 1)):
+        offset = page * page_size
+        try:
+            tickets = client.list_tickets(
+                limit=page_size, offset=offset, use_cache=False
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("CRM ticket page fetch failed offset=%s", offset)
+            result.errors.append({"ticket_id": "", "error": str(exc)})
+            break
+        if not tickets:
+            break
+        for crm_ticket in tickets:
+            result.fetched += 1
+            try:
+                outcome, comments_created, local_ticket = sync_ticket(
+                    db,
+                    crm_ticket,
+                    client=client,
+                    sync_comments=sync_comments,
+                    subscriber_cache=subscriber_cache,
+                    local_by_splynx=local_by_splynx,
+                )
+            except Exception as exc:  # noqa: BLE001
+                ticket_id = str(crm_ticket.get("id") or "")
+                logger.exception("CRM ticket sync failed ticket_id=%s", ticket_id)
+                result.errors.append({"ticket_id": ticket_id, "error": str(exc)})
+                if record_callback:
+                    record_callback(crm_ticket, "failed", 0, str(exc), None)
+                continue
+            if outcome == "created":
+                result.created += 1
+            elif outcome == "updated":
+                result.updated += 1
+            elif outcome == "skipped_lead":
+                result.skipped_leads += 1
+            elif outcome == "skipped_unmapped_subscriber":
+                result.skipped_unmapped_subscribers += 1
+            result.comments_created += comments_created
+            if record_callback:
+                record_callback(
+                    crm_ticket,
+                    outcome,
+                    comments_created,
+                    None,
+                    local_ticket.id if local_ticket else None,
+                )
+        if len(tickets) < page_size:
+            break
+    return result
+
+
+def delete_all_local_support_tickets(db: Session) -> dict[str, int]:
+    """Delete local support tickets and dependent local support rows.
+
+    This is intended for the approved one-time cleanup of test tickets before
+    the CRM ticket import becomes the source of truth for support ticket numbers.
+    """
+    from app.models.provisioning import ServiceOrder
+    from app.models.support import (
+        TicketAssignee,
+        TicketLink,
+        TicketMerge,
+        TicketSlaEvent,
+    )
+
+    ticket_ids = [row[0] for row in db.query(Ticket.id).all()]
+    if not ticket_ids:
+        return {
+            "tickets": 0,
+            "comments": 0,
+            "sla_events": 0,
+            "assignees": 0,
+            "links": 0,
+            "merges": 0,
+            "field_visit_service_orders": 0,
+        }
+
+    work_order_ids: list[UUID] = []
+    for metadata in db.query(Ticket.metadata_).filter(Ticket.id.in_(ticket_ids)):
+        value = (metadata[0] or {}).get("work_order_id")
+        parsed = _coerce_uuid(value)
+        if parsed:
+            work_order_ids.append(parsed)
+
+    counts = {
+        "comments": db.query(TicketComment)
+        .filter(TicketComment.ticket_id.in_(ticket_ids))
+        .delete(synchronize_session=False),
+        "sla_events": db.query(TicketSlaEvent)
+        .filter(TicketSlaEvent.ticket_id.in_(ticket_ids))
+        .delete(synchronize_session=False),
+        "assignees": db.query(TicketAssignee)
+        .filter(TicketAssignee.ticket_id.in_(ticket_ids))
+        .delete(synchronize_session=False),
+        "links": db.query(TicketLink)
+        .filter(
+            or_(
+                TicketLink.from_ticket_id.in_(ticket_ids),
+                TicketLink.to_ticket_id.in_(ticket_ids),
+            )
+        )
+        .delete(synchronize_session=False),
+        "merges": db.query(TicketMerge)
+        .filter(
+            or_(
+                TicketMerge.source_ticket_id.in_(ticket_ids),
+                TicketMerge.target_ticket_id.in_(ticket_ids),
+            )
+        )
+        .delete(synchronize_session=False),
+    }
+    counts["tickets"] = (
+        db.query(Ticket)
+        .filter(Ticket.id.in_(ticket_ids))
+        .delete(synchronize_session=False)
+    )
+    counts["field_visit_service_orders"] = 0
+    if work_order_ids:
+        counts["field_visit_service_orders"] = (
+            db.query(ServiceOrder)
+            .filter(ServiceOrder.id.in_(work_order_ids))
+            .delete(synchronize_session=False)
+        )
+    db.flush()
+    return counts

@@ -1,0 +1,135 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Syncs - Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Syncs</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage push, pull, scheduled, webhook, and event-driven sync profiles.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/admin/integrations/connectors" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Connectors</a>
+            <a href="/admin/integrations/jobs/new" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add Sync Job</a>
+        </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Profiles</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Active</p>
+            <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.active }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Pull</p>
+            <p class="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-400">{{ stats.pull }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Push</p>
+            <p class="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.push }}</p>
+        </div>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Sync Profiles</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Profile</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Direction</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Trigger</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Last Run</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for job in sync_jobs %}
+                    {% set runs = runs_by_job.get(job.id|string, []) %}
+                    {% set last_run = runs[0] if runs else None %}
+                    {% set status_val = last_run.status.value if last_run and last_run.status else 'never' %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4">
+                            <a href="/admin/integrations/syncs/{{ job.id }}" class="text-sm font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ job.name }}</a>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ job.adapter_key or 'custom' }} / {{ job.action or 'unconfigured' }}</p>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ (job.direction or 'sync') | title }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-700 dark:text-slate-300">
+                            {% if job.schedule_type and job.schedule_type.value == 'interval' %}
+                            Every {{ job.interval_minutes or ((job.interval_seconds or 0) // 60) }} min
+                            {% else %}
+                            {{ (job.trigger_mode or 'manual') | title }}
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ last_run.started_at.strftime('%b %d %H:%M') if last_run else 'Never' }}</td>
+                        <td class="px-6 py-4">
+                            {% if status_val == 'success' %}
+                            {{ status_badge("Success", "active", size="sm") }}
+                            {% elif status_val == 'failed' %}
+                            {{ status_badge("Failed", "inactive", size="sm") }}
+                            {% elif status_val == 'partial' %}
+                            <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Partial</span>
+                            {% elif status_val == 'running' %}
+                            <span class="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Running</span>
+                            {% else %}
+                            <span class="text-xs text-slate-400">Never</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Run</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-6 py-10 text-center text-sm text-slate-500">No sync profiles configured.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Daily Activity</h2>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for row in daily_counts %}
+                <div class="flex items-center justify-between px-6 py-3 text-sm">
+                    <span class="text-slate-700 dark:text-slate-300">{{ row.day }} · {{ row.direction | title }} · {{ row.status | title }}</span>
+                    <span class="font-semibold text-slate-900 dark:text-white">{{ row.count }}</span>
+                </div>
+                {% else %}
+                <p class="px-6 py-8 text-sm text-slate-500">No recent sync runs.</p>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Recent Failures</h2>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for record in failed_records %}
+                <div class="px-6 py-3 text-sm">
+                    <p class="font-medium text-slate-900 dark:text-white">{{ record.entity_type | title }} {{ record.remote_number or record.remote_id or '-' }}</p>
+                    <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ record.reason or 'Failed' }}</p>
+                </div>
+                {% else %}
+                <p class="px-6 py-8 text-sm text-slate-500">No failed records.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

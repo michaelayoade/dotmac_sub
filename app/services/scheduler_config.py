@@ -1309,6 +1309,28 @@ def build_beat_schedule() -> dict:
                 "schedule": timedelta(hours=splynx_customer_sync_interval_hours),
             }
 
+        # CRM ticket pull: inbound CRM tickets/comments into local support tickets.
+        crm_ticket_pull_enabled = _effective_bool(
+            session,
+            SettingDomain.scheduler,
+            "crm_ticket_pull_enabled",
+            "CRM_TICKET_PULL_ENABLED",
+            False,
+        )
+        crm_ticket_pull_interval = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "crm_ticket_pull_interval_minutes",
+            "CRM_TICKET_PULL_INTERVAL_MINUTES",
+            5,
+        )
+        crm_ticket_pull_interval = max(crm_ticket_pull_interval, 1)
+        if crm_ticket_pull_enabled:
+            schedule["crm_ticket_pull"] = {
+                "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
+                "schedule": timedelta(minutes=crm_ticket_pull_interval),
+            }
+
         # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
         olt_queue_enabled = _effective_bool(
             session,

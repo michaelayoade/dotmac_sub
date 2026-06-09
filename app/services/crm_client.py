@@ -219,28 +219,75 @@ class CRMClient:
                 "GET",
                 "/api/v1/subscribers",
                 params={
-                    "external_id": str(splynx_customer_id),
+                    "search": str(splynx_customer_id),
                     "external_system": "splynx",
-                    "limit": 1,
+                    "per_page": 10,
                 },
             )
             items = data if isinstance(data, list) else data.get("items", [])
-            if items:
-                return str(items[0]["id"])
+            for item in items:
+                if str(item.get("external_id") or "") == str(splynx_customer_id):
+                    return str(item["id"])
         except CRMClientError:
             logger.warning(
                 "CRM subscriber lookup failed for splynx_id=%s", splynx_customer_id
             )
         return None
 
+    def get_subscriber(self, subscriber_id: str) -> dict[str, Any]:
+        """Get a CRM subscriber by UUID."""
+        return self._cached_get(
+            f"/api/v1/subscribers/{subscriber_id}", None, _CACHE_DETAIL_TTL
+        )
+
+    def list_subscribers(
+        self,
+        *,
+        external_system: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        use_cache: bool = True,
+    ) -> list[dict[str, Any]]:
+        """List CRM subscribers with CRM's page/per_page pagination."""
+        params: dict[str, Any] = {
+            "page": max(page, 1),
+            "per_page": min(max(per_page, 1), 100),
+        }
+        if external_system:
+            params["external_system"] = external_system
+        data = (
+            self._cached_get("/api/v1/subscribers", params, _CACHE_LIST_TTL)
+            if use_cache
+            else self._request("GET", "/api/v1/subscribers", params=params)
+        )
+        return data if isinstance(data, list) else data.get("items", [])
+
     # ── Tickets ──────────────────────────────────────────────────────────
 
-    def list_tickets(self, subscriber_id: str | None = None) -> list[dict[str, Any]]:
+    def list_tickets(
+        self,
+        subscriber_id: str | None = None,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        use_cache: bool = True,
+    ) -> list[dict[str, Any]]:
         """List tickets, optionally filtered by CRM subscriber."""
-        params: dict[str, Any] = {"limit": 100}
+        params: dict[str, Any] = {
+            "limit": min(max(limit, 1), 200),
+            "offset": max(offset, 0),
+            "order_by": order_by,
+            "order_dir": order_dir,
+        }
         if subscriber_id:
             params["subscriber_id"] = subscriber_id
-        data = self._cached_get("/api/v1/tickets", params, _CACHE_LIST_TTL)
+        data = (
+            self._cached_get("/api/v1/tickets", params, _CACHE_LIST_TTL)
+            if use_cache
+            else self._request("GET", "/api/v1/tickets", params=params)
+        )
         return data if isinstance(data, list) else data.get("items", [])
 
     def get_ticket(self, ticket_id: str) -> dict[str, Any]:
@@ -251,12 +298,19 @@ class CRMClient:
         """Create a new ticket in the CRM."""
         return self._request("POST", "/api/v1/tickets", json_data=payload)
 
-    def list_ticket_comments(self, ticket_id: str) -> list[dict[str, Any]]:
+    def list_ticket_comments(
+        self, ticket_id: str, *, use_cache: bool = True
+    ) -> list[dict[str, Any]]:
         """List comments for a ticket."""
-        data = self._cached_get(
-            "/api/v1/ticket-comments",
-            {"ticket_id": ticket_id, "limit": 500},
-            _CACHE_DETAIL_TTL,
+        params = {"ticket_id": ticket_id, "limit": 200}
+        data = (
+            self._cached_get(
+                "/api/v1/ticket-comments",
+                params,
+                _CACHE_DETAIL_TTL,
+            )
+            if use_cache
+            else self._request("GET", "/api/v1/ticket-comments", params=params)
         )
         return data if isinstance(data, list) else data.get("items", [])
 
