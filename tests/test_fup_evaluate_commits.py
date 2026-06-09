@@ -20,9 +20,7 @@ def _fake_sub():
 def _run_with_subs(subs):
     session = MagicMock()
     # session.query(Subscription).join(...).filter(...).filter(...).all()
-    session.query.return_value.join.return_value.filter.return_value.filter.return_value.all.return_value = (
-        subs
-    )
+    session.query.return_value.join.return_value.filter.return_value.filter.return_value.all.return_value = subs
     fup_state_mock = MagicMock()
     fup_state_mock.get.return_value = None  # no period-boundary reset
     bucket = MagicMock(used_gb=0, period_end=None)
