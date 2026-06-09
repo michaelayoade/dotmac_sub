@@ -56,6 +56,11 @@ from app.services.response import ListResponseMixin
 
 _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
 _STALE_INFORM_SERVICE_APPLY_DAYS = 5
+# Commit the GenieACS device-sync upsert loop every N devices so a large ACS
+# inventory doesn't accumulate one long write transaction (row locks +
+# delayed autovacuum). Each device upsert is independent, so partial progress
+# on failure is fine.
+_GENIEACS_SYNC_COMMIT_BATCH = 200
 
 logger = logging.getLogger(__name__)
 
@@ -1034,9 +1039,16 @@ class CpeDevices(ListResponseMixin):
         server = db.get(Tr069AcsServer, acs_server_id)
         if not server:
             raise HTTPException(status_code=404, detail="ACS server not found")
+        base_url = server.base_url
+        # Release the read transaction opened by the lookup above BEFORE the
+        # (potentially slow) GenieACS HTTP fetch, so the DB connection isn't left
+        # "idle in transaction" across the network round-trip. On a busy ACS that
+        # hold lasted ~a minute, pinning a pool slot and blocking autovacuum. The
+        # device upserts below run in their own transaction (committed as before).
+        db.commit()
 
         try:
-            client = create_genieacs_client(server.base_url)
+            client = create_genieacs_client(base_url)
             devices = client.list_devices(
                 projection=CpeDevices._GENIEACS_SYNC_PROJECTION
             )
@@ -1046,7 +1058,7 @@ class CpeDevices(ListResponseMixin):
         created, updated = 0, 0
         datetime.now(UTC)
 
-        for device_data in devices:
+        for idx, device_data in enumerate(devices, start=1):
             # Extract GenieACS device ID (the authoritative identifier)
             genieacs_device_id = str(device_data.get("_id") or "").strip()
             if not genieacs_device_id:
@@ -1152,6 +1164,11 @@ class CpeDevices(ListResponseMixin):
                 existing,
                 serial=serial_number,
             )
+
+            # Flush each batch so a large inventory doesn't hold one long write
+            # transaction; the trailing commit below catches the remainder.
+            if idx % _GENIEACS_SYNC_COMMIT_BATCH == 0:
+                db.commit()
 
         db.commit()
 
