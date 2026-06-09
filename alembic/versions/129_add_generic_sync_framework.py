@@ -41,9 +41,13 @@ def upgrade() -> None:
     _add_column_if_missing("integration_jobs", sa.Column("trigger_mode", sa.String(24)))
     _add_column_if_missing("integration_jobs", sa.Column("mapping_config", sa.JSON()))
     _add_column_if_missing("integration_jobs", sa.Column("filter_config", sa.JSON()))
-    _add_column_if_missing("integration_jobs", sa.Column("conflict_policy", sa.String(40)))
+    _add_column_if_missing(
+        "integration_jobs", sa.Column("conflict_policy", sa.String(40))
+    )
     _add_column_if_missing("integration_runs", sa.Column("trigger", sa.String(32)))
-    _add_column_if_missing("integration_runs", sa.Column("requested_by", sa.String(160)))
+    _add_column_if_missing(
+        "integration_runs", sa.Column("requested_by", sa.String(160))
+    )
 
     inspector = inspect(bind)
     if "integration_records" not in inspector.get_table_names():

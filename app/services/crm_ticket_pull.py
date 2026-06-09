@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import or_
@@ -72,10 +73,12 @@ def _enum_value(value: Any) -> str | None:
     return text or None
 
 
-def _safe_channel(value: Any) -> str:
+def _safe_channel(value: Any) -> TicketChannel:
     text = _enum_value(value) or TicketChannel.api.value
-    allowed = {item.value for item in TicketChannel}
-    return text if text in allowed else TicketChannel.api.value
+    try:
+        return TicketChannel(text)
+    except ValueError:
+        return TicketChannel.api
 
 
 def _clean_tags(value: Any) -> list[str]:
@@ -193,10 +196,12 @@ def _find_local_subscriber_id_from_ticket_text(
     if not local_by_splynx:
         return None
 
-    for field in ("title", "description"):
+    for field_name in ("title", "description"):
         matched_ids = {
             customer_id
-            for customer_id in _extract_customer_id_pair_matches(crm_ticket.get(field))
+            for customer_id in _extract_customer_id_pair_matches(
+                crm_ticket.get(field_name)
+            )
             if customer_id in local_by_splynx
         }
         if len(matched_ids) == 1:
@@ -518,7 +523,7 @@ def delete_all_local_support_tickets(db: Session) -> dict[str, int]:
     work_order_ids: list[UUID] = []
     for metadata in db.query(Ticket.metadata_).filter(Ticket.id.in_(ticket_ids)):
         value = (metadata[0] or {}).get("work_order_id")
-        parsed = _coerce_uuid(value)
+        parsed = _coerce_uuid(str(value)) if value else None
         if parsed:
             work_order_ids.append(parsed)
 
