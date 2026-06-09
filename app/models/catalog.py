@@ -420,8 +420,13 @@ class AddOn(Base):
     ip_is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     ip_prefix_length: Mapped[int | None] = mapped_column(Integer)
 
-    # Provenance for the Splynx importer — "custom:8" / "one_time:3". Unique so
-    # re-running the import updates rather than duplicates.
+    # Data top-up: GB granted to the subscription's quota bucket on purchase
+    # (null for non-data add-ons). Sourced from Splynx cap_tariff.
+    grant_gb: Mapped[int | None] = mapped_column(Integer)
+
+    # Provenance for the Splynx importer — "custom:8" / "one_time:3" /
+    # "cap_tariff:1". Unique so re-running the import updates rather than
+    # duplicates.
     splynx_source: Mapped[str | None] = mapped_column(String(40), unique=True)
 
     created_at: Mapped[datetime] = mapped_column(

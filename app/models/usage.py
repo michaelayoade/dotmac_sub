@@ -59,6 +59,9 @@ class QuotaBucket(Base):
     included_gb: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     used_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     rollover_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    # GB granted by data top-up purchases this period (counts toward the
+    # allowance before overage, alongside included + rollover).
+    topup_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     overage_gb: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
 
     created_at: Mapped[datetime] = mapped_column(
