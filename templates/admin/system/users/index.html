@@ -104,6 +104,8 @@
             data-initial-search='{{ (search or "") | e }}'
             data-current-user-id='{{ (current_user.person_id if current_user and current_user.person_id is defined else (current_user.id if current_user and current_user.id is defined else (current_user.email if current_user and current_user.email is defined else "anonymous"))) | e }}'
             data-doctype="User"
+            x-on:htmx:before-request="onFilterRequestStart($event)"
+            x-on:htmx:after-request="onFilterRequestDone($event)"
             class="space-y-4"
         >
             <input type="hidden" name="filters" x-bind:value="filtersJson">
@@ -120,6 +122,7 @@
                        x-on:input="persistState()"
                        hx-include="[name='filters'],[name='order_by'],[name='order_dir']"
                        hx-target="#users-table-content"
+                       hx-indicator="#users-loading"
                        class="block w-full rounded-lg border border-slate-300 bg-white pl-10 pr-4 py-2 text-sm shadow-sm placeholder-slate-400 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
                 <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             </div>
@@ -206,24 +209,58 @@
                     Add Filter
                 </button>
                 <button type="button"
-                        x-on:click="clearRows(); persistState()"
+                        x-on:click="clearAndApply()"
                         class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                     Clear
                 </button>
                 <button type="button"
-                        x-on:click="persistState()"
+                        x-ref="applyButton"
+                        x-on:click="applyFilters()"
                         hx-get="/admin/system/users/filter?offset=0&limit={{ limit }}"
                         hx-include="[name='search'],[name='filters'],[name='order_by'],[name='order_dir']"
                         hx-target="#users-table-content"
-                        class="rounded-lg bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800">
-                    Apply Filters
+                        hx-indicator="#users-loading"
+                        class="rounded-lg px-3 py-2 text-sm font-medium transition"
+                        :class="hasUnappliedChanges() ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'">
+                    Apply
                 </button>
+            </div>
+            <div class="flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                <div class="flex flex-wrap items-center gap-2" x-show="appliedChips().length > 0" x-cloak>
+                    <template x-for="chip in appliedChips()" :key="chip.key">
+                        <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200">
+                            <span x-text="chip.label"></span>
+                            <button type="button"
+                                    x-on:click="removeAppliedChip(chip)"
+                                    class="rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-white"
+                                    :aria-label="`Remove ${chip.label}`">
+                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </span>
+                    </template>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-sm text-slate-500 dark:text-slate-400" x-text="resultSummaryText()"></p>
+                    <p class="text-xs font-medium text-amber-600 dark:text-amber-400" x-show="hasUnappliedChanges()" x-cloak>
+                        Unapplied filter changes
+                    </p>
+                </div>
+                <div x-show="requestError"
+                     x-cloak
+                     class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+                     x-text="requestError">
+                </div>
             </div>
         </div>
     {% endcall %}
 
     {# ── Users Table ── #}
     {% call card(color="slate", padding=False) %}
+        <div id="users-loading" class="htmx-indicator pointer-events-none absolute right-8 z-10 mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            Loading users...
+        </div>
         <div x-show="selectedIds.length > 0"
              x-cloak
              class="mx-4 mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/30">
@@ -362,6 +399,10 @@ function usersFilterBuilder() {
         schema: [],
         doctype: 'User',
         rows: [],
+        appliedRows: [],
+        appliedSearch: '',
+        appliedTotal: null,
+        requestError: '',
         filtersJson: '',
         storageKey: '',
         hydrating: false,
@@ -383,6 +424,7 @@ function usersFilterBuilder() {
             this.syncFilters();
             this.restorePersistedState(initialSearch, initialFilters);
             this.hydrating = false;
+            this.captureAppliedState();
             this.persistState();
         },
 
@@ -487,6 +529,188 @@ function usersFilterBuilder() {
             this.syncFilters();
         },
 
+        cloneRows(rows) {
+            return rows.map((row) => ({
+                id: row.id || this.newId(),
+                field: row.field,
+                operator: row.operator,
+                value: Array.isArray(row.value) ? [...row.value] : row.value,
+                group: row.group === 'or' ? 'or' : 'and',
+            }));
+        },
+
+        isRowComplete(row) {
+            if (!row || !row.field || !row.operator) return false;
+            if (row.operator === 'between') {
+                return Array.isArray(row.value)
+                    && row.value.length === 2
+                    && row.value[0] !== ''
+                    && row.value[0] !== null
+                    && row.value[0] !== undefined
+                    && row.value[1] !== ''
+                    && row.value[1] !== null
+                    && row.value[1] !== undefined;
+            }
+            if ((row.operator === 'is' || row.operator === 'is not') && this.fieldType(row.field) !== 'boolean') {
+                return true;
+            }
+            return row.value !== '' && row.value !== null && row.value !== undefined;
+        },
+
+        activeRows(rows = this.rows) {
+            return this.cloneRows(rows.filter((row) => this.isRowComplete(row)));
+        },
+
+        rowSignature(row) {
+            return JSON.stringify({
+                field: row.field,
+                operator: row.operator,
+                value: row.value,
+                group: row.group === 'or' ? 'or' : 'and',
+            });
+        },
+
+        stateSignature(rows, search) {
+            return JSON.stringify({
+                search: search || '',
+                rows: this.activeRows(rows).map((row) => ({
+                    field: row.field,
+                    operator: row.operator,
+                    value: row.value,
+                    group: row.group,
+                })),
+            });
+        },
+
+        hasUnappliedChanges() {
+            return this.stateSignature(this.rows, this.getSearchValue())
+                !== this.stateSignature(this.appliedRows, this.appliedSearch);
+        },
+
+        readTableTotal() {
+            const table = document.getElementById('users-table-content');
+            if (!table) return null;
+            const total = Number.parseInt(table.getAttribute('data-total') || '', 10);
+            return Number.isNaN(total) ? null : total;
+        },
+
+        captureAppliedState() {
+            this.appliedRows = this.activeRows();
+            this.appliedSearch = this.getSearchValue();
+            const total = this.readTableTotal();
+            if (total !== null) {
+                this.appliedTotal = total;
+            }
+        },
+
+        applyFilters() {
+            this.syncFilters();
+            this.persistState();
+            this.captureAppliedState();
+        },
+
+        clearAndApply() {
+            this.setSearchValue('');
+            this.clearRows();
+            this.persistState();
+            this.$nextTick(() => {
+                if (this.$refs.applyButton) {
+                    this.$refs.applyButton.click();
+                }
+            });
+        },
+
+        onFilterRequestStart(event) {
+            const path = event.detail && event.detail.pathInfo ? event.detail.pathInfo.requestPath : '';
+            if (!path || !path.includes('/admin/system/users/')) return;
+            this.requestError = '';
+            this.captureAppliedState();
+        },
+
+        onFilterRequestDone(event) {
+            const detail = event.detail || {};
+            const target = detail.target || null;
+            const path = detail.pathInfo ? detail.pathInfo.requestPath : '';
+            if ((!target || target.id !== 'users-table-content') && (!path || !path.includes('/admin/system/users/'))) return;
+            if (detail.failed) {
+                this.requestError = 'Search failed. Adjust the filters and try again.';
+                return;
+            }
+            this.requestError = '';
+            const total = this.readTableTotal();
+            if (total !== null) {
+                this.appliedTotal = total;
+            }
+        },
+
+        fieldLabel(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.label ? fieldEntry.label : field;
+        },
+
+        operatorLabel(field, operator) {
+            const operatorEntry = this.operatorOptions(field).find((item) => item.value === operator);
+            return operatorEntry && operatorEntry.label ? operatorEntry.label : operator;
+        },
+
+        valueLabel(field, value, operator) {
+            if ((operator === 'is' || operator === 'is not') && this.fieldType(field) !== 'boolean') {
+                const token = String(value || '').trim();
+                return token || 'Empty';
+            }
+            if (operator === 'between' && Array.isArray(value)) {
+                return `${value[0]} to ${value[1]}`;
+            }
+            const options = this.selectOptions(field);
+            if (Array.isArray(value)) {
+                return value.map((item) => this.valueLabel(field, item, '=')).join(', ');
+            }
+            const option = options.find((item) => String(item.value) === String(value));
+            return option && option.label ? option.label : String(value);
+        },
+
+        chipLabel(row) {
+            const field = this.fieldLabel(row.field);
+            const value = this.valueLabel(row.field, row.value, row.operator);
+            if (row.operator === '=') return `${field}: ${value}`;
+            return `${field} ${this.operatorLabel(row.field, row.operator)} ${value}`;
+        },
+
+        appliedChips() {
+            return this.appliedRows.map((row) => ({
+                key: this.rowSignature(row),
+                signature: this.rowSignature(row),
+                label: this.chipLabel(row),
+            }));
+        },
+
+        removeAppliedChip(chip) {
+            this.rows = this.rows.filter((row) => this.rowSignature(row) !== chip.signature);
+            if (this.rows.length === 0) {
+                this.addRow();
+            } else {
+                this.syncFilters();
+            }
+            this.persistState();
+            this.$nextTick(() => {
+                if (this.$refs.applyButton) {
+                    this.$refs.applyButton.click();
+                }
+            });
+        },
+
+        resultSummaryText() {
+            const total = this.appliedTotal;
+            const count = this.appliedRows.length;
+            if (total === null || total === undefined) {
+                return count > 0 ? `Showing users matching ${count} filter${count === 1 ? '' : 's'}` : 'Showing users';
+            }
+            if (count === 0) {
+                return `Showing ${total} user${total === 1 ? '' : 's'}`;
+            }
+            return `Showing ${total} user${total === 1 ? '' : 's'} matching ${count} filter${count === 1 ? '' : 's'}`;
+        },
+
         removeRow(index) {
             this.rows.splice(index, 1);
             if (this.rows.length === 0) {
@@ -531,7 +755,7 @@ function usersFilterBuilder() {
             const andRows = [];
             const orRows = [];
             this.rows.forEach((row) => {
-                if (!row.field || !row.operator) return;
+                if (!this.isRowComplete(row)) return;
                 const payload = [this.doctype, row.field, row.operator, row.value];
                 if (row.group === 'or') {
                     orRows.push(payload);

@@ -1591,6 +1591,43 @@ def customer_submit_change_plan(
             status_code=303,
         )
     except ValueError as exc:
+        message = str(exc)
+        if "same plan family" in message.lower():
+            try:
+                from app.models.catalog import CatalogOffer
+                from app.services.common import coerce_uuid
+
+                offer = db.get(CatalogOffer, coerce_uuid(offer_id))
+                target_family = str(getattr(offer, "plan_family", "") or "").strip()
+                if target_family:
+                    result = customer_portal.request_plan_migration(
+                        db=db,
+                        customer=customer,
+                        subscription_id=str(subscription_id),
+                        target_family=target_family,
+                        requested_offer_id=offer_id,
+                        notes=notes,
+                    )
+                    ticket = result.get("ticket") or {}
+                    ticket_id = str(ticket.get("id") or "")
+                    if ticket_id:
+                        emit_customer_event(
+                            db,
+                            "customer_ticket_created",
+                            {
+                                "ticket_id": ticket_id,
+                                "subscriber_id": str(
+                                    customer.get("subscriber_id") or ""
+                                ),
+                            },
+                        )
+                        return RedirectResponse(
+                            url=f"/portal/support/{ticket_id}",
+                            status_code=303,
+                        )
+                    return RedirectResponse(url="/portal/support", status_code=303)
+            except ValueError as migration_exc:
+                message = str(migration_exc)
         error_ctx = customer_portal.get_change_plan_error_context(
             db, str(subscription_id)
         )
@@ -1600,7 +1637,7 @@ def customer_submit_change_plan(
                 "request": request,
                 "customer": customer,
                 **error_ctx,
-                "error": str(exc),
+                "error": message,
                 "active_page": "services",
             },
             status_code=400,

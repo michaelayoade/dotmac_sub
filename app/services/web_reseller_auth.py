@@ -211,7 +211,11 @@ def reseller_mfa_submit(
 def reseller_logout(request: Request):
     session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
     if session_token:
-        reseller_portal.invalidate_session(session_token)
+        db = db_session_adapter.create_session()
+        try:
+            reseller_portal.invalidate_session(session_token, db)
+        finally:
+            db.close()
 
     response = RedirectResponse(url="/reseller/auth/login", status_code=303)
     response.delete_cookie(reseller_portal.SESSION_COOKIE_NAME)

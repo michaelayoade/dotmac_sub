@@ -94,6 +94,13 @@ function stddev(values) {
     return Math.sqrt(variance);
 }
 
+function getCsrfToken() {
+    const inputToken = document.querySelector('[name="_csrf_token"]')?.value || '';
+    if (inputToken) return inputToken;
+    const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+}
+
 async function probeLatency(samples = 5) {
     const points = [];
     for (let i = 0; i < samples; i += 1) {
@@ -120,7 +127,10 @@ async function probeUpload(sizeMb = 4) {
     const started = performance.now();
     await fetch('/portal/speedtest/probe-upload', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-CSRF-Token': getCsrfToken(),
+        },
         body: payload,
     });
     const elapsedSeconds = (performance.now() - started) / 1000;

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.support import TicketChannel, TicketPriority
+from app.models.support import TicketChannel, TicketCommentAuthorType, TicketPriority
 
 
 class AttachmentMeta(BaseModel):
@@ -173,6 +173,8 @@ class TicketCommentBase(BaseModel):
 
 class TicketCommentCreate(TicketCommentBase):
     author_person_id: UUID | None = None
+    author_type: TicketCommentAuthorType | str | None = None
+    author_system_user_id: UUID | None = None
 
 
 class TicketCommentUpdate(BaseModel):
@@ -187,6 +189,8 @@ class TicketCommentRead(BaseModel):
     id: UUID
     ticket_id: UUID
     author_person_id: UUID | None
+    author_type: str
+    author_system_user_id: UUID | None
     body: str
     is_internal: bool
     attachments: list[dict] | None = None

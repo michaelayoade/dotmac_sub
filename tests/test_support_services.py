@@ -14,6 +14,7 @@ from app.models.support import (
     TicketAssignee,
     TicketChannel,
     TicketComment,
+    TicketCommentAuthorType,
 )
 from app.models.system_user import SystemUser
 from app.schemas.support import (
@@ -273,7 +274,7 @@ def test_ticket_create_ignores_system_user_created_by_subscriber_fk(
     assert ticket.created_by_person_id is None
 
 
-def test_ticket_comment_ignores_system_user_author_subscriber_fk(
+def test_ticket_comment_stores_system_user_author_identity(
     db_session, subscriber
 ):
     system_user = _system_user(display_name="Comment Admin")
@@ -297,12 +298,44 @@ def test_ticket_comment_ignores_system_user_author_subscriber_fk(
         TicketCommentCreate(
             body="Internal admin note",
             is_internal=True,
-            author_person_id=system_user.id,
+            author_type=TicketCommentAuthorType.staff,
+            author_system_user_id=system_user.id,
         ),
         actor_id=str(system_user.id),
     )
 
+    assert comment.author_type == TicketCommentAuthorType.staff.value
     assert comment.author_person_id is None
+    assert comment.author_system_user_id == system_user.id
+
+
+def test_ticket_comment_stores_customer_author_identity(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Comment target",
+            description="",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    comment = support_service.tickets.create_comment(
+        db_session,
+        str(ticket.id),
+        TicketCommentCreate(
+            body="Customer reply",
+            is_internal=False,
+            author_type=TicketCommentAuthorType.customer,
+            author_person_id=subscriber.id,
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    assert comment.author_type == TicketCommentAuthorType.customer.value
+    assert comment.author_person_id == subscriber.id
+    assert comment.author_system_user_id is None
 
 
 def test_ticket_create_auto_links_inbound_sender_from_subscriber_contact(
