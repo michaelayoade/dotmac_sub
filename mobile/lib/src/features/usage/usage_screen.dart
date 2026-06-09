@@ -1,13 +1,13 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../models/usage.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
+import 'fup_card.dart';
 
 class UsageScreen extends ConsumerWidget {
   const UsageScreen({super.key});
@@ -49,7 +49,7 @@ class UsageScreen extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (s.fup?.needsAttention ?? false) ...[
-                    _FupCard(fup: s.fup!),
+                    FupCard(fup: s.fup!),
                     const SizedBox(height: 12),
                   ],
                   _WindowSummaryCard(summary: s),
@@ -116,68 +116,6 @@ class _PeriodChips extends StatelessWidget {
             onSelected: (_) => onSelect(e.key),
           ),
       ],
-    );
-  }
-}
-
-/// Fair-Usage status banner shown when the caller is throttled or blocked.
-/// Explains the limit in plain language and offers a restore (top-up) CTA.
-class _FupCard extends StatelessWidget {
-  const _FupCard({required this.fup});
-  final FupStatus fup;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final blocked = fup.isBlocked;
-    final accent = blocked ? scheme.error : scheme.tertiary;
-    final title = blocked ? 'Service paused' : 'Speed reduced';
-
-    return Card(
-      color: accent.withValues(alpha: 0.10),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(blocked ? Icons.block : Icons.speed, color: accent),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(title,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(color: accent, fontWeight: FontWeight.w600)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              fup.summary ??
-                  (blocked
-                      ? 'Your fair-usage limit has been reached.'
-                      : 'Speed reduced — fair-usage limit reached.'),
-              style: theme.textTheme.bodyMedium,
-            ),
-            if (fup.resetsAt != null) ...[
-              const SizedBox(height: 4),
-              Text('Resets ${Fmt.date(fup.resetsAt!)}',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: scheme.outline)),
-            ],
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.tonalIcon(
-                onPressed: () => context.push('/topup'),
-                icon: const Icon(Icons.add_card_outlined, size: 18),
-                label: const Text('Top up to restore'),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
