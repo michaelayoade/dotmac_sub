@@ -94,6 +94,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                 fup_state.clear(session, str(sub.id))
                 reset += 1
                 logger.info("Reset FUP state for subscription %s", sub.id)
+                session.commit()
                 continue
 
             # Get current usage from quota bucket
@@ -101,6 +102,7 @@ def evaluate_fup_rules() -> dict[str, int]:
 
             bucket = _resolve_or_create_quota_bucket(session, sub, now)
             if not bucket:
+                session.commit()
                 continue
 
             current_usage = float(bucket.used_gb or 0)
@@ -163,6 +165,15 @@ def evaluate_fup_rules() -> dict[str, int]:
                         )
                         enforced += 1
                         break
+
+            # Commit each subscription on its own so this periodic sweep never
+            # holds a single transaction open across the whole subscription list.
+            # Previously the one commit below ran only after the entire loop, so a
+            # large active-subscriber set produced multi-minute "idle in
+            # transaction" connections — pinning a pool slot and blocking
+            # autovacuum. Per-subscription commits also make a mid-sweep failure
+            # preserve already-enforced subscriptions (the sweep is idempotent).
+            session.commit()
 
         session.commit()
         logger.info(
