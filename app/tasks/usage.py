@@ -36,6 +36,22 @@ def import_radius_accounting():
         session.close()
 
 
+@celery_app.task(name="app.tasks.usage.meter_usage_into_quota")
+def meter_usage_into_quota():
+    """Roll imported RADIUS accounting into the current period's quota buckets
+    for capped subscriptions (the metering that feeds FUP/overage)."""
+    session = SessionLocal()
+    try:
+        result = usage_service.meter_usage_into_quota(session)
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
 def evaluate_fup_rules() -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
