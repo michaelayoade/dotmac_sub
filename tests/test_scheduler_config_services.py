@@ -803,3 +803,35 @@ class TestBuildBeatSchedule:
             and getattr(call.args[0], "interval_seconds", None) == 60
             for call in scheduled_calls
         )
+
+
+class TestIntervalToBeatSchedule:
+    """Day-long intervals become wall-clock crontabs (restart-proof)."""
+
+    def test_sub_daily_interval_stays_timedelta(self):
+        result = scheduler_config._interval_to_beat_schedule("task-1", 3600)
+        assert result == timedelta(seconds=3600)
+
+    def test_daily_interval_becomes_crontab(self):
+        import uuid
+
+        from celery.schedules import crontab
+
+        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 86400)
+        assert isinstance(result, crontab)
+        # Anchored into the 00:00-05:59 window.
+        assert max(result.hour) <= 5
+
+    def test_daily_crontab_is_deterministic_per_task(self):
+        import uuid
+
+        task_id = uuid.uuid4()
+        first = scheduler_config._interval_to_beat_schedule(task_id, 86400)
+        second = scheduler_config._interval_to_beat_schedule(task_id, 86400)
+        assert first.hour == second.hour and first.minute == second.minute
+
+    def test_multiday_interval_stays_timedelta(self):
+        import uuid
+
+        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 7 * 86400)
+        assert result == timedelta(days=7)
