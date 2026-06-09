@@ -629,6 +629,7 @@ def get_reseller_detail_context(
         outstanding_balance = db.scalar(
             select(func.coalesce(func.sum(Invoice.balance_due), 0))
             .where(Invoice.account_id.in_(linked_subscriber_ids))
+            .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
             .where(
                 Invoice.status.in_(
                     [

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -92,6 +92,9 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
 
 def _customer_accounts_query(db: Session, reseller_id: str):
     reseller_uuid = coerce_uuid(reseller_id)
+    # Lazy import avoids any import cycle with the subscriber service.
+    from app.services.subscriber import not_soft_deleted_subscriber_clause
+
     return (
         db.query(Subscriber)
         .filter(Subscriber.reseller_id == reseller_uuid)
@@ -101,6 +104,10 @@ def _customer_accounts_query(db: Session, reseller_id: str):
                 Subscriber.user_type != UserType.reseller,
             )
         )
+        # Exclude soft-deleted (canceled) accounts so they don't leak into the
+        # accounts list, counts, drill-down, and the alert/revenue metrics that
+        # build on this query.
+        .filter(not_soft_deleted_subscriber_clause())
     )
 
 
@@ -117,9 +124,17 @@ def _get_customer_account(
 
 
 def _customer_account_join_filter():
-    return or_(
-        Subscriber.user_type.is_(None),
-        Subscriber.user_type != UserType.reseller,
+    # Lazy import avoids any import cycle with the subscriber service.
+    from app.services.subscriber import not_soft_deleted_subscriber_clause
+
+    # Applied on Invoice/Payment ⨝ Subscriber joins so the money aggregations
+    # (open balance, overdue, revenue) exclude soft-deleted accounts too.
+    return and_(
+        or_(
+            Subscriber.user_type.is_(None),
+            Subscriber.user_type != UserType.reseller,
+        ),
+        not_soft_deleted_subscriber_clause(),
     )
 
 
@@ -449,6 +464,7 @@ def list_accounts(
             func.count(Invoice.id).label("open_invoices"),
         )
         .filter(Invoice.account_id.in_(account_ids))
+        .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status.in_(open_statuses))
         .group_by(Invoice.account_id)
         .all()
@@ -531,6 +547,7 @@ def get_dashboard_summary(
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
         .filter(_customer_account_join_filter())
+        .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status.in_(open_statuses))
         .first()
     )
@@ -543,6 +560,7 @@ def get_dashboard_summary(
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
         .filter(_customer_account_join_filter())
+        .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status == InvoiceStatus.overdue)
         .scalar()
         or 0
@@ -656,7 +674,11 @@ def get_account_detail(
     }
     open_balance = (
         db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == account.id, Invoice.status.in_(open_statuses))
+        .filter(
+            Invoice.account_id == account.id,
+            Invoice.is_active.is_(True),
+            Invoice.status.in_(open_statuses),
+        )
         .scalar()
     ) or 0
 
@@ -697,6 +719,7 @@ def list_account_invoices(
     invoices = (
         db.query(Invoice)
         .filter(Invoice.account_id == account.id)
+        .filter(Invoice.is_active.is_(True))
         .order_by(Invoice.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -735,7 +758,11 @@ def get_invoice_detail(
         return None
 
     invoice = db.get(Invoice, coerce_uuid(invoice_id))
-    if not invoice or str(invoice.account_id) != str(account.id):
+    if (
+        not invoice
+        or not invoice.is_active
+        or str(invoice.account_id) != str(account.id)
+    ):
         return None
 
     # Line items
@@ -810,6 +837,7 @@ def get_revenue_summary(
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == reseller_uuid)
         .filter(_customer_account_join_filter())
+        .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status == InvoiceStatus.paid)
         .scalar()
     ) or 0
@@ -825,6 +853,7 @@ def get_revenue_summary(
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == reseller_uuid)
         .filter(_customer_account_join_filter())
+        .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status.in_(open_statuses))
         .scalar()
     ) or 0
@@ -840,6 +869,7 @@ def get_revenue_summary(
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == reseller_uuid)
         .filter(_customer_account_join_filter())
+        .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status == InvoiceStatus.paid)
         .group_by("year", "month")
         .order_by(
