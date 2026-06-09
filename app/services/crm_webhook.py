@@ -42,44 +42,111 @@ def _get_token() -> str | None:
 
 
 def push_subscriber_change(
-    splynx_customer_id: int,
+    external_id: int | str,
     subscriber_data: dict,
-) -> bool:
-    """Push a subscriber change to the CRM webhook endpoint.
+    external_system: str = "splynx",
+) -> str | None:
+    """Push a subscriber change to the CRM sync webhook.
 
     Args:
-        splynx_customer_id: The Splynx customer ID (used as external_id).
-        subscriber_data: Dict with subscriber fields matching Splynx API format.
+        external_id: The CRM external_id — Splynx customer ID for migrated
+            subscribers, the local subscriber UUID for native ones.
+        subscriber_data: Subscriber fields. Splynx-shaped for the splynx
+            system; CRM Subscriber column names for any other system (the
+            CRM's generic handler instantiates its model from the payload
+            verbatim, so unknown keys break creation).
+        external_system: CRM external system the payload is keyed under.
 
     Returns:
-        True if successful.
+        The CRM subscriber UUID on success (or "ok" when the response carries
+        no id — still truthy), None on failure.
     """
     token = _get_token()
     if not token:
         logger.warning("Cannot push to CRM: no auth token")
-        return False
+        return None
 
-    payload = {"id": splynx_customer_id, **subscriber_data}
+    payload = {"id": external_id, **subscriber_data}
 
     try:
         resp = post(
-            f"{settings.crm_base_url}/api/v1/subscribers/sync/webhook/splynx",
+            f"{settings.crm_base_url}/api/v1/subscribers/sync/webhook/{external_system}",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,
         )
         if resp.status_code == 200:
-            logger.debug("CRM webhook OK for customer %d", splynx_customer_id)
-            return True
+            logger.debug("CRM webhook OK for %s %s", external_system, external_id)
+            try:
+                crm_subscriber_id = resp.json().get("subscriber_id")
+            except ValueError:
+                crm_subscriber_id = None
+            return str(crm_subscriber_id) if crm_subscriber_id else "ok"
         logger.warning(
-            "CRM webhook failed for customer %d: %d %s",
-            splynx_customer_id,
+            "CRM webhook failed for %s %s: %d %s",
+            external_system,
+            external_id,
             resp.status_code,
             resp.text[:200],
         )
     except RequestException as e:
-        logger.warning("CRM webhook error for customer %d: %s", splynx_customer_id, e)
-    return False
+        logger.warning(
+            "CRM webhook error for %s %s: %s", external_system, external_id, e
+        )
+    return None
+
+
+# Local subscriber statuses → CRM SubscriberStatus values
+# (active / suspended / terminated / pending).
+_NATIVE_STATUS_MAP = {
+    "new": "pending",
+    "active": "active",
+    "delinquent": "active",
+    "suspended": "suspended",
+    "blocked": "suspended",
+    "disabled": "terminated",
+    "canceled": "terminated",
+}
+
+NATIVE_EXTERNAL_SYSTEM = "dotmac"
+
+
+def native_status(status: object) -> str:
+    """Map a local subscriber status to the CRM's status vocabulary."""
+    value = getattr(status, "value", status)
+    return _NATIVE_STATUS_MAP.get(str(value or "").lower(), "pending")
+
+
+def native_subscriber_payload(
+    subscriber,
+    service_name: str = "",
+    service_speed: str = "",
+    status: str | None = None,
+) -> dict:
+    """Build a generic-webhook payload for a native (non-Splynx) subscriber.
+
+    Only CRM Subscriber column names: the CRM's generic handler creates its
+    model from the payload verbatim. The CRM has no name field on
+    subscribers (names hang off person/organization links), so the display
+    name goes into notes for agents.
+    """
+    name = (
+        subscriber.display_name
+        or f"{subscriber.first_name} {subscriber.last_name}".strip()
+    )
+    payload = {
+        "status": status or native_status(subscriber.status),
+        "notes": f"DotMac Sub native subscriber: {name} <{subscriber.email}>",
+    }
+    if subscriber.subscriber_number:
+        payload["subscriber_number"] = subscriber.subscriber_number
+    if subscriber.account_number:
+        payload["account_number"] = subscriber.account_number
+    if service_name:
+        payload["service_name"] = service_name
+    if service_speed:
+        payload["service_speed"] = service_speed
+    return payload
 
 
 def status_change_payload(new_status: str, name: str = "") -> dict:
