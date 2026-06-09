@@ -68,6 +68,78 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+# Customer-facing status + relative severity for picking the worst state when a
+# subscriber has more than one subscription.
+_FUP_STATUS_MAP = {
+    "blocked": ("blocked", 3),
+    "throttled": ("throttled", 2),
+    "notified": ("full_speed", 1),  # warned, but not yet speed-limited
+    "none": ("full_speed", 0),
+}
+
+
+def fup_summary(db: Session, subscriber_id: str) -> dict | None:
+    """Customer-facing Fair-Usage status for the caller's subscriptions.
+
+    Reads the per-subscription ``FupState`` the enforcement engine maintains and
+    surfaces the most severe active state. Returns ``None`` when the caller has
+    no subscriptions (nothing to report); otherwise always returns a summary so
+    the app gets a definite signal (``full_speed`` when nothing is breached).
+    """
+    if db is None:
+        return None
+    from app.models.fup import FupRule
+    from app.models.fup_state import FupState
+    from app.services.fup_state import fup_state as fup_state_mgr
+
+    sub_ids = _subscription_ids(db, subscriber_id)
+    if not sub_ids:
+        return None
+
+    best: tuple[int, FupState] | None = None  # (severity, state)
+    for sub_id in sub_ids:
+        state = fup_state_mgr.get(db, str(sub_id))
+        if state is None:
+            continue
+        _, severity = _FUP_STATUS_MAP.get(state.action_status.value, ("full_speed", 0))
+        if best is None or severity > best[0]:
+            best = (severity, state)
+
+    if best is None or best[0] == 0:
+        return {"status": "full_speed", "is_reduced": False}
+
+    state = best[1]
+    status, _ = _FUP_STATUS_MAP.get(state.action_status.value, ("full_speed", 0))
+    rule = (
+        db.query(FupRule).filter(FupRule.id == state.active_rule_id).first()
+        if state.active_rule_id
+        else None
+    )
+    reduction = state.speed_reduction_percent
+    summary = None
+    if rule is not None:
+        period = {"daily": "day", "weekly": "week", "monthly": "month"}.get(
+            rule.consumption_period.value, rule.consumption_period.value
+        )
+        limit = f"{rule.threshold_amount:g} {rule.threshold_unit.value.upper()}"
+        if status == "blocked":
+            summary = f"Access paused after {limit} this {period}"
+        elif reduction is not None:
+            kept = max(0.0, 100.0 - reduction)
+            summary = f"Speed reduced to {kept:g}% after {limit} this {period}"
+        else:
+            summary = f"Fair-usage limit reached after {limit} this {period}"
+
+    return {
+        "status": status,
+        "is_reduced": status in {"throttled", "blocked"},
+        "speed_reduction_percent": reduction,
+        "active_rule_name": rule.name if rule is not None else None,
+        "resets_at": _as_utc(state.cap_resets_at),
+        "summary": summary,
+    }
+
+
 def _subscriber_tz(db: Session, subscriber_id: str) -> ZoneInfo:
     """The subscriber's timezone, falling back to the deployment default, so
     "today" / daily buckets align to the customer's local day, not UTC."""

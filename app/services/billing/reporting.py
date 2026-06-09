@@ -193,7 +193,7 @@ class BillingReporting:
             func.count(case((Invoice.status == InvoiceStatus.draft, 1))).label(
                 "draft_count"
             ),
-        )
+        ).where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
         if partner_id or location:
             stmt = stmt.join(Subscriber, Invoice.account_id == Subscriber.id)
             if partner_id:
@@ -276,6 +276,7 @@ class BillingReporting:
         ]
         stmt = (
             select(Invoice)
+            .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
             .where(Invoice.status.in_(unpaid_statuses))
             .order_by(Invoice.due_at.asc())
         )
@@ -366,7 +367,12 @@ class BillingReporting:
 
         # --- Scoping helpers for SQL WHERE clauses ---
         def _scope_invoice_stmt(stmt: Any) -> Any:
-            """Apply partner/location scope to an invoice query via JOIN."""
+            """Apply partner/location scope to an invoice query via JOIN.
+
+            Always excludes soft-deleted invoices (is_active=False) so dashboard
+            money/counts never include them.
+            """
+            stmt = stmt.where(Invoice.is_active.is_(True))
             if selected_partner_id or selected_location:
                 stmt = stmt.join(Subscriber, Invoice.account_id == Subscriber.id)
                 if selected_partner_id:

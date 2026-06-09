@@ -220,6 +220,64 @@ def test_window_with_no_data_falls_back_without_false_zero(
 # --- endpoint scoping ------------------------------------------------------
 
 
+# --- customer-facing FUP summary -------------------------------------------
+
+
+def test_fup_summary_none_without_subscriptions(db_session, subscriber):
+    # A subscriber with no subscriptions has nothing to report.
+    assert svc.fup_summary(db_session, str(subscriber.id)) is None
+
+
+def test_fup_summary_none_db_guard():
+    # Endpoint passes db=None in some unit paths; must not blow up.
+    assert svc.fup_summary(None, str(uuid.uuid4())) is None
+
+
+def test_fup_summary_full_speed_when_no_state(db_session, subscriber, subscription):
+    out = svc.fup_summary(db_session, str(subscriber.id))
+    assert out == {"status": "full_speed", "is_reduced": False}
+
+
+def test_fup_summary_throttled_with_plain_language(
+    db_session, subscriber, subscription
+):
+    from app.models.fup import FupAction, FupConsumptionPeriod, FupDataUnit, FupRule
+    from app.models.fup_state import FupActionStatus
+    from app.services.fup import fup_policies
+    from app.services.fup_state import fup_state
+
+    policy = fup_policies.get_or_create(db_session, str(subscription.offer_id))
+    rule = FupRule(
+        policy_id=policy.id,
+        name="Monthly 100GB cap",
+        consumption_period=FupConsumptionPeriod.monthly,
+        threshold_amount=100,
+        threshold_unit=FupDataUnit.gb,
+        action=FupAction.reduce_speed,
+        speed_reduction_percent=75,
+    )
+    db_session.add(rule)
+    db_session.commit()
+
+    fup_state.apply_action(
+        db_session,
+        str(subscription.id),
+        offer_id=str(subscription.offer_id),
+        rule_id=str(rule.id),
+        action_status=FupActionStatus.throttled,
+        speed_reduction_percent=75.0,
+        cap_resets_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    out = svc.fup_summary(db_session, str(subscriber.id))
+    assert out["status"] == "throttled"
+    assert out["is_reduced"] is True
+    assert out["speed_reduction_percent"] == 75.0
+    assert out["active_rule_name"] == "Monthly 100GB cap"
+    assert out["summary"] == "Speed reduced to 25% after 100 GB this month"
+
+
 def test_usage_summary_403_for_non_subscriber():
     principal = {"principal_type": "system_user", "subscriber_id": str(uuid.uuid4())}
     with pytest.raises(HTTPException) as exc:

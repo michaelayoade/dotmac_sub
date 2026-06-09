@@ -7,6 +7,7 @@ import '../../models/usage.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
+import 'fup_card.dart';
 
 class UsageScreen extends ConsumerWidget {
   const UsageScreen({super.key});
@@ -44,7 +45,16 @@ class UsageScreen extends ConsumerWidget {
               value: summary,
               onRetry: () => ref.invalidate(usageSummaryProvider(period)),
               skeleton: const CardSkeleton(height: 160),
-              data: (s) => _WindowSummaryCard(summary: s),
+              data: (s) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (s.fup?.needsAttention ?? false) ...[
+                    FupCard(fup: s.fup!),
+                    const SizedBox(height: 12),
+                  ],
+                  _WindowSummaryCard(summary: s),
+                ],
+              ),
             ),
             for (final b in quotaList) ...[
               const SizedBox(height: 12),

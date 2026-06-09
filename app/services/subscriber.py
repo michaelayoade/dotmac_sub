@@ -121,6 +121,21 @@ def visible_subscriber_clause():
     )
 
 
+def not_soft_deleted_subscriber_clause():
+    """Return a SQL clause for subscribers that are NOT soft-deleted.
+
+    Excludes the ``canceled`` status — the model's "Terminated / soft-deleted"
+    mapping (Splynx ``deleted``) — and Splynx-imported deleted rows. ``disabled``
+    accounts are intentionally NOT excluded: they're deactivated but real records
+    (e.g. still carry an outstanding balance), so callers that want only live
+    accounts should add their own status filter on top.
+    """
+    return and_(
+        Subscriber.status != SubscriberStatus.canceled,
+        not_(splynx_deleted_import_clause()),
+    )
+
+
 def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None

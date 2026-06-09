@@ -59,7 +59,8 @@
                  fd.append('billing_day_elapsed', this.billingDay);
                  fd.append('billing_cycle_days', this.cycleDays);
                  try {
-                     const resp = await fetch('/admin/catalog/offers/{{ offer.id }}/fup/simulate', {method: 'POST', body: fd});
+                     const token = (document.cookie.match(/csrf_token=([^;]+)/) || [])[1] || '';
+                     const resp = await fetch('/admin/catalog/offers/{{ offer.id }}/fup/simulate', {method: 'POST', headers: token ? {'X-CSRF-Token': token} : {}, body: fd});
                      this.results = await resp.json();
                  } catch(e) {
                      this.results = {error: e.message};

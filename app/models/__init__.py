@@ -116,6 +116,7 @@ from app.models.connector import (  # noqa: F401
 )
 from app.models.contracts import ContractSignature  # noqa: F401
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
+from app.models.device_token import DeviceToken  # noqa: F401
 from app.models.domain_settings import (  # noqa: F401
     DomainSetting,
     SettingDomain,

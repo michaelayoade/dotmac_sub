@@ -44,7 +44,11 @@ from app.schemas.catalog import (
     SubscriptionRead,
 )
 from app.schemas.common import ListResponse
-from app.schemas.notification import NotificationRead
+from app.schemas.notification import (
+    NotificationRead,
+    PushTokenRead,
+    PushTokenRegister,
+)
 from app.schemas.support import (
     MySupportCommentCreate,
     MySupportTicketCreate,
@@ -66,6 +70,7 @@ from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import notification as notification_service
+from app.services import push as push_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
@@ -536,6 +541,31 @@ def my_notifications(
     )
 
 
+@router.post("/push-tokens", response_model=PushTokenRead, status_code=201)
+def my_register_push_token(
+    payload: PushTokenRegister,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Register (or refresh) this device's push token for the calling subscriber."""
+    subscriber_id = _subscriber_id(principal)
+    return push_service.register_token(
+        db, subscriber_id, payload.token, payload.platform
+    )
+
+
+@router.delete("/push-tokens/{token}", status_code=204)
+def my_unregister_push_token(
+    token: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Unregister a device's push token (e.g. on logout). Idempotent."""
+    subscriber_id = _subscriber_id(principal)
+    push_service.unregister_token(db, subscriber_id, token)
+    return None
+
+
 @router.get(
     "/radius-accounting-sessions",
     response_model=ListResponse[RadiusAccountingSessionRead],
@@ -569,7 +599,9 @@ async def my_usage_summary(
     and counts the live session's current octets.
     """
     subscriber_id = _subscriber_id(principal)
-    return await usage_summary_service.get_usage_summary(db, subscriber_id, period)
+    summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
+    summary["fup"] = usage_summary_service.fup_summary(db, subscriber_id)
+    return summary
 
 
 # --- Support tickets (self-scoped) ---------------------------------------------

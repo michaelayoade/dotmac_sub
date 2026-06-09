@@ -14,6 +14,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.services import email as email_service
+from app.services import push as push_service
 from app.services import sms as sms_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations.connectors import whatsapp as whatsapp_service
@@ -121,6 +122,14 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     notification.last_error = str(
                         result.get("response") or "whatsapp_send_failed"
                     )
+            elif notification.channel == NotificationChannel.push:
+                success = push_service.send_push(
+                    db=db,
+                    subscriber_id=notification.subscriber_id,
+                    title=subject,
+                    body=body,
+                    notification_id=str(notification.id),
+                )
             else:
                 success = False
                 notification.last_error = (
