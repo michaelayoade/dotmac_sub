@@ -268,12 +268,12 @@ def purchase_addon(
             )
         )
 
-    # Data top-up: credit the purchased GB to the current period's quota bucket.
-    grant_gb = add_on.grant_gb
-    if grant_gb:
+    # Data top-up: stamp its validity window and credit the purchased GB to the
+    # current period's quota bucket.
+    if add_on.grant_gb:
         from app.services.usage import grant_data_topup
 
-        grant_data_topup(db, subscription, int(grant_gb) * quantity)
+        grant_data_topup(db, subscription, sub_add_on, add_on)
 
     if idempotency_key:
         db.flush()  # assign sub_add_on.id before referencing it
