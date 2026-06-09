@@ -14,6 +14,7 @@ from app.services.auth_flow import AuthFlow
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
+MFA_ENROLLMENT_COOKIE = "mfa_enrollment_pending"
 
 
 def _session_cookie_settings(db: Session) -> dict:
@@ -97,6 +98,18 @@ def login_submit(
             response.set_cookie(
                 key="mfa_pending",
                 value=result.get("mfa_token", ""),
+                httponly=True,
+                secure=_is_https_request(request),
+                samesite="lax",
+                max_age=300,
+            )
+            return response
+        if result.get("mfa_enrollment_required"):
+            enroll_url = f"/auth/mfa/enroll?next={quote(redirect_url)}"
+            response = RedirectResponse(url=enroll_url, status_code=303)
+            response.set_cookie(
+                key=MFA_ENROLLMENT_COOKIE,
+                value=result.get("mfa_enrollment_token", ""),
                 httponly=True,
                 secure=_is_https_request(request),
                 samesite="lax",
@@ -211,6 +224,106 @@ def mfa_submit(
                 "request": request,
                 "error": "Invalid verification code",
                 "next": next_url,
+                "csrf_token": _get_csrf_token(request),
+            },
+            status_code=401,
+        )
+
+
+def _mfa_enrollment_payload(db: Session, token: str) -> dict:
+    payload = auth_flow_service._decode_jwt(db, token, "mfa_enrollment")  # noqa: SLF001
+    if payload.get("principal_type") != "system_user":
+        raise ValueError("Invalid MFA enrollment token")
+    if not (payload.get("principal_id") or payload.get("sub")):
+        raise ValueError("Invalid MFA enrollment token")
+    return payload
+
+
+def mfa_enroll_page(
+    request: Request,
+    db: Session,
+    next_url: str | None = None,
+    error: str | None = None,
+):
+    enrollment_token = request.cookies.get(MFA_ENROLLMENT_COOKIE)
+    if not enrollment_token:
+        return RedirectResponse(url="/auth/login", status_code=303)
+    try:
+        payload = _mfa_enrollment_payload(db, enrollment_token)
+        principal_id = str(payload.get("principal_id") or payload.get("sub"))
+        setup = auth_flow_service.auth_flow.admin_mfa_setup(
+            db, principal_id, "Authenticator app"
+        )
+    except Exception:
+        response = RedirectResponse(url="/auth/login", status_code=303)
+        response.delete_cookie(MFA_ENROLLMENT_COOKIE)
+        return response
+
+    return templates.TemplateResponse(
+        request,
+        "auth/mfa_enroll.html",
+        {
+            "request": request,
+            "error": error,
+            "next": _safe_next(next_url),
+            "method_id": setup["method_id"],
+            "secret_key": setup["secret"],
+            "otpauth_uri": setup["otpauth_uri"],
+            "csrf_token": _get_csrf_token(request),
+        },
+    )
+
+
+def mfa_enroll_confirm(
+    request: Request,
+    db: Session,
+    method_id: str,
+    code: str,
+    next_url: str,
+):
+    enrollment_token = request.cookies.get(MFA_ENROLLMENT_COOKIE)
+    if not enrollment_token:
+        return RedirectResponse(url="/auth/login", status_code=303)
+    redirect_url = _safe_next(next_url)
+    try:
+        payload = _mfa_enrollment_payload(db, enrollment_token)
+        principal_id = str(payload.get("principal_id") or payload.get("sub"))
+        auth_flow_service.auth_flow.admin_mfa_confirm(
+            db, method_id, code.strip(), principal_id
+        )
+        result = auth_flow_service.auth_flow._issue_tokens(  # noqa: SLF001
+            db, "system_user", principal_id, request
+        )
+        response = RedirectResponse(url=redirect_url, status_code=303)
+        response.delete_cookie(MFA_ENROLLMENT_COOKIE)
+        cookie_cfg = _session_cookie_settings(db)
+        secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
+        session_token = auth_flow_service.issue_web_session_token(
+            db,
+            str(result.get("access_token", "")),
+        )
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=secure_cookie,
+            samesite=cookie_cfg["samesite"],
+        )
+        refresh_token = result.get("refresh_token")
+        if refresh_token:
+            _set_refresh_cookie(response, db, refresh_token, request)
+        return response
+    except Exception:
+        return templates.TemplateResponse(
+            request,
+            "auth/mfa_enroll.html",
+            {
+                "request": request,
+                "error": "Invalid verification code. Please try again.",
+                "next": redirect_url,
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=401,
@@ -349,6 +462,7 @@ def logout(request: Request, db: Session):
     response = RedirectResponse(url="/auth/login", status_code=303)
     response.delete_cookie("session_token")
     response.delete_cookie("mfa_pending")
+    response.delete_cookie(MFA_ENROLLMENT_COOKIE)
     settings = AuthFlow.refresh_cookie_settings(db)
     response.delete_cookie(
         key=settings["key"],

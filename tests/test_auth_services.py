@@ -1,14 +1,19 @@
 import hashlib
 import uuid
+from http.cookies import SimpleCookie
 from unittest.mock import Mock
 
+import pyotp
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.rbac import Role, SystemUserRole
 from app.models.subscriber import UserType
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.schemas.auth import (
     ApiKeyCreate,
@@ -21,6 +26,7 @@ from app.schemas.auth import (
     UserCredentialUpdate,
 )
 from app.services import auth as auth_service
+from app.services import auth_flow as auth_flow_service
 from app.services import web_auth as web_auth_service
 from app.services.auth_flow import hash_password
 
@@ -57,6 +63,55 @@ def _make_request(user_agent: str = "pytest") -> Request:
         "client": ("127.0.0.1", 12345),
     }
     return Request(scope)
+
+
+def _response_cookies(response) -> dict[str, str]:
+    jar = SimpleCookie()
+    for header, value in response.raw_headers:
+        if header.lower() == b"set-cookie":
+            jar.load(value.decode())
+    return {key: morsel.value for key, morsel in jar.items()}
+
+
+def _make_system_user_with_login(db_session, *, email: str):
+    user = SystemUser(
+        first_name="Admin",
+        last_name="User",
+        display_name="Admin User",
+        email=email,
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = Role(name=f"admin-{email}", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+
+    credential = UserCredential(
+        system_user_id=user.id,
+        provider=AuthProvider.local,
+        username=email,
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    return user
+
+
+def _enable_force_admin_mfa(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="force_2fa",
+            value_type=SettingValueType.string,
+            value_text="true",
+        )
+    )
+    db_session.commit()
 
 
 def test_user_credentials_soft_delete(db_session, person):
@@ -320,6 +375,72 @@ def test_web_login_submit_supports_system_user(db_session, monkeypatch):
     assert response.status_code == 303
     assert response.headers.get("location") == "/admin/dashboard"
     assert "session_token=" in response.headers.get("set-cookie", "")
+
+
+def test_web_login_submit_forces_admin_mfa_enrollment(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    _enable_force_admin_mfa(db_session)
+    _make_system_user_with_login(db_session, email="forced-admin@example.com")
+
+    response = web_auth_service.login_submit(
+        _make_request(),
+        db_session,
+        "forced-admin@example.com",
+        "secret",
+        False,
+        "/admin/system",
+    )
+
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/auth/mfa/enroll?next=/admin/system"
+    cookies = _response_cookies(response)
+    assert web_auth_service.MFA_ENROLLMENT_COOKIE in cookies
+    assert "session_token" not in cookies
+
+
+def test_web_mfa_enroll_confirm_creates_admin_session(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    system_user = _make_system_user_with_login(
+        db_session, email="enroll-admin@example.com"
+    )
+    setup = auth_flow_service.auth_flow.admin_mfa_setup(
+        db_session, str(system_user.id), "Authenticator app"
+    )
+    enrollment_token = auth_flow_service._issue_mfa_enrollment_token(  # noqa: SLF001
+        db_session, str(system_user.id), "system_user"
+    )
+    request = _make_request()
+    request.scope["headers"].append(
+        (
+            b"cookie",
+            f"{web_auth_service.MFA_ENROLLMENT_COOKIE}={enrollment_token}".encode(),
+        )
+    )
+
+    invalid_response = web_auth_service.mfa_enroll_confirm(
+        request,
+        db_session,
+        str(setup["method_id"]),
+        "000000",
+        "/admin/system",
+    )
+    assert invalid_response.status_code == 401
+
+    valid_response = web_auth_service.mfa_enroll_confirm(
+        request,
+        db_session,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        "/admin/system",
+    )
+
+    assert valid_response.status_code == 303
+    assert valid_response.headers.get("location") == "/admin/system"
+    cookies = _response_cookies(valid_response)
+    assert "session_token" in cookies
+    assert web_auth_service.MFA_ENROLLMENT_COOKIE in cookies
+    assert cookies[web_auth_service.MFA_ENROLLMENT_COOKIE] == ""
 
 
 def test_web_login_submit_issues_lean_session_cookie_for_system_user(

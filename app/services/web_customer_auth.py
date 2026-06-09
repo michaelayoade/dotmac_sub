@@ -4,17 +4,20 @@ import html
 import logging
 from datetime import UTC, datetime, timedelta
 
+import pyotp
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from jose import JWTError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from app.models.auth import AuthProvider, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, UserCredential
 from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services import auth_flow as auth_flow_service
 from app.services import customer_portal, radius_auth
 from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
@@ -22,6 +25,9 @@ from app.services.settings_spec import resolve_value
 from app.web.customer.branding import get_customer_templates
 
 templates = get_customer_templates()
+_CUSTOMER_MFA_TOKEN_COOKIE = "customer_mfa_pending"
+_CUSTOMER_MFA_CONTEXT_COOKIE = "customer_mfa_context"
+_CUSTOMER_MFA_MAX_AGE = 300
 
 
 def _safe_next(next_url: str | None, fallback: str = "/portal/dashboard") -> str:
@@ -41,7 +47,126 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
         return default
 
 
+def _customer_mfa_context_token(
+    db: Session,
+    *,
+    username: str,
+    account_id: object,
+    subscriber_id: object,
+    subscription_id: object | None,
+    remember: bool,
+    next_url: str | None,
+) -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "typ": "customer_mfa_context",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=_CUSTOMER_MFA_MAX_AGE)).timestamp()),
+        "username": username,
+        "account_id": str(account_id),
+        "subscriber_id": str(subscriber_id),
+        "subscription_id": str(subscription_id) if subscription_id else None,
+        "remember": bool(remember),
+        "next": _safe_next(next_url),
+    }
+    return auth_flow_service._jwt_encode_token(  # noqa: SLF001
+        payload,
+        auth_flow_service._jwt_secret(db),  # noqa: SLF001
+        auth_flow_service._jwt_algorithm(db),  # noqa: SLF001
+    )
+
+
+def _decode_customer_mfa_context(db: Session, token: str) -> dict:
+    try:
+        payload = auth_flow_service._jwt_decode_token(  # noqa: SLF001
+            token,
+            auth_flow_service._jwt_secret(db),  # noqa: SLF001
+            auth_flow_service._jwt_algorithm(db),  # noqa: SLF001
+        )
+    except JWTError as exc:
+        raise ValueError("Invalid MFA session") from exc
+    if payload.get("typ") != "customer_mfa_context":
+        raise ValueError("Invalid MFA session")
+    return payload
+
+
+def _set_customer_mfa_cookies(
+    response: Response,
+    *,
+    mfa_token: str,
+    context_token: str,
+) -> None:
+    for key, value in (
+        (_CUSTOMER_MFA_TOKEN_COOKIE, mfa_token),
+        (_CUSTOMER_MFA_CONTEXT_COOKIE, context_token),
+    ):
+        response.set_cookie(
+            key=key,
+            value=value,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=_CUSTOMER_MFA_MAX_AGE,
+        )
+
+
+def _clear_customer_mfa_cookies(response: Response) -> None:
+    response.delete_cookie(_CUSTOMER_MFA_TOKEN_COOKIE)
+    response.delete_cookie(_CUSTOMER_MFA_CONTEXT_COOKIE)
+
+
+def list_active_mfa_methods(db: Session, subscriber_id: object) -> list[MFAMethod]:
+    """Active MFA methods for a subscriber, newest first (profile page)."""
+    return (
+        db.query(MFAMethod)
+        .filter(MFAMethod.subscriber_id == subscriber_id)
+        .filter(MFAMethod.is_active.is_(True))
+        .order_by(MFAMethod.created_at.desc())
+        .all()
+    )
+
+
+def _primary_customer_totp_enabled(db: Session, subscriber_id: object) -> bool:
+    return (
+        auth_flow_service._primary_totp_method(  # noqa: SLF001
+            db, "subscriber", str(subscriber_id)
+        )
+        is not None
+    )
+
+
+def _verify_customer_mfa_token(
+    db: Session,
+    *,
+    mfa_token: str,
+    context: dict,
+    code: str,
+) -> None:
+    payload = auth_flow_service._decode_jwt(db, mfa_token, "mfa")  # noqa: SLF001
+    principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
+    subscriber_id = str(context.get("subscriber_id") or "")
+    if not principal_id or principal_id != subscriber_id:
+        raise ValueError("Invalid MFA session")
+
+    method = auth_flow_service._primary_totp_method(  # noqa: SLF001
+        db, "subscriber", subscriber_id
+    )
+    if not method:
+        raise ValueError("MFA method not found")
+
+    secret = auth_flow_service._decrypt_secret(db, method.secret or "")  # noqa: SLF001
+    if not pyotp.TOTP(secret).verify(code.strip(), valid_window=0):
+        raise ValueError("Invalid verification code")
+
+    method.last_used_at = datetime.now(UTC)
+    db.commit()
+
+
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
+    cached_customer = getattr(request.state, "customer", None)
+    if isinstance(cached_customer, dict):
+        return cached_customer
+
     session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
     customer = customer_portal.get_current_customer(session_token, db)
     if not customer:
@@ -53,6 +178,7 @@ def get_current_customer_from_request(request: Request, db: Session) -> dict | N
     except Exception:
         enriched["module_states"] = {}
         enriched["feature_states"] = {}
+    request.state.customer = enriched
     return enriched
 
 
@@ -210,6 +336,25 @@ def customer_login_submit(
         if not account_id or not subscriber_id:
             raise ValueError("Customer account not found. Please contact support.")
 
+        if _primary_customer_totp_enabled(db, subscriber_id):
+            response = RedirectResponse(url="/portal/auth/mfa", status_code=303)
+            _set_customer_mfa_cookies(
+                response,
+                mfa_token=auth_flow_service._issue_mfa_token(  # noqa: SLF001
+                    db, str(subscriber_id), "subscriber"
+                ),
+                context_token=_customer_mfa_context_token(
+                    db,
+                    username=normalized_username,
+                    account_id=account_id,
+                    subscriber_id=subscriber_id,
+                    subscription_id=subscription_id,
+                    remember=remember,
+                    next_url=next_url,
+                ),
+            )
+            return response
+
         session_token = customer_portal.create_customer_session(
             username=normalized_username,
             account_id=account_id,
@@ -278,6 +423,71 @@ def customer_login_submit(
         )
 
 
+def customer_mfa_page(request: Request, db: Session, error: str | None = None):
+    mfa_token = request.cookies.get(_CUSTOMER_MFA_TOKEN_COOKIE)
+    context_token = request.cookies.get(_CUSTOMER_MFA_CONTEXT_COOKIE)
+    if not mfa_token or not context_token:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        _decode_customer_mfa_context(db, context_token)
+    except Exception:
+        response = RedirectResponse(url="/portal/auth/login", status_code=303)
+        _clear_customer_mfa_cookies(response)
+        return response
+    return templates.TemplateResponse(
+        request,
+        "customer/auth/mfa.html",
+        {"request": request, "error": error},
+    )
+
+
+def customer_mfa_submit(request: Request, db: Session, code: str):
+    mfa_token = request.cookies.get(_CUSTOMER_MFA_TOKEN_COOKIE)
+    context_token = request.cookies.get(_CUSTOMER_MFA_CONTEXT_COOKIE)
+    if not mfa_token or not context_token:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    try:
+        context = _decode_customer_mfa_context(db, context_token)
+        _verify_customer_mfa_token(
+            db,
+            mfa_token=mfa_token,
+            context=context,
+            code=code,
+        )
+        session_token = customer_portal.create_customer_session(
+            username=str(context.get("username") or ""),
+            account_id=context.get("account_id"),
+            subscriber_id=context.get("subscriber_id"),
+            subscription_id=context.get("subscription_id"),
+            remember=bool(context.get("remember")),
+            db=db,
+        )
+        response = RedirectResponse(
+            url=_safe_next(str(context.get("next") or "")),
+            status_code=303,
+        )
+        _clear_customer_mfa_cookies(response)
+        response.set_cookie(
+            key=customer_portal.SESSION_COOKIE_NAME,
+            value=session_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=customer_portal.get_remember_max_age(db)
+            if context.get("remember")
+            else customer_portal.get_session_max_age(db),
+        )
+        return response
+    except Exception:
+        return templates.TemplateResponse(
+            request,
+            "customer/auth/mfa.html",
+            {"request": request, "error": "Invalid verification code"},
+            status_code=401,
+        )
+
+
 def customer_support_info(request: Request, db: Session) -> Response:
     """Render public support contact page (no auth required)."""
     from app.services.web_system_company_info import get_company_info
@@ -301,6 +511,7 @@ def customer_logout(request: Request):
 
     response = RedirectResponse(url="/portal/auth/login", status_code=303)
     response.delete_cookie(customer_portal.SESSION_COOKIE_NAME)
+    _clear_customer_mfa_cookies(response)
     return response
 
 

@@ -193,3 +193,41 @@ def test_reseller_login_error_hides_http_status_prefix(monkeypatch):
     assert response.status_code == 401
     assert "Wrong email/username or password." in body
     assert "401: Invalid credentials" not in body
+
+
+def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
+    request = _request()
+    db = object()
+    reset_request = MagicMock(
+        return_value={
+            "token": "reset-token",
+            "email": "reseller@example.com",
+            "subscriber_name": "Reseller User",
+        }
+    )
+    send_email = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        web_reseller_auth_service.auth_flow_service,
+        "request_password_reset",
+        reset_request,
+    )
+    monkeypatch.setattr(
+        web_reseller_auth_service, "send_password_reset_email", send_email
+    )
+
+    response = web_reseller_auth_service.reseller_forgot_password_submit(
+        request,
+        db,
+        "reseller@example.com",
+    )
+
+    assert response.status_code == 200
+    assert "Check your email" in response.body.decode()
+    reset_request.assert_called_once_with(db=db, email="reseller@example.com")
+    send_email.assert_called_once_with(
+        db=db,
+        to_email="reseller@example.com",
+        reset_token="reset-token",
+        person_name="Reseller User",
+        next_login_path="/reseller/auth/login?next=/reseller/dashboard",
+    )

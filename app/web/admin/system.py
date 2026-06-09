@@ -4,10 +4,12 @@ import json
 import logging
 from base64 import b64encode
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import cast
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
 
+import qrcode
 from fastapi import (
     APIRouter,
     Depends,
@@ -1110,9 +1112,20 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
+    auth = getattr(request.state, "auth", None) or {}
+    system_user_id = (
+        auth.get("principal_id")
+        if auth.get("principal_type") == "system_user"
+        else None
+    )
+    success = None
+    if request.query_params.get("mfa") == "enabled":
+        success = "Two-factor authentication enabled successfully."
     state = web_system_profiles_service.build_profile_page_state(
         db,
         current_user=current_user,
+        success=success,
+        system_user_id=system_user_id,
     )
 
     context = {
@@ -1138,6 +1151,12 @@ def user_profile_update(
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
+    auth = getattr(request.state, "auth", None) or {}
+    system_user_id = (
+        auth.get("principal_id")
+        if auth.get("principal_type") == "system_user"
+        else None
+    )
     error = None
     success = None
     updated_person_id = None
@@ -1166,6 +1185,7 @@ def user_profile_update(
         error=error,
         success=success,
         person_id=updated_person_id,
+        system_user_id=system_user_id if updated_person_id is None else None,
     )
 
     context = {
@@ -1177,6 +1197,83 @@ def user_profile_update(
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+@router.get("/users/profile/mfa/setup", response_class=HTMLResponse)
+def user_profile_mfa_setup(request: Request, db: Session = Depends(get_db)):
+    from app.services import auth_flow as auth_flow_service
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        return RedirectResponse(url="/admin/system/users/profile", status_code=303)
+
+    setup = auth_flow_service.auth_flow.admin_mfa_setup(
+        db, principal_id, "Authenticator app"
+    )
+    otpauth_uri = str(setup["otpauth_uri"])
+    return templates.TemplateResponse(
+        "admin/system/profile_mfa_setup.html",
+        {
+            "request": request,
+            "active_page": "users",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "method_id": setup["method_id"],
+            "secret_key": setup["secret"],
+            "otpauth_uri": otpauth_uri,
+            "qr_code_url": _qr_code_data_url(otpauth_uri),
+        },
+    )
+
+
+@router.post("/users/profile/mfa/setup", response_class=HTMLResponse)
+def user_profile_mfa_setup_post(request: Request, db: Session = Depends(get_db)):
+    return user_profile_mfa_setup(request, db)
+
+
+@router.post("/users/profile/mfa/confirm", response_class=HTMLResponse)
+def user_profile_mfa_confirm(
+    request: Request,
+    method_id: str = Form(...),
+    code: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    from app.services import auth_flow as auth_flow_service
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        return RedirectResponse(url="/admin/system/users/profile", status_code=303)
+
+    try:
+        auth_flow_service.auth_flow.admin_mfa_confirm(
+            db, method_id, code.strip(), principal_id
+        )
+    except Exception:
+        return templates.TemplateResponse(
+            "admin/system/profile_mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "users",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "qr_code_url": "",
+                "error": "Invalid verification code. Please try again.",
+            },
+            status_code=401,
+        )
+
+    return RedirectResponse(
+        url="/admin/system/users/profile?mfa=enabled", status_code=303
+    )
 
 
 @router.post(
@@ -4027,3 +4124,11 @@ def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _qr_code_data_url(value: str) -> str:
+    image = qrcode.make(value)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"

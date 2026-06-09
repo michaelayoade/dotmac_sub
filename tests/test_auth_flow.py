@@ -9,8 +9,10 @@ from fastapi.routing import APIRoute
 from starlette.requests import Request
 
 from app.api.auth_flow import router as auth_flow_router
-from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
 from app.services.auth_dependencies import require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password
 
@@ -180,6 +182,50 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
     assert method.is_primary is True
     assert method.is_active is True
     assert method.verified_at is not None
+
+
+def test_admin_mfa_setup_confirm_uses_system_user_id(db_session, monkeypatch):
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    system_user = SystemUser(
+        first_name="Admin",
+        last_name="Mfa",
+        email="admin-mfa@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(system_user)
+    db_session.flush()
+    credential = UserCredential(
+        system_user_id=system_user.id,
+        provider=AuthProvider.local,
+        username="admin-mfa@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.admin_mfa_setup(
+        db_session, str(system_user.id), label="admin device"
+    )
+    method = db_session.get(MFAMethod, setup["method_id"])
+
+    assert method is not None
+    assert method.system_user_id == system_user.id
+    assert method.subscriber_id is None
+    assert method.enabled is False
+
+    confirmed = AuthFlow.admin_mfa_confirm(
+        db_session,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        str(system_user.id),
+    )
+
+    assert confirmed.enabled is True
+    assert confirmed.is_primary is True
+    assert confirmed.system_user_id == system_user.id
+    assert confirmed.subscriber_id is None
 
 
 def test_mfa_setup_requires_auth():
