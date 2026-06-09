@@ -47,12 +47,15 @@ def evaluate_fup_rules() -> dict[str, int]:
     from datetime import UTC, datetime
 
     from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.domain_settings import SettingDomain
     from app.models.fup import FupPolicy
     from app.models.fup_state import FupActionStatus
+    from app.services import settings_spec
     from app.services.events import emit_event
     from app.services.events.types import EventType
     from app.services.fup import evaluate_rules
     from app.services.fup_state import fup_state
+    from app.services.usage import _parse_warning_thresholds
 
     session = SessionLocal()
     try:
@@ -64,6 +67,25 @@ def evaluate_fup_rules() -> dict[str, int]:
         # notification failure can't roll back enforcement state. Each entry:
         # {subscriber_id, kind, rule_name, threshold_gb, used_gb}.
         pending_notifs: list[dict] = []
+
+        # "Approaching" warnings reuse the configurable usage-warning settings
+        # (usage_warning_enabled / usage_warning_thresholds, e.g. "0.8,0.9") so
+        # the percentage is operator-controlled, not hardcoded. We warn at the
+        # lowest configured threshold.
+        _warn_raw = settings_spec.resolve_value(
+            session, SettingDomain.usage, "usage_warning_enabled"
+        )
+        warn_enabled = not (
+            _warn_raw is not None
+            and str(_warn_raw).lower() in {"0", "false", "no", "off"}
+        )
+        _thr_raw = settings_spec.resolve_value(
+            session, SettingDomain.usage, "usage_warning_thresholds"
+        )
+        _parsed = _parse_warning_thresholds(
+            str(_thr_raw) if _thr_raw is not None else None
+        )
+        warn_ratio = float(_parsed[0]) if _parsed else 0.8
 
         # Find all active subscriptions that have FUP policies
         subscriptions = (
@@ -162,10 +184,11 @@ def evaluate_fup_rules() -> dict[str, int]:
                                 }
                             )
                         break
-            elif prior_status == "none":
-                # Not yet enforced — warn once when usage crosses 80% of the
-                # nearest threshold. Mark the state 'notified' so we don't repeat
-                # it every tick; the period-boundary reset above clears it.
+            elif prior_status == "none" and warn_enabled:
+                # Not yet enforced — warn once when usage crosses the configured
+                # warning ratio of the nearest threshold. Mark the state
+                # 'notified' so we don't repeat it every tick; the
+                # period-boundary reset above clears it.
                 ratios = [
                     (current_usage / r["threshold_gb"], r)
                     for r in results
@@ -173,7 +196,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                 ]
                 if ratios:
                     ratio, r = max(ratios, key=lambda x: x[0])
-                    if 0.8 <= ratio < 1.0:
+                    if warn_ratio <= ratio < 1.0:
                         fup_state.apply_action(
                             session,
                             str(sub.id),
@@ -242,9 +265,21 @@ def _build_fup_notification(kind: str, rule_name, threshold_gb, used_gb):
     )
 
 
+# Channels per event kind. Enforcement (throttled/blocked) is important enough
+# to email as well as push; the soft "approaching" heads-up is push/in-app only.
+_FUP_NOTIFICATION_CHANNELS = {
+    "approaching": ("push",),
+    "throttled": ("push", "email"),
+    "blocked": ("push", "email"),
+}
+
+
 def _emit_fup_notifications(session, pending: list[dict]) -> int:
-    """Create in-app/push notifications for queued FUP events. Best-effort:
-    a failure on one notification never affects the others or enforcement."""
+    """Create customer notifications for queued FUP events, on the channels that
+    fit each event (push always; email for enforcement). Best-effort: a failure
+    on one notification or channel never affects the others or enforcement.
+    Returns the number of (event) notifications for which at least one channel
+    was created."""
     if not pending:
         return 0
     from app.models.notification import NotificationChannel
@@ -262,19 +297,32 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
             subject, body = _build_fup_notification(
                 n["kind"], n.get("rule_name"), n.get("threshold_gb"), n.get("used_gb")
             )
-            notifications_svc.create(
-                session,
-                NotificationCreate(
-                    channel=NotificationChannel.push,
-                    subscriber_id=n["subscriber_id"],
-                    recipient=recipient,
-                    subject=subject,
-                    body=body,
-                    category="fup",
-                    event_type=f"fup_{n['kind']}",
-                ),
-            )
-            sent += 1
+            channels = _FUP_NOTIFICATION_CHANNELS.get(n["kind"], ("push",))
+            created_any = False
+            for channel in channels:
+                try:
+                    notifications_svc.create(
+                        session,
+                        NotificationCreate(
+                            channel=NotificationChannel(channel),
+                            subscriber_id=n["subscriber_id"],
+                            recipient=recipient,
+                            subject=subject,
+                            body=body,
+                            category="fup",
+                            event_type=f"fup_{n['kind']}",
+                        ),
+                    )
+                    created_any = True
+                except Exception:
+                    logger.warning(
+                        "Failed to emit FUP %s notification on %s",
+                        n["kind"],
+                        channel,
+                        exc_info=True,
+                    )
+            if created_any:
+                sent += 1
         except Exception:
             logger.warning("Failed to emit FUP notification", exc_info=True)
     return sent

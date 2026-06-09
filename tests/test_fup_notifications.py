@@ -1,6 +1,6 @@
 """Customer FUP notifications emitted by the periodic FUP evaluation task."""
 
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationChannel
 from app.tasks.usage import _build_fup_notification, _emit_fup_notifications
 
 
@@ -19,7 +19,7 @@ def test_build_fup_notification_messages():
     assert "your plan" in body
 
 
-def test_emit_fup_notifications_creates_inapp(db_session, subscriber):
+def test_emit_throttled_creates_push_and_email(db_session, subscriber):
     subscriber.email = "fup.customer@example.com"
     db_session.commit()
 
@@ -37,14 +37,41 @@ def test_emit_fup_notifications_creates_inapp(db_session, subscriber):
     )
     assert sent == 1
 
-    note = (
+    notes = (
         db_session.query(Notification)
         .filter(Notification.subscriber_id == subscriber.id)
         .filter(Notification.event_type == "fup_throttled")
-        .one()
+        .all()
     )
-    assert note.category == "fup"
-    assert note.subject == "Speed reduced"
+    # Enforcement notifications go out on both push and email.
+    channels = {n.channel for n in notes}
+    assert channels == {NotificationChannel.push, NotificationChannel.email}
+    assert all(n.category == "fup" and n.subject == "Speed reduced" for n in notes)
+
+
+def test_emit_approaching_is_push_only(db_session, subscriber):
+    subscriber.email = "fup.customer2@example.com"
+    db_session.commit()
+
+    _emit_fup_notifications(
+        db_session,
+        [
+            {
+                "subscriber_id": subscriber.id,
+                "kind": "approaching",
+                "rule_name": "Monthly 100GB cap",
+                "threshold_gb": 100,
+                "used_gb": 85,
+            }
+        ],
+    )
+    notes = (
+        db_session.query(Notification)
+        .filter(Notification.subscriber_id == subscriber.id)
+        .filter(Notification.event_type == "fup_approaching")
+        .all()
+    )
+    assert [n.channel for n in notes] == [NotificationChannel.push]
 
 
 def test_emit_fup_notifications_skips_unknown_subscriber(db_session):
