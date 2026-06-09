@@ -907,3 +907,57 @@ class TestRunInvoiceCycle:
             complete_record.dunning_escalations_sent
             == summary["dunning_escalations_sent"]
         )
+
+
+# =============================================================================
+# Billing run resilience
+# =============================================================================
+
+
+class TestBillingRunResilience:
+    def test_audit_log_failure_does_not_fail_the_run(self, db_session, monkeypatch):
+        """A failing audit write must not mark a committed run as failed.
+
+        Regression: every 2026 billing run was marked failed by a NOT NULL
+        violation in the audit insert, after the invoices had already
+        committed.
+        """
+        from app.models.billing import BillingRun, BillingRunStatus
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("audit_events insert failed")
+
+        monkeypatch.setattr(billing_automation, "_log_billing_run_audit", boom)
+
+        summary = billing_automation.run_invoice_cycle(db_session)
+
+        run = db_session.get(BillingRun, summary["run_id"])
+        assert run is not None
+        assert run.status == BillingRunStatus.success
+        assert run.finished_at is not None
+
+    def test_abandoned_running_runs_are_swept(self, db_session):
+        """Runs stuck in `running` for hours get marked failed by the sweep."""
+        from app.models.billing import BillingRun, BillingRunStatus
+
+        stale = BillingRun(
+            run_at=datetime.now(UTC) - timedelta(hours=30),
+            status=BillingRunStatus.running,
+            started_at=datetime.now(UTC) - timedelta(hours=30),
+        )
+        fresh = BillingRun(
+            run_at=datetime.now(UTC),
+            status=BillingRunStatus.running,
+            started_at=datetime.now(UTC) - timedelta(minutes=10),
+        )
+        db_session.add_all([stale, fresh])
+        db_session.commit()
+
+        swept = billing_automation._fail_abandoned_runs(db_session)
+
+        assert swept == 1
+        db_session.refresh(stale)
+        db_session.refresh(fresh)
+        assert stale.status == BillingRunStatus.failed
+        assert "abandoned" in (stale.error or "")
+        assert fresh.status == BillingRunStatus.running
