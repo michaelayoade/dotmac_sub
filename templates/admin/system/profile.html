@@ -165,6 +165,10 @@
                             {{ 'Enabled' if mfa_enabled else 'Disabled' }}
                         </span>
                     </div>
+                    <a href="/admin/system/users/profile/mfa/setup" class="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-primary-300 bg-primary-50 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0-1.105.895-2 2-2s2 .895 2 2-.895 2-2 2-2-.895-2-2zM4 7a4 4 0 014-4h8a4 4 0 014 4v10a4 4 0 01-4 4H8a4 4 0 01-4-4V7z"/></svg>
+                        {{ 'Replace MFA' if mfa_enabled else 'Set up MFA' }}
+                    </a>
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-sm font-medium text-slate-900 dark:text-white">API Keys</p>

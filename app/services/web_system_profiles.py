@@ -54,6 +54,7 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
             select(MFAMethod.id)
             .where(MFAMethod.system_user_id == person.id)
             .where(MFAMethod.enabled.is_(True))
+            .where(MFAMethod.is_active.is_(True))
             .limit(1)
         )
     )
@@ -205,8 +206,9 @@ def build_profile_page_state(
     error: str | None = None,
     success: str | None = None,
     person_id: str | UUID | None = None,
+    system_user_id: str | UUID | None = None,
 ) -> dict[str, Any]:
-    resolved_person_id = person_id
+    resolved_person_id = system_user_id or person_id
     if resolved_person_id is None and current_user:
         resolved_person_id = current_user.get("person_id")
     profile_data = get_profile_data(db, resolved_person_id)

@@ -48,6 +48,29 @@ def mfa_submit(
     return web_auth_service.mfa_submit(request, db, code, next)
 
 
+@router.get("/mfa/enroll", response_class=HTMLResponse)
+def mfa_enroll_page(
+    request: Request,
+    error: str | None = None,
+    next: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Display required admin MFA enrollment page."""
+    return web_auth_service.mfa_enroll_page(request, db, next, error)
+
+
+@router.post("/mfa/enroll/confirm", response_class=HTMLResponse)
+def mfa_enroll_confirm(
+    request: Request,
+    method_id: str = Form(...),
+    code: str = Form(...),
+    next: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    """Confirm required admin MFA enrollment."""
+    return web_auth_service.mfa_enroll_confirm(request, db, method_id, code, next)
+
+
 @router.get("/refresh")
 def refresh(request: Request, next: str | None = None, db: Session = Depends(get_db)):
     """Refresh access token using refresh cookie."""

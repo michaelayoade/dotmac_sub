@@ -41,6 +41,26 @@ def customer_login_submit(
     )
 
 
+@router.get("/mfa", response_class=HTMLResponse)
+def customer_mfa_page(
+    request: Request,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Display customer MFA verification page."""
+    return web_customer_auth_service.customer_mfa_page(request, db, error)
+
+
+@router.post("/mfa", response_class=HTMLResponse)
+def customer_mfa_submit(
+    request: Request,
+    code: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Process customer MFA code verification."""
+    return web_customer_auth_service.customer_mfa_submit(request, db, code)
+
+
 @router.post("/logout")
 def customer_logout(request: Request):
     """Log out the current customer."""

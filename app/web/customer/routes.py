@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_db
+from app.models.auth import MFAMethod
+from app.services import auth_flow as auth_flow_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
@@ -1049,12 +1051,25 @@ def customer_profile(
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id:
         subscriber = db.get(_Subscriber, subscriber_id)
+    mfa_methods = []
+    if subscriber_id:
+        mfa_methods = (
+            db.query(MFAMethod)
+            .filter(MFAMethod.subscriber_id == subscriber_id)
+            .filter(MFAMethod.is_active.is_(True))
+            .order_by(MFAMethod.created_at.desc())
+            .all()
+        )
     return templates.TemplateResponse(
         "customer/profile/index.html",
         {
             "request": request,
             "customer": customer,
             "subscriber": subscriber,
+            "mfa_methods": mfa_methods,
+            "mfa_enabled": any(
+                bool(method.enabled and method.is_active) for method in mfa_methods
+            ),
             "active_page": "profile",
             "success": "Profile updated successfully" if saved else None,
         },
@@ -1092,6 +1107,79 @@ def customer_update_profile(
     # POST-Redirect-GET: bounce to the profile page with a success flag so a
     # browser refresh after save can't accidentally resubmit the form.
     return RedirectResponse(url="/portal/profile?saved=1", status_code=303)
+
+
+@router.get("/profile/mfa/setup", response_class=HTMLResponse)
+def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Response:
+    """Customer MFA setup page."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/profile", status_code=303
+        )
+    subscriber_id = customer.get("subscriber_id")
+    if not subscriber_id:
+        return RedirectResponse(url="/portal/profile", status_code=303)
+
+    setup = auth_flow_service.auth_flow.mfa_setup(
+        db, str(subscriber_id), "Authenticator app"
+    )
+    return templates.TemplateResponse(
+        "customer/profile/mfa_setup.html",
+        {
+            "request": request,
+            "customer": customer,
+            "active_page": "profile",
+            "method_id": setup["method_id"],
+            "secret_key": setup["secret"],
+            "otpauth_uri": setup["otpauth_uri"],
+        },
+    )
+
+
+@router.post("/profile/mfa/setup", response_class=HTMLResponse)
+def customer_mfa_setup_post(
+    request: Request, db: Session = Depends(get_db)
+) -> Response:
+    """Start customer MFA setup."""
+    return customer_mfa_setup(request, db)
+
+
+@router.post("/profile/mfa/confirm", response_class=HTMLResponse)
+def customer_mfa_confirm(
+    request: Request,
+    method_id: str = Form(...),
+    code: str = Form(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Confirm customer MFA setup."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    subscriber_id = customer.get("subscriber_id")
+    if not subscriber_id:
+        return RedirectResponse(url="/portal/profile", status_code=303)
+
+    try:
+        auth_flow_service.auth_flow.mfa_confirm(
+            db, method_id, code.strip(), str(subscriber_id)
+        )
+    except Exception:
+        return templates.TemplateResponse(
+            "customer/profile/mfa_setup.html",
+            {
+                "request": request,
+                "customer": customer,
+                "active_page": "profile",
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "error": "Invalid verification code. Please try again.",
+            },
+            status_code=401,
+        )
+
+    return RedirectResponse(url="/portal/profile?saved=security", status_code=303)
 
 
 @router.get("/contacts", response_class=HTMLResponse)

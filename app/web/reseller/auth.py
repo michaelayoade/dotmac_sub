@@ -28,6 +28,22 @@ def reseller_login_submit(
     )
 
 
+@router.get("/forgot-password", response_class=HTMLResponse)
+def reseller_forgot_password_page(request: Request, success: bool = False):
+    return web_reseller_auth_service.reseller_forgot_password_page(request, success)
+
+
+@router.post("/forgot-password", response_class=HTMLResponse)
+def reseller_forgot_password_submit(
+    request: Request,
+    email: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_auth_service.reseller_forgot_password_submit(
+        request, db, email
+    )
+
+
 @router.get("/mfa", response_class=HTMLResponse)
 def reseller_mfa_page(request: Request, error: str | None = None):
     return web_reseller_auth_service.reseller_mfa_page(request, error)

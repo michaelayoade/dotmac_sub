@@ -154,6 +154,13 @@ def _totp_issuer(db: Session | None) -> str:
     return _env_value("TOTP_ISSUER") or _setting_value(db, "totp_issuer") or "dotmac_sm"
 
 
+def _force_admin_mfa(db: Session | None) -> bool:
+    value = _setting_value(db, "force_2fa")
+    if value is None:
+        value = _setting_value(db, "admin_mfa_required")
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _refresh_cookie_name(db: Session | None) -> str:
     return (
         _env_value("REFRESH_COOKIE_NAME")
@@ -317,6 +324,23 @@ def _issue_mfa_token(
         "principal_id": principal_id,
         "principal_type": principal_type,
         "typ": "mfa",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+    }
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+
+
+def _issue_mfa_enrollment_token(
+    db: Session | None,
+    principal_id: str,
+    principal_type: str = "system_user",
+) -> str:
+    now = _now()
+    payload = {
+        "sub": principal_id,
+        "principal_id": principal_id,
+        "principal_type": principal_type,
+        "typ": "mfa_enrollment",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
     }
@@ -714,8 +738,91 @@ class AuthFlow(ListResponseMixin):
                 "mfa_required": True,
                 "mfa_token": _issue_mfa_token(db, principal_id, principal_type),
             }
+        if principal_type == "system_user" and _force_admin_mfa(db):
+            return {
+                "mfa_enrollment_required": True,
+                "mfa_enrollment_token": _issue_mfa_enrollment_token(
+                    db, principal_id, principal_type
+                ),
+            }
 
         return AuthFlow._issue_tokens(db, principal_type, principal_id, request)
+
+    @staticmethod
+    def admin_mfa_setup(db: Session, system_user_id: str, label: str | None):
+        system_user = cast(
+            SystemUser | None, db.get(SystemUser, coerce_uuid(system_user_id))
+        )
+        if not system_user:
+            raise HTTPException(status_code=404, detail="System user not found")
+
+        username = system_user.email
+        credential = (
+            db.query(UserCredential)
+            .filter(UserCredential.system_user_id == system_user.id)
+            .filter(UserCredential.provider == AuthProvider.local)
+            .first()
+        )
+        if credential and credential.username:
+            username = credential.username
+
+        secret = pyotp.random_base32()
+        encrypted = _encrypt_secret(db, secret)
+        method = MFAMethod(
+            system_user_id=system_user.id,
+            method_type=MFAMethodType.totp,
+            label=label,
+            secret=encrypted,
+            enabled=False,
+            is_primary=False,
+        )
+        db.add(method)
+        db.commit()
+        db.refresh(method)
+
+        totp = pyotp.TOTP(secret)
+        otpauth_uri = totp.provisioning_uri(name=username, issuer_name=_totp_issuer(db))
+        return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
+
+    @staticmethod
+    def admin_mfa_confirm(
+        db: Session, method_id: str, code: str, system_user_id: str
+    ):
+        method = db.get(MFAMethod, coerce_uuid(method_id))
+        if not method:
+            raise HTTPException(status_code=404, detail="MFA method not found")
+        if method.subscriber_id is not None:
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if str(method.system_user_id) != str(system_user_id):
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if method.method_type != MFAMethodType.totp:
+            raise HTTPException(status_code=400, detail="Unsupported MFA method")
+
+        secret = _decrypt_secret(db, method.secret or "")
+        totp = pyotp.TOTP(secret)
+        if not totp.verify(code, valid_window=0):
+            raise HTTPException(status_code=401, detail="Invalid MFA code")
+
+        db.query(MFAMethod).filter(
+            MFAMethod.system_user_id == method.system_user_id,
+            MFAMethod.id != method.id,
+            MFAMethod.is_primary.is_(True),
+        ).update({"is_primary": False})
+
+        method.enabled = True
+        method.is_primary = True
+        method.is_active = True
+        method.verified_at = _now()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Primary MFA method already exists for this user",
+            ) from exc
+        db.refresh(method)
+        return method
 
     @staticmethod
     def mfa_setup(db: Session, subscriber_id: str, label: str | None):
