@@ -1034,9 +1034,16 @@ class CpeDevices(ListResponseMixin):
         server = db.get(Tr069AcsServer, acs_server_id)
         if not server:
             raise HTTPException(status_code=404, detail="ACS server not found")
+        base_url = server.base_url
+        # Release the read transaction opened by the lookup above BEFORE the
+        # (potentially slow) GenieACS HTTP fetch, so the DB connection isn't left
+        # "idle in transaction" across the network round-trip. On a busy ACS that
+        # hold lasted ~a minute, pinning a pool slot and blocking autovacuum. The
+        # device upserts below run in their own transaction (committed as before).
+        db.commit()
 
         try:
-            client = create_genieacs_client(server.base_url)
+            client = create_genieacs_client(base_url)
             devices = client.list_devices(
                 projection=CpeDevices._GENIEACS_SYNC_PROJECTION
             )
