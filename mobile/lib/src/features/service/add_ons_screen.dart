@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../models/addon.dart';
 import '../../models/subscription.dart';
 import '../../providers/data_providers.dart';
-import '../billing/topup_screen.dart';
 
 /// Browse and buy add-ons for a service. Purchases are charged from the wallet
 /// balance (GET/POST /me/subscriptions/{id}/add-ons); insufficient balance
@@ -320,12 +320,11 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
             if (q != null && !affordable)
               FilledButton.tonalIcon(
                 onPressed: () {
-                  // Capture the navigator before popping the sheet — using the
+                  // Capture the router before popping the sheet — using the
                   // sheet's context after pop targets a defunct element.
-                  final navigator = Navigator.of(context);
-                  navigator.pop();
-                  navigator.push(
-                      MaterialPageRoute(builder: (_) => const TopUpScreen()));
+                  final router = GoRouter.of(context);
+                  Navigator.of(context).pop();
+                  router.push('/topup');
                 },
                 icon: const Icon(Icons.add_card_outlined),
                 label: const Text('Top up'),

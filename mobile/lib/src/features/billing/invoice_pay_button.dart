@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
@@ -34,18 +35,16 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
     final inv = widget.invoice;
     final repo = ref.read(billingRepositoryProvider);
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
+    final router = GoRouter.of(context);
 
     setState(() => _busy = true);
     try {
       final initiation = await repo.initiatePayment(inv.id);
 
       if (!mounted) return;
-      final reference = await navigator.push<String>(
-        MaterialPageRoute(
-          builder: (_) =>
-              PaymentWebViewScreen(args: CheckoutArgs.invoice(initiation)),
-        ),
+      final reference = await router.push<String>(
+        '/pay',
+        extra: CheckoutArgs.invoice(initiation),
       );
       if (reference == null) return; // cancelled
 

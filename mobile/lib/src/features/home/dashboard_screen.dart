@@ -11,7 +11,6 @@ import '../../providers/read_notifications.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
-import '../service/service_detail_screen.dart';
 
 /// Home dashboard: an at-a-glance summary (account status, balance, data,
 /// services) plus quick-action shortcuts into the rest of the app.
@@ -66,6 +65,39 @@ class DashboardScreen extends ConsumerWidget {
     final dataToday = todaySummary?.totalBytes;
     final fup = todaySummary?.fup;
 
+    // Current period's quota bucket for the current service, when the plan is
+    // capped — drives the usage bar on the service card.
+    final quotaBuckets = ref.watch(quotaBucketsProvider).asData?.value;
+    QuotaBucket? currentQuota;
+    if (quotaBuckets != null && currentService != null) {
+      final now = DateTime.now();
+      for (final b in quotaBuckets) {
+        if (b.subscriptionId != currentService.id || b.isUnlimited) continue;
+        if (b.periodEnd.isBefore(now)) continue;
+        if (currentQuota == null ||
+            b.periodStart.isAfter(currentQuota.periodStart)) {
+          currentQuota = b;
+        }
+      }
+    }
+
+    // Expiry urgency: lift a renew prompt to the banner area when the current
+    // service is within 3 days of lapsing (the payment banner takes priority).
+    final daysLeft = currentService?.daysUntilExpiry;
+    String? renewMessage;
+    if (currentService != null &&
+        needsPayment.isEmpty &&
+        daysLeft != null &&
+        daysLeft <= 3) {
+      final name = currentService.displayName;
+      renewMessage = switch (daysLeft) {
+        < 0 => '$name has expired — renew now',
+        0 => '$name expires today — renew now',
+        1 => '$name expires tomorrow — renew now',
+        final d => '$name expires in $d days — renew now',
+      };
+    }
+
     // Connection status: an open RADIUS accounting session (no end) means the
     // subscriber is currently online; its start gives the uptime.
     AccountingSession? activeSession;
@@ -99,6 +131,7 @@ class DashboardScreen extends ConsumerWidget {
           ref.invalidate(invoicesProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(usageSummaryProvider('today'));
+          ref.invalidate(quotaBucketsProvider);
           await Future.wait([
             ref.read(subscriptionsProvider.future),
             ref.read(invoicesProvider.future),
@@ -129,6 +162,14 @@ class DashboardScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               _FupBanner(fup: fup!, onTap: () => context.go('/usage')),
             ],
+            if (renewMessage != null) ...[
+              const SizedBox(height: 12),
+              _RenewBanner(
+                message: renewMessage,
+                expired: (daysLeft ?? 0) < 0,
+                onTap: () => context.go('/billing'),
+              ),
+            ],
             const SizedBox(height: 16),
 
             // --- At-a-glance summary ---
@@ -141,7 +182,7 @@ class DashboardScreen extends ConsumerWidget {
                     // conveyed by the red colour alone (accessibility).
                     label: (outstanding ?? 0) > 0 ? 'Amount due' : 'Balance',
                     value: outstanding == null
-                        ? '—'
+                        ? null
                         : Fmt.moneyCompact(outstanding, currency),
                     highlight: (outstanding ?? 0) > 0,
                     onTap: () => context.go('/billing'),
@@ -152,7 +193,7 @@ class DashboardScreen extends ConsumerWidget {
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
                     label: 'Data today',
-                    value: dataToday == null ? '—' : Fmt.bytes(dataToday),
+                    value: dataToday == null ? null : Fmt.bytes(dataToday),
                     onTap: () => context.go('/usage'),
                   ),
                 ),
@@ -214,7 +255,10 @@ class DashboardScreen extends ConsumerWidget {
                         ),
                         const SizedBox(height: 10),
                       ],
-                      _CurrentServiceCard(service: selected),
+                      _CurrentServiceCard(
+                        service: selected,
+                        quota: currentQuota,
+                      ),
                     ],
                   );
                 }
@@ -231,10 +275,11 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
-/// Days-left figure for the stat row: '—' while loading or when the service
-/// has no known expiry, otherwise the (urgency-worded) day count.
-String _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
-  if (subList == null) return '—';
+/// Days-left figure for the stat row: null while loading (renders a
+/// skeleton), '—' when the service has no known expiry, otherwise the
+/// (urgency-worded) day count.
+String? _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
+  if (subList == null) return null;
   final days = service?.daysUntilExpiry;
   return switch (days) {
     null => '—',
@@ -396,6 +441,48 @@ class _StatusBanner extends StatelessWidget {
 
 /// Fair-Usage alert on the dashboard. Taps through to the Usage tab, where the
 /// full explainer and "Top up to restore" CTA live.
+/// Expiry-urgency prompt lifted to the banner area when the current service
+/// is within 3 days of lapsing (or already lapsed).
+class _RenewBanner extends StatelessWidget {
+  const _RenewBanner({
+    required this.message,
+    required this.expired,
+    this.onTap,
+  });
+  final String message;
+  final bool expired;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final bg = expired ? scheme.errorContainer : scheme.tertiaryContainer;
+    final fg = expired ? scheme.onErrorContainer : scheme.onTertiaryContainer;
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(expired ? Icons.error_outline : Icons.schedule, color: fg),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(message,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              ),
+              if (onTap != null) Icon(Icons.chevron_right, color: fg),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FupBanner extends StatelessWidget {
   const _FupBanner({required this.fup, this.onTap});
   final FupStatus fup;
@@ -485,7 +572,9 @@ class _StatCard extends StatelessWidget {
   });
   final IconData icon;
   final String label;
-  final String value;
+
+  /// Null while the backing request is loading — renders a shimmer skeleton.
+  final String? value;
   final VoidCallback onTap;
   final bool highlight;
 
@@ -506,17 +595,23 @@ class _StatCard extends StatelessWidget {
               const SizedBox(height: 10),
               // Scale the figure down to fit the narrow column rather than
               // truncating it (a cut-off "NGN 1,732,…" is unreadable).
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(value,
-                    maxLines: 1,
-                    softWrap: false,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: highlight ? theme.colorScheme.error : null,
-                    )),
-              ),
+              if (value == null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 3),
+                  child: Shimmer(child: SkeletonBox(width: 56, height: 16)),
+                )
+              else
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(value!,
+                      maxLines: 1,
+                      softWrap: false,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: highlight ? theme.colorScheme.error : null,
+                      )),
+                ),
               const SizedBox(height: 2),
               Text(label,
                   style: theme.textTheme.bodySmall
@@ -555,7 +650,10 @@ class _QuickActions extends StatelessWidget {
           _ActionTile(
             icon: icon,
             label: label,
-            onTap: () => context.go(path),
+            // Tabs are switched with go; the top-up task is pushed so the
+            // back gesture returns here instead of exiting the app.
+            onTap: () =>
+                path == '/topup' ? context.push(path) : context.go(path),
           ),
       ],
     );
@@ -593,8 +691,12 @@ class _ActionTile extends StatelessWidget {
 }
 
 class _CurrentServiceCard extends StatelessWidget {
-  const _CurrentServiceCard({required this.service});
+  const _CurrentServiceCard({required this.service, this.quota});
   final Subscription service;
+
+  /// Current period's quota bucket, when the plan is capped — renders a thin
+  /// usage bar so an approaching cap is visible without opening Usage.
+  final QuotaBucket? quota;
 
   @override
   Widget build(BuildContext context) {
@@ -612,9 +714,7 @@ class _CurrentServiceCard extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => ServiceDetailScreen(service: s)),
-        ),
+        onTap: () => context.push('/service/${s.id}', extra: s),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -660,6 +760,42 @@ class _CurrentServiceCard extends StatelessWidget {
                     ),
                 ],
               ),
+              if (quota?.usedFraction != null) ...[
+                const SizedBox(height: 10),
+                Builder(builder: (context) {
+                  final q = quota!;
+                  final fraction = q.usedFraction!;
+                  final nearCap = fraction >= 0.9;
+                  final color = nearCap
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.primary;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: fraction,
+                          minHeight: 6,
+                          color: color,
+                          backgroundColor:
+                              theme.colorScheme.surfaceContainerHighest,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${q.usedGb.toStringAsFixed(1)} of '
+                        '${q.allowanceGb!.toStringAsFixed(0)} GB used',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: nearCap
+                              ? theme.colorScheme.error
+                              : theme.colorScheme.outline,
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ],
               const SizedBox(height: 8),
               Builder(builder: (context) {
                 // Surface a pay CTA when the service needs attention: suspended,
@@ -679,10 +815,8 @@ class _CurrentServiceCard extends StatelessWidget {
                       ),
                     if (needsAttention) const SizedBox(width: 8),
                     TextButton(
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => ServiceDetailScreen(service: s)),
-                      ),
+                      onPressed: () =>
+                          context.push('/service/${s.id}', extra: s),
                       child: const Text('Manage'),
                     ),
                   ],

@@ -7,8 +7,6 @@ import '../../config/env.dart';
 import '../../core/api_exception.dart';
 import '../../models/auth.dart';
 import '../../providers/auth_controller.dart';
-import '../billing/payment_methods_screen.dart';
-import '../settings/settings_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -78,10 +76,7 @@ class ProfileScreen extends ConsumerWidget {
                     leading: const Icon(Icons.credit_card_outlined),
                     title: const Text('Payment methods'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                          builder: (_) => const PaymentMethodsScreen()),
-                    ),
+                    onTap: () => context.push('/profile/payment-methods'),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -99,9 +94,7 @@ class ProfileScreen extends ConsumerWidget {
                     leading: const Icon(Icons.settings_outlined),
                     title: const Text('Settings'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                    ),
+                    onTap: () => context.push('/profile/settings'),
                   ),
                 ),
                 const SizedBox(height: 12),
