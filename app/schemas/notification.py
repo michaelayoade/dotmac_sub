@@ -297,3 +297,18 @@ class AlertNotificationPolicyStepRead(AlertNotificationPolicyStepBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class PushTokenRegister(BaseModel):
+    """Mobile push-token registration from the app (POST /me/push-tokens)."""
+
+    token: str = Field(min_length=1, max_length=512)
+    platform: str | None = Field(default=None, max_length=16)
+
+
+class PushTokenRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    platform: str | None = None
+    is_active: bool
