@@ -310,3 +310,35 @@ def test_pull_crm_ticket_text_match_does_not_persist_crm_link(db_session, subscr
 
     assert result.created == 1
     assert subscriber.crm_subscriber_id is None
+
+
+def test_pull_crm_ticket_maps_via_alias_crm_id(db_session, subscriber):
+    primary_crm_id = uuid4()
+    alias_crm_id = uuid4()
+    subscriber.splynx_customer_id = None
+    subscriber.crm_subscriber_id = primary_crm_id
+    subscriber.metadata_ = {"crm_alias_ids": [str(alias_crm_id)]}
+    db_session.commit()
+    client = FakeCrmClient(
+        tickets=[
+            {
+                "id": str(uuid4()),
+                "subscriber_id": str(alias_crm_id),  # duplicate CRM record
+                "number": "30004",
+                "title": "Ticket on the erpnext duplicate record",
+                "status": "open",
+                "priority": "normal",
+                "channel": "phone",
+                "is_active": True,
+            }
+        ],
+        subscribers={},
+        comments={},
+    )
+
+    result = pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    assert result.created == 1
+    ticket = db_session.query(Ticket).filter(Ticket.number == "30004").one()
+    assert ticket.subscriber_id == subscriber.id
