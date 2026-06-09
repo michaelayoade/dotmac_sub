@@ -439,6 +439,32 @@ def build_beat_schedule() -> dict:
             enabled=radius_accounting_enabled,
             interval_seconds=radius_accounting_interval_seconds,
         )
+        # Close ghost sessions (no Stop packet, accounting feed silent). Off by
+        # default: enable only after the importer's open-session refresh has
+        # been running for at least one interim interval, so genuinely live
+        # sessions have a fresh last_update_at before the first reap.
+        radius_reap_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "radius_session_reap_enabled",
+            "RADIUS_SESSION_REAP_ENABLED",
+            False,
+        )
+        radius_reap_interval_seconds = _effective_int(
+            session,
+            SettingDomain.usage,
+            "radius_session_reap_interval_seconds",
+            "RADIUS_SESSION_REAP_INTERVAL_SECONDS",
+            900,
+        )
+        radius_reap_interval_seconds = max(radius_reap_interval_seconds, 60)
+        _sync_scheduled_task(
+            session,
+            name="radius_session_reaper",
+            task_name="app.tasks.usage.reap_stale_radius_sessions",
+            enabled=radius_reap_enabled,
+            interval_seconds=radius_reap_interval_seconds,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag; no point metering faster than every 5 min.
         _sync_scheduled_task(

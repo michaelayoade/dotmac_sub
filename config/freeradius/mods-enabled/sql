@@ -161,8 +161,8 @@ sql {
 						SET acctupdatetime = NOW(), \
 					    acctinterval = NULLIF('%{%{Acct-Interim-Interval}:-0}', '')::integer, \
 					    acctsessiontime = NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
-					    acctinputoctets = NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint, \
-					    acctoutputoctets = NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint, \
+					    acctinputoctets = ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+					    acctoutputoctets = ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
 					    framedipaddress = NULLIF('%{Framed-IP-Address}', '')::inet, \
 					    framedipv6address = '%{Framed-IPv6-Address}', \
 					    framedipv6prefix = '%{Framed-IPv6-Prefix}', \
@@ -185,8 +185,8 @@ sql {
 						 NULLIF('%{NAS-IP-Address}', '')::inet, '%{NAS-Port-ID}', '%{NAS-Port-Type}', \
 						 NOW() - '%{%{Acct-Session-Time}:-0} seconds'::interval, NOW(), \
 						 NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
-						 NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint, \
-						 NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint, \
+						 ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+						 ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
 						 '%{Acct-Authentic}', '%{Called-Station-Id}', '%{Calling-Station-Id}', \
 						 '%{Service-Type}', '%{Framed-Protocol}', \
 						 NULLIF('%{Framed-IP-Address}', '')::inet, '%{Framed-IPv6-Address}', \
@@ -200,8 +200,8 @@ sql {
 						UPDATE ${....acct_table1} \
 						SET acctstoptime = NOW(), \
 					    acctsessiontime = NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
-					    acctinputoctets = NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint, \
-					    acctoutputoctets = NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint, \
+					    acctinputoctets = ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+					    acctoutputoctets = ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
 					    acctterminatecause = '%{Acct-Terminate-Cause}', \
 					    connectinfo_stop = '%{Connect-Info}', \
 					    framedipaddress = NULLIF('%{Framed-IP-Address}', '')::inet, \
@@ -225,8 +225,8 @@ sql {
 						 NULLIF('%{NAS-IP-Address}', '')::inet, '%{NAS-Port-ID}', '%{NAS-Port-Type}', \
 						 NOW() - '%{%{Acct-Session-Time}:-0} seconds'::interval, NOW(), NOW(), \
 						 NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
-						 NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint, \
-						 NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint, \
+						 ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+						 ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
 						 '%{Acct-Authentic}', '%{Connect-Info}', '%{Called-Station-Id}', \
 						 '%{Calling-Station-Id}', '%{Service-Type}', '%{Framed-Protocol}', \
 						 NULLIF('%{Framed-IP-Address}', '')::inet, '%{Framed-IPv6-Address}', \

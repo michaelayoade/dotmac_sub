@@ -212,7 +212,7 @@
                         </div>
                         <div>
                             <p class="text-base font-semibold text-stone-900 dark:text-white">{{ service.name }}</p>
-                            <p class="text-sm text-stone-500 dark:text-stone-400">{{ service.speed }} &bull; {{ service.address }}</p>
+                            <p class="text-sm text-stone-500 dark:text-stone-400">{{ service.speed }} &bull; {{ service.address }}{% if service.ip_address %} &bull; <span class="font-mono">{{ service.ip_address }}</span>{% endif %}</p>
                         </div>
                     </div>
                     <div class="text-right">

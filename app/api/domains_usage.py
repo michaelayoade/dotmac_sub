@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -108,6 +110,29 @@ def create_radius_accounting_session(
     payload: RadiusAccountingSessionCreate, db: Session = Depends(get_db)
 ):
     return usage_service.radius_accounting_sessions.create(db, payload)
+
+
+@router.get(
+    "/radius-accounting-sessions/by-ip",
+    response_model=ListResponse[RadiusAccountingSessionRead],
+    tags=["usage"],
+    dependencies=[Depends(require_permission("usage:read"))],
+)
+def find_radius_accounting_sessions_by_ip(
+    ip: str = Query(min_length=2, max_length=128),
+    at: datetime | None = Query(
+        default=None,
+        description="Optional point in time: only sessions live at this moment.",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Reverse lookup ("who held this IP at this time") over the framed v4
+    address or exact v6 prefix recorded on accounting sessions."""
+    return usage_service.radius_accounting_sessions.find_by_ip_response(
+        db, ip, at=at, limit=limit, offset=offset
+    )
 
 
 @router.get(

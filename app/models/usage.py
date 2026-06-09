@@ -101,9 +101,23 @@ class RadiusAccountingSession(Base):
     )
     session_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     session_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last accounting observation (acctupdatetime / acctstoptime). A live
+    # session keeps advancing this via interim updates; an open session whose
+    # last_update_at goes stale is a ghost and gets reaped.
+    last_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     input_octets: Mapped[int | None] = mapped_column(BigInteger)
     output_octets: Mapped[int | None] = mapped_column(BigInteger)
     terminate_cause: Mapped[str | None] = mapped_column(String(120))
+    # Framed addresses from radacct. v4 populates wherever FreeRADIUS logs
+    # accounting; the v6 columns fill only if the NAS sends them AND
+    # queries.conf writes them — absent columns are skipped at import.
+    framed_ip_address: Mapped[str | None] = mapped_column(String(64))
+    framed_ipv6_prefix: Mapped[str | None] = mapped_column(String(128))
+    delegated_ipv6_prefix: Mapped[str | None] = mapped_column(String(128))
+    # Physical attachment from radacct: NAS-Port-Id (e.g. PPPoE interface) and
+    # Called-Station-Id — enables per-port concurrency / fault correlation.
+    nas_port_id: Mapped[str | None] = mapped_column(String(64))
+    called_station_id: Mapped[str | None] = mapped_column(String(64))
     splynx_session_id: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(

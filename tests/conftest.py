@@ -1,4 +1,21 @@
 import os
+
+# The unit suite must never touch live infrastructure: app/config.py calls
+# load_dotenv(), which pulls the deployment .env (this host runs prod), and
+# the Redis-backed SettingsCache then reads/writes PROD's live settings keys —
+# test writes like default_offer_status="inactive" poison prod for the cache
+# TTL, and leak between test files, failing whole modules ("Offer is not
+# active"). load_dotenv() does not override pre-set env vars, so stomp them
+# before any app import. Port 9 refuses instantly, and the redis client's
+# circuit breaker keeps subsequent lookups cheap.
+os.environ["REDIS_URL"] = "redis://127.0.0.1:9/0"
+os.environ["SESSION_REDIS_URL"] = "redis://127.0.0.1:9/0"
+# Likewise the radacct importer: .env carries real FreeRADIUS DB credentials
+# and the code has fallbacks; blank both so import_radius_accounting no-ops
+# unless a test explicitly points it at a fixture database.
+os.environ["RADIUS_DB_DSN"] = ""
+os.environ["RADIUS_DB_HOST"] = ""
+
 import sqlite3
 import uuid
 from datetime import UTC

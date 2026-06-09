@@ -56,6 +56,7 @@ celery_app.conf.task_routes = {
     "app.tasks.zabbix_ingestion.ingest_portal_usage_chunk": {"queue": "ingestion"},
     "app.tasks.zabbix_ingestion.ingest_portal_usage_batch": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
+    "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.usage.meter_usage_into_quota": {"queue": "ingestion"},
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
