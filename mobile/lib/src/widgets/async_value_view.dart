@@ -6,11 +6,13 @@ import 'skeleton.dart';
 /// Renders an [AsyncValue] with consistent loading / error (with retry) /
 /// data states across the app.
 ///
-/// Behaves stale-while-revalidate: while a refresh or re-listen is in flight
-/// and a previous value exists, the cached data stays on screen (with a thin
-/// progress bar at the top) instead of flashing back to the loading state. If a
-/// background refresh fails but we still hold data, the stale data is kept
-/// rather than replaced by an error screen.
+/// Stale-while-revalidate: while a refresh or re-listen is in flight and a
+/// previous value exists, the cached data stays on screen (with a thin progress
+/// bar at the top) instead of flashing back to the loading state. If a
+/// background refresh *fails* but we still hold data, the stale data is kept
+/// with a quiet "couldn't refresh" banner rather than being replaced by a
+/// full-screen error. The loading/error states are only for the *first* load,
+/// when there is nothing to show yet.
 class AsyncValueView<T> extends StatelessWidget {
   const AsyncValueView({
     super.key,
@@ -37,9 +39,19 @@ class AsyncValueView<T> extends StatelessWidget {
       loading: () =>
           skeleton ?? const Center(child: CircularProgressIndicator()),
       // On a failed *refresh* we still have the last good value: keep showing it
-      // rather than wiping the screen to an error.
+      // with a quiet "couldn't refresh" banner rather than wiping the screen.
       error: (err, _) => value.hasValue
-          ? data(value.requireValue)
+          ? Stack(
+              children: [
+                data(value.requireValue),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: StaleBanner(onRetry: onRetry),
+                ),
+              ],
+            )
           : _ErrorState(message: '$err', onRetry: onRetry),
       data: data,
     );
@@ -55,6 +67,46 @@ class AsyncValueView<T> extends StatelessWidget {
           child: LinearProgressIndicator(minHeight: 2),
         ),
       ],
+    );
+  }
+}
+
+/// Unobtrusive notice shown over still-valid (stale) data when a refresh failed.
+class StaleBanner extends StatelessWidget {
+  const StaleBanner({super.key, this.onRetry});
+
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_off, size: 16, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Showing saved data — couldn’t refresh.',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+            ),
+            if (onRetry != null)
+              TextButton(
+                onPressed: onRetry,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Retry'),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

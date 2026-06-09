@@ -23,6 +23,9 @@ dependencies:
   # Secure token storage
   flutter_secure_storage: ^9.2.2
 
+  # App-support directory for the on-disk response cache (SWR fallback)
+  path_provider: ^2.1.0
+
   # Biometric app-lock (Face ID / fingerprint) gating the stored session
   local_auth: ^2.3.0
 

@@ -8,6 +8,7 @@ import '../core/api_client.dart';
 import '../core/api_exception.dart';
 import '../core/biometric_service.dart';
 import '../core/observability.dart';
+import '../core/response_cache.dart';
 import '../core/token_storage.dart';
 import '../models/auth.dart';
 import '../repositories/auth_repository.dart';
@@ -44,9 +45,14 @@ final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 final biometricServiceProvider =
     Provider<BiometricService>((ref) => BiometricService());
 
+/// On-disk stale-while-revalidate cache for GET responses. Single instance so
+/// the auth controller can clear it on logout / session expiry.
+final responseCacheProvider = Provider<ResponseCache>((ref) => ResponseCache());
+
 final apiClientProvider = Provider<ApiClient>((ref) {
   final client = ApiClient(
     storage: ref.watch(tokenStorageProvider),
+    cache: ref.watch(responseCacheProvider),
     onSessionExpired: () {
       // Refresh failed irrecoverably: drop to the signed-out state so the
       // router redirects to /login.
@@ -271,11 +277,15 @@ class AuthController extends StateNotifier<AuthState> {
     // Explicit sign-out is a full reset: drop the biometric opt-in so the next
     // user starts from a clean password login.
     await _storage.setBiometricEnabled(false);
+    // Drop cached responses so the next account never sees this one's data.
+    await _ref.read(responseCacheProvider).clear();
     state = AuthState.signedOut;
     await Sentry.configureScope((scope) => scope.setUser(null));
   }
 
   void onSessionExpired() {
+    // Fire-and-forget: clearing the disk cache must not block the redirect.
+    _ref.read(responseCacheProvider).clear();
     state = AuthState.signedOut;
   }
 }
