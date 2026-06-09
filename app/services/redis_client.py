@@ -225,14 +225,11 @@ def get_redis(force_reconnect: bool = False) -> redis.Redis | None:
     global _redis_client, _circuit_state
 
     with _lock:
-        # Return existing client if healthy
+        # Return the existing client without a pre-flight ping. Callers already
+        # handle RedisError around the actual operation; pinging here makes every
+        # session/cache lookup pay an extra network round trip.
         if _redis_client is not None and not force_reconnect:
-            try:
-                _redis_client.ping()
-                return _redis_client
-            except RedisError:
-                _redis_client = None
-                _circuit_state.record_failure()
+            return _redis_client
 
         # Check circuit breaker
         if not force_reconnect and not _circuit_state.should_attempt():

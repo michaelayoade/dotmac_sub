@@ -3,6 +3,10 @@
 {% block title %}Add Funds - Customer Portal{% endblock %}
 
 {% block content %}
+{% set topup_options = payment_options|default([
+    {"provider_type": "paystack", "label": "Pay with Paystack"},
+    {"provider_type": "flutterwave", "label": "Pay with Flutterwave"}
+], true) %}
 <div class="space-y-6" x-data="topupPage()">
     <div>
         <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
@@ -17,6 +21,7 @@
     </div>
 
     <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
+        <div class="space-y-6">
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -82,6 +87,72 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <div>
+                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Payment method</h2>
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Choose how you want to pay after setting the amount.</p>
+            </div>
+
+            <div class="mt-5 space-y-3">
+                {% for option in topup_options %}
+                <label
+                    :class="selectedPaymentChoice === 'provider:{{ option.provider_type }}' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600'"
+                    class="flex cursor-pointer items-center gap-4 rounded-2xl border p-4 transition-colors">
+                    <input
+                        type="radio"
+                        name="payment_choice"
+                        value="provider:{{ option.provider_type }}"
+                        x-model="selectedPaymentChoice"
+                        class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
+                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
+                        <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4-3h5M7 19h10a4 4 0 004-4V9a4 4 0 00-4-4H7a4 4 0 00-4 4v6a4 4 0 004 4z"/>
+                        </svg>
+                    </span>
+                    <span class="min-w-0 flex-1">
+                        <span class="block text-sm font-semibold text-stone-900 dark:text-white">{{ option.label }}</span>
+                        <span class="mt-0.5 block text-sm text-stone-500 dark:text-stone-400">
+                            Secure online checkout
+                        </span>
+                    </span>
+                </label>
+                {% endfor %}
+
+                {% for method in payment_methods|default([]) %}
+                <label
+                    :class="selectedPaymentChoice === 'card:{{ method.id }}' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600'"
+                    class="flex cursor-pointer items-center gap-4 rounded-2xl border p-4 transition-colors">
+                    <input
+                        type="radio"
+                        name="payment_choice"
+                        value="card:{{ method.id }}"
+                        x-model="selectedPaymentChoice"
+                        class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
+                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
+                        <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                        </svg>
+                    </span>
+                    <span class="min-w-0 flex-1">
+                        <span class="block truncate text-sm font-semibold text-stone-900 dark:text-white">
+                            {{ method.label or ((method.brand or "Card") ~ (" ending in " ~ method.last4 if method.last4 else "")) }}
+                        </span>
+                        <span class="mt-0.5 block text-sm text-stone-500 dark:text-stone-400">
+                            {% if method.expires_month and method.expires_year %}
+                            Expires {{ "%02d"|format(method.expires_month) }}/{{ method.expires_year }}
+                            {% else %}
+                            Saved payment method
+                            {% endif %}
+                        </span>
+                    </span>
+                    {% if method.is_default %}
+                    <span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Default</span>
+                    {% endif %}
+                </label>
+                {% endfor %}
+            </div>
 
             <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
                 <button
@@ -102,16 +173,13 @@
                 </a>
             </div>
         </div>
+        </div>
 
         <div class="space-y-4">
             <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
                 <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Secure checkout</h2>
                 <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">
-                    {% if provider_type == "flutterwave" %}
-                    Payments are processed securely by Flutterwave.
-                    {% else %}
-                    Payments are processed securely by Paystack.
-                    {% endif %}
+                    Payments are processed securely by the payment method you choose.
                 </p>
                 <dl class="mt-5 space-y-4 text-sm">
                     <div class="flex items-center justify-between">
@@ -144,6 +212,7 @@ function topupPage() {
         liveReference: '',
         customAmount: '',
         validationError: '',
+        selectedPaymentChoice: 'provider:{{ provider_type }}',
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
         setAmount(amount) {
@@ -187,6 +256,10 @@ function topupPage() {
                 minimumFractionDigits: 2,
             }).format(amount);
         },
+        csrfToken() {
+            const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        },
         buttonLabel() {
             if (this.processing) {
                 return 'Processing...';
@@ -213,16 +286,21 @@ function topupPage() {
             this.validationError = '';
             const self = this;
             let intent;
+            const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
+            const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : 'paystack';
+            const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
 
             try {
                 const response = await fetch('/portal/billing/topup/intent', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRF-Token': this.csrfToken(),
                     },
                     body: JSON.stringify({
                         amount: amount,
-                        provider: '{{ provider_type }}',
+                        provider: selectedProvider,
+                        payment_method_id: selectedPaymentMethodId,
                     }),
                 });
                 const payload = await response.json();
@@ -231,36 +309,28 @@ function topupPage() {
                 }
                 intent = payload;
                 this.liveReference = intent.reference || '';
+                if (intent.charged) {
+                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(intent.reference) + '&provider=paystack';
+                    return;
+                }
+                if (intent.checkout_url) {
+                    window.location.href = intent.checkout_url;
+                    return;
+                }
             } catch (error) {
                 this.processing = false;
                 this.validationError = error.message || 'Unable to start payment.';
                 return;
             }
 
-            {% if provider_type == "flutterwave" %}
-            FlutterwaveCheckout({
-                public_key: intent.provider_public_key || '{{ provider_public_key }}',
-                tx_ref: intent.reference,
-                amount: amount,
-                currency: intent.currency || 'NGN',
-                customer: {
-                    email: '{{ customer_email }}'
-                },
-                meta: intent.checkout_metadata || {},
-                callback: function(response) {
-                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(response.tx_ref) + '&provider=flutterwave';
-                },
-                onclose: function() {
-                    self.processing = false;
-                },
-                customizations: {
-                    title: 'Add Funds',
-                    description: 'Add funds to your account balance'
-                }
-            });
-            {% else %}
+            if (intent.provider_type === 'flutterwave') {
+                this.processing = false;
+                this.validationError = 'Unable to start Flutterwave checkout.';
+                return;
+            }
+
             const handler = PaystackPop.setup({
-                key: intent.provider_public_key || '{{ provider_public_key or paystack_public_key }}',
+                key: intent.provider_public_key,
                 email: '{{ customer_email }}',
                 amount: amount * 100,
                 currency: intent.currency || 'NGN',
@@ -274,15 +344,13 @@ function topupPage() {
                 }
             });
             handler.openIframe();
-            {% endif %}
         }
     };
 }
 </script>
 
-{% if provider_type == "flutterwave" %}
-<script src="https://checkout.flutterwave.com/v3.js"></script>
-{% else %}
+{% set topup_provider_types = topup_options|map(attribute="provider_type")|list %}
+{% if "paystack" in topup_provider_types %}
 <script src="https://js.paystack.co/v1/inline.js"></script>
 {% endif %}
 {% endblock %}

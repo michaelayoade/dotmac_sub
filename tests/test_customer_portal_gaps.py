@@ -718,6 +718,28 @@ class TestPortalServiceVisibility:
         assert len(page["services"]) == 1
         assert page["services"][0].status == SubscriptionStatus.blocked
 
+    def test_services_page_eager_loads_template_relationships(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from sqlalchemy import inspect as sa_inspect
+
+        from app.services.customer_portal_flow_services import get_services_page
+
+        db_session.expire_all()
+
+        page = get_services_page(
+            db_session,
+            {"account_id": subscriber.id},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["services"]
+        service = page["services"][0]
+        unloaded = sa_inspect(service).unloaded
+        assert "offer" not in unloaded
+        assert "offer_version" not in unloaded
+
 
 class TestCustomerUsageRoute:
     def test_usage_page_defaults_to_chart_and_includes_initial_bandwidth_stats(

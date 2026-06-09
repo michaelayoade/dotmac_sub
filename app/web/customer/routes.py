@@ -387,7 +387,37 @@ def customer_invoice_pdf(
                 exc_info=True,
             )
 
-    # Queue generation if not ready
+    generated_export = billing_invoice_pdf_service.generate_export_now(
+        db,
+        invoice_id=str(invoice_id),
+        requested_by_id=customer.get("subscriber_id")
+        or customer.get("session", {}).get("subscriber_id"),
+    )
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, generated_export):
+        try:
+            from starlette.responses import StreamingResponse
+
+            stream = billing_invoice_pdf_service.stream_export(db, generated_export)
+            headers = {
+                "Content-Disposition": build_content_disposition(
+                    billing_invoice_pdf_service.download_filename(invoice)
+                ),
+            }
+            if stream.content_length is not None:
+                headers["Content-Length"] = str(stream.content_length)
+            return StreamingResponse(
+                stream.chunks,
+                media_type=stream.content_type or "application/pdf",
+                headers=headers,
+            )
+        except Exception:
+            logger.debug(
+                "Failed streaming generated invoice PDF for invoice %s",
+                invoice_id,
+                exc_info=True,
+            )
+
+    # Queue generation if the inline path did not produce a downloadable PDF.
     subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
         "subscriber_id"
     )
@@ -1477,6 +1507,11 @@ def customer_billing_topup(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     page_data = customer_portal.get_topup_page(db, customer)
+    if not page_data.get("payment_options"):
+        page_data["payment_options"] = [
+            {"provider_type": "paystack", "label": "Pay with Paystack"},
+            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
+        ]
     return templates.TemplateResponse(
         "customer/billing/topup.html",
         {
@@ -1508,6 +1543,8 @@ def customer_create_topup_intent(
             customer,
             amount_value,
             provider=payload.get("provider"),
+            payment_method_id=payload.get("payment_method_id"),
+            redirect_url=str(request.url_for("customer_verify_topup")),
         )
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)

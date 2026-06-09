@@ -13,12 +13,15 @@ from app.models.billing import (
     InvoiceStatus,
     Payment,
     PaymentAllocation,
+    PaymentProvider,
+    PaymentProviderType,
     PaymentStatus,
     TopupIntent,
 )
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
+from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
 from app.services.common import round_money, to_decimal
@@ -31,6 +34,10 @@ from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 _TOPUP_INTENT_TTL = timedelta(minutes=30)
+_ONLINE_PROVIDER_LABELS = {
+    "paystack": "Pay with Paystack",
+    "flutterwave": "Pay with Flutterwave",
+}
 
 
 def _resolve_payment_provider(db: Session) -> str:
@@ -39,6 +46,41 @@ def _resolve_payment_provider(db: Session) -> str:
     if val and str(val) == "flutterwave":
         return "flutterwave"
     return "paystack"
+
+
+def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str, str]]:
+    """Return active online provider options for customer top-ups."""
+    provider_types: list[str] = [default_provider]
+    try:
+        rows = db.scalars(
+            select(PaymentProvider.provider_type)
+            .where(PaymentProvider.is_active.is_(True))
+            .where(
+                PaymentProvider.provider_type.in_(
+                    [PaymentProviderType.paystack, PaymentProviderType.flutterwave]
+                )
+            )
+            .order_by(PaymentProvider.name)
+        ).all()
+        for provider_type in rows:
+            value = getattr(provider_type, "value", str(provider_type))
+            if value not in provider_types:
+                provider_types.append(value)
+    except Exception:
+        logger.debug("Failed to resolve active payment providers", exc_info=True)
+
+    for provider_type in ("paystack", "flutterwave"):
+        if provider_type not in provider_types:
+            provider_types.append(provider_type)
+
+    return [
+        {
+            "provider_type": provider_type,
+            "label": _ONLINE_PROVIDER_LABELS[provider_type],
+        }
+        for provider_type in provider_types
+        if provider_type in _ONLINE_PROVIDER_LABELS
+    ]
 
 
 def _resolve_topup_limits(db: Session) -> tuple[int, int]:
@@ -408,14 +450,26 @@ def get_topup_page(
     min_amount_value, max_amount_value = _resolve_topup_limits(db)
 
     email = _resolve_customer_email(db, customer)
+    payment_methods = []
+    if account_id:
+        try:
+            payment_methods = customer_cards.list_for_account(db, str(account_id))
+        except Exception:
+            logger.warning(
+                "Failed to resolve payment methods for account %s",
+                account_id,
+                exc_info=True,
+            )
 
     context = {
         "provider_type": provider_type,
+        "payment_options": _topup_payment_options(db, provider_type),
         "customer_email": email,
         "prepaid_balance": prepaid_balance,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
         "preset_amounts": [1000, 2000, 5000, 10000, 20000, 50000],
+        "payment_methods": payment_methods,
     }
 
     gateway_context = payment_gateway_adapter.build_context(
@@ -435,6 +489,8 @@ def create_topup_intent(
     amount: Decimal | int | float | str,
     *,
     provider: str | None = None,
+    payment_method_id: str | None = None,
+    redirect_url: str | None = None,
 ) -> dict:
     """Create a server-owned top-up intent for checkout."""
     account_id = _customer_account_uuid(customer)
@@ -453,10 +509,30 @@ def create_topup_intent(
         )
 
     provider_type = provider or _resolve_payment_provider(db)
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    selected_payment_method = None
+    selected_payment_token = None
+    if selected_payment_method_id:
+        if provider_type != "paystack":
+            raise ValueError("Saved cards can only be used with Paystack")
+        selected_payment_method = customer_cards._owned(
+            db, str(account_id), selected_payment_method_id
+        )
+        if selected_payment_method is None:
+            raise ValueError("Payment method not found")
+        selected_payment_token = billing_service.payment_methods.get_decrypted_token(
+            db, str(selected_payment_method.id)
+        )
+        if not selected_payment_token:
+            raise ValueError("Payment method is not chargeable")
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
     )
+
+    intent_metadata = {"payment_flow": "account_topup"}
+    if selected_payment_method_id:
+        intent_metadata["payment_method_id"] = selected_payment_method_id
 
     intent = TopupIntent(
         account_id=account_id,
@@ -466,11 +542,68 @@ def create_topup_intent(
         requested_amount=requested_amount,
         status="pending",
         expires_at=datetime.now(UTC) + _TOPUP_INTENT_TTL,
-        metadata_={"payment_flow": "account_topup"},
+        metadata_=intent_metadata,
     )
     db.add(intent)
     db.commit()
     db.refresh(intent)
+
+    checkout_metadata = {
+        "payment_flow": "account_topup",
+        "topup_intent_id": str(intent.id),
+        "account_id": str(account_id),
+        **(
+            {"payment_method_id": selected_payment_method_id}
+            if selected_payment_method_id
+            else {}
+        ),
+    }
+    charged = False
+    if selected_payment_method is not None:
+        from app.services import paystack
+
+        paystack.charge_authorization(
+            db,
+            authorization_code=selected_payment_token,
+            email=_resolve_customer_email(db, customer),
+            amount_kobo=paystack.amount_to_kobo(requested_amount),
+            reference=gateway_context.reference,
+            metadata=checkout_metadata,
+        )
+        charged = True
+
+    checkout_url = None
+    if gateway_context.provider_type == "flutterwave":
+        from app.services import flutterwave
+
+        callback_url = redirect_url or "/portal/billing/topup/verify"
+        separator = "&" if "?" in callback_url else "?"
+        try:
+            checkout = flutterwave.initialize_transaction(
+                db,
+                email=_resolve_customer_email(db, customer),
+                amount=requested_amount,
+                reference=gateway_context.reference,
+                redirect_url=(
+                    f"{callback_url}{separator}reference={gateway_context.reference}"
+                    "&provider=flutterwave"
+                ),
+                metadata=checkout_metadata,
+            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.warning("Flutterwave checkout initialization failed", exc_info=True)
+            raise ValueError(
+                "Unable to start Flutterwave checkout. Check Flutterwave configuration and try again."
+            ) from exc
+        checkout_url = checkout.get("link")
+        if not checkout_url:
+            logger.warning(
+                "Flutterwave checkout initialization returned no link: %s",
+                checkout,
+            )
+            raise ValueError("Flutterwave did not return a checkout link")
 
     return {
         "intent_id": str(intent.id),
@@ -479,11 +612,9 @@ def create_topup_intent(
         "reference": gateway_context.reference,
         "requested_amount": requested_amount,
         "currency": intent.currency,
-        "checkout_metadata": {
-            "payment_flow": "account_topup",
-            "topup_intent_id": str(intent.id),
-            "account_id": str(account_id),
-        },
+        "checkout_metadata": checkout_metadata,
+        "charged": charged,
+        "checkout_url": checkout_url,
     }
 
 
