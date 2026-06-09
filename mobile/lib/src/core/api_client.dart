@@ -3,6 +3,7 @@ import 'package:sentry/sentry.dart' show SentryLevel;
 
 import '../config/env.dart';
 import 'observability.dart';
+import 'response_cache.dart';
 import 'token_storage.dart';
 
 /// Thin wrapper around Dio configured for the DotMac API.
@@ -13,7 +14,7 @@ import 'token_storage.dart';
 ///    replay the original request once,
 ///  * notify the app when the session can no longer be recovered.
 class ApiClient {
-  ApiClient({required TokenStorage storage, this.onSessionExpired})
+  ApiClient({required TokenStorage storage, this.cache, this.onSessionExpired})
       : _storage = storage {
     _dio = Dio(
       BaseOptions(
@@ -37,6 +38,14 @@ class ApiClient {
         onResponse: _onResponse,
       ),
     );
+
+    // Stale-while-revalidate fallback: serve the last good GET body when a
+    // request fails at the transport level (timeout/reset/5xx). Added after the
+    // auth interceptor so a post-refresh replay that times out — now rejected as
+    // a DioException — also gets served from cache. No-op when no cache wired.
+    if (cache != null) {
+      _dio.interceptors.add(CacheInterceptor(cache!));
+    }
 
     // Breadcrumb every call (method + path + status only — never headers/body,
     // which carry the bearer token and passwords) so crashes have an API trail.
@@ -73,6 +82,9 @@ class ApiClient {
 
   final TokenStorage _storage;
 
+  /// Optional on-disk response cache for stale-while-revalidate fallback.
+  final ResponseCache? cache;
+
   /// Invoked when refresh fails and the user must re-authenticate.
   final void Function()? onSessionExpired;
 
@@ -108,8 +120,13 @@ class ApiClient {
         try {
           final replay = await _replay(response.requestOptions);
           return handler.resolve(replay);
-        } catch (_) {
-          // fall through to reject below
+        } on DioException catch (e) {
+          // Refresh succeeded but the replay itself failed — typically a
+          // timeout or connection reset under server load, not an auth
+          // problem. Surface THAT error so the UI shows a retryable network
+          // state; falling through would deliver the stale original 401 and
+          // mislabel the failure as "(401)".
+          return handler.reject(e);
         }
       } else {
         onSessionExpired?.call();
