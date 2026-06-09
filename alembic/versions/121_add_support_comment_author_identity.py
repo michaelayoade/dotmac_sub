@@ -26,6 +26,11 @@ _FK = "fk_support_ticket_comments_author_system_user_id"
 
 def upgrade() -> None:
     bind = op.get_bind()
+    # SQLite (tests) builds the schema from model metadata via create_all
+    # rather than running migrations, and cannot ALTER TABLE to add a FK;
+    # the model carries these columns/FK there instead.
+    if bind.dialect.name == "sqlite":
+        return
     inspector = inspect(bind)
     if _TABLE not in inspector.get_table_names():
         return
@@ -71,6 +76,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        return
     inspector = inspect(bind)
     if _TABLE not in inspector.get_table_names():
         return
