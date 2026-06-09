@@ -72,8 +72,7 @@ void main() {
   });
 
   test('FupStatus full_speed does not need attention', () {
-    final f =
-        FupStatus.fromJson({'status': 'full_speed', 'is_reduced': false});
+    final f = FupStatus.fromJson({'status': 'full_speed', 'is_reduced': false});
     expect(f.needsAttention, isFalse);
     expect(f.isThrottled, isFalse);
   });

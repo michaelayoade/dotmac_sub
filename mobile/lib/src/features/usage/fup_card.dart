@@ -49,8 +49,8 @@ class FupCard extends StatelessWidget {
             if (fup.resetsAt != null) ...[
               const SizedBox(height: 4),
               Text('Resets ${Fmt.date(fup.resetsAt!)}',
-                  style:
-                      theme.textTheme.bodySmall?.copyWith(color: scheme.outline)),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: scheme.outline)),
             ],
             const SizedBox(height: 12),
             Align(

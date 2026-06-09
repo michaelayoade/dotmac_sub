@@ -1,7 +1,7 @@
 """Add device_tokens for mobile push (FCM/APNs).
 
-Revision ID: 125_add_device_tokens
-Revises: 124_add_support_comment_metadata
+Revision ID: 128_add_device_tokens
+Revises: 127_add_addon_validity_days
 Create Date: 2026-06-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "125_add_device_tokens"
-down_revision = "124_add_support_comment_metadata"
+revision = "128_add_device_tokens"
+down_revision = "127_add_addon_validity_days"
 branch_labels = None
 depends_on = None
 
