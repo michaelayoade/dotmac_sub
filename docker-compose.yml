@@ -155,6 +155,42 @@ services:
     - --max-tasks-per-child=50
     - -Q
     - nin
+  celery-worker-crm:
+    build: .
+    container_name: dotmac_sub_celery_worker_crm
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *id001
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
+      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
+      REDIS_URL: ${REDIS_URL}
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+    env_file:
+    - .env
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=1
+    - --max-tasks-per-child=50
+    - -Q
+    - crm
   celery-worker-tr069:
     build: .
     container_name: dotmac_sub_celery_worker_tr069

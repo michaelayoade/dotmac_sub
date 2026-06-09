@@ -211,6 +211,39 @@ def _find_local_subscriber_id_from_ticket_text(
     return None
 
 
+def load_local_crm_id_map(db: Session) -> dict[str, UUID]:
+    """Map stored CRM subscriber UUIDs to local subscriber IDs."""
+    return {
+        str(crm_subscriber_id): subscriber_id
+        for crm_subscriber_id, subscriber_id in db.query(
+            Subscriber.crm_subscriber_id, Subscriber.id
+        )
+        .filter(Subscriber.crm_subscriber_id.isnot(None))
+        .all()
+    }
+
+
+def _persist_crm_subscriber_id(
+    db: Session,
+    subscriber_id: UUID,
+    crm_subscriber_id: str,
+    local_by_crm_id: dict[str, UUID] | None,
+) -> None:
+    """Store a CRM link resolved via the legacy chain so the next run is direct.
+
+    Skips if any subscriber already holds this CRM id (partial unique index).
+    """
+    if local_by_crm_id is not None and crm_subscriber_id in local_by_crm_id:
+        return
+    parsed = _coerce_uuid(crm_subscriber_id)
+    subscriber = db.get(Subscriber, subscriber_id)
+    if parsed is None or subscriber is None or subscriber.crm_subscriber_id:
+        return
+    subscriber.crm_subscriber_id = parsed
+    if local_by_crm_id is not None:
+        local_by_crm_id[crm_subscriber_id] = subscriber_id
+
+
 def build_subscriber_cache(
     db: Session,
     client: CRMClient,
@@ -351,6 +384,7 @@ def sync_ticket(
     sync_comments: bool = True,
     subscriber_cache: dict[str, UUID] | None = None,
     local_by_splynx: dict[int, UUID] | None = None,
+    local_by_crm_id: dict[str, UUID] | None = None,
 ) -> tuple[str, int, Ticket | None]:
     client = client or get_crm_client()
     crm_ticket_id = str(crm_ticket.get("id") or "").strip()
@@ -360,11 +394,17 @@ def sync_ticket(
         return "skipped_lead", 0, None
 
     crm_subscriber_id = str(crm_ticket.get("subscriber_id") or "").strip() or None
-    subscriber_id = (
-        subscriber_cache.get(crm_subscriber_id)
-        if subscriber_cache is not None and crm_subscriber_id
-        else _find_local_subscriber_id(db, client, crm_subscriber_id)
-    )
+    subscriber_id: UUID | None = None
+    resolved_via_legacy_chain = False
+    if crm_subscriber_id and local_by_crm_id is not None:
+        subscriber_id = local_by_crm_id.get(crm_subscriber_id)
+    if not subscriber_id and crm_subscriber_id:
+        subscriber_id = (
+            subscriber_cache.get(crm_subscriber_id)
+            if subscriber_cache is not None
+            else _find_local_subscriber_id(db, client, crm_subscriber_id)
+        )
+        resolved_via_legacy_chain = subscriber_id is not None
     if not subscriber_id:
         subscriber_id = _find_local_subscriber_id_from_ticket_text(
             crm_ticket,
@@ -372,6 +412,13 @@ def sync_ticket(
         )
     if not subscriber_id:
         return "skipped_unmapped_subscriber", 0, None
+    if resolved_via_legacy_chain and crm_subscriber_id:
+        # The CRM subscriber's Splynx external id matched a local subscriber;
+        # store the direct link. Text-regex matches are NOT persisted — the
+        # title may name a different customer than the ticket's CRM subscriber.
+        _persist_crm_subscriber_id(
+            db, subscriber_id, crm_subscriber_id, local_by_crm_id
+        )
 
     existing = _find_existing_ticket(db, crm_ticket)
     if existing:
@@ -403,6 +450,7 @@ def sync_ticket_by_id(
     crm_ticket = client.get_ticket(crm_ticket_id)
     subscriber_cache = build_subscriber_cache(db, client)
     local_by_splynx = load_local_subscriber_map(db)
+    local_by_crm_id = load_local_crm_id_map(db)
     result.fetched = 1
     outcome, comments_created, local_ticket = sync_ticket(
         db,
@@ -411,6 +459,7 @@ def sync_ticket_by_id(
         sync_comments=sync_comments,
         subscriber_cache=subscriber_cache,
         local_by_splynx=local_by_splynx,
+        local_by_crm_id=local_by_crm_id,
     )
     if outcome == "created":
         result.created += 1
@@ -433,6 +482,7 @@ def pull_tickets(
     sync_comments: bool = True,
     subscriber_cache: dict[str, UUID] | None = None,
     local_by_splynx: dict[int, UUID] | None = None,
+    local_by_crm_id: dict[str, UUID] | None = None,
     record_callback: CrmTicketRecordCallback | None = None,
 ) -> CrmTicketPullResult:
     client = client or get_crm_client()
@@ -442,6 +492,8 @@ def pull_tickets(
     subscriber_cache = subscriber_cache or build_subscriber_cache_from_map(
         local_by_splynx, client
     )
+    if local_by_crm_id is None:
+        local_by_crm_id = load_local_crm_id_map(db)
     for page in range(max(max_pages, 1)):
         offset = page * page_size
         try:
@@ -464,6 +516,7 @@ def pull_tickets(
                     sync_comments=sync_comments,
                     subscriber_cache=subscriber_cache,
                     local_by_splynx=local_by_splynx,
+                    local_by_crm_id=local_by_crm_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 ticket_id = str(crm_ticket.get("id") or "")

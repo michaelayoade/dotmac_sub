@@ -214,3 +214,99 @@ def test_pull_crm_ticket_skips_ambiguous_customer_id_pairs(db_session, subscribe
 
     assert result.skipped_unmapped_subscribers == 1
     assert db_session.query(Ticket).count() == 0
+
+
+def test_pull_crm_ticket_maps_via_stored_crm_subscriber_id(db_session, subscriber):
+    crm_subscriber_id = uuid4()
+    subscriber.splynx_customer_id = None
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    db_session.commit()
+    crm_ticket_id = str(uuid4())
+    client = FakeCrmClient(
+        tickets=[
+            {
+                "id": crm_ticket_id,
+                "subscriber_id": str(crm_subscriber_id),
+                "number": "30001",
+                "title": "ERPNext customer ticket",
+                "status": "open",
+                "priority": "normal",
+                "channel": "phone",
+                "is_active": True,
+            }
+        ],
+        subscribers={},
+        comments={},
+    )
+
+    result = pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    assert result.created == 1
+    ticket = db_session.query(Ticket).filter(Ticket.number == "30001").one()
+    assert ticket.subscriber_id == subscriber.id
+
+
+def test_pull_crm_ticket_persists_crm_link_after_legacy_resolution(
+    db_session, subscriber
+):
+    subscriber.splynx_customer_id = 202
+    db_session.commit()
+    crm_subscriber_id = str(uuid4())
+    client = FakeCrmClient(
+        tickets=[
+            {
+                "id": str(uuid4()),
+                "subscriber_id": crm_subscriber_id,
+                "number": "30002",
+                "title": "Splynx customer ticket",
+                "status": "open",
+                "priority": "normal",
+                "channel": "phone",
+                "is_active": True,
+            }
+        ],
+        subscribers={
+            crm_subscriber_id: {
+                "id": crm_subscriber_id,
+                "external_system": "splynx",
+                "external_id": "202",
+            }
+        },
+        comments={},
+    )
+
+    result = pull_tickets(db_session, client=client)
+    db_session.commit()
+    db_session.refresh(subscriber)
+
+    assert result.created == 1
+    assert str(subscriber.crm_subscriber_id) == crm_subscriber_id
+
+
+def test_pull_crm_ticket_text_match_does_not_persist_crm_link(db_session, subscriber):
+    subscriber.splynx_customer_id = 24295
+    db_session.commit()
+    client = FakeCrmClient(
+        tickets=[
+            {
+                "id": str(uuid4()),
+                "subscriber_id": str(uuid4()),  # unknown CRM subscriber
+                "number": "30003",
+                "title": "Acme Ltd (100024295 - 24295)",
+                "status": "open",
+                "priority": "normal",
+                "channel": "phone",
+                "is_active": True,
+            }
+        ],
+        subscribers={},
+        comments={},
+    )
+
+    result = pull_tickets(db_session, client=client)
+    db_session.commit()
+    db_session.refresh(subscriber)
+
+    assert result.created == 1
+    assert subscriber.crm_subscriber_id is None

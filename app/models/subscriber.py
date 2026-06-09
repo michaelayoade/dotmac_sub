@@ -178,6 +178,12 @@ class Subscriber(Base):
             unique=True,
             postgresql_where=text("splynx_customer_id IS NOT NULL"),
         ),
+        Index(
+            "uq_subscribers_crm_subscriber_id",
+            "crm_subscriber_id",
+            unique=True,
+            postgresql_where=text("crm_subscriber_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -283,6 +289,10 @@ class Subscriber(Base):
     # === Common Fields ===
     notes: Mapped[str | None] = mapped_column(Text)
     splynx_customer_id: Mapped[int | None] = mapped_column(Integer)
+    # Direct link to the DotMac Omni CRM subscriber record. Replaces the
+    # splynx_customer_id -> CRM external_id resolution chain for subscribers
+    # that have it; backfilled from CRM, persisted lazily on first resolve.
+    crm_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )

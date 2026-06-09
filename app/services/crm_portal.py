@@ -93,8 +93,9 @@ def _cache_set(key: str, value: str, ttl: int) -> None:
 def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:
     """Resolve a DotMac Sub subscriber UUID to a CRM subscriber UUID.
 
-    Chain: Sub UUID → splynx_customer_id → CRM external_id lookup → CRM UUID.
-    Cached in Redis for 1hr.
+    Prefers the locally stored crm_subscriber_id; falls back to the legacy
+    splynx_customer_id → CRM external_id chain and persists the result so each
+    subscriber only pays for the chain once. Cached in Redis for 1hr.
     """
     cache_key = f"crm:sub_map:{subscriber_id}"
     cached = _cache_get(cache_key)
@@ -102,13 +103,27 @@ def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:
         return cached if cached != "__none__" else None
 
     subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
-    if not subscriber or not subscriber.splynx_customer_id:
+    if not subscriber:
+        _cache_set(cache_key, "__none__", _CACHE_SUBSCRIBER_MAP)
+        return None
+
+    if subscriber.crm_subscriber_id:
+        crm_id = str(subscriber.crm_subscriber_id)
+        _cache_set(cache_key, crm_id, _CACHE_SUBSCRIBER_MAP)
+        return crm_id
+
+    if not subscriber.splynx_customer_id:
         _cache_set(cache_key, "__none__", _CACHE_SUBSCRIBER_MAP)
         return None
 
     client = get_crm_client()
     crm_id = client.resolve_subscriber_id(subscriber.splynx_customer_id)
     if crm_id:
+        try:
+            subscriber.crm_subscriber_id = coerce_uuid(crm_id)
+            db.commit()
+        except ValueError:
+            pass
         _cache_set(cache_key, crm_id, _CACHE_SUBSCRIBER_MAP)
     else:
         _cache_set(cache_key, "__none__", 300)  # shorter TTL for misses
