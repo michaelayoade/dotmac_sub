@@ -464,6 +464,7 @@ from app.models.support import (  # noqa: F401
     TicketAssignee,
     TicketChannel,
     TicketComment,
+    TicketCommentAuthorType,
     TicketLink,
     TicketMerge,
     TicketPriority,

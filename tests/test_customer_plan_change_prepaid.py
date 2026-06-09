@@ -186,6 +186,52 @@ def test_get_available_portal_offers_only_returns_same_family_compatible_offers(
     }
 
 
+def test_change_plan_page_separates_migration_offers(db_session, subscriber):
+    from app.services import customer_portal_flow_changes as flow
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    instant_offer = _make_offer(
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("150.00"),
+        plan_family="unlimited",
+    )
+    migration_offer = _make_offer(
+        db_session,
+        name="Dedicated 1",
+        amount=Decimal("300.00"),
+        plan_family="dedicated",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    page = flow.get_change_plan_page(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert page is not None
+    assert {str(offer.id) for offer in page["available_offers"]} == {
+        str(current_offer.id),
+        str(instant_offer.id),
+    }
+    assert {str(offer.id) for offer in page["migration_offers"]} == {
+        str(migration_offer.id),
+    }
+    assert str(migration_offer.id) in page["migration_offer_summaries"]
+
+
 def test_validate_plan_change_rejects_cross_family_change(db_session, subscriber):
     from app.schemas.catalog import SubscriptionUpdate
     from app.services import catalog as catalog_service
@@ -219,6 +265,64 @@ def test_validate_plan_change_rejects_cross_family_change(db_session, subscriber
 
     assert exc.value.status_code == 400
     assert "same plan family" in exc.value.detail.lower()
+
+
+def test_request_plan_migration_includes_requested_offer(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import crm_portal
+    from app.services import customer_portal_flow_changes as flow
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Dedicated 1",
+        amount=Decimal("300.00"),
+        plan_family="dedicated",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    captured: dict[str, str] = {}
+
+    def fake_ticket_create(
+        db, customer, subscriber_lookup, title, description, priority
+    ):
+        captured["subscriber_lookup"] = subscriber_lookup
+        captured["title"] = title
+        captured["description"] = description
+        captured["priority"] = priority
+        return {"success": True, "ticket": {"id": "ticket-123"}}
+
+    monkeypatch.setattr(crm_portal, "handle_ticket_create", fake_ticket_create)
+
+    result = flow.request_plan_migration(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        target_family="dedicated",
+        requested_offer_id=str(target_offer.id),
+        notes="Please move me.",
+    )
+
+    assert result["ticket"]["id"] == "ticket-123"
+    assert captured["title"] == "Request Plan Migration"
+    assert captured["priority"] == "normal"
+    assert f"Subscription: {subscription.id}" in captured["description"]
+    assert "Current offer: Unlimited Basic" in captured["description"]
+    assert "Requested family: dedicated" in captured["description"]
+    assert "Requested offer: Dedicated 1" in captured["description"]
+    assert "Customer notes: Please move me." in captured["description"]
 
 
 def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(

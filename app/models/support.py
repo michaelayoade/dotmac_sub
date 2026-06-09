@@ -51,6 +51,12 @@ class TicketChannel(enum.Enum):
     api = "api"
 
 
+class TicketCommentAuthorType(enum.Enum):
+    customer = "customer"
+    staff = "staff"
+    system = "system"
+
+
 class Ticket(Base):
     __tablename__ = "support_tickets"
     __table_args__ = (
@@ -179,6 +185,14 @@ class TicketComment(Base):
     )
     author_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    author_type: Mapped[str] = mapped_column(
+        String(40),
+        default=TicketCommentAuthorType.system.value,
+        nullable=False,
+    )
+    author_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id")
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

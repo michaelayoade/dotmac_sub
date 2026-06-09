@@ -80,9 +80,12 @@
 
     <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6" @submit.prevent="confirmAndSubmit($event)">
         {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="requested_offer_id" x-model="selectedOfferId">
+        <input type="hidden" name="target_family" x-model="selectedOfferFamily">
         <!-- Available Plans -->
         <div>
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Available Plans</h2>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Instant Plan Changes</h2>
+            <p class="-mt-2 mb-4 text-sm text-slate-500 dark:text-slate-400">These plans are in your current plan family and can be applied immediately.</p>
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {% set selectable_offers = namespace(count=0) %}
                 {% for offer in available_offers %}
@@ -92,7 +95,7 @@
                 <label class="relative cursor-pointer">
                     <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required
                            {% if selected_offer_id and selected_offer_id == offer.id|string %}checked{% endif %}
-                           @change="selectOffer('{{ offer.id }}', '{{ offer.name }}', {{ offer_summary.amount }}, '{{ offer_summary.currency }}', '{{ offer_summary.period_label }}')">
+                           @change='selectOffer({{ offer.id|string|tojson }}, {{ offer.name|tojson }}, {{ offer_summary.amount }}, {{ offer_summary.currency|tojson }}, {{ offer_summary.period_label|tojson }}, "instant", {{ (offer.plan_family or "")|tojson }})'>
                     <div class="rounded-xl border-2 border-slate-200 bg-white p-6 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600 dark:peer-checked:border-primary-400">
                         <div class="flex items-start justify-between">
                             <div>
@@ -130,12 +133,50 @@
             </div>
             {% if selectable_offers.count == 0 %}
             <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-                No instant self-service plan changes are currently available for this subscription. Use the migration request option below if you need a different plan family.
+                No instant self-service plan changes are currently available for this subscription.
             </div>
             {% endif %}
         </div>
 
-        <div x-show="selectedOfferId && changeQuote" x-cloak class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% if migration_offers %}
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Requires Support</h2>
+            <p class="-mt-2 mb-4 text-sm text-slate-500 dark:text-slate-400">These plans are in a different family. Selecting one creates a support ticket for review instead of applying the change immediately.</p>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {% for offer in migration_offers %}
+                {% set offer_summary = migration_offer_summaries[offer.id | string] %}
+                {% set family = offer.plan_family or '' %}
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required
+                           {% if selected_offer_id and selected_offer_id == offer.id|string %}checked{% endif %}
+                           @change='selectOffer({{ offer.id|string|tojson }}, {{ offer.name|tojson }}, {{ offer_summary.amount }}, {{ offer_summary.currency|tojson }}, {{ offer_summary.period_label|tojson }}, "migration", {{ family|tojson }})'>
+                    <div class="rounded-xl border-2 border-slate-200 bg-white p-6 transition-all hover:border-amber-300 peer-checked:border-amber-500 peer-checked:ring-2 peer-checked:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-amber-600 dark:peer-checked:border-amber-400">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <div class="mb-2 inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                                    Support review
+                                </div>
+                                <h3 class="font-semibold text-slate-900 dark:text-white">{{ offer.name }}</h3>
+                                {% if offer.description %}
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ offer.description }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                            <p class="text-2xl font-bold text-slate-900 dark:text-white">
+                                {{ offer_summary.currency }} {{ '{:,.2f}'.format(offer_summary.amount) }}
+                                <span class="text-sm font-normal text-slate-500 dark:text-slate-400">{{ offer_summary.period_label }}</span>
+                            </p>
+                            <p class="mt-1 text-sm font-medium text-amber-600 dark:text-amber-400">Request migration to {{ family|replace('_', ' ')|title }}</p>
+                        </div>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div x-show="selectedOfferId && selectedChangeMode === 'instant' && changeQuote" x-cloak class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
                     <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Upgrade Summary</h2>
@@ -194,34 +235,11 @@
             <a href="/portal/services" class="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
                 Cancel
             </a>
-            <button type="submit" class="rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 {% if selectable_offers.count == 0 %}opacity-60 cursor-not-allowed{% endif %}" {% if selectable_offers.count == 0 %}disabled{% endif %}>
-                Change Plan Now
+            <button type="submit" class="rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 {% if selectable_offers.count == 0 and not migration_offers %}opacity-60 cursor-not-allowed{% endif %}" {% if selectable_offers.count == 0 and not migration_offers %}disabled{% endif %}>
+                <span x-text="selectedChangeMode === 'migration' ? 'Request Plan Migration' : 'Change Plan Now'">Change Plan Now</span>
             </button>
         </div>
     </form>
-
-    {% if migration_options %}
-    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Need a Different Plan Family?</h2>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Cross-family migrations are reviewed by support before they are applied.</p>
-            </div>
-        </div>
-        <div class="mt-4 flex flex-wrap gap-3">
-            {% for option in migration_options %}
-            <form action="/portal/services/{{ subscription.id }}/migration-request" method="POST">
-                {% include "components/forms/csrf_input.html" %}
-                <input type="hidden" name="target_family" value="{{ option.family }}">
-                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-primary-400 hover:text-primary-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-500 dark:hover:text-primary-300">
-                    Request Plan Migration
-                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">to {{ option.label }}</span>
-                </button>
-            </form>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
 
     <!-- Confirmation Modal -->
     <div x-show="showConfirm" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @keydown.escape.window="showConfirm = false">
@@ -232,15 +250,19 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
                     </svg>
                 </div>
-                <h3 class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">Confirm Plan Change</h3>
+                <h3 class="mt-4 text-lg font-semibold text-slate-900 dark:text-white" x-text="selectedChangeMode === 'migration' ? 'Request Plan Migration' : 'Confirm Plan Change'">Confirm Plan Change</h3>
                 <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                    You're switching to <span class="font-semibold text-slate-900 dark:text-white" x-text="selectedOfferName"></span>.
+                    <span x-text="selectedChangeMode === 'migration' ? 'You are requesting a migration to' : 'You are switching to'"></span>
+                    <span class="font-semibold text-slate-900 dark:text-white" x-text="selectedOfferName"></span>.
                     The recurring rate will be
                     <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + selectedOfferPrice.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>
                     <span x-text="selectedOfferPeriodLabel"></span>.
                 </p>
+                <p class="mt-2 text-sm text-amber-700 dark:text-amber-300" x-show="selectedChangeMode === 'migration'">
+                    This plan is in a different family, so a support ticket will be created for review.
+                </p>
                 <p class="mt-4 text-sm text-slate-500 dark:text-slate-400" x-show="quoteLoading">Calculating prorated charges…</p>
-                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40" x-show="changeQuote">
+                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40" x-show="selectedChangeMode === 'instant' && changeQuote">
                     <p class="text-sm text-slate-700 dark:text-slate-200">Remaining value: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Required today: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Wallet balance: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_balance)"></span></p>
@@ -263,7 +285,7 @@
                     Cancel
                 </button>
                 <button @click="submitForm()" class="flex-1 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                    Change Plan Now
+                    <span x-text="selectedChangeMode === 'migration' ? 'Create Support Request' : 'Change Plan Now'">Change Plan Now</span>
                 </button>
             </div>
         </div>
@@ -278,6 +300,8 @@ function changePlanPage() {
         selectedOfferPrice: 0,
         selectedOfferCurrency: 'NGN',
         selectedOfferPeriodLabel: '/month',
+        selectedOfferFamily: '',
+        selectedChangeMode: 'instant',
         priceDifference: 0,
         currentPrice: {{ current_offer_summary.amount if current_offer_summary else 0 }},
         selectedOfferId: {{ ('"' ~ selected_offer_id ~ '"') if selected_offer_id else 'null' }},
@@ -288,13 +312,20 @@ function changePlanPage() {
         formatMoney(value) {
             return Number(value || 0).toLocaleString('en-NG', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         },
-        selectOffer(id, name, price, currency, periodLabel) {
+        selectOffer(id, name, price, currency, periodLabel, mode, family) {
             this.selectedOfferId = id;
             this.selectedOfferName = name;
             this.selectedOfferPrice = price;
             this.selectedOfferCurrency = currency;
             this.selectedOfferPeriodLabel = periodLabel;
+            this.selectedChangeMode = mode || 'instant';
+            this.selectedOfferFamily = family || '';
             this.priceDifference = price - this.currentPrice;
+            if (this.selectedChangeMode === 'migration') {
+                this.changeQuote = null;
+                this.quoteLoading = false;
+                return;
+            }
             // Quotes load lazily (one per selected offer) to keep this page fast.
             if (this.quotes[id]) { this.changeQuote = this.quotes[id]; return; }
             this.changeQuote = null;
@@ -320,6 +351,9 @@ function changePlanPage() {
         submitForm() {
             if (this.pendingForm) {
                 this.showConfirm = false;
+                this.pendingForm.action = this.selectedChangeMode === 'migration'
+                    ? '/portal/services/{{ subscription.id }}/migration-request'
+                    : '/portal/services/{{ subscription.id }}/change';
                 this.pendingForm.submit();
             }
         },

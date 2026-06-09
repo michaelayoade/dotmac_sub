@@ -16,6 +16,7 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
+from app.models.support import TicketCommentAuthorType
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.session_store import get_session_redis
@@ -168,15 +169,24 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
     }
 
 
-def _comment_to_dict(comment: Any) -> dict[str, Any]:
+def _comment_to_dict(comment: Any, customer_subscriber_ids: set[str]) -> dict[str, Any]:
     """Map a local TicketComment to the portal comment dict.
 
-    Staff replies carry author_person_id; customer/portal comments do not, so we
-    label them "Support Team" vs "You".
+    New rows carry explicit author identity. Legacy rows with a subscriber
+    author are treated as customer-authored only when the ID is in the current
+    customer's allowed subscriber set; NULL author rows render as support.
     """
+    author_type = str(getattr(comment, "author_type", "") or "")
+    author_person_id = getattr(comment, "author_person_id", None)
+    is_customer = (
+        author_type == TicketCommentAuthorType.customer.value
+        and str(author_person_id or "") in customer_subscriber_ids
+    )
+    if not author_type and author_person_id:
+        is_customer = str(author_person_id) in customer_subscriber_ids
     return {
         "body": comment.body,
-        "author_name": "Support Team" if comment.author_person_id else "You",
+        "author_name": "You" if is_customer else "Support Team",
         "is_internal": comment.is_internal,
         "created_at": comment.created_at.isoformat() if comment.created_at else None,
     }
@@ -252,7 +262,7 @@ def ticket_detail_context(
         return not_found
 
     comments = [
-        _comment_to_dict(c)
+        _comment_to_dict(c, allowed)
         for c in support_service.TicketComments.list(db, str(ticket.id))
         if not c.is_internal
     ]
@@ -350,10 +360,19 @@ def handle_ticket_comment(
     if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
         return {"success": False, "error": "Ticket not found."}
     try:
+        try:
+            author_person_id = coerce_uuid(ticket.subscriber_id)
+        except (TypeError, ValueError):
+            author_person_id = None
         support_service.TicketComments.create(
             db,
             ticket=ticket,
-            payload=TicketCommentCreate(body=body, is_internal=False),
+            payload=TicketCommentCreate(
+                body=body,
+                is_internal=False,
+                author_type=TicketCommentAuthorType.customer,
+                author_person_id=author_person_id,
+            ),
             actor_id=None,
         )
         db.commit()

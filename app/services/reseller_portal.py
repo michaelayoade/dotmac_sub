@@ -170,6 +170,7 @@ def _create_session(
     subscriber_id: str | None = None,
     db: Session | None = None,
     person_id: str | None = None,
+    auth_session_id: str | None = None,
 ) -> str:
     if not subscriber_id:
         subscriber_id = person_id
@@ -183,6 +184,9 @@ def _create_session(
         # Backwards-compat: older tests/callers use "person_id".
         "person_id": subscriber_id,
         "reseller_id": reseller_id,
+        # Backing auth_flow session, so logout can revoke it (not just drop
+        # the local portal session).
+        "auth_session_id": auth_session_id,
         "remember": remember,
         "created_at": _now().isoformat(),
         "expires_at": (_now() + timedelta(seconds=ttl_seconds)).isoformat(),
@@ -208,11 +212,26 @@ def _get_session(session_token: str) -> dict | None:
     return session
 
 
+def _revoke_auth_session(db: Session, auth_session_id: str | None) -> None:
+    """Revoke the backing auth_flow session so logout actually ends access."""
+    if not auth_session_id:
+        return
+    try:
+        auth_session = db.get(AuthSession, coerce_uuid(auth_session_id))
+        if auth_session and auth_session.status == SessionStatus.active:
+            auth_session.status = SessionStatus.revoked
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("Failed to revoke reseller auth session", exc_info=True)
+
+
 def invalidate_session(session_token: str, db: Session | None = None) -> None:
     # Read raw session without going through _get_session (which calls invalidate on expiry)
     session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     delete_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     if db and session:
+        _revoke_auth_session(db, session.get("auth_session_id"))
         _emit_reseller_event(
             db,
             "reseller_logout",
@@ -290,6 +309,7 @@ def _session_from_access_token(
         reseller_id=str(reseller_user.reseller_id),
         remember=remember,
         db=db,
+        auth_session_id=str(session_id),
     )
     _emit_reseller_event(
         db,
@@ -856,7 +876,7 @@ def get_revenue_summary(
     }
 
 
-def create_customer_imsubscriberation_session(
+def create_customer_impersonation_session(
     db: Session,
     reseller_id: str,
     account_id: str,
@@ -896,7 +916,7 @@ def create_customer_imsubscriberation_session(
             selected_subscription_id = any_subs[0].id
 
     session_token = customer_portal.create_customer_session(
-        username=f"imsubscriberate:reseller:{reseller_id}:{account.id}",
+        username=f"impersonate:reseller:{reseller_id}:{account.id}",
         account_id=account.id,
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
@@ -914,13 +934,7 @@ def create_customer_imsubscriberation_session(
     return session_token
 
 
-def create_customer_impersonation_session(
-    db: Session,
-    reseller_id: str,
-    account_id: str,
-    return_to: str,
-) -> str:
-    """Backwards-compat wrapper for a historical typo in the function name."""
-    return create_customer_imsubscriberation_session(
-        db, reseller_id, account_id, return_to
-    )
+# Backwards-compat alias for a historical bad auto-rename ("impersonation" ->
+# "imsubscriberation"). Retained so any external callers keep working; prefer
+# create_customer_impersonation_session.
+create_customer_imsubscriberation_session = create_customer_impersonation_session

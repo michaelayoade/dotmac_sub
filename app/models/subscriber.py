@@ -617,11 +617,15 @@ class ResellerUser(Base):
     )
     # DB column name is person_id in legacy schemas.
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        "person_id", UUID(as_uuid=True)
+        "person_id",
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="CASCADE"),
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
-    reseller_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id", ondelete="CASCADE")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

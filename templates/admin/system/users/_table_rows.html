@@ -81,7 +81,7 @@
     </td>
     <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
         {% if user.is_bulk_actionable %}
-        <div x-data="{ open: false }" class="relative">
+        <div x-data="{ open: false, sendingReset: false, sendingInvite: false }" class="relative">
             <button x-on:click="open = !open" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/>
@@ -96,12 +96,20 @@
                     Edit User
                 </a>
                 <button hx-post="/admin/system/users/{{ user.id }}/reset-password"
-                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
-                    Send Reset Link
+                        x-bind:disabled="sendingReset"
+                        x-on:htmx:before-request="sendingReset = true"
+                        x-on:htmx:after-request="sendingReset = false"
+                        x-bind:class="{ 'cursor-not-allowed opacity-60': sendingReset }"
+                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:hover:bg-transparent dark:text-slate-200 dark:hover:bg-slate-700 dark:disabled:hover:bg-transparent">
+                    <span x-text="sendingReset ? 'Sending...' : 'Send Reset Link'">Send Reset Link</span>
                 </button>
                 <button hx-post="/admin/system/users/{{ user.id }}/invite"
-                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
-                    Send Welcome Invite
+                        x-bind:disabled="sendingInvite"
+                        x-on:htmx:before-request="sendingInvite = true"
+                        x-on:htmx:after-request="sendingInvite = false"
+                        x-bind:class="{ 'cursor-not-allowed opacity-60': sendingInvite }"
+                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:hover:bg-transparent dark:text-slate-200 dark:hover:bg-slate-700 dark:disabled:hover:bg-transparent">
+                    <span x-text="sendingInvite ? 'Sending...' : 'Send Welcome Invite'">Send Welcome Invite</span>
                 </button>
                 {% if user.mfa_enabled %}
                 <button hx-post="/admin/system/users/{{ user.id }}/disable-mfa"

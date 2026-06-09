@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import math
 
-from fastapi import Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.db import get_db
 from app.models.auth import MFAMethod
 from app.services import auth_flow as auth_flow_service
 from app.services import crm_portal, customer_portal, reseller_portal
@@ -19,12 +20,33 @@ logger = logging.getLogger(__name__)
 templates = get_reseller_templates()
 
 
+RESELLER_LOGIN_URL = "/reseller/auth/login"
+
+
 def _require_reseller_context(request: Request, db: Session):
     context = reseller_portal.get_context(
         db, request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
     )
     if not context:
         return None
+    return context
+
+
+def require_reseller_context(request: Request, db: Session = Depends(get_db)):
+    """Router-level auth guard for the reseller portal.
+
+    Attached to the portal router via ``dependencies=`` so every route is
+    protected structurally rather than by per-handler convention — a new
+    route cannot accidentally ship unauthenticated. Returns the reseller
+    context (handlers may also depend on it directly); raises a 303 redirect
+    to the login page when there is no valid reseller session.
+    """
+    context = _require_reseller_context(request, db)
+    if not context:
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            headers={"Location": RESELLER_LOGIN_URL},
+        )
     return context
 
 
@@ -164,8 +186,7 @@ def reseller_account_view(
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    # Note: underlying service function name is legacy misspelling.
-    session_token = reseller_portal.create_customer_imsubscriberation_session(
+    session_token = reseller_portal.create_customer_impersonation_session(
         db=db,
         reseller_id=str(context["reseller"].id),
         account_id=account_id,
