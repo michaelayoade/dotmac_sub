@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
 from importlib import import_module
 from threading import Lock
-from time import monotonic
+from time import monotonic, sleep
 from typing import TypedDict
 
 warnings.filterwarnings(
@@ -54,6 +54,15 @@ _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
 _DEFERRED_ROUTER_TASK = None
 _DEFERRED_STARTUP_TASK = None
+# Startup Zabbix health probe runs in a worker thread (see
+# _run_deferred_startup) with retries so a transient failure while the process
+# is still saturated from the startup seed doesn't false-alarm as
+# "unavailable". All three are env-overridable.
+_ZABBIX_STARTUP_HEALTH_TIMEOUT = float(os.getenv("ZABBIX_STARTUP_HEALTH_TIMEOUT", "10"))
+_ZABBIX_STARTUP_HEALTH_ATTEMPTS = int(os.getenv("ZABBIX_STARTUP_HEALTH_ATTEMPTS", "3"))
+_ZABBIX_STARTUP_HEALTH_RETRY_DELAY = float(
+    os.getenv("ZABBIX_STARTUP_HEALTH_RETRY_DELAY", "5")
+)
 
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
@@ -423,15 +432,40 @@ def _seed_startup_settings() -> None:
 
 
 def _log_zabbix_startup_health() -> None:
-    try:
-        from app.services.zabbix import check_zabbix_availability
+    """Probe Zabbix availability during deferred startup, with retries.
 
-        health = check_zabbix_availability(timeout=5.0)
-    except Exception:
+    Runs in a worker thread off the serving path (see _run_deferred_startup),
+    so a blocking retry loop here never stalls the event loop. The first probe
+    can fail transiently while the process is still saturated from the startup
+    seed, so retry a few times (with a generous, env-tunable timeout) before
+    logging a warning — avoiding false "unavailable" alarms.
+    """
+    from app.services.zabbix import check_zabbix_availability
+
+    health: dict | None = None
+    attempt = 0
+    for attempt in range(1, _ZABBIX_STARTUP_HEALTH_ATTEMPTS + 1):
+        try:
+            health = check_zabbix_availability(timeout=_ZABBIX_STARTUP_HEALTH_TIMEOUT)
+        except Exception:
+            logger.debug(
+                "zabbix_startup_health_attempt_failed",
+                exc_info=True,
+                extra={
+                    "event": "zabbix_startup_health_attempt_failed",
+                    "attempt": attempt,
+                },
+            )
+            health = None
+        if health and health.get("available"):
+            break
+        if attempt < _ZABBIX_STARTUP_HEALTH_ATTEMPTS:
+            sleep(_ZABBIX_STARTUP_HEALTH_RETRY_DELAY)
+
+    if health is None:
         logger.warning(
             "zabbix_startup_health_failed",
-            exc_info=True,
-            extra={"event": "zabbix_startup_health_failed"},
+            extra={"event": "zabbix_startup_health_failed", "attempts": attempt},
         )
         return
 
@@ -445,6 +479,7 @@ def _log_zabbix_startup_health() -> None:
             "available": health.get("available"),
             "api_url": health.get("api_url"),
             "status_message": health.get("message"),
+            "attempts": attempt,
         },
     )
 
