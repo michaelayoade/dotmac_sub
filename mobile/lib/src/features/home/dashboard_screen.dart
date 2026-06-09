@@ -11,7 +11,6 @@ import '../../providers/read_notifications.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
-import '../service/service_detail_screen.dart';
 
 /// Home dashboard: an at-a-glance summary (account status, balance, data,
 /// services) plus quick-action shortcuts into the rest of the app.
@@ -555,7 +554,10 @@ class _QuickActions extends StatelessWidget {
           _ActionTile(
             icon: icon,
             label: label,
-            onTap: () => context.go(path),
+            // Tabs are switched with go; the top-up task is pushed so the
+            // back gesture returns here instead of exiting the app.
+            onTap: () =>
+                path == '/topup' ? context.push(path) : context.go(path),
           ),
       ],
     );
@@ -612,9 +614,7 @@ class _CurrentServiceCard extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => ServiceDetailScreen(service: s)),
-        ),
+        onTap: () => context.push('/service/${s.id}', extra: s),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -679,10 +679,8 @@ class _CurrentServiceCard extends StatelessWidget {
                       ),
                     if (needsAttention) const SizedBox(width: 8),
                     TextButton(
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => ServiceDetailScreen(service: s)),
-                      ),
+                      onPressed: () =>
+                          context.push('/service/${s.id}', extra: s),
                       child: const Text('Manage'),
                     ),
                   ],

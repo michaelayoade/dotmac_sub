@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
@@ -61,7 +62,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     final page = _page!;
     final amount = _amount;
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
+    final router = GoRouter.of(context);
     if (amount == null || amount < page.minAmount || amount > page.maxAmount) {
       messenger.showSnackBar(SnackBar(
         content: Text(
@@ -75,10 +76,10 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       final initiation =
           await ref.read(billingRepositoryProvider).initiateTopup(amount);
       if (!mounted) return;
-      final reference = await navigator.push<String>(MaterialPageRoute(
-        builder: (_) =>
-            PaymentWebViewScreen(args: CheckoutArgs.topup(initiation)),
-      ));
+      final reference = await router.push<String>(
+        '/pay',
+        extra: CheckoutArgs.topup(initiation),
+      );
       if (reference == null) return; // cancelled
 
       final result =
