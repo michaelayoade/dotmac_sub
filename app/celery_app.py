@@ -62,6 +62,10 @@ celery_app.conf.task_routes = {
     # Monitoring cache warmer queries Zabbix; keep it off the default queue so
     # it isn't starved by slow/long default-queue jobs (e.g. Splynx sync).
     "app.tasks.monitoring_warm.warm_monitoring_caches": {"queue": "ingestion"},
+    # CRM ticket pull paginates an external API; the default queue's backlog
+    # would push it far past its 5-minute schedule.
+    "app.tasks.crm_ticket_pull.pull_crm_tickets": {"queue": "crm"},
+    "app.tasks.crm_ticket_pull.sync_crm_ticket": {"queue": "crm"},
 }
 
 celery_app.conf.task_queues = (
@@ -71,6 +75,7 @@ celery_app.conf.task_queues = (
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
     Queue("bandwidth"),  # High-volume bandwidth processing
     Queue("ingestion"),  # High-volume data ingestion (Zabbix, usage)
+    Queue("crm"),  # CRM ticket/comment pull (external API paced)
 )
 
 # Ensure all tasks are registered by importing the tasks package

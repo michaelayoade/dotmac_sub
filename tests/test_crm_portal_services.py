@@ -412,3 +412,48 @@ def test_handle_ticket_comment_returns_error_on_failure(monkeypatch) -> None:
         "success": False,
         "error": "Unable to add comment. Please try again later.",
     }
+
+
+def test_resolve_crm_subscriber_id_prefers_stored_id(
+    monkeypatch, db_session, subscriber
+) -> None:
+    stored = uuid4()
+    subscriber.crm_subscriber_id = stored
+    db_session.commit()
+    cache_sets: list[tuple[str, str, int]] = []
+
+    client = Mock()
+    monkeypatch.setattr("app.services.crm_portal._cache_get", lambda _key: None)
+    monkeypatch.setattr(
+        "app.services.crm_portal._cache_set",
+        lambda key, value, ttl: cache_sets.append((key, value, ttl)),
+    )
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+
+    resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
+
+    assert resolved == str(stored)
+    client.resolve_subscriber_id.assert_not_called()
+
+
+def test_resolve_crm_subscriber_id_persists_fallback_result(
+    monkeypatch, db_session, subscriber
+) -> None:
+    subscriber.splynx_customer_id = 987
+    db_session.commit()
+    crm_uuid = str(uuid4())
+
+    client = Mock()
+    client.resolve_subscriber_id.return_value = crm_uuid
+
+    monkeypatch.setattr("app.services.crm_portal._cache_get", lambda _key: None)
+    monkeypatch.setattr(
+        "app.services.crm_portal._cache_set", lambda key, value, ttl: None
+    )
+    monkeypatch.setattr("app.services.crm_portal.get_crm_client", lambda: client)
+
+    resolved = crm_portal.resolve_crm_subscriber_id(db_session, str(subscriber.id))
+    db_session.refresh(subscriber)
+
+    assert resolved == crm_uuid
+    assert str(subscriber.crm_subscriber_id) == crm_uuid
