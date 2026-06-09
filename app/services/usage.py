@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 from urllib.parse import urlparse, urlunparse
@@ -17,9 +17,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
 from app.models.catalog import (
     AccessCredential,
+    AddOn,
     CatalogOffer,
     OfferVersion,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
     UsageAllowance,
 )
@@ -609,6 +611,8 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         ) or 0
         used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
         bucket.used_gb = used_gb
+        # Refresh top-up from still-valid purchases so expired ones drop out.
+        bucket.topup_gb = _round_bucket_gb(_active_topup_gb(db, sub, now))
         allowed = (
             Decimal(str(bucket.included_gb or 0))
             + Decimal(str(bucket.rollover_gb or 0))
@@ -623,17 +627,46 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
     return {"metered": metered}
 
 
+def _active_topup_gb(db: Session, subscription: Subscription, now: datetime) -> Decimal:
+    """Total GB from the subscription's data-top-up purchases that are currently
+    in their validity window (started, not yet expired)."""
+    rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .filter(AddOn.grant_gb.isnot(None))
+        .filter(
+            (SubscriptionAddOn.start_at.is_(None)) | (SubscriptionAddOn.start_at <= now)
+        )
+        .filter((SubscriptionAddOn.end_at.is_(None)) | (SubscriptionAddOn.end_at > now))
+        .all()
+    )
+    total = Decimal("0")
+    for sub_addon, add_on in rows:
+        total += Decimal(str(add_on.grant_gb or 0)) * Decimal(
+            str(sub_addon.quantity or 1)
+        )
+    return total
+
+
 def grant_data_topup(
     db: Session,
     subscription: Subscription,
-    gb: int,
+    sub_add_on: SubscriptionAddOn,
+    add_on: AddOn,
     now: datetime | None = None,
 ) -> QuotaBucket:
-    """Credit a purchased data top-up's GB to the subscription's current quota
-    bucket (so it counts toward the allowance before overage)."""
+    """Apply a data-top-up purchase: stamp its validity window on the purchase
+    record (end_at), then refresh the current quota bucket's topup_gb from all
+    still-valid top-ups. A top-up with no validity_days expires at period end."""
     now = now or datetime.now(UTC)
     bucket = _resolve_or_create_quota_bucket(db, subscription, now)
-    bucket.topup_gb = Decimal(str(bucket.topup_gb or 0)) + Decimal(str(gb))
+    if add_on.validity_days:
+        sub_add_on.end_at = now + timedelta(days=int(add_on.validity_days))
+    else:
+        sub_add_on.end_at = bucket.period_end
+    db.flush()
+    bucket.topup_gb = _round_bucket_gb(_active_topup_gb(db, subscription, now))
     db.flush()
     return bucket
 

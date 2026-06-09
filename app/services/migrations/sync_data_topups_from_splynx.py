@@ -35,6 +35,20 @@ def _to_decimal(value: object) -> Decimal:
         return Decimal("0")
 
 
+def _validity_days(row: dict) -> int | None:
+    """Splynx cap_tariff.validity -> top-up validity in days. 'end_of_period'
+    (and blank) -> None (expires at period end); a numeric value is a count of
+    billing periods (~30 days each)."""
+    raw = str(row.get("validity") or "").strip().lower()
+    if not raw or raw == "end_of_period":
+        return None
+    try:
+        periods = int(raw)
+    except ValueError:
+        return None
+    return periods * 30 if periods > 0 else None
+
+
 def import_data_topups(
     db: Session, cap_tariff_rows: list[dict], *, commit: bool = True
 ) -> dict:
@@ -70,6 +84,7 @@ def import_data_topups(
         add_on.description = f"{gb} GB data top-up"
         add_on.is_active = True
         add_on.grant_gb = gb
+        add_on.validity_days = _validity_days(row)
         db.flush()
 
         # one-time price (deactivate any others)
