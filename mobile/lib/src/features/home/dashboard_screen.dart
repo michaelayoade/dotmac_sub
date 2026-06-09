@@ -8,6 +8,7 @@ import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
+import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 import '../service/service_detail_screen.dart';
@@ -150,35 +151,48 @@ class DashboardScreen extends ConsumerWidget {
 
             // --- Current service (with a switcher when there are several) ---
             const _SectionHeader('Current service'),
-            subs.when(
-              loading: () => const CardSkeleton(),
-              error: (e, _) => _MessageCard('Could not load service: $e'),
-              data: (page) {
-                final services = page.items;
-                if (services.isEmpty) {
-                  return const _MessageCard('No active service found.');
-                }
-                final selectedId = ref.watch(selectedServiceIdProvider);
-                final selected = services.firstWhere(
-                  (s) => s.id == selectedId,
-                  orElse: () => pickCurrentService(services),
-                );
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (services.length > 1) ...[
-                      _ServiceSwitcher(
-                        services: services,
-                        selectedId: selected.id,
-                        onSelect: (id) => ref
-                            .read(selectedServiceIdProvider.notifier)
-                            .state = id,
-                      ),
-                      const SizedBox(height: 10),
+            Builder(
+              builder: (context) {
+                // Stale-while-revalidate: keep showing the last-known
+                // service(s) — with a quiet "couldn't refresh" banner — instead
+                // of replacing the card with an error when a refresh fails under
+                // load. The on-disk cache means `subs` usually still has a value
+                // even on a cold-start network blip.
+                if (subs.hasValue) {
+                  final services = subs.requireValue.items;
+                  if (services.isEmpty) {
+                    return const _MessageCard('No active service found.');
+                  }
+                  final selectedId = ref.watch(selectedServiceIdProvider);
+                  final selected = services.firstWhere(
+                    (s) => s.id == selectedId,
+                    orElse: () => pickCurrentService(services),
+                  );
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (subs.hasError && !subs.isLoading)
+                        StaleBanner(
+                          onRetry: () => ref.invalidate(subscriptionsProvider),
+                        ),
+                      if (services.length > 1) ...[
+                        _ServiceSwitcher(
+                          services: services,
+                          selectedId: selected.id,
+                          onSelect: (id) => ref
+                              .read(selectedServiceIdProvider.notifier)
+                              .state = id,
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      _CurrentServiceCard(service: selected),
                     ],
-                    _CurrentServiceCard(service: selected),
-                  ],
-                );
+                  );
+                }
+                return subs.isLoading
+                    ? const CardSkeleton()
+                    : const _MessageCard(
+                        'Couldn’t load your service. Pull down to refresh.');
               },
             ),
           ],

@@ -1,25 +1,39 @@
 name: Mobile CI
 
-# Scoped to the Flutter app so backend-only PRs don't pay for a Flutter run.
+# Runs on every PR so the `Mobile CI` gate job always reports a status (a
+# required check that never reports would deadlock a PR). The expensive Flutter
+# and iOS jobs stay scoped to mobile changes via the `changes` filter below, so
+# backend-only PRs still don't pay for a Flutter/iOS run.
 on:
   push:
     branches: [main, develop]
-    paths:
-      - "mobile/**"
-      - ".github/workflows/mobile.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "mobile/**"
-      - ".github/workflows/mobile.yml"
 
 concurrency:
   group: mobile-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect mobile changes
+    runs-on: ubuntu-latest
+    outputs:
+      mobile: ${{ steps.filter.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            mobile:
+              - 'mobile/**'
+              - '.github/workflows/mobile.yml'
+
   flutter:
     name: Flutter analyze & test
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,9 +63,13 @@ jobs:
         run: flutter test
 
   # iOS can only be compiled on macOS — this proves the committed ios/ project
-  # builds. No code signing (CI has no provisioning profile).
+  # builds. No code signing (CI has no provisioning profile). Advisory: it is not
+  # part of the required `Mobile CI` gate (macOS runs are slow/flaky for a
+  # codesign-less smoke build).
   ios-build:
     name: iOS build (no codesign)
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
     runs-on: macos-latest
     defaults:
       run:
@@ -71,3 +89,24 @@ jobs:
 
       - name: Build iOS (no codesign)
         run: flutter build ios --debug --no-codesign
+
+  # Always-reporting gate so it can be a required status check without blocking
+  # backend-only PRs: it passes when the Flutter job succeeded OR was skipped
+  # (no mobile changes), and fails only when Flutter actually failed. iOS is
+  # intentionally excluded (advisory).
+  gate:
+    name: Mobile CI
+    needs: [flutter]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Flutter checks (or skip on backend-only PRs)
+        run: |
+          result='${{ needs.flutter.result }}'
+          echo "flutter job result: $result"
+          if [ "$result" = "success" ] || [ "$result" = "skipped" ]; then
+            echo "Mobile CI gate passed."
+          else
+            echo "Mobile CI gate failed (flutter=$result)."
+            exit 1
+          fi
