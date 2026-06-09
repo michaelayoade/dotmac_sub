@@ -63,10 +63,13 @@ services:
     - ./scripts:/app/scripts
     - ./uploads:/app/uploads
     - ./tests:/app/tests
+    # Migrations are NOT run on boot: a half-applied / multi-head migration
+    # state must never crash-loop the live app. Apply them as a controlled,
+    # pre-deploy step instead: `make docker-migrate` (or `make prod-migrate`).
     command:
     - /bin/sh
     - -c
-    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
+    - uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
       --workers ${WEB_CONCURRENCY:-1}
   celery-worker:
     build: .
