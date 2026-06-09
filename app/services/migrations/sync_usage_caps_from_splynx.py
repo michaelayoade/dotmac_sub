@@ -71,6 +71,11 @@ def import_usage_caps(
         allowance.name = offer.name[:120]
         allowance.included_gb = included_gb
         allowance.throttle_rate_mbps = _throttle_mbps(row)
+        allowance.rollover_enabled = str(row.get("rollover_data") or "").strip() in {
+            "1",
+            "true",
+            "yes",
+        }
         allowance.is_active = True
         summary["capped"] += 1
 
