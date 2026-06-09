@@ -423,6 +423,9 @@ class AddOn(Base):
     # Data top-up: GB granted to the subscription's quota bucket on purchase
     # (null for non-data add-ons). Sourced from Splynx cap_tariff.
     grant_gb: Mapped[int | None] = mapped_column(Integer)
+    # Top-up validity in days; null means it expires at the end of the billing
+    # period it was bought in. Sourced from Splynx cap_tariff.validity.
+    validity_days: Mapped[int | None] = mapped_column(Integer)
 
     # Provenance for the Splynx importer — "custom:8" / "one_time:3" /
     # "cap_tariff:1". Unique so re-running the import updates rather than
