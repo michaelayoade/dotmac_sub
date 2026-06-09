@@ -526,6 +526,36 @@ def _log_billing_run_audit(
     db.add(audit_event)
 
 
+_ABANDONED_RUN_MAX_AGE_HOURS = 12
+
+
+def _fail_abandoned_runs(db: Session) -> int:
+    """Mark billing runs stuck in `running` for hours as failed.
+
+    A run left `running` means the worker died mid-run (deploy restart, OOM,
+    kill) before the failure handler could write; without this sweep those
+    rows look in-flight forever.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=_ABANDONED_RUN_MAX_AGE_HOURS)
+    stale = (
+        db.query(BillingRun)
+        .filter(BillingRun.status == BillingRunStatus.running)
+        .filter(BillingRun.started_at < cutoff)
+        .all()
+    )
+    for run in stale:
+        run.status = BillingRunStatus.failed
+        run.finished_at = datetime.now(UTC)
+        run.error = "abandoned: worker died mid-run (swept by next run)"
+    if stale:
+        db.commit()
+        logger.warning(
+            "billing_runs_abandoned_swept",
+            extra={"event": "billing_runs_abandoned_swept", "count": len(stale)},
+        )
+    return len(stale)
+
+
 def run_invoice_cycle(
     db: Session,
     run_at: datetime | None = None,
@@ -563,6 +593,7 @@ def run_invoice_cycle(
     )
     run_uuid = None
     if not dry_run:
+        _fail_abandoned_runs(db)
         db.add(run)
         db.commit()
         db.refresh(run)
@@ -813,10 +844,20 @@ def run_invoice_cycle(
             run_db.invoices_created = summary["invoices_created"]
             run_db.lines_created = summary["lines_created"]
             run_db.skipped = summary["skipped"]
-
-        # Log successful billing run to audit
-        _log_billing_run_audit(db, run_db, summary, "success")
         db.commit()
+
+        # Log the run to audit AFTER the success status is committed, and
+        # never let it fail the run: this exact write failing (a NOT NULL
+        # violation on audit_events) marked every 2026 billing run "failed"
+        # while the invoices it had created survived.
+        try:
+            _log_billing_run_audit(db, run_db, summary, "success")
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "billing_run_audit_log_failed", extra={"run_id": run_id_str}
+            )
 
         logger.info(
             "Billing run completed: %d invoices, %d lines, %d activated",
