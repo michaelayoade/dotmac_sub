@@ -391,9 +391,7 @@ def customer_invoice_pdf(
         requested_by_id=customer.get("subscriber_id")
         or customer.get("session", {}).get("subscriber_id"),
     )
-    if billing_invoice_pdf_service.is_export_cache_valid(
-        db, invoice, generated_export
-    ):
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, generated_export):
         try:
             from starlette.responses import StreamingResponse
 

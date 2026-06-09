@@ -289,9 +289,7 @@ def test_create_topup_intent_records_selected_payment_method(
     )
 
     intent = (
-        db_session.query(TopupIntent)
-        .filter_by(reference="topup-intent-ref-card")
-        .one()
+        db_session.query(TopupIntent).filter_by(reference="topup-intent-ref-card").one()
     )
     assert intent.metadata_["payment_method_id"] == str(card.id)
     assert payload["checkout_metadata"]["payment_method_id"] == str(card.id)

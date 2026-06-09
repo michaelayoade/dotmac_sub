@@ -74,7 +74,10 @@ def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str,
             provider_types.append(provider_type)
 
     return [
-        {"provider_type": provider_type, "label": _ONLINE_PROVIDER_LABELS[provider_type]}
+        {
+            "provider_type": provider_type,
+            "label": _ONLINE_PROVIDER_LABELS[provider_type],
+        }
         for provider_type in provider_types
         if provider_type in _ONLINE_PROVIDER_LABELS
     ]
