@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../models/reseller.dart';
@@ -119,11 +120,16 @@ class _AlertTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final (IconData icon, Color color) = switch (alert.level) {
+      'danger' => (Icons.error_outline, Colors.red),
+      'warning' => (Icons.warning_amber_outlined, Colors.orange),
+      _ => (Icons.info_outline, Colors.blue),
+    };
     return Card(
       margin: const EdgeInsets.only(top: 8),
       child: ListTile(
         dense: true,
-        leading: const Icon(Icons.info_outline),
+        leading: Icon(icon, color: color),
         title: Text(alert.message),
       ),
     );
@@ -140,14 +146,25 @@ class _AccountTile extends StatelessWidget {
     final title = account.subscriberName.isEmpty
         ? (account.accountNumber ?? account.id)
         : account.subscriberName;
+    final lastPaid = account.lastPaymentAt == null
+        ? ''
+        : ' · paid ${Fmt.date(account.lastPaymentAt)}';
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
+        onTap: () =>
+            context.push('/reseller/accounts/${account.id}', extra: title),
         title: Text(title),
         subtitle: Text(
-          '${account.accountNumber ?? '—'} · ${account.openInvoices} open',
+          '${account.status} · ${account.openInvoices} open$lastPaid',
         ),
-        trailing: Text(Fmt.money(account.openBalance, 'NGN')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(Fmt.money(account.openBalance, 'NGN')),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
       ),
     );
   }

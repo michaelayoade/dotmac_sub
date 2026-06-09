@@ -38,4 +38,27 @@ class ResellerRepository {
     return Page.fromJson(
         data as Map<String, dynamic>, ResellerAccount.fromJson);
   }
+
+  /// GET /reseller/accounts/{id} — one managed account (404 if not owned).
+  Future<ResellerAccountDetail> account(String accountId) async {
+    final data = await guard(() => dio.get('/reseller/accounts/$accountId'));
+    return ResellerAccountDetail.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// GET /reseller/accounts/{id}/invoices — invoices for a managed account.
+  Future<List<ResellerInvoiceSummary>> accountInvoices(
+    String accountId, {
+    int limit = 25,
+    int offset = 0,
+  }) async {
+    final data = await guard(
+      () => dio.get('/reseller/accounts/$accountId/invoices',
+          queryParameters: {'limit': limit, 'offset': offset}),
+    );
+    final items = (data as Map<String, dynamic>)['items'] as List? ?? const [];
+    return items
+        .cast<Map<String, dynamic>>()
+        .map(ResellerInvoiceSummary.fromJson)
+        .toList();
+  }
 }

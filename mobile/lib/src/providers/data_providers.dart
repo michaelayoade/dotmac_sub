@@ -41,8 +41,26 @@ final resellerRepositoryProvider = Provider<ResellerRepository>(
     (ref) => ResellerRepository(ref.watch(apiClientProvider).dio));
 
 /// The authenticated reseller's dashboard (KPIs + first page of accounts).
-final resellerDashboardProvider = FutureProvider<ResellerDashboard>(
-    (ref) => ref.watch(resellerRepositoryProvider).dashboard());
+/// Portfolio aggregation is a heavy call, so cache it stale-while-revalidate.
+final resellerDashboardProvider =
+    FutureProvider.autoDispose<ResellerDashboard>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).dashboard();
+});
+
+/// One managed account's detail (subscriptions + open balance).
+final resellerAccountProvider = FutureProvider.autoDispose
+    .family<ResellerAccountDetail, String>((ref, accountId) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).account(accountId);
+});
+
+/// Invoices for one managed account.
+final resellerAccountInvoicesProvider = FutureProvider.autoDispose
+    .family<List<ResellerInvoiceSummary>, String>((ref, accountId) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).accountInvoices(accountId);
+});
 
 /// The signed-in subscriber's id (== Subscriber.id == billing account_id).
 /// Used where a request needs the caller's id explicitly (e.g. new tickets);
