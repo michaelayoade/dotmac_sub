@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -115,12 +115,31 @@ class ZabbixAlertPayload(BaseModel):
     item_value: str | None = Field(default=None, alias="itemValue")
     item_key: str | None = Field(default=None, alias="itemKey")
 
-    # Tags (optional, passed as JSON string or dict)
+    # Tags (optional). Zabbix's default action template sends these as a LIST of
+    # {"tag": ..., "value": ...} objects; older/custom templates may send a flat
+    # {tag: value} dict. Normalized to a dict by the validator below.
     tags: dict[str, str] | None = None
 
     # Acknowledge info (for OK/resolved)
     ack_message: str | None = Field(default=None, alias="ackMessage")
     ack_user: str | None = Field(default=None, alias="ackUser")
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _coerce_tags(cls, value: Any) -> dict[str, str] | None:
+        """Accept Zabbix's native list form and flatten to {tag: value}.
+
+        Zabbix posts `tags` as `[{"tag": "scope", "value": "availability"}, ...]`.
+        Without this, a real alert is rejected 422 on an unused field. Duplicate
+        tag keys keep the last value; a dict input passes through unchanged.
+        """
+        if isinstance(value, list):
+            return {
+                str(item["tag"]): str(item.get("value", ""))
+                for item in value
+                if isinstance(item, dict) and "tag" in item
+            }
+        return value
 
 
 class ZabbixWebhookResponse(BaseModel):
