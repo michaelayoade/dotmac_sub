@@ -467,15 +467,13 @@ def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
         existing is not None
         and existing.terminate_cause == _REAPED_TERMINATE_CAUSE
         and new_stop_at is None
-        and (
-            observed_at is None
-            or (
-                existing.last_update_at is not None
-                and _as_utc(observed_at) <= _as_utc(existing.last_update_at)
-            )
-        )
     ):
-        return False
+        observed_utc = _as_utc(observed_at)
+        reaped_seen_utc = _as_utc(existing.last_update_at)
+        if observed_utc is None or (
+            reaped_seen_utc is not None and observed_utc <= reaped_seen_utc
+        ):
+            return False
 
     target.subscription_id = subscription.id if subscription else None
     target.radius_client_id = radius_client.id if radius_client else None
@@ -629,7 +627,7 @@ def _refresh_open_sessions_from_radacct(
                 WHERE acctsessionid IN :session_ids
                   AND username IN :usernames
                 ORDER BY radacctid ASC
-        """  # noqa: S608 — column list built from fixed names; values are bind params
+        """  # nosec B608  # noqa: S608 — fixed column names; values are bind params
     ).bindparams(
         bindparam("session_ids", expanding=True),
         bindparam("usernames", expanding=True),
@@ -668,7 +666,7 @@ def import_radius_accounting(
                 WHERE radacctid > :cursor
                 ORDER BY radacctid ASC
                 LIMIT :limit
-                """  # noqa: S608 — column list built from fixed names; values are bind params
+                """  # nosec B608  # noqa: S608 — fixed column names; values are bind params
             ),
             {"cursor": last_radacctid, "limit": batch_size},
         )
