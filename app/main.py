@@ -53,12 +53,18 @@ _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
 _DEFERRED_ROUTER_TASK = None
+_DEFERRED_STARTUP_TASK = None
 
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
     ("app.api.tr069_auth", "router", "api", "none"),
     ("app.api.tr069_inform", "router", "api", "none"),
     ("app.api.reconcile_webhooks", "router", "api", "none"),
+    # Inbound provider webhooks must be mounted before serving — if they were
+    # deferred, they 404 during the startup load window and we'd silently drop
+    # payment confirmations / monitoring alerts on every restart.
+    ("app.api.billing", "webhook_router", "api", "none"),
+    ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.search", "router", "api", "user"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
@@ -77,8 +83,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.notifications", "router", "api", "user"),
     ("app.api.external", "router", "api", "user"),
     ("app.api.billing", "router", "api", "user"),
-    # Inbound payment-provider webhooks: signature-verified, no user session.
-    ("app.api.billing", "webhook_router", "api", "none"),
     ("app.api.files", "router", "api", "user"),
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
@@ -121,7 +125,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.validation", "router", "api", "user"),
     ("app.api.defaults", "router", "api", "user"),
     ("app.api.zabbix", "router", "api", "user"),
-    ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.wireguard", "public_router", "api", "none"),
 ]
 
@@ -446,14 +449,51 @@ def _log_zabbix_startup_health() -> None:
     )
 
 
+def _startup_preflight() -> None:
+    """Fast, fail-fast checks that MUST pass before serving traffic: credential
+    encryption enforcement and required schema. The slow, idempotent
+    default-settings seeding is deferred off the serving path — see
+    [_run_deferred_startup]."""
+    _check_test_environment_leakage()
+    from app.config import settings
+    from app.services.credential_crypto import require_encryption_key
+
+    if settings.enforce_credential_encryption:
+        require_encryption_key(enforce=True)
+        logger.info(
+            "Credential encryption enforcement enabled",
+            extra={"event": "credential_encryption_enforced"},
+        )
+    _assert_required_schema()
+
+
+async def _run_deferred_startup() -> None:
+    """Run slow, idempotent, non-fatal startup work in worker threads so it
+    never blocks the event loop (single-worker safe) or delays serving.
+
+    Default-settings seeding is ~100s of upserts against a busy DB; running it
+    inline kept the app dead to health checks for minutes after every restart.
+    The seeds are idempotent (upsert/skip-if-exists), so deferring is safe."""
+    for fn, step in (
+        (_seed_startup_settings, "seed"),
+        (_log_zabbix_startup_health, "zabbix"),
+        (_warn_on_scheduler_registry_drift, "scheduler_drift"),
+    ):
+        try:
+            await asyncio.to_thread(fn)
+        except Exception:
+            logger.exception(
+                "deferred_startup_step_failed",
+                extra={"event": "deferred_startup_step_failed", "step": step},
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _DEFERRED_ROUTER_TASK
+    global _DEFERRED_ROUTER_TASK, _DEFERRED_STARTUP_TASK
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
-    _seed_startup_settings()
-    _log_zabbix_startup_health()
-    _warn_on_scheduler_registry_drift()
+    _startup_preflight()
     from app.websocket.manager import get_connection_manager
 
     manager = get_connection_manager()
@@ -466,17 +506,23 @@ async def lifespan(app: FastAPI):
         "websocket_manager_connect_complete",
         extra={"event": "websocket_manager_connect_complete"},
     )
+    # Defer slow, idempotent, non-fatal startup work (default-settings seeding,
+    # integration health probes) off the serving path so a restart serves
+    # health/traffic in seconds, not minutes.
+    _DEFERRED_STARTUP_TASK = asyncio.create_task(_run_deferred_startup())
     _DEFERRED_ROUTER_TASK = asyncio.create_task(_load_deferred_api_routers(app))
     try:
         yield
     finally:
-        if _DEFERRED_ROUTER_TASK is not None:
-            _DEFERRED_ROUTER_TASK.cancel()
-            try:
-                await _DEFERRED_ROUTER_TASK
-            except asyncio.CancelledError:
-                pass
-            _DEFERRED_ROUTER_TASK = None
+        for _task_name in ("_DEFERRED_STARTUP_TASK", "_DEFERRED_ROUTER_TASK"):
+            _task = globals().get(_task_name)
+            if _task is not None:
+                _task.cancel()
+                try:
+                    await _task
+                except asyncio.CancelledError:
+                    pass
+                globals()[_task_name] = None
         logger.info(
             "websocket_manager_disconnect_begin",
             extra={"event": "websocket_manager_disconnect_begin"},
