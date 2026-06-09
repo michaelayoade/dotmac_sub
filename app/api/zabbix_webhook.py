@@ -7,13 +7,15 @@ into internal notifications and alerts.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -113,12 +115,31 @@ class ZabbixAlertPayload(BaseModel):
     item_value: str | None = Field(default=None, alias="itemValue")
     item_key: str | None = Field(default=None, alias="itemKey")
 
-    # Tags (optional, passed as JSON string or dict)
+    # Tags (optional). Zabbix's default action template sends these as a LIST of
+    # {"tag": ..., "value": ...} objects; older/custom templates may send a flat
+    # {tag: value} dict. Normalized to a dict by the validator below.
     tags: dict[str, str] | None = None
 
     # Acknowledge info (for OK/resolved)
     ack_message: str | None = Field(default=None, alias="ackMessage")
     ack_user: str | None = Field(default=None, alias="ackUser")
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _coerce_tags(cls, value: Any) -> dict[str, str] | None:
+        """Accept Zabbix's native list form and flatten to {tag: value}.
+
+        Zabbix posts `tags` as `[{"tag": "scope", "value": "availability"}, ...]`.
+        Without this, a real alert is rejected 422 on an unused field. Duplicate
+        tag keys keep the last value; a dict input passes through unchanged.
+        """
+        if isinstance(value, list):
+            return {
+                str(item["tag"]): str(item.get("value", ""))
+                for item in value
+                if isinstance(item, dict) and "tag" in item
+            }
+        return value
 
 
 class ZabbixWebhookResponse(BaseModel):
@@ -170,8 +191,8 @@ def _response(
 
 
 @router.post("/webhook/alert", response_model=ZabbixWebhookResponse)
-def receive_zabbix_alert(
-    payload: ZabbixAlertPayload,
+async def receive_zabbix_alert(
+    request: Request,
     db: Session = Depends(get_db),
     x_zabbix_token: str | None = Header(default=None, alias="X-Zabbix-Token"),
 ):
@@ -180,8 +201,44 @@ def receive_zabbix_alert(
     This endpoint converts Zabbix trigger notifications into internal
     Alert records, enabling unified alert management across all monitoring
     sources.
+
+    Authentication is enforced *before* the body is parsed: unauthenticated
+    callers (scanners, misconfigured senders) get 401 and never reach
+    validation, so they neither generate 422 noise nor learn the payload
+    schema. On a malformed authenticated payload we log the raw body to help
+    reconcile the Zabbix action template against ``ZabbixAlertPayload``, then
+    return 422.
     """
     _require_zabbix_webhook_token(x_zabbix_token)
+
+    raw_body = await request.body()
+    try:
+        data = json.loads(raw_body) if raw_body else {}
+        payload = ZabbixAlertPayload.model_validate(data)
+    except (ValueError, ValidationError) as exc:
+        logger.warning(
+            "zabbix_webhook_invalid_payload",
+            extra={
+                "event": "zabbix_webhook_invalid_payload",
+                "content_type": request.headers.get("content-type"),
+                "raw_body": raw_body.decode("utf-8", "replace")[:2000],
+                "error": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid Zabbix alert payload",
+        ) from exc
+
+    # SQLAlchemy work is synchronous; run it off the event loop so a slow DB
+    # call cannot stall this single-worker process.
+    return await run_in_threadpool(_persist_zabbix_alert, db, payload)
+
+
+def _persist_zabbix_alert(
+    db: Session, payload: ZabbixAlertPayload
+) -> ZabbixWebhookResponse:
+    """Convert a validated Zabbix alert into Alert/AlertEvent records."""
     logger.info(
         "zabbix_webhook_received",
         extra={

@@ -36,6 +36,22 @@ def import_radius_accounting():
         session.close()
 
 
+@celery_app.task(name="app.tasks.usage.meter_usage_into_quota")
+def meter_usage_into_quota():
+    """Roll imported RADIUS accounting into the current period's quota buckets
+    for capped subscriptions (the metering that feeds FUP/overage)."""
+    session = SessionLocal()
+    try:
+        result = usage_service.meter_usage_into_quota(session)
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
 def evaluate_fup_rules() -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
@@ -105,6 +121,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                 fup_state.clear(session, str(sub.id))
                 reset += 1
                 logger.info("Reset FUP state for subscription %s", sub.id)
+                session.commit()
                 continue
 
             # Get current usage from quota bucket
@@ -112,6 +129,7 @@ def evaluate_fup_rules() -> dict[str, int]:
 
             bucket = _resolve_or_create_quota_bucket(session, sub, now)
             if not bucket:
+                session.commit()
                 continue
 
             current_usage = float(bucket.used_gb or 0)
@@ -142,6 +160,13 @@ def evaluate_fup_rules() -> dict[str, int]:
                                 "rule_id": rule_result.get("rule_id"),
                                 "current_usage_gb": current_usage,
                                 "threshold_gb": rule_result.get("threshold_gb"),
+                                # cap resets at the quota period boundary — lets
+                                # enforcement auto-lift the throttle/block then.
+                                "cap_resets_at": (
+                                    bucket.period_end.isoformat()
+                                    if bucket.period_end
+                                    else None
+                                ),
                             },
                             subscription_id=sub.id,
                             account_id=sub.subscriber_id,
@@ -168,6 +193,13 @@ def evaluate_fup_rules() -> dict[str, int]:
                                 "rule_id": rule_result.get("rule_id"),
                                 "current_usage_gb": current_usage,
                                 "threshold_gb": rule_result.get("threshold_gb"),
+                                # cap resets at the quota period boundary — lets
+                                # enforcement auto-lift the throttle/block then.
+                                "cap_resets_at": (
+                                    bucket.period_end.isoformat()
+                                    if bucket.period_end
+                                    else None
+                                ),
                             },
                             subscription_id=sub.id,
                             account_id=sub.subscriber_id,
@@ -214,6 +246,15 @@ def evaluate_fup_rules() -> dict[str, int]:
                                 "used_gb": current_usage,
                             }
                         )
+
+            # Commit each subscription on its own so this periodic sweep never
+            # holds a single transaction open across the whole subscription list.
+            # Previously the one commit below ran only after the entire loop, so a
+            # large active-subscriber set produced multi-minute "idle in
+            # transaction" connections — pinning a pool slot and blocking
+            # autovacuum. Per-subscription commits also make a mid-sweep failure
+            # preserve already-enforced subscriptions (the sweep is idempotent).
+            session.commit()
 
         session.commit()
         # Notifications are sent after the enforcement commit so a delivery

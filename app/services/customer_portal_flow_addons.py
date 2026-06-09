@@ -83,6 +83,8 @@ def _serialize_option(link: OfferAddOn, add_on: AddOn) -> dict:
         "min_quantity": int(link.min_quantity or 1),
         "max_quantity": link.max_quantity,
         "is_required": bool(link.is_required),
+        # Data top-up: GB granted to the quota bucket on purchase (null otherwise).
+        "grant_gb": add_on.grant_gb,
     }
 
 
@@ -267,6 +269,13 @@ def purchase_addon(
                 + (f" x{quantity}" if quantity > 1 else ""),
             )
         )
+
+    # Data top-up: stamp its validity window and credit the purchased GB to the
+    # current period's quota bucket.
+    if add_on.grant_gb:
+        from app.services.usage import grant_data_topup
+
+        grant_data_topup(db, subscription, sub_add_on, add_on)
 
     if idempotency_key:
         db.flush()  # assign sub_add_on.id before referencing it

@@ -358,6 +358,9 @@ class UsageAllowance(Base):
     overage_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     overage_cap_gb: Mapped[int | None] = mapped_column(Integer)
     throttle_rate_mbps: Mapped[int | None] = mapped_column(Integer)
+    # Unused allowance carries into next period's quota bucket (capped at one
+    # period's included_gb). Sourced from Splynx fup_limits.rollover_data.
+    rollover_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -417,8 +420,16 @@ class AddOn(Base):
     ip_is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     ip_prefix_length: Mapped[int | None] = mapped_column(Integer)
 
-    # Provenance for the Splynx importer — "custom:8" / "one_time:3". Unique so
-    # re-running the import updates rather than duplicates.
+    # Data top-up: GB granted to the subscription's quota bucket on purchase
+    # (null for non-data add-ons). Sourced from Splynx cap_tariff.
+    grant_gb: Mapped[int | None] = mapped_column(Integer)
+    # Top-up validity in days; null means it expires at the end of the billing
+    # period it was bought in. Sourced from Splynx cap_tariff.validity.
+    validity_days: Mapped[int | None] = mapped_column(Integer)
+
+    # Provenance for the Splynx importer — "custom:8" / "one_time:3" /
+    # "cap_tariff:1". Unique so re-running the import updates rather than
+    # duplicates.
     splynx_source: Mapped[str | None] = mapped_column(String(40), unique=True)
 
     created_at: Mapped[datetime] = mapped_column(

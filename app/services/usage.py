@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 from urllib.parse import urlparse, urlunparse
@@ -17,9 +17,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
 from app.models.catalog import (
     AccessCredential,
+    AddOn,
     CatalogOffer,
     OfferVersion,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
     UsageAllowance,
 )
@@ -522,16 +524,149 @@ def _resolve_or_create_quota_bucket(
     included_gb, _ = _prorate_allowance(
         allowance, subscription, period_start, period_end
     )
+    rounded_included = _round_bucket_gb(included_gb)
+    rollover_gb = _carry_forward_rollover(
+        db, subscription, allowance, period_start, rounded_included
+    )
     bucket = QuotaBucket(
         subscription_id=subscription.id,
         period_start=period_start,
         period_end=period_end,
-        included_gb=_round_bucket_gb(included_gb),
+        included_gb=rounded_included,
         used_gb=Decimal("0.00"),
-        rollover_gb=Decimal("0.00"),
+        rollover_gb=rollover_gb,
         overage_gb=Decimal("0.00"),
     )
     db.add(bucket)
+    db.flush()
+    return bucket
+
+
+def _carry_forward_rollover(
+    db: Session,
+    subscription: Subscription,
+    allowance,
+    period_start: datetime,
+    included_gb: Decimal,
+) -> Decimal:
+    """Unused allowance from the immediately-preceding period, when the plan has
+    rollover. Capped at one period's included_gb so it can't accumulate forever."""
+    if allowance is None or not getattr(allowance, "rollover_enabled", False):
+        return Decimal("0.00")
+    prev = (
+        db.query(QuotaBucket)
+        .filter(QuotaBucket.subscription_id == subscription.id)
+        .filter(QuotaBucket.period_end == period_start)
+        .first()
+    )
+    if prev is None:
+        return Decimal("0.00")
+    available = (
+        Decimal(str(prev.included_gb or 0))
+        + Decimal(str(prev.rollover_gb or 0))
+        - Decimal(str(prev.used_gb or 0))
+    )
+    if available <= 0:
+        return Decimal("0.00")
+    capped = min(available, included_gb) if included_gb > 0 else available
+    return _round_bucket_gb(capped)
+
+
+_GB_BYTES = 1024**3
+
+
+def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
+    """Populate the current period's ``QuotaBucket.used_gb`` from RADIUS
+    accounting octets, for every active *capped* subscription.
+
+    This is the missing link between imported ``RadiusAccountingSession`` traffic
+    and the quota/FUP machinery — without it ``used_gb`` stays 0 and nothing ever
+    triggers. Idempotent: ``used_gb`` is recomputed absolutely from the period's
+    sessions each run (never incremented). Uncapped/unlimited plans have no
+    allowance, so they get no bucket and are skipped — so an unlimited plan never
+    looks "exhausted".
+    """
+    now = now or datetime.now(UTC)
+    subs = (
+        db.query(Subscription)
+        .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(CatalogOffer.usage_allowance_id.isnot(None))
+        .all()
+    )
+    metered = 0
+    for sub in subs:
+        if _resolve_allowance(sub) is None:
+            continue
+        bucket = _resolve_or_create_quota_bucket(db, sub, now)
+        octets = (
+            db.query(
+                func.coalesce(func.sum(RadiusAccountingSession.input_octets), 0)
+                + func.coalesce(func.sum(RadiusAccountingSession.output_octets), 0)
+            )
+            .filter(RadiusAccountingSession.subscription_id == sub.id)
+            .filter(RadiusAccountingSession.session_start >= bucket.period_start)
+            .filter(RadiusAccountingSession.session_start < bucket.period_end)
+            .scalar()
+        ) or 0
+        used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
+        bucket.used_gb = used_gb
+        # Refresh top-up from still-valid purchases so expired ones drop out.
+        bucket.topup_gb = _round_bucket_gb(_active_topup_gb(db, sub, now))
+        allowed = (
+            Decimal(str(bucket.included_gb or 0))
+            + Decimal(str(bucket.rollover_gb or 0))
+            + Decimal(str(bucket.topup_gb or 0))
+        )
+        overage = used_gb - allowed
+        bucket.overage_gb = (
+            _round_bucket_gb(overage) if overage > Decimal("0") else Decimal("0.00")
+        )
+        metered += 1
+    logger.info("usage_metered_into_quota", extra={"metered": metered})
+    return {"metered": metered}
+
+
+def _active_topup_gb(db: Session, subscription: Subscription, now: datetime) -> Decimal:
+    """Total GB from the subscription's data-top-up purchases that are currently
+    in their validity window (started, not yet expired)."""
+    rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .filter(AddOn.grant_gb.isnot(None))
+        .filter(
+            (SubscriptionAddOn.start_at.is_(None)) | (SubscriptionAddOn.start_at <= now)
+        )
+        .filter((SubscriptionAddOn.end_at.is_(None)) | (SubscriptionAddOn.end_at > now))
+        .all()
+    )
+    total = Decimal("0")
+    for sub_addon, add_on in rows:
+        total += Decimal(str(add_on.grant_gb or 0)) * Decimal(
+            str(sub_addon.quantity or 1)
+        )
+    return total
+
+
+def grant_data_topup(
+    db: Session,
+    subscription: Subscription,
+    sub_add_on: SubscriptionAddOn,
+    add_on: AddOn,
+    now: datetime | None = None,
+) -> QuotaBucket:
+    """Apply a data-top-up purchase: stamp its validity window on the purchase
+    record (end_at), then refresh the current quota bucket's topup_gb from all
+    still-valid top-ups. A top-up with no validity_days expires at period end."""
+    now = now or datetime.now(UTC)
+    bucket = _resolve_or_create_quota_bucket(db, subscription, now)
+    if add_on.validity_days:
+        sub_add_on.end_at = now + timedelta(days=int(add_on.validity_days))
+    else:
+        sub_add_on.end_at = bucket.period_end
+    db.flush()
+    bucket.topup_gb = _round_bucket_gb(_active_topup_gb(db, subscription, now))
     db.flush()
     return bucket
 
@@ -589,6 +724,11 @@ def _emit_usage_events(
                 "account_id": str(subscription.subscriber_id),
                 "used_gb": str(_round_gb(new_used)),
                 "included_gb": str(_round_gb(included)),
+                # When the cap resets — lets enforcement store cap_resets_at so
+                # the throttle/block auto-lifts at the period boundary.
+                "cap_resets_at": (
+                    bucket.period_end.isoformat() if bucket.period_end else None
+                ),
             },
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
