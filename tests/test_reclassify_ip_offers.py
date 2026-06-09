@@ -47,7 +47,7 @@ def _offer(db, name, code):
     return o
 
 
-def _sub(db, subscriber, offer, *, ipv4=None):
+def _sub(db, subscriber, offer, *, ipv4=None, login=None):
     s = Subscription(
         subscriber_id=subscriber.id,
         offer_id=offer.id,
@@ -56,6 +56,7 @@ def _sub(db, subscriber, offer, *, ipv4=None):
         start_at=datetime.now(UTC),
         next_billing_at=datetime.now(UTC),
         ipv4_address=ipv4,
+        login=login,
     )
     db.add(s)
     db.flush()
@@ -93,6 +94,10 @@ def _scenario(db):
     c = _subscriber(db, "c@x.io")
     _sub(db, c, plan_offer)
     _sub(db, c, ip30)
+    # D: a /29 IP block that carries its OWN RADIUS login → safety-blocked
+    d = _subscriber(db, "d@x.io")
+    _sub(db, d, plan_offer)
+    _sub(db, d, ip29, login="100099999")
     db.commit()
     return main_a
 
@@ -101,11 +106,13 @@ def test_plan_classifies_each_ip_subscription(db_session):
     _scenario(db_session)
     plan = build_reclassification_plan(db_session)
     s = plan["summary"]
-    assert s["ip_subscriptions"] == 3
+    assert s["ip_subscriptions"] == 4
     assert s["would_reclassify"] == 1
-    assert s["with_allocated_ip"] == 1  # A's /29 carries a real IP
+    assert s["vestigial_ipv4"] == 1  # A's /29 carries a (non-RADIUS) ipv4
+    assert s["radius_login_blocked"] == 1  # D's /29 has a RADIUS login
     assert s["skip_reasons"].get("no_main_subscription") == 1
     assert s["skip_reasons"].get("no_matching_addon") == 1
+    assert s["skip_reasons"].get("has_radius_login") == 1
 
 
 def test_apply_attaches_addon_and_archives(db_session):

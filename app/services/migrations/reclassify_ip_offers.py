@@ -8,11 +8,17 @@ same invoice. This module plans and applies that move:
     IP-block Subscription  →  SubscriptionAddOn on the subscriber's main plan
                               (+ the standalone IP subscription is archived)
 
+These IP-block subscriptions are **billing-only**: they carry no RADIUS login,
+so the public IP RADIUS serves lives on the customer's MAIN subscription's
+session — archiving the billing artifact never touches it. The planner enforces
+that invariant: any IP-block sub that *does* have a RADIUS login is refused
+(``has_radius_login``) rather than archived blindly.
+
 ``build_reclassification_plan`` is READ-ONLY and returns exactly what would
-happen, per subscription, including the rows it cannot safely move (no main
-plan, no matching add-on, …) and which carry a real allocated IP that needs
-provisioning continuity. ``apply_reclassification`` performs it (gated on
-``commit``). Idempotent: an already-archived IP subscription is skipped.
+happen per subscription, including the rows it cannot safely move (no main plan,
+no matching add-on, has a RADIUS login). ``apply_reclassification`` performs it
+(gated on ``commit``). Idempotent: an already-archived IP subscription is
+skipped.
 
 Depends on the IP add-ons existing first (run import_addons_from_splynx).
 """
@@ -107,6 +113,7 @@ def build_reclassification_plan(db: Session) -> dict:
             "ip_offer_name": offer.name if offer else None,
             "prefix": prefix,
             "ipv4_address": getattr(sub, "ipv4_address", None),
+            "has_radius_login": bool(getattr(sub, "login", None)),
             "decision": "skip",
             "reason": None,
             "target_main_subscription_id": None,
@@ -116,6 +123,16 @@ def build_reclassification_plan(db: Session) -> dict:
         # Already reclassified (idempotent) or otherwise not active → leave it.
         if sub.status != SubscriptionStatus.active:
             item["reason"] = "not_active"
+            items.append(item)
+            continue
+
+        # SAFETY: these IP-block subscriptions are billing-only — they carry no
+        # RADIUS login, so archiving them never touches the RADIUS session that
+        # serves the public IP (that lives on the customer's MAIN subscription).
+        # If one ever DID have a login it would be RADIUS-serving; refuse to
+        # archive it without provisioning handling.
+        if item["has_radius_login"]:
+            item["reason"] = "has_radius_login"
             items.append(item)
             continue
 
@@ -148,9 +165,14 @@ def build_reclassification_plan(db: Session) -> dict:
         "skipped": len(skipped),
         "skip_reasons": _count_by(skipped, "reason"),
         "by_prefix": _count_by(reclass, "prefix"),
-        # rows carrying a real allocated IP need provisioning continuity before
-        # the standalone subscription is archived (RADIUS/CPE must keep routing).
-        "with_allocated_ip": sum(1 for i in reclass if i.get("ipv4_address")),
+        # Hard safety stop: any IP-block sub with its own RADIUS login is
+        # RADIUS-serving and must NOT be archived blindly. Expected to be 0 —
+        # these subscriptions are billing-only (the public IP lives on the main
+        # subscription's session).
+        "radius_login_blocked": _count_by(skipped, "reason").get("has_radius_login", 0),
+        # Informational only: a vestigial ipv4 on the (login-less) IP sub — not
+        # RADIUS-served, so not a continuity risk.
+        "vestigial_ipv4": sum(1 for i in reclass if i.get("ipv4_address")),
         "ambiguous_main_plan": sum(
             1 for i in reclass if i.get("main_candidates", 1) > 1
         ),

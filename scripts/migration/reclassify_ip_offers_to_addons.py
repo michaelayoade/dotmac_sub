@@ -42,12 +42,10 @@ def _print_report(plan: dict) -> None:
     reclass = [i for i in plan["items"] if i["decision"] == "reclassify"]
     print(f"\n--- {len(reclass)} would reclassify (first 20) ---")
     for i in reclass[:20]:
-        flag = " ⚠ has-IP" if i.get("ipv4_address") else ""
-        amb = " ⚠ multi-plan" if i.get("main_candidates", 1) > 1 else ""
+        amb = " ⚠ multi-plan (verify)" if i.get("main_candidates", 1) > 1 else ""
         print(
             f"  {i['subscriber_name']}: /{i['prefix']} → main="
-            f"{i['target_main_subscription_id']} addon={i['target_addon_id']}"
-            f"{flag}{amb}"
+            f"{i['target_main_subscription_id']} addon={i['target_addon_id']}{amb}"
         )
 
 
