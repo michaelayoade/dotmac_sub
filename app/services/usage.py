@@ -536,6 +536,57 @@ def _resolve_or_create_quota_bucket(
     return bucket
 
 
+_GB_BYTES = 1024**3
+
+
+def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
+    """Populate the current period's ``QuotaBucket.used_gb`` from RADIUS
+    accounting octets, for every active *capped* subscription.
+
+    This is the missing link between imported ``RadiusAccountingSession`` traffic
+    and the quota/FUP machinery — without it ``used_gb`` stays 0 and nothing ever
+    triggers. Idempotent: ``used_gb`` is recomputed absolutely from the period's
+    sessions each run (never incremented). Uncapped/unlimited plans have no
+    allowance, so they get no bucket and are skipped — so an unlimited plan never
+    looks "exhausted".
+    """
+    now = now or datetime.now(UTC)
+    subs = (
+        db.query(Subscription)
+        .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(CatalogOffer.usage_allowance_id.isnot(None))
+        .all()
+    )
+    metered = 0
+    for sub in subs:
+        if _resolve_allowance(sub) is None:
+            continue
+        bucket = _resolve_or_create_quota_bucket(db, sub, now)
+        octets = (
+            db.query(
+                func.coalesce(func.sum(RadiusAccountingSession.input_octets), 0)
+                + func.coalesce(func.sum(RadiusAccountingSession.output_octets), 0)
+            )
+            .filter(RadiusAccountingSession.subscription_id == sub.id)
+            .filter(RadiusAccountingSession.session_start >= bucket.period_start)
+            .filter(RadiusAccountingSession.session_start < bucket.period_end)
+            .scalar()
+        ) or 0
+        used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
+        bucket.used_gb = used_gb
+        allowed = Decimal(str(bucket.included_gb or 0)) + Decimal(
+            str(bucket.rollover_gb or 0)
+        )
+        overage = used_gb - allowed
+        bucket.overage_gb = (
+            _round_bucket_gb(overage) if overage > Decimal("0") else Decimal("0.00")
+        )
+        metered += 1
+    logger.info("usage_metered_into_quota", extra={"metered": metered})
+    return {"metered": metered}
+
+
 def _emit_usage_events(
     db: Session,
     subscription: Subscription,
