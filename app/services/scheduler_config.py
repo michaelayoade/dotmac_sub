@@ -423,6 +423,15 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=max(usage_interval_seconds, 300),
         )
+        # Evaluate FUP rules against the metered usage and apply / auto-lift
+        # throttle/block. Without this the FUP engine never runs on a schedule.
+        _sync_scheduled_task(
+            session,
+            name="fup_evaluation_runner",
+            task_name="app.tasks.usage.evaluate_fup_rules",
+            enabled=usage_enabled,
+            interval_seconds=max(usage_interval_seconds, 300),
+        )
         zabbix_usage_enabled_by_default = _zabbix_configured_default()
         zabbix_usage_enabled = _effective_bool(
             session,

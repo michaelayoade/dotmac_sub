@@ -640,6 +640,11 @@ def _emit_usage_events(
                 "account_id": str(subscription.subscriber_id),
                 "used_gb": str(_round_gb(new_used)),
                 "included_gb": str(_round_gb(included)),
+                # When the cap resets — lets enforcement store cap_resets_at so
+                # the throttle/block auto-lifts at the period boundary.
+                "cap_resets_at": (
+                    bucket.period_end.isoformat() if bucket.period_end else None
+                ),
             },
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
