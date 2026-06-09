@@ -787,7 +787,9 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
-    comments = support_service.ticket_comments.list(db, str(ticket.id), limit=500, offset=0)
+    comments = support_service.ticket_comments.list(
+        db, str(ticket.id), limit=500, offset=0
+    )
     status_options = _append_missing_option(status_options, ticket.status)
     priority_options = _append_missing_option(priority_options, ticket.priority)
     staff = support_service.list_assignment_people(

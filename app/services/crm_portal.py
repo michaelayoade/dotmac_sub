@@ -178,9 +178,10 @@ def _comment_to_dict(comment: Any, customer_subscriber_ids: set[str]) -> dict[st
     """
     author_type = str(getattr(comment, "author_type", "") or "")
     author_person_id = getattr(comment, "author_person_id", None)
-    is_customer = author_type == TicketCommentAuthorType.customer.value and str(
-        author_person_id or ""
-    ) in customer_subscriber_ids
+    is_customer = (
+        author_type == TicketCommentAuthorType.customer.value
+        and str(author_person_id or "") in customer_subscriber_ids
+    )
     if not author_type and author_person_id:
         is_customer = str(author_person_id) in customer_subscriber_ids
     return {

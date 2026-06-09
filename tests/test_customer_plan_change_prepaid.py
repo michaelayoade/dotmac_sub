@@ -295,7 +295,9 @@ def test_request_plan_migration_includes_requested_offer(
 
     captured: dict[str, str] = {}
 
-    def fake_ticket_create(db, customer, subscriber_lookup, title, description, priority):
+    def fake_ticket_create(
+        db, customer, subscriber_lookup, title, description, priority
+    ):
         captured["subscriber_lookup"] = subscriber_lookup
         captured["title"] = title
         captured["description"] = description

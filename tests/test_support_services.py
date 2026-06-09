@@ -274,9 +274,7 @@ def test_ticket_create_ignores_system_user_created_by_subscriber_fk(
     assert ticket.created_by_person_id is None
 
 
-def test_ticket_comment_stores_system_user_author_identity(
-    db_session, subscriber
-):
+def test_ticket_comment_stores_system_user_author_identity(db_session, subscriber):
     system_user = _system_user(display_name="Comment Admin")
     db_session.add(system_user)
     db_session.commit()

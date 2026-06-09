@@ -56,7 +56,9 @@ def upgrade() -> None:
     if _AUTHOR_SYSTEM_USER_ID not in columns:
         op.add_column(
             _TABLE,
-            sa.Column(_AUTHOR_SYSTEM_USER_ID, postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                _AUTHOR_SYSTEM_USER_ID, postgresql.UUID(as_uuid=True), nullable=True
+            ),
         )
         op.create_foreign_key(
             _FK,
