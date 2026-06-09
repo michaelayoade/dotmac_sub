@@ -104,8 +104,12 @@ def main() -> None:
         if args.limit:
             query = query.limit(args.limit)
 
+        # Materialize the candidate set up front: the batched commits below
+        # would invalidate a yield_per server-side cursor mid-iteration.
+        candidates = query.all()
+
         pending = 0
-        for sub in query.yield_per(200):
+        for sub in candidates:
             stats["scanned"] += 1
             _, _, cycle = _resolve_price(db, sub)
             cycle = cycle or BillingCycle.monthly
