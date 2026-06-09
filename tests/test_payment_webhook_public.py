@@ -8,7 +8,7 @@ route placement and the mount auth mode.
 """
 
 from app.api.billing import router, webhook_router
-from app.main import _DEFERRED_API_ROUTER_SPECS
+from app.main import _CORE_ROUTER_SPECS, _DEFERRED_API_ROUTER_SPECS
 
 _WEBHOOK_PATHS = {
     "/payment-events/paystack",
@@ -31,9 +31,12 @@ def test_provider_webhooks_not_on_user_authed_router():
 
 def test_webhook_router_mounted_without_user_auth():
     spec = ("app.api.billing", "webhook_router", "api", "none")
-    assert spec in _DEFERRED_API_ROUTER_SPECS, (
-        "webhook_router must be mounted with 'none' auth so external providers "
-        "can reach it"
+    # Pinned to the CORE specs (not deferred): a deferred webhook 404s during the
+    # post-restart load window, silently dropping provider callbacks. It must be
+    # mounted with "none" auth so external providers can reach it immediately.
+    assert spec in _CORE_ROUTER_SPECS, (
+        "webhook_router must be mounted with 'none' auth in the core specs so "
+        "external providers can reach it the instant the app serves"
     )
 
 
