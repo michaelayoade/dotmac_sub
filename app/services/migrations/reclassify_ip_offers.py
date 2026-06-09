@@ -39,6 +39,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Subscriber
+from app.services.common import coerce_uuid
 from app.services.migrations.sync_addons_from_splynx import ip_prefix_length
 
 logger = logging.getLogger(__name__)
@@ -196,8 +197,8 @@ def apply_reclassification(db: Session, *, commit: bool = True) -> dict:
     for item in plan["items"]:
         if item["decision"] != "reclassify":
             continue
-        main_id = item["target_main_subscription_id"]
-        addon_id = item["target_addon_id"]
+        main_id = coerce_uuid(item["target_main_subscription_id"])
+        addon_id = coerce_uuid(item["target_addon_id"])
         # Don't duplicate an existing add-on link.
         exists = db.scalar(
             select(SubscriptionAddOn).where(
@@ -215,12 +216,12 @@ def apply_reclassification(db: Session, *, commit: bool = True) -> dict:
                     start_at=now,
                 )
             )
-        ip_sub = db.get(Subscription, item["ip_subscription_id"])
+        ip_sub = db.get(Subscription, coerce_uuid(item["ip_subscription_id"]))
         if ip_sub is None:
             continue
         ip_sub.status = SubscriptionStatus.archived
         ip_sub.end_at = now
-        ip_sub.cancel_reason = f"{_RECLASS_REASON}:{addon_id}"
+        ip_sub.cancel_reason = f"{_RECLASS_REASON}:{item['target_addon_id']}"
         applied += 1
 
     if commit:
