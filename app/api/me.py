@@ -569,7 +569,9 @@ async def my_usage_summary(
     and counts the live session's current octets.
     """
     subscriber_id = _subscriber_id(principal)
-    return await usage_summary_service.get_usage_summary(db, subscriber_id, period)
+    summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
+    summary["fup"] = usage_summary_service.fup_summary(db, subscriber_id)
+    return summary
 
 
 # --- Support tickets (self-scoped) ---------------------------------------------

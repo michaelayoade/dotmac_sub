@@ -91,6 +91,24 @@ class UsageSeriesPoint(BaseModel):
     bytes: int
 
 
+class FupSummary(BaseModel):
+    """Customer-facing Fair-Usage status for the caller's subscription.
+
+    Derived from the per-subscription ``FupState`` the enforcement engine
+    maintains; surfaced so the app can tell a subscriber they're throttled,
+    how to restore speed, and when the limit resets.
+    """
+
+    status: str = Field(description="full_speed | throttled | blocked")
+    is_reduced: bool = False
+    speed_reduction_percent: float | None = None
+    active_rule_name: str | None = None
+    resets_at: datetime | None = None
+    # Plain-language explainer for the active rule, e.g.
+    # "Speed reduced to 25% after 100 GB this month".
+    summary: str | None = None
+
+
 class UsageSummaryResponse(BaseModel):
     """Time-windowed data-usage summary for GET /me/usage-summary."""
 
@@ -107,6 +125,8 @@ class UsageSummaryResponse(BaseModel):
     # Bucket width of the series: "minute" | "hour" | "day" | None (no chart).
     bucket: str | None = None
     series: list[UsageSeriesPoint] = Field(default_factory=list)
+    # Fair-Usage status for the caller (None when no FUP applies / unknown).
+    fup: FupSummary | None = None
 
 
 class UsageRecordBase(BaseModel):

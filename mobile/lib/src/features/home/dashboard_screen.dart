@@ -47,8 +47,9 @@ class DashboardScreen extends ConsumerWidget {
 
     final sessItems = sessions.asData?.value.items;
     // Defined-window total (today) instead of summing the latest 50 sessions.
-    final dataToday =
-        ref.watch(usageSummaryProvider('today')).asData?.value.totalBytes;
+    final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
+    final dataToday = todaySummary?.totalBytes;
+    final fup = todaySummary?.fup;
 
     // Connection status: an open RADIUS accounting session (no end) means the
     // subscriber is currently online; its start gives the uptime.
@@ -102,6 +103,10 @@ class DashboardScreen extends ConsumerWidget {
               // A suspended service is resolved by paying — deep-link to billing.
               onTap: hasSuspended ? () => context.go('/billing') : null,
             ),
+            if (fup?.needsAttention ?? false) ...[
+              const SizedBox(height: 12),
+              _FupBanner(fup: fup!, onTap: () => context.go('/usage')),
+            ],
             const SizedBox(height: 16),
 
             // --- At-a-glance summary ---
@@ -306,6 +311,48 @@ class _StatusBanner extends StatelessWidget {
           child: Row(
             children: [
               Icon(icon, color: fg),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(text,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              ),
+              if (onTap != null) Icon(Icons.chevron_right, color: fg),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Fair-Usage alert on the dashboard. Taps through to the Usage tab, where the
+/// full explainer and "Top up to restore" CTA live.
+class _FupBanner extends StatelessWidget {
+  const _FupBanner({required this.fup, this.onTap});
+  final FupStatus fup;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final blocked = fup.isBlocked;
+    final bg = blocked ? scheme.errorContainer : scheme.tertiaryContainer;
+    final fg = blocked ? scheme.onErrorContainer : scheme.onTertiaryContainer;
+    final text = fup.summary ??
+        (blocked
+            ? 'Service paused — fair-usage limit reached'
+            : 'Speed reduced — fair-usage limit reached');
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(blocked ? Icons.block : Icons.speed, color: fg),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(text,

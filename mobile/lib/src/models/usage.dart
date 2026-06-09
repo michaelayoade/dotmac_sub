@@ -113,6 +113,41 @@ class UsageSeriesPoint {
       );
 }
 
+/// Customer-facing Fair-Usage status. Mirrors FupSummary in schemas/usage.py.
+class FupStatus {
+  FupStatus({
+    required this.status,
+    this.isReduced = false,
+    this.speedReductionPercent,
+    this.activeRuleName,
+    this.resetsAt,
+    this.summary,
+  });
+
+  final String status; // full_speed | throttled | blocked
+  final bool isReduced;
+  final double? speedReductionPercent;
+  final String? activeRuleName;
+  final DateTime? resetsAt;
+  final String? summary; // plain-language explainer
+
+  bool get isThrottled => status == 'throttled';
+  bool get isBlocked => status == 'blocked';
+
+  /// Whether the customer should see a banner / restore CTA.
+  bool get needsAttention => isThrottled || isBlocked;
+
+  factory FupStatus.fromJson(Map<String, dynamic> json) => FupStatus(
+        status: json['status']?.toString() ?? 'full_speed',
+        isReduced: json['is_reduced'] as bool? ?? false,
+        speedReductionPercent:
+            (json['speed_reduction_percent'] as num?)?.toDouble(),
+        activeRuleName: json['active_rule_name'] as String?,
+        resetsAt: _toDate(json['resets_at']),
+        summary: json['summary'] as String?,
+      );
+}
+
 /// Windowed data-usage summary. Mirrors UsageSummaryResponse from
 /// schemas/usage.py (GET /me/usage-summary).
 class UsageSummary {
@@ -125,6 +160,7 @@ class UsageSummary {
     required this.isAuthoritative,
     this.bucket,
     this.series = const [],
+    this.fup,
   });
 
   final String period; // hour | today | week | cycle | all
@@ -135,6 +171,7 @@ class UsageSummary {
   final bool isAuthoritative;
   final String? bucket; // minute | hour | day | null
   final List<UsageSeriesPoint> series;
+  final FupStatus? fup;
 
   factory UsageSummary.fromJson(Map<String, dynamic> json) => UsageSummary(
         period: json['period'].toString(),
@@ -147,6 +184,9 @@ class UsageSummary {
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),
+        fup: json['fup'] == null
+            ? null
+            : FupStatus.fromJson(json['fup'] as Map<String, dynamic>),
       );
 }
 
