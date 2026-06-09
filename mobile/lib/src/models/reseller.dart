@@ -33,6 +33,102 @@ class ResellerAccount {
       );
 }
 
+class ResellerSubscriptionRef {
+  ResellerSubscriptionRef({
+    required this.id,
+    required this.offerName,
+    required this.status,
+    this.startDate,
+  });
+
+  final String id;
+  final String offerName;
+  final String status;
+  final DateTime? startDate;
+
+  factory ResellerSubscriptionRef.fromJson(Map<String, dynamic> json) =>
+      ResellerSubscriptionRef(
+        id: json['id'].toString(),
+        offerName: json['offer_name'] as String? ?? 'N/A',
+        status: json['status'] as String? ?? 'unknown',
+        startDate: json['start_date'] == null
+            ? null
+            : DateTime.tryParse(json['start_date'].toString()),
+      );
+}
+
+class ResellerInvoiceSummary {
+  ResellerInvoiceSummary({
+    required this.id,
+    required this.status,
+    required this.totalAmount,
+    required this.balanceDue,
+    this.invoiceNumber,
+    this.issuedAt,
+    this.dueDate,
+  });
+
+  final String id;
+  final String status;
+  final num totalAmount;
+  final num balanceDue;
+  final String? invoiceNumber;
+  final DateTime? issuedAt;
+  final DateTime? dueDate;
+
+  factory ResellerInvoiceSummary.fromJson(Map<String, dynamic> json) =>
+      ResellerInvoiceSummary(
+        id: json['id'].toString(),
+        status: json['status'] as String? ?? 'draft',
+        totalAmount: (json['total_amount'] as num?) ?? 0,
+        balanceDue: (json['balance_due'] as num?) ?? 0,
+        invoiceNumber: json['invoice_number'] as String?,
+        issuedAt: json['issued_at'] == null
+            ? null
+            : DateTime.tryParse(json['issued_at'].toString()),
+        dueDate: json['due_date'] == null
+            ? null
+            : DateTime.tryParse(json['due_date'].toString()),
+      );
+}
+
+class ResellerAccountDetail {
+  ResellerAccountDetail({
+    required this.id,
+    required this.subscriberName,
+    required this.status,
+    required this.openBalance,
+    required this.subscriptions,
+    this.accountNumber,
+    this.email,
+    this.phone,
+  });
+
+  final String id;
+  final String subscriberName;
+  final String status;
+  final num openBalance;
+  final List<ResellerSubscriptionRef> subscriptions;
+  final String? accountNumber;
+  final String? email;
+  final String? phone;
+
+  factory ResellerAccountDetail.fromJson(Map<String, dynamic> json) =>
+      ResellerAccountDetail(
+        id: json['id'].toString(),
+        subscriberName: json['subscriber_name'] as String? ?? '',
+        status: json['status'] as String? ?? 'active',
+        openBalance: (json['open_balance'] as num?) ?? 0,
+        subscriptions: (json['subscriptions'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerSubscriptionRef.fromJson)
+            .toList(),
+        accountNumber: json['account_number'] as String?,
+        email: json['email'] as String?,
+        phone: json['phone'] as String?,
+      );
+}
+
 class ResellerTotals {
   ResellerTotals({
     required this.accounts,

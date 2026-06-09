@@ -17,6 +17,7 @@ import '../features/home/dashboard_screen.dart';
 import '../features/home/home_shell.dart';
 import '../features/home/notifications_screen.dart';
 import '../features/home/splash_screen.dart';
+import '../features/reseller/reseller_account_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
 import '../features/support/create_ticket_screen.dart';
 import '../features/support/ticket_detail_screen.dart';
@@ -94,6 +95,15 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/reseller',
         builder: (_, __) => const ResellerHomeScreen(),
+        routes: [
+          GoRoute(
+            path: 'accounts/:id',
+            builder: (_, state) => ResellerAccountScreen(
+              accountId: state.pathParameters['id']!,
+              title: state.extra as String?,
+            ),
+          ),
+        ],
       ),
       // Authenticated shell with bottom navigation.
       ShellRoute(
