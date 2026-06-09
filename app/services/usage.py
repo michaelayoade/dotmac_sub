@@ -11,7 +11,8 @@ from typing import cast
 from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
-from sqlalchemy import create_engine, func, text
+from sqlalchemy import and_, bindparam, create_engine, func, or_, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
@@ -61,6 +62,11 @@ logger = logging.getLogger(__name__)
 
 _MAC_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
 _RADIUS_ACCOUNTING_CURSOR_KEY = "radius_accounting_last_radacctid"
+# terminate_cause stamped on sessions the reaper closes synthetically (no Stop
+# packet ever arrived). Distinguishable from any real RADIUS terminate cause.
+_REAPED_TERMINATE_CAUSE = "reaped"
+# Per import run, how many locally-open sessions get re-read from radacct.
+_RADIUS_REFRESH_BATCH = 500
 
 # Bandwidth samples derived from RADIUS interim-update deltas are written to
 # the same Redis stream consumed by app.tasks.bandwidth.process_bandwidth_stream
@@ -136,6 +142,27 @@ def _write_subscription_mac_from_accounting(
     if not subscription or subscription.mac_address == mac_address:
         return
     subscription.mac_address = mac_address
+
+
+def _write_subscription_ips_from_accounting(
+    db: Session,
+    subscription_id,
+    *,
+    ipv4: str | None,
+    ipv6: str | None,
+) -> None:
+    """Mirror of the MAC write-back: the framed address on a live accounting
+    row is the subscriber's current address, so keep Subscription.ipv4_address
+    / ipv6_address (what the portal and mobile dashboard render) in sync."""
+    if not subscription_id or not (ipv4 or ipv6):
+        return
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription:
+        return
+    if ipv4 and subscription.ipv4_address != ipv4:
+        subscription.ipv4_address = ipv4
+    if ipv6 and subscription.ipv6_address != ipv6:
+        subscription.ipv6_address = ipv6
 
 
 def _normalize_radius_db_url(value: str | None) -> str | None:
@@ -350,6 +377,39 @@ def _parse_iso_ts(value: object) -> datetime | None:
     return parsed
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize for comparison: radacct (Postgres) hands back aware datetimes
+    while SQLite-backed local rows can be naive — treat naive as UTC."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _coerce_radacct_ts(value: object) -> datetime | None:
+    """radacct timestamps arrive as datetime from Postgres but as ISO strings
+    from drivers without type info on raw SELECTs (SQLite in tests, some MySQL
+    setups)."""
+    if value is None or isinstance(value, datetime):
+        return value
+    return _parse_iso_ts(str(value))
+
+
+def _coerce_radacct_ip(value: object) -> str | None:
+    """radacct inet columns arrive as ipaddress objects from psycopg or as
+    strings elsewhere. Host addresses lose their redundant /32 (v4) or /128
+    (v6) suffix; genuine prefixes (e.g. a /56 delegation) keep theirs."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("/32") or raw.endswith("/128"):
+        raw = raw.rsplit("/", 1)[0]
+    return raw
+
+
 def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
     username = str(row.get("username") or "").strip()
     session_id = str(row.get("acctsessionid") or "").strip()
@@ -389,22 +449,62 @@ def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
 
     prev_input_octets = target.input_octets
     prev_output_octets = target.output_octets
-    prev_update_at = target.session_start if existing is None else None
-    # session_end was cleared on prior interim updates; for delta math we want
-    # the most recent observation time, which we approximate by acctupdatetime
-    # of the incoming row vs. the stored session_end (only set on stop) or the
-    # session_start as a floor.
-    new_update_at = cast(datetime | None, row.get("acctupdatetime"))
+    prev_update_at = target.last_update_at
+    new_update_at = _coerce_radacct_ts(row.get("acctupdatetime"))
+    new_stop_at = _coerce_radacct_ts(row.get("acctstoptime"))
+    new_start_at = _coerce_radacct_ts(row.get("acctstarttime"))
+    # Most recent accounting observation for this row: stop beats interim
+    # beats start.
+    observed_at = new_stop_at or new_update_at or new_start_at
+
+    # A session we reaped can show up again via the open-session refresh while
+    # its radacct row is unchanged (still no stop, no fresher update). Without
+    # this guard the upsert would reopen it (session_end back to NULL) and the
+    # reaper would close it again next run — a permanent flap. Only let a
+    # reaped session be revived by genuinely new information: a real stop or a
+    # fresher acctupdatetime.
+    if (
+        existing is not None
+        and existing.terminate_cause == _REAPED_TERMINATE_CAUSE
+        and new_stop_at is None
+        and (
+            observed_at is None
+            or (
+                existing.last_update_at is not None
+                and _as_utc(observed_at) <= _as_utc(existing.last_update_at)
+            )
+        )
+    ):
+        return False
 
     target.subscription_id = subscription.id if subscription else None
     target.radius_client_id = radius_client.id if radius_client else None
     target.nas_device_id = radius_client.nas_device_id if radius_client else None
     target.status_type = status_type
-    target.session_start = cast(datetime | None, row.get("acctstarttime"))
-    target.session_end = cast(datetime | None, row.get("acctstoptime"))
+    target.session_start = new_start_at
+    target.session_end = new_stop_at
+    if observed_at is not None:
+        target.last_update_at = observed_at
     target.input_octets = cast(int | None, row.get("acctinputoctets"))
     target.output_octets = cast(int | None, row.get("acctoutputoctets"))
     target.terminate_cause = cast(str | None, row.get("acctterminatecause"))
+    framed_ipv4 = _coerce_radacct_ip(row.get("framedipaddress"))
+    framed_ipv6_prefix = _coerce_radacct_ip(row.get("framedipv6prefix"))
+    delegated_ipv6_prefix = _coerce_radacct_ip(row.get("delegatedipv6prefix"))
+    nas_port_id = str(row.get("nasportid") or "").strip() or None
+    called_station_id = str(row.get("calledstationid") or "").strip() or None
+    # Keep the last known value when a later row omits it (or the column is
+    # absent from this radacct schema entirely).
+    if framed_ipv4:
+        target.framed_ip_address = framed_ipv4
+    if framed_ipv6_prefix:
+        target.framed_ipv6_prefix = framed_ipv6_prefix
+    if delegated_ipv6_prefix:
+        target.delegated_ipv6_prefix = delegated_ipv6_prefix
+    if nas_port_id:
+        target.nas_port_id = nas_port_id
+    if called_station_id:
+        target.called_station_id = called_station_id
 
     if (
         status_type == AccountingStatus.interim
@@ -427,9 +527,119 @@ def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
         target.subscription_id,
         cast(str | None, row.get("callingstationid")),
     )
+    # Only live rows update the subscription's current address — a Stop (or a
+    # backlog of historical rows) shouldn't overwrite it.
+    if new_stop_at is None:
+        _write_subscription_ips_from_accounting(
+            db,
+            target.subscription_id,
+            ipv4=framed_ipv4,
+            ipv6=delegated_ipv6_prefix or framed_ipv6_prefix,
+        )
     if status_type in {AccountingStatus.start, AccountingStatus.interim}:
         credential.last_auth_at = datetime.now(UTC)
     return True
+
+
+_RADACCT_BASE_COLUMNS = (
+    "radacctid",
+    "acctsessionid",
+    "username",
+    "nasipaddress",
+    "acctstarttime",
+    "acctupdatetime",
+    "acctstoptime",
+    "acctinputoctets",
+    "acctoutputoctets",
+    "acctterminatecause",
+    "callingstationid",
+)
+# Present in the standard FreeRADIUS schema but historically not selected
+# here; can be absent on older radacct deployments, and the v6 ones only
+# carry data if the NAS sends them AND queries.conf writes them. Probed per
+# run — missing columns are simply skipped, never an error.
+_RADACCT_OPTIONAL_COLUMNS = (
+    "framedipaddress",
+    "framedipv6prefix",
+    "delegatedipv6prefix",
+    "nasportid",
+    "calledstationid",
+)
+
+
+def _radacct_select_list(conn) -> str:
+    try:
+        available = {c["name"] for c in sa_inspect(conn).get_columns("radacct")}
+    except Exception:
+        available = set()
+    extras = [c for c in _RADACCT_OPTIONAL_COLUMNS if c in available]
+    return ", ".join((*_RADACCT_BASE_COLUMNS, *extras))
+
+
+def _refresh_open_sessions_from_radacct(
+    db: Session,
+    conn,
+    select_list: str,
+    *,
+    batch: int = _RADIUS_REFRESH_BATCH,
+) -> tuple[int, int]:
+    """Re-read radacct for sessions we still hold open.
+
+    FreeRADIUS UPDATEs the radacct row in place on Interim-Update/Stop (same
+    radacctid), so the forward-only cursor never sees a session again after
+    first ingesting it — without this pass an open session's Stop would be
+    lost forever and it would look "active" indefinitely. Recently reaped
+    sessions are included too, so one the reaper guessed wrong on (or whose
+    real Stop arrived late) gets corrected with the real close.
+
+    Stalest first, so a large backlog drains across consecutive runs.
+    Returns (candidates_checked, rows_updated).
+    """
+    now = datetime.now(UTC)
+    candidates = (
+        db.query(RadiusAccountingSession.session_id, AccessCredential.username)
+        .join(
+            AccessCredential,
+            RadiusAccountingSession.access_credential_id == AccessCredential.id,
+        )
+        .filter(
+            or_(
+                RadiusAccountingSession.session_end.is_(None),
+                and_(
+                    RadiusAccountingSession.terminate_cause == _REAPED_TERMINATE_CAUSE,
+                    RadiusAccountingSession.session_end >= now - timedelta(hours=24),
+                ),
+            )
+        )
+        .order_by(RadiusAccountingSession.last_update_at.asc().nullsfirst())
+        .limit(batch)
+        .all()
+    )
+    if not candidates:
+        return 0, 0
+
+    session_ids = sorted({sid for sid, _ in candidates})
+    usernames = sorted({username for _, username in candidates if username})
+    if not usernames:
+        return len(candidates), 0
+    stmt = text(
+        f"""
+                SELECT {select_list}
+                FROM radacct
+                WHERE acctsessionid IN :session_ids
+                  AND username IN :usernames
+                ORDER BY radacctid ASC
+        """  # noqa: S608 — column list built from fixed names; values are bind params
+    ).bindparams(
+        bindparam("session_ids", expanding=True),
+        bindparam("usernames", expanding=True),
+    )
+    result = conn.execute(stmt, {"session_ids": session_ids, "usernames": usernames})
+    updated = 0
+    for row in result:
+        if _upsert_accounting_row(db, dict(row._mapping)):
+            updated += 1
+    return len(candidates), updated
 
 
 def import_radius_accounting(
@@ -443,51 +653,121 @@ def import_radius_accounting(
 
     batch_size = max(limit or 500, 1)
     last_radacctid = _get_radius_accounting_cursor(db)
+    processed = 0
+    created_or_updated = 0
+    refreshed = 0
+    cursor = last_radacctid
     engine = create_engine(db_url)
     with engine.begin() as conn:
+        select_list = _radacct_select_list(conn)
         result = conn.execute(
             text(
-                """
-                SELECT
-                    radacctid,
-                    acctsessionid,
-                    username,
-                    nasipaddress,
-                    acctstarttime,
-                    acctupdatetime,
-                    acctstoptime,
-                    acctinputoctets,
-                    acctoutputoctets,
-                    acctterminatecause,
-                    callingstationid
+                f"""
+                SELECT {select_list}
                 FROM radacct
                 WHERE radacctid > :cursor
                 ORDER BY radacctid ASC
                 LIMIT :limit
-                """
+                """  # noqa: S608 — column list built from fixed names; values are bind params
             ),
             {"cursor": last_radacctid, "limit": batch_size},
         )
         rows = [dict(row._mapping) for row in result]
-
-    processed = 0
-    created_or_updated = 0
-    cursor = last_radacctid
-    for row in rows:
-        processed += 1
-        if _upsert_accounting_row(db, row):
-            created_or_updated += 1
-        cursor = max(cursor, int(row.get("radacctid") or 0))
+        for row in rows:
+            processed += 1
+            if _upsert_accounting_row(db, row):
+                created_or_updated += 1
+            cursor = max(cursor, int(row.get("radacctid") or 0))
+        # New rows first (a fresh Stop may close a session and shrink the
+        # refresh set), then re-read radacct for whatever is still open.
+        db.flush()
+        refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
+            db, conn, select_list
+        )
 
     if cursor > last_radacctid:
         _set_radius_accounting_cursor(db, cursor)
     db.commit()
+    if refreshed:
+        logger.info(
+            "radius accounting refresh: %d/%d open sessions updated from radacct",
+            refreshed,
+            refresh_checked,
+        )
     return {
         "ok": True,
         "processed": processed,
         "created_or_updated": created_or_updated,
+        "refreshed": refreshed,
         "cursor": cursor,
     }
+
+
+_RADIUS_REAP_STALE_DEFAULT_SECONDS = 3600
+_RADIUS_REAP_STALE_FLOOR_SECONDS = 300
+
+
+def reap_stale_radius_sessions(
+    db: Session,
+    *,
+    stale_after_seconds: int | None = None,
+    batch: int = 1000,
+) -> dict[str, int]:
+    """Close open accounting sessions whose accounting feed went silent.
+
+    A NAS reboot, crash or lost Stop packet leaves a session open forever —
+    FreeRADIUS never writes acctstoptime, so session_end stays NULL and the
+    session renders as "active" indefinitely. A genuinely live session keeps
+    advancing last_update_at via interim updates (kept fresh by the
+    open-session refresh in import_radius_accounting), so "open but no
+    observation since the cutoff" reliably means dead.
+
+    The synthetic session_end is the last time we actually saw the session,
+    not the reap time — closer to the truth for usage display. If the session
+    turns out to be alive after all, the refresh pass revives it (the upsert
+    only honors a reaped close while radacct shows nothing new).
+    """
+    if stale_after_seconds is None:
+        raw = settings_spec.resolve_value(
+            db, SettingDomain.usage, "radius_session_reap_stale_seconds"
+        )
+        try:
+            stale_after_seconds = (
+                int(str(raw)) if raw is not None else _RADIUS_REAP_STALE_DEFAULT_SECONDS
+            )
+        except ValueError:
+            stale_after_seconds = _RADIUS_REAP_STALE_DEFAULT_SECONDS
+    stale_after_seconds = max(stale_after_seconds, _RADIUS_REAP_STALE_FLOOR_SECONDS)
+
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(seconds=stale_after_seconds)
+    last_seen = func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    )
+    stale = (
+        db.query(RadiusAccountingSession)
+        .filter(RadiusAccountingSession.session_end.is_(None))
+        .filter(last_seen < cutoff)
+        .order_by(last_seen.asc())
+        .limit(batch)
+        .all()
+    )
+    reaped = 0
+    for sess in stale:
+        sess.session_end = sess.last_update_at or sess.session_start or sess.created_at
+        sess.status_type = AccountingStatus.stop
+        sess.terminate_cause = _REAPED_TERMINATE_CAUSE
+        reaped += 1
+    db.commit()
+    if reaped:
+        logger.info(
+            "reaped %d stale radius sessions (no accounting update in %ds)",
+            reaped,
+            stale_after_seconds,
+        )
+    return {"reaped": reaped, "stale_after_seconds": stale_after_seconds}
 
 
 def _parse_warning_thresholds(value: str | None) -> list[Decimal]:
@@ -940,6 +1220,52 @@ class RadiusAccountingSessions(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def find_by_ip(
+        db: Session,
+        ip: str,
+        *,
+        at: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> builtins.list:
+        """Reverse lookup: which sessions held this address (v4, or exact v6
+        prefix), optionally narrowed to ones live at a point in time. This is
+        the abuse-desk / DMCA / lawful-request question — "who had IP X at
+        time T" — answerable only because the importer stores the framed
+        address against the session window."""
+        ip = ip.strip()
+        query = db.query(RadiusAccountingSession).filter(
+            or_(
+                RadiusAccountingSession.framed_ip_address == ip,
+                RadiusAccountingSession.framed_ipv6_prefix == ip,
+                RadiusAccountingSession.delegated_ipv6_prefix == ip,
+            )
+        )
+        if at is not None:
+            query = query.filter(
+                RadiusAccountingSession.session_start <= at,
+                or_(
+                    RadiusAccountingSession.session_end.is_(None),
+                    RadiusAccountingSession.session_end >= at,
+                ),
+            )
+        query = query.order_by(RadiusAccountingSession.session_start.desc().nullslast())
+        return apply_pagination(query, limit, offset).all()
+
+    @classmethod
+    def find_by_ip_response(
+        cls,
+        db: Session,
+        ip: str,
+        *,
+        at: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        items = cls.find_by_ip(db, ip, at=at, limit=limit, offset=offset)
+        return list_response(items, limit, offset)
 
     @staticmethod
     def list_for_subscriber(

@@ -36,6 +36,24 @@ def import_radius_accounting():
         session.close()
 
 
+@celery_app.task(name="app.tasks.usage.reap_stale_radius_sessions")
+def reap_stale_radius_sessions():
+    """Close accounting sessions whose feed went silent (NAS reboot / lost
+    Stop packet) so they stop rendering as "active" forever. Safe only
+    because the importer's refresh pass keeps last_update_at fresh for
+    genuinely live sessions."""
+    session = SessionLocal()
+    try:
+        result = usage_service.reap_stale_radius_sessions(session)
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.usage.meter_usage_into_quota")
 def meter_usage_into_quota():
     """Roll imported RADIUS accounting into the current period's quota buckets

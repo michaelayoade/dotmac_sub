@@ -216,10 +216,11 @@
     </div>
     {% endif %}
 
-    {% if pppoe_credentials %}
+    {% if pppoe_credentials or subscription.ipv4_address or subscription.ipv6_address %}
     <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
-        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white mb-4">Connection Credentials</h2>
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white mb-4">Connection Details</h2>
         <div class="grid gap-3">
+            {% if pppoe_credentials %}
             <div class="flex items-center justify-between rounded-xl bg-stone-50 px-4 py-3 dark:bg-stone-700/40">
                 <div>
                     <p class="text-xs font-medium text-stone-500 dark:text-stone-400">PPPoE Username</p>
@@ -237,6 +238,37 @@
                 <p class="text-xs font-medium text-stone-500 dark:text-stone-400">PPPoE Password</p>
                 <p class="mt-0.5 text-sm text-stone-600 dark:text-stone-300">Contact support if you need your password reset</p>
             </div>
+            {% endif %}
+            {% if subscription.ipv4_address %}
+            <div class="flex items-center justify-between rounded-xl bg-stone-50 px-4 py-3 dark:bg-stone-700/40">
+                <div>
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">IP Address</p>
+                    <p class="mt-0.5 font-mono text-sm font-semibold text-stone-900 dark:text-white">{{ subscription.ipv4_address }}</p>
+                </div>
+                <button onclick="navigator.clipboard.writeText('{{ subscription.ipv4_address }}')"
+                        class="rounded-lg p-2 text-stone-400 hover:bg-stone-200 hover:text-stone-600 dark:hover:bg-stone-600 dark:hover:text-stone-200"
+                        title="Copy IP address">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                </button>
+            </div>
+            {% endif %}
+            {% if subscription.ipv6_address %}
+            <div class="flex items-center justify-between rounded-xl bg-stone-50 px-4 py-3 dark:bg-stone-700/40">
+                <div>
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">IPv6 Prefix</p>
+                    <p class="mt-0.5 font-mono text-sm font-semibold text-stone-900 dark:text-white">{{ subscription.ipv6_address }}</p>
+                </div>
+                <button onclick="navigator.clipboard.writeText('{{ subscription.ipv6_address }}')"
+                        class="rounded-lg p-2 text-stone-400 hover:bg-stone-200 hover:text-stone-600 dark:hover:bg-stone-600 dark:hover:text-stone-200"
+                        title="Copy IPv6 prefix">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                </button>
+            </div>
+            {% endif %}
         </div>
     </div>
     {% endif %}

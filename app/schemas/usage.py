@@ -57,9 +57,17 @@ class RadiusAccountingSessionBase(BaseModel):
     status_type: AccountingStatus
     session_start: datetime | None = None
     session_end: datetime | None = None
+    # Most recent accounting observation (interim update or stop); a live
+    # session keeps advancing this, an open one gone quiet is a ghost.
+    last_update_at: datetime | None = None
     input_octets: int | None = None
     output_octets: int | None = None
     terminate_cause: str | None = Field(default=None, max_length=120)
+    framed_ip_address: str | None = Field(default=None, max_length=64)
+    framed_ipv6_prefix: str | None = Field(default=None, max_length=128)
+    delegated_ipv6_prefix: str | None = Field(default=None, max_length=128)
+    nas_port_id: str | None = Field(default=None, max_length=64)
+    called_station_id: str | None = Field(default=None, max_length=64)
 
 
 class RadiusAccountingSessionCreate(RadiusAccountingSessionBase):
@@ -75,9 +83,15 @@ class RadiusAccountingSessionUpdate(BaseModel):
     status_type: AccountingStatus | None = None
     session_start: datetime | None = None
     session_end: datetime | None = None
+    last_update_at: datetime | None = None
     input_octets: int | None = None
     output_octets: int | None = None
     terminate_cause: str | None = Field(default=None, max_length=120)
+    framed_ip_address: str | None = Field(default=None, max_length=64)
+    framed_ipv6_prefix: str | None = Field(default=None, max_length=128)
+    delegated_ipv6_prefix: str | None = Field(default=None, max_length=128)
+    nas_port_id: str | None = Field(default=None, max_length=64)
+    called_station_id: str | None = Field(default=None, max_length=64)
     calling_station_id: str | None = Field(default=None, max_length=64)
 
 

@@ -109,7 +109,11 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
-from app.tasks.usage import import_radius_accounting, run_usage_rating
+from app.tasks.usage import (
+    import_radius_accounting,
+    reap_stale_radius_sessions,
+    run_usage_rating,
+)
 from app.tasks.vacation_holds import resume_expired_holds
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
@@ -164,6 +168,7 @@ __all__ = [
     "cleanup_old_events",
     "run_usage_rating",
     "import_radius_accounting",
+    "reap_stale_radius_sessions",
     "cleanup_nas_backups",
     "refresh_expiring_tokens",
     "check_token_health",

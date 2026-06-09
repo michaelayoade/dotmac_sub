@@ -263,6 +263,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 name=offer.name if offer else "Service",
                 speed=speed,
                 address=address,
+                ip_address=subscription.ipv4_address,
                 status=subscription.status.value if subscription.status else "pending",
                 monthly_cost=monthly_cost,
             )
