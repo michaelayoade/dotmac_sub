@@ -35,14 +35,18 @@ class CrmPushError(Exception):
 )
 def push_subscriber_change(
     self,
-    splynx_customer_id: int,
+    external_id: int | str,
     subscriber_data: dict,
+    external_system: str = "splynx",
 ) -> bool:
     """Push one subscriber change to the CRM webhook, retrying on failure.
 
     Args:
-        splynx_customer_id: Splynx customer ID (used as the CRM external_id).
-        subscriber_data: Subscriber fields in Splynx API shape.
+        external_id: CRM external_id — the Splynx customer ID for migrated
+            subscribers, the local subscriber UUID for native ones.
+        subscriber_data: Subscriber fields (Splynx-shaped for splynx, CRM
+            column names otherwise).
+        external_system: CRM external system the payload is keyed under.
 
     Returns:
         True on success.
@@ -50,12 +54,35 @@ def push_subscriber_change(
     Raises:
         CrmPushError: On any push failure, to trigger Celery retry.
     """
+    from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM
     from app.services.crm_webhook import push_subscriber_change as _push
 
-    if _push(splynx_customer_id, subscriber_data):
+    crm_subscriber_id = _push(external_id, subscriber_data, external_system)
+    if crm_subscriber_id:
+        if external_system == NATIVE_EXTERNAL_SYSTEM:
+            _persist_crm_link(str(external_id), crm_subscriber_id)
         return True
 
     raise CrmPushError(
-        f"CRM push failed for customer {splynx_customer_id} "
+        f"CRM push failed for {external_system} {external_id} "
         f"(attempt {self.request.retries + 1}/{MAX_RETRIES + 1})"
     )
+
+
+def _persist_crm_link(subscriber_id: str, crm_subscriber_id: str) -> None:
+    """Store the CRM subscriber UUID returned by a native push."""
+    from uuid import UUID
+
+    from app.db import task_session
+    from app.models.subscriber import Subscriber
+
+    try:
+        crm_uuid = UUID(crm_subscriber_id)
+        local_uuid = UUID(subscriber_id)
+    except (TypeError, ValueError):
+        return
+    with task_session() as db:
+        subscriber = db.get(Subscriber, local_uuid)
+        if subscriber and not subscriber.crm_subscriber_id:
+            subscriber.crm_subscriber_id = crm_uuid
+            db.commit()

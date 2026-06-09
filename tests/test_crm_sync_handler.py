@@ -18,6 +18,8 @@ import pytest
 
 from app.config import settings
 from app.services.crm_webhook import (
+    native_status,
+    native_subscriber_payload,
     service_activation_payload,
     status_change_payload,
 )
@@ -39,9 +41,15 @@ def crm_base_url(value: str):
 
 def _subscriber(splynx_id=4242, first="Jane", last="Doe"):
     sub = MagicMock()
+    sub.id = uuid.uuid4()
     sub.splynx_customer_id = splynx_id
     sub.first_name = first
     sub.last_name = last
+    sub.display_name = None
+    sub.email = "jane@example.com"
+    sub.subscriber_number = "SUB-1001"
+    sub.account_number = None
+    sub.status = "active"
     return sub
 
 
@@ -71,6 +79,32 @@ class TestPayloadBuilders:
         assert payload["service_name"] == "Fiber 100"
         assert payload["service_speed"] == "100/20 Mbps"
         assert "last_update" in payload
+
+    def test_native_status_maps_local_vocabulary(self):
+        assert native_status("active") == "active"
+        assert native_status("blocked") == "suspended"
+        assert native_status("canceled") == "terminated"
+        assert native_status("new") == "pending"
+        assert native_status(None) == "pending"
+
+    def test_native_subscriber_payload_uses_crm_columns_only(self):
+        sub = _subscriber(splynx_id=None)
+        payload = native_subscriber_payload(sub, "Fiber 100", "100/20 Mbps")
+        # CRM generic handler instantiates its model from this verbatim —
+        # every key must be a CRM Subscriber column.
+        assert set(payload) <= {
+            "status",
+            "notes",
+            "subscriber_number",
+            "account_number",
+            "service_name",
+            "service_plan",
+            "service_speed",
+        }
+        assert payload["status"] == "active"
+        assert payload["subscriber_number"] == "SUB-1001"
+        assert "Jane Doe" in payload["notes"]
+        assert "jane@example.com" in payload["notes"]
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +144,9 @@ class TestCrmSyncHandler:
         http.assert_not_called()
         enqueue.assert_called_once()
         _, kwargs = enqueue.call_args
-        splynx_id, payload = kwargs["args"]
+        splynx_id, payload, external_system = kwargs["args"]
         assert splynx_id == 4242
+        assert external_system == "splynx"
         assert payload["status"] == "blocked"
         assert payload["name"] == "Jane Doe"
         assert kwargs["source"] == "crm_sync_handler"
@@ -128,7 +163,7 @@ class TestCrmSyncHandler:
         with crm_base_url("https://crm.example"):
             enqueue, _ = self._handle(event, db)
         _, kwargs = enqueue.call_args
-        _, payload = kwargs["args"]
+        _, payload, _ = kwargs["args"]
         assert payload["status"] == "active"
 
     def test_subscription_activated_enqueues_service(self):
@@ -151,8 +186,9 @@ class TestCrmSyncHandler:
         http.assert_not_called()
         enqueue.assert_called_once()
         _, kwargs = enqueue.call_args
-        splynx_id, payload = kwargs["args"]
+        splynx_id, payload, external_system = kwargs["args"]
         assert splynx_id == 4242
+        assert external_system == "splynx"
         assert payload["status"] == "active"
         assert payload["service_name"] == "Fiber 100"
         assert payload["service_speed"] == "100/20 Mbps"
@@ -175,7 +211,7 @@ class TestCrmSyncHandler:
         with crm_base_url("https://crm.example"):
             enqueue, _ = self._handle(event, db)
         _, kwargs = enqueue.call_args
-        _, payload = kwargs["args"]
+        _, payload, _ = kwargs["args"]
         assert payload["service_name"] == "Fiber 100"
         assert payload["service_speed"] == ""
 
@@ -192,14 +228,46 @@ class TestCrmSyncHandler:
         enqueue.assert_not_called()
         http.assert_not_called()
 
-    def test_skips_subscriber_without_splynx_id(self):
+    def test_native_subscriber_pushes_generic_webhook(self):
+        """Subscribers without a Splynx id push via the generic 'dotmac' system."""
+        sub = _subscriber(splynx_id=None)
         db = MagicMock()
-        db.get.return_value = _subscriber(splynx_id=None)
+        db.get.return_value = sub
         event = Event(
             event_type=EventType.subscriber_suspended,
             payload={"to_status": "blocked"},
             account_id=uuid.uuid4(),
         )
+        with crm_base_url("https://crm.example"):
+            enqueue, _ = self._handle(event, db)
+        enqueue.assert_called_once()
+        _, kwargs = enqueue.call_args
+        external_id, payload, external_system = kwargs["args"]
+        assert external_id == str(sub.id)
+        assert external_system == "dotmac"
+        assert payload["status"] == "suspended"  # CRM vocabulary, not splynx's
+        assert "name" not in payload  # not a CRM Subscriber column
+
+    def test_subscriber_created_pushes_native_only(self):
+        """Creation pushes natives into the CRM; migrated subscribers skip."""
+        native = _subscriber(splynx_id=None)
+        db = MagicMock()
+        db.get.return_value = native
+        event = Event(
+            event_type=EventType.subscriber_created,
+            payload={},
+            account_id=uuid.uuid4(),
+        )
+        with crm_base_url("https://crm.example"):
+            enqueue, _ = self._handle(event, db)
+        enqueue.assert_called_once()
+        _, kwargs = enqueue.call_args
+        external_id, payload, external_system = kwargs["args"]
+        assert external_id == str(native.id)
+        assert external_system == "dotmac"
+        assert payload["status"] == "active"
+
+        db.get.return_value = _subscriber()  # has a splynx id → already in CRM
         with crm_base_url("https://crm.example"):
             enqueue, _ = self._handle(event, db)
         enqueue.assert_not_called()
@@ -247,17 +315,44 @@ class TestCrmSyncHandler:
 class TestPushTask:
     def test_returns_true_on_success(self):
         with patch(
-            "app.services.crm_webhook.push_subscriber_change", return_value=True
+            "app.services.crm_webhook.push_subscriber_change", return_value="ok"
         ) as push:
             assert push_subscriber_change.run(99, {"status": "active"}) is True
-        push.assert_called_once_with(99, {"status": "active"})
+        push.assert_called_once_with(99, {"status": "active"}, "splynx")
 
     def test_raises_to_retry_on_failure(self):
         with patch(
-            "app.services.crm_webhook.push_subscriber_change", return_value=False
+            "app.services.crm_webhook.push_subscriber_change", return_value=None
         ):
             with pytest.raises(CrmPushError):
                 push_subscriber_change.run(99, {"status": "active"})
+
+    def test_native_push_persists_crm_link(self):
+        local_id = str(uuid.uuid4())
+        crm_id = str(uuid.uuid4())
+        with (
+            patch(
+                "app.services.crm_webhook.push_subscriber_change",
+                return_value=crm_id,
+            ),
+            patch("app.tasks.crm_sync._persist_crm_link") as persist,
+        ):
+            assert (
+                push_subscriber_change.run(local_id, {"status": "active"}, "dotmac")
+                is True
+            )
+        persist.assert_called_once_with(local_id, crm_id)
+
+    def test_splynx_push_does_not_persist(self):
+        with (
+            patch(
+                "app.services.crm_webhook.push_subscriber_change",
+                return_value=str(uuid.uuid4()),
+            ),
+            patch("app.tasks.crm_sync._persist_crm_link") as persist,
+        ):
+            push_subscriber_change.run(99, {"status": "active"})
+        persist.assert_not_called()
 
     def test_task_configured_for_autoretry(self):
         assert CrmPushError in push_subscriber_change.autoretry_for
