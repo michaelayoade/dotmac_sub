@@ -10,6 +10,7 @@ class QuotaBucket {
     this.includedGb,
     this.usedGb = 0,
     this.rolloverGb = 0,
+    this.topupGb = 0,
     this.overageGb = 0,
   });
 
@@ -20,11 +21,12 @@ class QuotaBucket {
   final double? includedGb;
   final double usedGb;
   final double rolloverGb;
+  final double topupGb;
   final double overageGb;
 
-  /// Total data available this period (included + rolled-over).
+  /// Total data available this period (included + rolled-over + top-ups).
   double? get allowanceGb =>
-      includedGb == null ? null : includedGb! + rolloverGb;
+      includedGb == null ? null : includedGb! + rolloverGb + topupGb;
 
   double? get remainingGb {
     final a = allowanceGb;
@@ -51,6 +53,7 @@ class QuotaBucket {
         includedGb: asDoubleOrNull(json['included_gb']),
         usedGb: asDouble(json['used_gb']),
         rolloverGb: asDouble(json['rollover_gb']),
+        topupGb: asDouble(json['topup_gb']),
         overageGb: asDouble(json['overage_gb']),
       );
 }

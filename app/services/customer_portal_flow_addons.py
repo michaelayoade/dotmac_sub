@@ -83,6 +83,8 @@ def _serialize_option(link: OfferAddOn, add_on: AddOn) -> dict:
         "min_quantity": int(link.min_quantity or 1),
         "max_quantity": link.max_quantity,
         "is_required": bool(link.is_required),
+        # Data top-up: GB granted to the quota bucket on purchase (null otherwise).
+        "grant_gb": add_on.grant_gb,
     }
 
 

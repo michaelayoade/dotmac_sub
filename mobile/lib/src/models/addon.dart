@@ -12,6 +12,7 @@ class AddonOption {
     required this.minQuantity,
     required this.maxQuantity,
     this.description,
+    this.grantGb,
   });
 
   final String addOnId;
@@ -23,6 +24,11 @@ class AddonOption {
   final int? maxQuantity;
   final String? description;
 
+  /// GB this add-on grants to the quota bucket — set only for data top-ups.
+  final int? grantGb;
+
+  bool get isDataTopup => grantGb != null && grantGb! > 0;
+
   factory AddonOption.fromJson(Map<String, dynamic> json) => AddonOption(
         addOnId: json['add_on_id'].toString(),
         name: json['name'] as String? ?? 'Add-on',
@@ -32,6 +38,7 @@ class AddonOption {
         minQuantity: (json['min_quantity'] as num?)?.toInt() ?? 1,
         maxQuantity: (json['max_quantity'] as num?)?.toInt(),
         description: json['description'] as String?,
+        grantGb: (json['grant_gb'] as num?)?.toInt(),
       );
 }
 

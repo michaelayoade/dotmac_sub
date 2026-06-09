@@ -312,6 +312,30 @@ class _QuotaCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(5),
               color: overLimit ? theme.colorScheme.error : null,
             ),
+            if (!b.isUnlimited) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    overLimit
+                        ? '${Fmt.gb(b.overageGb)} over'
+                        : '${Fmt.gb(b.remainingGb ?? 0)} left',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: overLimit
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.outline,
+                    ),
+                  ),
+                  if (b.topupGb > 0)
+                    Text(
+                      '+${Fmt.gb(b.topupGb)} top-up',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.primary),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
