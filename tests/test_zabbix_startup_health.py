@@ -1,17 +1,11 @@
 """The startup Zabbix health probe retries before warning, so a transient
-failure during the saturated post-seed window doesn't false-alarm. It must
-also never raise into the startup path."""
+failure during the saturated post-seed window doesn't false-alarm. It runs in
+a worker thread (see _run_deferred_startup) and must never raise."""
 
 from __future__ import annotations
 
-import asyncio
-
 import app.main as main
 import app.services.zabbix as zabbix_service
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 def test_retries_until_available(monkeypatch):
@@ -28,7 +22,7 @@ def test_retries_until_available(monkeypatch):
 
     monkeypatch.setattr(zabbix_service, "check_zabbix_availability", fake_check)
 
-    _run(main._log_zabbix_startup_health())
+    main._log_zabbix_startup_health()
     # Stops retrying as soon as it sees availability.
     assert calls["n"] == 3
 
@@ -51,15 +45,15 @@ def test_exhausts_attempts_then_warns(monkeypatch, caplog):
     monkeypatch.setattr(zabbix_service, "check_zabbix_availability", fake_check)
 
     with caplog.at_level("WARNING"):
-        _run(main._log_zabbix_startup_health())
+        main._log_zabbix_startup_health()
 
     assert calls["n"] == 2  # used all attempts before giving up
     assert any(r.message == "zabbix_startup_health" for r in caplog.records)
 
 
 def test_exception_does_not_propagate(monkeypatch):
-    """A probe that raises must be swallowed (retried), never bubbled into
-    the startup task."""
+    """A probe that raises must be swallowed (retried), never bubbled out of
+    the deferred-startup worker thread."""
     monkeypatch.setattr(main, "_ZABBIX_STARTUP_HEALTH_ATTEMPTS", 2)
     monkeypatch.setattr(main, "_ZABBIX_STARTUP_HEALTH_RETRY_DELAY", 0)
 
@@ -69,4 +63,4 @@ def test_exception_does_not_propagate(monkeypatch):
     monkeypatch.setattr(zabbix_service, "check_zabbix_availability", boom)
 
     # Should complete without raising.
-    _run(main._log_zabbix_startup_health())
+    main._log_zabbix_startup_health()
