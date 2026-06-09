@@ -56,6 +56,11 @@ from app.services.response import ListResponseMixin
 
 _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
 _STALE_INFORM_SERVICE_APPLY_DAYS = 5
+# Commit the GenieACS device-sync upsert loop every N devices so a large ACS
+# inventory doesn't accumulate one long write transaction (row locks +
+# delayed autovacuum). Each device upsert is independent, so partial progress
+# on failure is fine.
+_GENIEACS_SYNC_COMMIT_BATCH = 200
 
 logger = logging.getLogger(__name__)
 
@@ -1053,7 +1058,7 @@ class CpeDevices(ListResponseMixin):
         created, updated = 0, 0
         datetime.now(UTC)
 
-        for device_data in devices:
+        for idx, device_data in enumerate(devices, start=1):
             # Extract GenieACS device ID (the authoritative identifier)
             genieacs_device_id = str(device_data.get("_id") or "").strip()
             if not genieacs_device_id:
@@ -1159,6 +1164,11 @@ class CpeDevices(ListResponseMixin):
                 existing,
                 serial=serial_number,
             )
+
+            # Flush each batch so a large inventory doesn't hold one long write
+            # transaction; the trailing commit below catches the remainder.
+            if idx % _GENIEACS_SYNC_COMMIT_BATCH == 0:
+                db.commit()
 
         db.commit()
 
