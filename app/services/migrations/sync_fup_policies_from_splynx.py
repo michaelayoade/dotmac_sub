@@ -66,7 +66,11 @@ def _rules_from_conditions(
         conds = json.loads(conditions) if isinstance(conditions, str) else conditions
     except (json.JSONDecodeError, TypeError):
         return
-    for cond in conds or []:
+    if not isinstance(conds, list):
+        return
+    for cond in conds:
+        if not isinstance(cond, dict):
+            continue
         ctype = str(cond.get("type") or "").lower()
         direction = _DIRECTION.get(str(cond.get("direction") or "").lower())
         if direction is None:
