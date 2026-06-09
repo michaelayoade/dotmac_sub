@@ -414,6 +414,15 @@ def build_beat_schedule() -> dict:
             enabled=radius_accounting_enabled,
             interval_seconds=radius_accounting_interval_seconds,
         )
+        # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
+        # Gated by the same usage flag; no point metering faster than every 5 min.
+        _sync_scheduled_task(
+            session,
+            name="usage_metering_runner",
+            task_name="app.tasks.usage.meter_usage_into_quota",
+            enabled=usage_enabled,
+            interval_seconds=max(usage_interval_seconds, 300),
+        )
         zabbix_usage_enabled_by_default = _zabbix_configured_default()
         zabbix_usage_enabled = _effective_bool(
             session,
