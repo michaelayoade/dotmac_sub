@@ -40,15 +40,11 @@ def upgrade() -> None:
         ),
         sa.Column("token", sa.String(length=512), nullable=False, unique=True),
         sa.Column("platform", sa.String(length=16), nullable=True),
-        sa.Column(
-            "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
-        ),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index(
-        "ix_device_tokens_subscriber_id", _TABLE, ["subscriber_id"]
-    )
+    op.create_index("ix_device_tokens_subscriber_id", _TABLE, ["subscriber_id"])
 
 
 def downgrade() -> None:

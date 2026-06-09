@@ -28,10 +28,14 @@ def test_register_upserts_and_lists_active(db_session, subscriber):
 
 def test_unregister_deactivates_and_is_idempotent(db_session, subscriber):
     push_service.register_token(db_session, str(subscriber.id), "tok-2", "android")
-    assert push_service.unregister_token(db_session, str(subscriber.id), "tok-2") is True
+    assert (
+        push_service.unregister_token(db_session, str(subscriber.id), "tok-2") is True
+    )
     assert push_service.active_tokens(db_session, str(subscriber.id)) == []
     # Unknown token → no-op False, no raise.
-    assert push_service.unregister_token(db_session, str(subscriber.id), "nope") is False
+    assert (
+        push_service.unregister_token(db_session, str(subscriber.id), "nope") is False
+    )
 
 
 def test_send_push_noop_without_tokens(db_session, subscriber):
@@ -62,7 +66,9 @@ def test_register_endpoint_creates_row(db_session, subscriber):
     )
     assert out.platform == "android"
     assert out.is_active is True
-    assert push_service.active_tokens(db_session, str(subscriber.id)) == ["endpoint-tok"]
+    assert push_service.active_tokens(db_session, str(subscriber.id)) == [
+        "endpoint-tok"
+    ]
 
 
 def test_unregister_endpoint_is_idempotent(db_session, subscriber):

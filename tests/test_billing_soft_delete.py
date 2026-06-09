@@ -9,7 +9,9 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.services.billing.reporting import billing_reporting
 
 
-def _invoice(db_session, account_id, balance, *, is_active=True, status=InvoiceStatus.issued):
+def _invoice(
+    db_session, account_id, balance, *, is_active=True, status=InvoiceStatus.issued
+):
     inv = Invoice(
         account_id=account_id,
         invoice_number=f"INV-{uuid.uuid4()}",
