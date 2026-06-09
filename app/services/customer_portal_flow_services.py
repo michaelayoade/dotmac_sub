@@ -17,7 +17,7 @@ class VacationHoldUsage(TypedDict):
 
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
@@ -769,9 +769,16 @@ def get_services_page(
     if not account_id_str:
         return empty_result
 
-    query = db.query(Subscription).filter(
-        Subscription.subscriber_id == coerce_uuid(account_id_str),
-        Subscription.status.in_(_PORTAL_VISIBLE_SERVICE_STATUSES),
+    query = (
+        db.query(Subscription)
+        .options(
+            selectinload(Subscription.offer),
+            selectinload(Subscription.offer_version),
+        )
+        .filter(
+            Subscription.subscriber_id == coerce_uuid(account_id_str),
+            Subscription.status.in_(_PORTAL_VISIBLE_SERVICE_STATUSES),
+        )
     )
     if status:
         query = query.filter(

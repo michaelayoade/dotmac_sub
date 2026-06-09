@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.comms import CustomerNotificationEvent, CustomerNotificationStatus
@@ -101,6 +101,7 @@ def _load_notifications(
     *,
     subscriber: Subscriber | None,
     recipients: list[str],
+    candidate_limit: int | None = None,
 ) -> list[SimpleNamespace]:
     if subscriber is None and not recipients:
         return []
@@ -124,23 +125,38 @@ def _load_notifications(
             )
         )
 
-    queue_notifications = (
+    queue_query = (
         db.query(Notification)
         .filter(Notification.is_active.is_(True))
         .filter(Notification.status == NotificationStatus.delivered)
         .filter(or_(*notification_filters))
-        .all()
         if notification_filters
-        else []
+        else None
     )
-    customer_notifications = (
+    if queue_query is not None:
+        queue_query = queue_query.order_by(Notification.created_at.desc())
+        if candidate_limit is not None:
+            queue_query = queue_query.limit(candidate_limit)
+        queue_notifications = queue_query.all()
+    else:
+        queue_notifications = []
+
+    customer_query = (
         db.query(CustomerNotificationEvent)
         .filter(CustomerNotificationEvent.status == CustomerNotificationStatus.sent)
         .filter(or_(*comms_filters))
-        .all()
         if comms_filters
-        else []
+        else None
     )
+    if customer_query is not None:
+        customer_query = customer_query.order_by(
+            CustomerNotificationEvent.created_at.desc()
+        )
+        if candidate_limit is not None:
+            customer_query = customer_query.limit(candidate_limit)
+        customer_notifications = customer_query.all()
+    else:
+        customer_notifications = []
 
     merged = [
         normalized
@@ -161,6 +177,58 @@ def _load_notifications(
     return merged
 
 
+def _count_notification_candidates(
+    db: Session,
+    *,
+    subscriber: Subscriber | None,
+    recipients: list[str],
+) -> int:
+    if subscriber is None and not recipients:
+        return 0
+
+    notification_filters = []
+    comms_filters = []
+    if subscriber is not None:
+        notification_filters.append(Notification.subscriber_id == subscriber.id)
+        comms_filters.append(CustomerNotificationEvent.subscriber_id == subscriber.id)
+    if recipients:
+        notification_filters.append(
+            and_(
+                Notification.subscriber_id.is_(None),
+                Notification.recipient.in_(recipients),
+            )
+        )
+        comms_filters.append(
+            and_(
+                CustomerNotificationEvent.subscriber_id.is_(None),
+                CustomerNotificationEvent.recipient.in_(recipients),
+            )
+        )
+
+    queue_count = (
+        db.scalar(
+            db.query(func.count(Notification.id))
+            .filter(Notification.is_active.is_(True))
+            .filter(Notification.status == NotificationStatus.delivered)
+            .filter(or_(*notification_filters))
+            .statement
+        )
+        if notification_filters
+        else 0
+    )
+    customer_count = (
+        db.scalar(
+            db.query(func.count(CustomerNotificationEvent.id))
+            .filter(CustomerNotificationEvent.status == CustomerNotificationStatus.sent)
+            .filter(or_(*comms_filters))
+            .statement
+        )
+        if comms_filters
+        else 0
+    )
+    return int(queue_count or 0) + int(customer_count or 0)
+
+
 def get_notifications_preview(
     db: Session,
     customer: dict,
@@ -169,9 +237,14 @@ def get_notifications_preview(
 ) -> dict[str, object]:
     subscriber, recipients = _resolve_notification_context(db, customer)
     notifications = _load_notifications(
+        db,
+        subscriber=subscriber,
+        recipients=recipients,
+        candidate_limit=max(limit * 2, limit),
+    )
+    total = _count_notification_candidates(
         db, subscriber=subscriber, recipients=recipients
     )
-    total = len(notifications)
     return {
         "recent_notifications": notifications[:limit],
         "recent_notifications_total": total,

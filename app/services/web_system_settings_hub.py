@@ -56,6 +56,11 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Manage API access tokens",
             },
             {
+                "name": "Resellers",
+                "url": "/admin/resellers",
+                "description": "Manage reseller and partner accounts",
+            },
+            {
                 "name": "Secrets (OpenBao)",
                 "url": "/admin/system/secrets",
                 "description": "Encrypted secrets vault — API keys, passwords, tokens",

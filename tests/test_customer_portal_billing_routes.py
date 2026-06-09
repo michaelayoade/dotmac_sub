@@ -166,6 +166,10 @@ class TestCustomerTopupRoutes:
         context = render.call_args.args[1]
         assert "payment_reference" not in context
         assert context["active_page"] == "billing"
+        assert context["payment_options"] == [
+            {"provider_type": "paystack", "label": "Pay with Paystack"},
+            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
+        ]
 
     def test_topup_intent_route_returns_json_payload(self) -> None:
         import json

@@ -137,7 +137,15 @@ def get_current_customer(session_token: str | None, db: Session) -> dict | None:
 
     # Enrich session with user data
     username = session.get("username")
-    if username:
+    needs_identity_lookup = bool(
+        username
+        and (
+            not session.get("account_id")
+            or not session.get("subscriber_id")
+            or not session.get("subscription_id")
+        )
+    )
+    if needs_identity_lookup:
         radius_user = db.scalars(
             select(RadiusUser)
             .where(RadiusUser.username == username)
