@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, row_actions, row_action, status_badge, empty_state, action_button, icon_plus, icon_view, icon_puzzle, icon_check_circle, animation_styles %}
 
-{% block title %}Connectors - Integrations{% endblock %}
+{% block title %}{{ page_title or 'Connectors' }} - Integrations{% endblock %}
 
 {% block content %}
 {{ ambient_background("indigo", "violet") }}
@@ -9,14 +9,15 @@
 <div class="relative space-y-8">
     {# Page Header #}
     {% call page_header(
-        title="Connectors",
-        subtitle="Reusable connection configurations for external systems",
+        title=page_title or "Connectors",
+        subtitle=page_subtitle or "Reusable connection configurations for external systems",
         icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/></svg>',
         color="indigo",
         color2="violet"
     ) %}
         {{ action_button("Marketplace", "/admin/integrations/marketplace", "", "secondary", "indigo", "violet") }}
         {{ action_button("Installed", "/admin/integrations/installed", "", "secondary", "emerald", "teal") }}
+        {{ action_button("Syncs", "/admin/integrations/syncs", "", "secondary", "cyan", "blue") }}
         {{ action_button("Register Integration", "/admin/integrations/register", "", "secondary", "slate", "gray") }}
         {{ action_button("WhatsApp Config", "/admin/integrations/whatsapp/config", "", "secondary", "emerald", "teal") }}
         {{ action_button("Add Connector", "/admin/integrations/connectors/new", icon_plus(), "primary", "indigo", "violet") }}
@@ -32,7 +33,7 @@
 
     {# Connectors Table #}
     <div class="animate-fade-in-up" style="animation-delay: 100ms;">
-    {% call card("Connectors", color="indigo") %}
+    {% call card(table_title or "Connectors", color="indigo") %}
         {% if connectors %}
         {% call data_table() %}
             {{ table_head(["Connector", "Type", "Auth", "Base URL", "Status", ""]) }}

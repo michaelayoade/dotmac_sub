@@ -12,7 +12,11 @@ SessionLocal = db_session_adapter.create_session
 
 
 @celery_app.task(name="app.tasks.integrations.run_integration_job")
-def run_integration_job(job_id: str):
+def run_integration_job(
+    job_id: str,
+    trigger: str = "schedule",
+    requested_by: str | None = None,
+):
     start = time.monotonic()
     status = "success"
     logger = get_logger(__name__)
@@ -30,7 +34,15 @@ def run_integration_job(job_id: str):
             logger.info("integration_job_skipped_running job_id=%s", job_id)
             session.rollback()
             return
-        integration_service.integration_jobs.run(session, job_id)
+        if trigger == "schedule" and requested_by is None:
+            integration_service.integration_jobs.run(session, job_id)
+        else:
+            integration_service.integration_jobs.run(
+                session,
+                job_id,
+                trigger=trigger,
+                requested_by=requested_by,
+            )
         session.commit()
     except Exception:
         status = "error"

@@ -199,6 +199,9 @@ class TicketComment(Base):
     attachments: Mapped[list[dict] | None] = mapped_column(
         MutableList.as_mutable(JSON()), default=list
     )
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

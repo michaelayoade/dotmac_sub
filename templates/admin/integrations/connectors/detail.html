@@ -35,6 +35,12 @@
         </div>
     </div>
 
+    {% if request.query_params.get('saved') %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Connector updated.
+    </div>
+    {% endif %}
+
     <!-- Details Card -->
     <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Configuration</h2>
@@ -73,5 +79,67 @@
             </div>
         </dl>
     </div>
+
+    <form method="POST" action="/admin/integrations/connectors/{{ connector.id }}" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% include "components/forms/csrf_input.html" %}
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Edit Connection</h2>
+        <div class="mt-5 grid gap-5 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+                <label for="base_url" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Base URL</label>
+                <input type="url" name="base_url" id="base_url" value="{{ connector.base_url or '' }}" maxlength="500"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="auth_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Type</label>
+                <select name="auth_type" id="auth_type"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for auth_type in auth_types %}
+                    <option value="{{ auth_type }}" {% if connector.auth_type and connector.auth_type.value == auth_type %}selected{% endif %}>{{ auth_type | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="timeout_sec" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Timeout Seconds</label>
+                <input type="number" name="timeout_sec" id="timeout_sec" min="1" step="1" value="{{ connector.timeout_sec or '' }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-2">
+                <label for="auth_config" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Config Update (JSON)</label>
+                <textarea name="auth_config" id="auth_config" rows="3" placeholder='{"username":"user","password":"new-secret"}'
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to keep current credentials. Submitted values merge into the existing auth config.</p>
+            </div>
+            <div class="sm:col-span-2">
+                <label for="headers" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Headers (JSON)</label>
+                <textarea name="headers" id="headers" rows="3"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ (connector.headers or {}) | tojson }}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+                <label for="retry_policy" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Retry Policy (JSON)</label>
+                <textarea name="retry_policy" id="retry_policy" rows="3"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ (connector.retry_policy or {}) | tojson }}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+                <label for="metadata" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Metadata (JSON)</label>
+                <textarea name="metadata" id="metadata" rows="3"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ (connector.metadata_ or {}) | tojson }}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                <textarea name="notes" id="notes" rows="3"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ connector.notes or '' }}</textarea>
+            </div>
+            <div>
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" name="is_active" value="true" {% if connector.is_active %}checked{% endif %}
+                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                </label>
+            </div>
+        </div>
+        <div class="mt-6 flex justify-end">
+            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Connection</button>
+        </div>
+    </form>
 </div>
 {% endblock %}

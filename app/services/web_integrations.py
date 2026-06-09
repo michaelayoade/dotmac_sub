@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.webhook import WebhookDelivery, WebhookEndpoint
 from app.schemas.billing import PaymentProviderCreate
-from app.schemas.connector import ConnectorConfigCreate
+from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
 from app.schemas.webhook import WebhookEndpointCreate, WebhookSubscriptionCreate
 from app.services import billing as billing_service
@@ -271,6 +271,14 @@ def job_form_options(db) -> dict[str, object]:
     return {
         "job_types": [t.value for t in IntegrationJobType],
         "schedule_types": [t.value for t in IntegrationScheduleType],
+        "directions": ["pull", "push", "bidirectional"],
+        "trigger_modes": ["manual", "schedule", "event", "webhook"],
+        "conflict_policies": [
+            "remote_wins",
+            "local_wins",
+            "newest_wins",
+            "manual_review",
+        ],
         "targets": targets,
     }
 
@@ -283,8 +291,16 @@ def job_error_state(
     job_type: str,
     schedule_type: str,
     interval_minutes: str | None,
-    notes: str | None,
-    is_active: bool,
+    adapter_key: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    direction: str | None = None,
+    trigger_mode: str | None = None,
+    mapping_config: str | None = None,
+    filter_config: str | None = None,
+    conflict_policy: str | None = None,
+    notes: str | None = None,
+    is_active: bool = True,
 ) -> dict[str, object]:
     return {
         **job_form_options(db),
@@ -294,6 +310,14 @@ def job_error_state(
             "job_type": job_type,
             "schedule_type": schedule_type,
             "interval_minutes": interval_minutes or "",
+            "adapter_key": adapter_key or "",
+            "action": action or "",
+            "entity_type": entity_type or "",
+            "direction": direction or "pull",
+            "trigger_mode": trigger_mode or "manual",
+            "mapping_config": mapping_config or "",
+            "filter_config": filter_config or "",
+            "conflict_policy": conflict_policy or "remote_wins",
             "notes": notes or "",
             "is_active": is_active,
         },
@@ -601,8 +625,8 @@ def create_connector(
     headers: str | None,
     retry_policy: str | None,
     metadata: str | None,
-    notes: str | None,
-    is_active: bool,
+    notes: str | None = None,
+    is_active: bool = True,
 ):
     from app.models.connector import ConnectorAuthType, ConnectorType
 
@@ -620,6 +644,37 @@ def create_connector(
         is_active=is_active,
     )
     return connector_service.connector_configs.create(db, payload)
+
+
+def update_connector_config(
+    db,
+    connector_id: str,
+    *,
+    base_url: str | None,
+    auth_type: str,
+    timeout_sec: str | None,
+    auth_config: str | None,
+    headers: str | None,
+    retry_policy: str | None,
+    metadata: str | None,
+    notes: str | None,
+    is_active: bool,
+):
+    from app.models.connector import ConnectorAuthType
+
+    timeout_value = int(timeout_sec) if timeout_sec else None
+    payload = ConnectorConfigUpdate(
+        base_url=base_url.strip() if base_url else None,
+        auth_type=validate_enum(auth_type, ConnectorAuthType, "auth_type"),
+        timeout_sec=timeout_value,
+        auth_config=_parse_json(auth_config, "auth_config"),
+        headers=_parse_json(headers, "headers"),
+        retry_policy=_parse_json(retry_policy, "retry_policy"),
+        metadata_=_parse_json(metadata, "metadata"),
+        notes=notes.strip() if notes else None,
+        is_active=is_active,
+    )
+    return connector_service.connector_configs.update(db, connector_id, payload)
 
 
 def build_embedded_connector_data(
@@ -800,6 +855,14 @@ def create_job(
     job_type: str,
     schedule_type: str,
     interval_minutes: str | None,
+    adapter_key: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    direction: str | None = None,
+    trigger_mode: str | None = None,
+    mapping_config: str | None = None,
+    filter_config: str | None = None,
+    conflict_policy: str | None = None,
     notes: str | None,
     is_active: bool,
 ):
@@ -816,6 +879,14 @@ def create_job(
             schedule_type, IntegrationScheduleType, "schedule_type"
         ),
         interval_minutes=interval_value,
+        adapter_key=(adapter_key or "").strip() or None,
+        action=(action or "").strip() or None,
+        entity_type=(entity_type or "").strip() or None,
+        direction=(direction or "").strip() or None,
+        trigger_mode=(trigger_mode or "").strip() or None,
+        mapping_config=_parse_json(mapping_config, "mapping_config"),
+        filter_config=_parse_json(filter_config, "filter_config"),
+        conflict_policy=(conflict_policy or "").strip() or None,
         notes=notes.strip() if notes else None,
         is_active=is_active,
     )
