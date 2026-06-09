@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from app.models.auth import AuthProvider, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, UserCredential
 from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
@@ -113,6 +113,17 @@ def _set_customer_mfa_cookies(
 def _clear_customer_mfa_cookies(response: Response) -> None:
     response.delete_cookie(_CUSTOMER_MFA_TOKEN_COOKIE)
     response.delete_cookie(_CUSTOMER_MFA_CONTEXT_COOKIE)
+
+
+def list_active_mfa_methods(db: Session, subscriber_id: object) -> list[MFAMethod]:
+    """Active MFA methods for a subscriber, newest first (profile page)."""
+    return (
+        db.query(MFAMethod)
+        .filter(MFAMethod.subscriber_id == subscriber_id)
+        .filter(MFAMethod.is_active.is_(True))
+        .order_by(MFAMethod.created_at.desc())
+        .all()
+    )
 
 
 def _primary_customer_totp_enabled(db: Session, subscriber_id: object) -> bool:

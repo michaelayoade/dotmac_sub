@@ -13,11 +13,11 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_db
-from app.models.auth import MFAMethod
 from app.services import auth_flow as auth_flow_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
+from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_portal_context import (
@@ -1053,12 +1053,8 @@ def customer_profile(
         subscriber = db.get(_Subscriber, subscriber_id)
     mfa_methods = []
     if subscriber_id:
-        mfa_methods = (
-            db.query(MFAMethod)
-            .filter(MFAMethod.subscriber_id == subscriber_id)
-            .filter(MFAMethod.is_active.is_(True))
-            .order_by(MFAMethod.created_at.desc())
-            .all()
+        mfa_methods = web_customer_auth_service.list_active_mfa_methods(
+            db, subscriber_id
         )
     return templates.TemplateResponse(
         "customer/profile/index.html",

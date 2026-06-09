@@ -211,7 +211,9 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
         "request_password_reset",
         reset_request,
     )
-    monkeypatch.setattr(web_reseller_auth_service, "send_password_reset_email", send_email)
+    monkeypatch.setattr(
+        web_reseller_auth_service, "send_password_reset_email", send_email
+    )
 
     response = web_reseller_auth_service.reseller_forgot_password_submit(
         request,

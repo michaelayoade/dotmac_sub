@@ -1114,7 +1114,9 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
     current_user = get_current_user(request)
     auth = getattr(request.state, "auth", None) or {}
     system_user_id = (
-        auth.get("principal_id") if auth.get("principal_type") == "system_user" else None
+        auth.get("principal_id")
+        if auth.get("principal_type") == "system_user"
+        else None
     )
     success = None
     if request.query_params.get("mfa") == "enabled":
@@ -1151,7 +1153,9 @@ def user_profile_update(
     current_user = get_current_user(request)
     auth = getattr(request.state, "auth", None) or {}
     system_user_id = (
-        auth.get("principal_id") if auth.get("principal_type") == "system_user" else None
+        auth.get("principal_id")
+        if auth.get("principal_type") == "system_user"
+        else None
     )
     error = None
     success = None
@@ -1267,7 +1271,9 @@ def user_profile_mfa_confirm(
             status_code=401,
         )
 
-    return RedirectResponse(url="/admin/system/users/profile?mfa=enabled", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/users/profile?mfa=enabled", status_code=303
+    )
 
 
 @router.post(

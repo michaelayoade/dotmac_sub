@@ -39,9 +39,7 @@ def reseller_forgot_password_submit(
     email: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_auth_service.reseller_forgot_password_submit(
-        request, db, email
-    )
+    return web_reseller_auth_service.reseller_forgot_password_submit(request, db, email)
 
 
 @router.get("/mfa", response_class=HTMLResponse)

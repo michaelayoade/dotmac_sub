@@ -785,9 +785,7 @@ class AuthFlow(ListResponseMixin):
         return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
 
     @staticmethod
-    def admin_mfa_confirm(
-        db: Session, method_id: str, code: str, system_user_id: str
-    ):
+    def admin_mfa_confirm(db: Session, method_id: str, code: str, system_user_id: str):
         method = db.get(MFAMethod, coerce_uuid(method_id))
         if not method:
             raise HTTPException(status_code=404, detail="MFA method not found")

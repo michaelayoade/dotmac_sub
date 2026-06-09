@@ -171,7 +171,9 @@ def reseller_forgot_password_submit(request: Request, db: Session, email: str):
                 next_login_path=_RESELLER_RESET_LOGIN_PATH,
             )
     except Exception:
-        logger.info("Reseller password reset request failed for %s", email, exc_info=True)
+        logger.info(
+            "Reseller password reset request failed for %s", email, exc_info=True
+        )
     return templates.TemplateResponse(
         "reseller/auth/forgot-password.html",
         {"request": request, "success": True},
