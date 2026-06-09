@@ -60,6 +60,11 @@ _CORE_ROUTER_SPECS = [
     ("app.api.tr069_auth", "router", "api", "none"),
     ("app.api.tr069_inform", "router", "api", "none"),
     ("app.api.reconcile_webhooks", "router", "api", "none"),
+    # Inbound provider webhooks must be mounted before serving — if they were
+    # deferred, they 404 during the startup load window and we'd silently drop
+    # payment confirmations / monitoring alerts on every restart.
+    ("app.api.billing", "webhook_router", "api", "none"),
+    ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.search", "router", "api", "user"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
@@ -78,8 +83,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.notifications", "router", "api", "user"),
     ("app.api.external", "router", "api", "user"),
     ("app.api.billing", "router", "api", "user"),
-    # Inbound payment-provider webhooks: signature-verified, no user session.
-    ("app.api.billing", "webhook_router", "api", "none"),
     ("app.api.files", "router", "api", "user"),
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
@@ -122,7 +125,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.validation", "router", "api", "user"),
     ("app.api.defaults", "router", "api", "user"),
     ("app.api.zabbix", "router", "api", "user"),
-    ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.wireguard", "public_router", "api", "none"),
 ]
 
