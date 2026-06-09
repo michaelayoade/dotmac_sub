@@ -127,6 +127,13 @@ def evaluate_fup_rules() -> dict[str, int]:
                                 "rule_id": rule_result.get("rule_id"),
                                 "current_usage_gb": current_usage,
                                 "threshold_gb": rule_result.get("threshold_gb"),
+                                # cap resets at the quota period boundary — lets
+                                # enforcement auto-lift the throttle/block then.
+                                "cap_resets_at": (
+                                    bucket.period_end.isoformat()
+                                    if bucket.period_end
+                                    else None
+                                ),
                             },
                             subscription_id=sub.id,
                             account_id=sub.subscriber_id,
@@ -143,6 +150,13 @@ def evaluate_fup_rules() -> dict[str, int]:
                                 "rule_id": rule_result.get("rule_id"),
                                 "current_usage_gb": current_usage,
                                 "threshold_gb": rule_result.get("threshold_gb"),
+                                # cap resets at the quota period boundary — lets
+                                # enforcement auto-lift the throttle/block then.
+                                "cap_resets_at": (
+                                    bucket.period_end.isoformat()
+                                    if bucket.period_end
+                                    else None
+                                ),
                             },
                             subscription_id=sub.id,
                             account_id=sub.subscriber_id,
