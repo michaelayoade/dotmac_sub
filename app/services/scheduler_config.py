@@ -3,6 +3,8 @@ import os
 from collections.abc import Iterable
 from datetime import timedelta
 
+from celery.schedules import crontab
+
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.services import integration as integration_service
@@ -349,6 +351,29 @@ def get_celery_config() -> dict:
     )
     config["task_annotations"] = annotations
     return config
+
+
+def _interval_to_beat_schedule(task_id, interval_seconds: int):
+    """Beat schedule object for an interval task.
+
+    Celery beat measures `timedelta` intervals from its own (non-persisted)
+    start time, so a daily task only fires after 24h of uninterrupted beat
+    uptime — under frequent deploys it never comes due (this starved billing,
+    dunning, expiration and FUP runs for weeks). Day-long intervals are
+    therefore anchored to a stable wall-clock slot instead: 00:00-05:59,
+    spread deterministically by task id so the daily runners don't stampede.
+    Sub-daily intervals keep their timedelta — a restart delays them by at
+    most one interval, which is acceptable.
+    """
+    if 86400 <= interval_seconds < 2 * 86400:
+        anchor = task_id.int if hasattr(task_id, "int") else abs(hash(task_id))
+        return crontab(minute=anchor % 60, hour=(anchor // 60) % 6)
+    if interval_seconds >= 2 * 86400:
+        logger.warning(
+            "scheduled_task_multiday_interval_restart_relative",
+            extra={"task_id": str(task_id), "interval_seconds": interval_seconds},
+        )
+    return timedelta(seconds=interval_seconds)
 
 
 def build_beat_schedule() -> dict:
@@ -1438,7 +1463,7 @@ def build_beat_schedule() -> dict:
             interval_seconds = max(task.interval_seconds or 0, 1)
             schedule[f"scheduled_task_{task.id}"] = {
                 "task": task.task_name,
-                "schedule": timedelta(seconds=interval_seconds),
+                "schedule": _interval_to_beat_schedule(task.id, interval_seconds),
                 "args": task.args_json or [],
                 "kwargs": task.kwargs_json or {},
             }
