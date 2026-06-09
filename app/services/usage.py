@@ -522,18 +522,52 @@ def _resolve_or_create_quota_bucket(
     included_gb, _ = _prorate_allowance(
         allowance, subscription, period_start, period_end
     )
+    rounded_included = _round_bucket_gb(included_gb)
+    rollover_gb = _carry_forward_rollover(
+        db, subscription, allowance, period_start, rounded_included
+    )
     bucket = QuotaBucket(
         subscription_id=subscription.id,
         period_start=period_start,
         period_end=period_end,
-        included_gb=_round_bucket_gb(included_gb),
+        included_gb=rounded_included,
         used_gb=Decimal("0.00"),
-        rollover_gb=Decimal("0.00"),
+        rollover_gb=rollover_gb,
         overage_gb=Decimal("0.00"),
     )
     db.add(bucket)
     db.flush()
     return bucket
+
+
+def _carry_forward_rollover(
+    db: Session,
+    subscription: Subscription,
+    allowance,
+    period_start: datetime,
+    included_gb: Decimal,
+) -> Decimal:
+    """Unused allowance from the immediately-preceding period, when the plan has
+    rollover. Capped at one period's included_gb so it can't accumulate forever."""
+    if allowance is None or not getattr(allowance, "rollover_enabled", False):
+        return Decimal("0.00")
+    prev = (
+        db.query(QuotaBucket)
+        .filter(QuotaBucket.subscription_id == subscription.id)
+        .filter(QuotaBucket.period_end == period_start)
+        .first()
+    )
+    if prev is None:
+        return Decimal("0.00")
+    available = (
+        Decimal(str(prev.included_gb or 0))
+        + Decimal(str(prev.rollover_gb or 0))
+        - Decimal(str(prev.used_gb or 0))
+    )
+    if available <= 0:
+        return Decimal("0.00")
+    capped = min(available, included_gb) if included_gb > 0 else available
+    return _round_bucket_gb(capped)
 
 
 _GB_BYTES = 1024**3
