@@ -22,6 +22,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.device_token import DeviceToken
+from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +36,16 @@ def register_token(
     db: Session, subscriber_id: str, token: str, platform: str | None = None
 ) -> DeviceToken:
     """Upsert a device token, (re)binding it to this subscriber and activating it."""
+    sid = coerce_uuid(subscriber_id)
     existing = db.query(DeviceToken).filter(DeviceToken.token == token).first()
     if existing:
-        existing.subscriber_id = subscriber_id
+        existing.subscriber_id = sid
         existing.platform = platform or existing.platform
         existing.is_active = True
         existing.last_seen_at = datetime.now(UTC)
         db.commit()
         return existing
-    row = DeviceToken(
-        subscriber_id=subscriber_id, token=token, platform=platform, is_active=True
-    )
+    row = DeviceToken(subscriber_id=sid, token=token, platform=platform, is_active=True)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -142,9 +142,7 @@ def send_push(
     if not access_token:
         return False
 
-    url = (
-        f"https://fcm.googleapis.com/v1/projects/{cfg['project_id']}/messages:send"
-    )
+    url = f"https://fcm.googleapis.com/v1/projects/{cfg['project_id']}/messages:send"
     headers = {"Authorization": f"Bearer {access_token}"}
     string_data = {k: str(v) for k, v in (data or {}).items()}
     if notification_id:

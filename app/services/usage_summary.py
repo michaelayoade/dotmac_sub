@@ -89,13 +89,14 @@ def fup_summary(db: Session, subscriber_id: str) -> dict | None:
     if db is None:
         return None
     from app.models.fup import FupRule
+    from app.models.fup_state import FupState
     from app.services.fup_state import fup_state as fup_state_mgr
 
     sub_ids = _subscription_ids(db, subscriber_id)
     if not sub_ids:
         return None
 
-    best: tuple[int, object] | None = None  # (severity, FupState)
+    best: tuple[int, FupState] | None = None  # (severity, state)
     for sub_id in sub_ids:
         state = fup_state_mgr.get(db, str(sub_id))
         if state is None:
