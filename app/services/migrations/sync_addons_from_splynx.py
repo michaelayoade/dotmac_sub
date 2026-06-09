@@ -20,7 +20,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -28,7 +28,11 @@ from app.models.catalog import (
     AddOnPrice,
     AddOnType,
     BillingCycle,
+    CatalogOffer,
+    OfferAddOn,
     PriceType,
+    Subscription,
+    SubscriptionStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,6 +202,70 @@ def import_addon_rows(
     else:
         db.flush()
     logger.info("splynx_addon_import_complete", extra={"summary": summary})
+    return summary
+
+
+def seed_ip_addon_offer_links(db: Session, *, commit: bool = True) -> dict:
+    """Make the public-IP add-ons buyable by linking them to the real plans
+    customers are actually on.
+
+    Splynx doesn't scope IP blocks to specific plans (``available_for_services``
+    is a boolean, not a per-plan list), so the rule here is: link every active
+    public-IP add-on to every active offer that has at least one active
+    subscriber and isn't itself an IP-block offer. Idempotent; ``commit=False``
+    only flushes (dry-run).
+    """
+    summary = {"ip_addons": 0, "offers_linked": 0, "links_created": 0}
+    ip_addons = db.scalars(
+        select(AddOn).where(AddOn.ip_is_public.is_(True), AddOn.is_active.is_(True))
+    ).all()
+    summary["ip_addons"] = len(ip_addons)
+    if not ip_addons:
+        return summary
+
+    offers = db.scalars(
+        select(CatalogOffer).where(CatalogOffer.is_active.is_(True))
+    ).all()
+    for offer in offers:
+        if ip_prefix_length(offer.name or "") is not None:
+            continue  # an IP-block offer itself, not a plan that buys IP add-ons
+        active_subs = db.scalar(
+            select(func.count(Subscription.id)).where(
+                Subscription.offer_id == offer.id,
+                Subscription.status == SubscriptionStatus.active,
+            )
+        )
+        if not active_subs:
+            continue  # not a real plan in use (skips e2e/test offers)
+        linked_here = False
+        for add_on in ip_addons:
+            exists = db.scalar(
+                select(OfferAddOn).where(
+                    OfferAddOn.offer_id == offer.id,
+                    OfferAddOn.add_on_id == add_on.id,
+                )
+            )
+            if exists is not None:
+                continue
+            db.add(
+                OfferAddOn(
+                    offer_id=offer.id,
+                    add_on_id=add_on.id,
+                    is_required=False,
+                    min_quantity=1,
+                    max_quantity=1,
+                )
+            )
+            summary["links_created"] += 1
+            linked_here = True
+        if linked_here:
+            summary["offers_linked"] += 1
+
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    logger.info("ip_addon_offer_link_seed_complete", extra={"summary": summary})
     return summary
 
 

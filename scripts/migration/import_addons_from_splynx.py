@@ -22,13 +22,16 @@ from app.services.migrations.db_connections import (
     fetch_all,
     splynx_connection,
 )
-from app.services.migrations.sync_addons_from_splynx import import_addon_rows
+from app.services.migrations.sync_addons_from_splynx import (
+    import_addon_rows,
+    seed_ip_addon_offer_links,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("import_addons_from_splynx")
 
 
-def run(*, execute: bool) -> None:
+def run(*, execute: bool, link_offers: bool) -> None:
     with splynx_connection() as conn:
         one_time = list(fetch_all(conn, "SELECT * FROM tariffs_one_time"))
         custom = list(fetch_all(conn, "SELECT * FROM tariffs_custom"))
@@ -40,11 +43,12 @@ def run(*, execute: bool) -> None:
 
     with dotmac_session() as db:
         summary = import_addon_rows(db, one_time, custom, commit=execute)
+        logger.info("%s import: %s", "EXECUTE" if execute else "DRY-RUN", summary)
+        if link_offers:
+            links = seed_ip_addon_offer_links(db, commit=execute)
+            logger.info("%s link: %s", "EXECUTE" if execute else "DRY-RUN", links)
         if not execute:
             db.rollback()
-            logger.info("DRY-RUN (no commit) — would import: %s", summary)
-        else:
-            logger.info("Imported: %s", summary)
 
 
 if __name__ == "__main__":
@@ -52,7 +56,12 @@ if __name__ == "__main__":
     p.add_argument(
         "--execute",
         action="store_true",
-        help="Commit the import (default is a dry-run that rolls back).",
+        help="Commit (default is a dry-run that rolls back).",
+    )
+    p.add_argument(
+        "--link-offers",
+        action="store_true",
+        help="Also link public-IP add-ons to the plans customers are on.",
     )
     args = p.parse_args()
-    run(execute=args.execute)
+    run(execute=args.execute, link_offers=args.link_offers)

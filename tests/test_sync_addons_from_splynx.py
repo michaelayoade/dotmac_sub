@@ -6,12 +6,28 @@ shapes; the import is verified against SQLite.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.models.catalog import AddOn, AddOnPrice, AddOnType, PriceType
+from app.models.catalog import (
+    AccessType,
+    AddOn,
+    AddOnPrice,
+    AddOnType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    OfferAddOn,
+    PriceBasis,
+    PriceType,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.services.migrations.sync_addons_from_splynx import (
     import_addon_rows,
     ip_prefix_length,
+    seed_ip_addon_offer_links,
 )
 
 _ONE_TIME = [
@@ -111,3 +127,62 @@ def test_import_is_idempotent(db_session):
         db_session.query(AddOnPrice).filter_by(add_on_id=ip32.id, is_active=True).one()
     )
     assert Decimal(str(price.amount)) == Decimal("3000.00")
+
+
+def _offer(db, name, code):
+    o = CatalogOffer(
+        name=name,
+        code=code,
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        is_active=True,
+    )
+    db.add(o)
+    db.flush()
+    return o
+
+
+def _sub(db, subscriber, offer):
+    s = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=offer.billing_mode,
+        start_at=datetime.now(UTC),
+        next_billing_at=datetime.now(UTC),
+    )
+    db.add(s)
+    db.flush()
+    return s
+
+
+def test_seed_ip_offer_links_targets_real_plans_only(db_session, subscriber):
+    plan = _offer(db_session, "Unlimited 3", "unlimited-3")
+    _sub(db_session, subscriber, plan)  # real plan in use
+    ip_offer = _offer(db_session, "/29 IP", "ip-29")  # an IP-block offer itself
+    _sub(db_session, subscriber, ip_offer)
+    _offer(db_session, "E2E Test Plan", "e2e-test")  # active but no subscriber
+    ip_addon = AddOn(
+        name="/29 IP",
+        addon_type=AddOnType.extra_ip,
+        is_active=True,
+        ip_is_public=True,
+        ip_prefix_length=29,
+        splynx_source="custom:test29",
+    )
+    db_session.add(ip_addon)
+    db_session.commit()
+
+    summary = seed_ip_addon_offer_links(db_session)
+    assert summary["ip_addons"] == 1
+    assert summary["links_created"] == 1
+
+    links = db_session.query(OfferAddOn).all()
+    assert len(links) == 1
+    assert links[0].offer_id == plan.id  # only the real plan, not the IP/empty offers
+
+    # idempotent
+    assert seed_ip_addon_offer_links(db_session)["links_created"] == 0
