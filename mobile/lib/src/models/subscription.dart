@@ -42,6 +42,23 @@ class Subscription {
   bool get isActive => status == 'active';
   bool get isPrepaid => billingMode == 'prepaid';
 
+  /// Statuses that are operationally relevant to the customer right now.
+  /// Terminal/historical ones (disabled, canceled, expired, hidden, archived)
+  /// stay out of the dashboard switcher, banners and service counts.
+  static const currentStatuses = {
+    'pending',
+    'active',
+    'blocked',
+    'suspended',
+    'stopped',
+  };
+
+  bool get isCurrent => currentStatuses.contains(status);
+
+  /// Out of service for a reason the customer can fix by paying:
+  /// blocked = non-payment block, suspended = generic suspension.
+  bool get needsPayment => status == 'blocked' || status == 'suspended';
+
   String get displayName =>
       offerName ?? serviceDescription ?? 'Subscription ${id.substring(0, 8)}';
 

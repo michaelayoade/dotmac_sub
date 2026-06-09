@@ -272,7 +272,8 @@ class _SessionTile extends StatelessWidget {
         title: Text(Fmt.bytes(s.totalOctets)),
         subtitle: Text(
           '↓ ${Fmt.bytes(s.outputOctets ?? 0)}  ↑ ${Fmt.bytes(s.inputOctets ?? 0)}\n'
-          '${Fmt.dateTime(s.sessionStart)}${s.isActive ? ' · active' : ''}',
+          '${Fmt.dateTime(s.sessionStart)}'
+          '${s.isActive ? ' · active · seen ${Fmt.dateTime(s.lastSeenAt)}' : ''}',
         ),
         isThreeLine: true,
       ),
