@@ -53,6 +53,15 @@ _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
 _DEFERRED_ROUTER_TASK = None
+_ZABBIX_HEALTH_TASK = None
+# Startup Zabbix health probe: runs off the critical path with retries so a
+# transient failure while the process is still saturated from the startup seed
+# doesn't false-alarm as "unavailable". All three are env-overridable.
+_ZABBIX_STARTUP_HEALTH_TIMEOUT = float(os.getenv("ZABBIX_STARTUP_HEALTH_TIMEOUT", "10"))
+_ZABBIX_STARTUP_HEALTH_ATTEMPTS = int(os.getenv("ZABBIX_STARTUP_HEALTH_ATTEMPTS", "3"))
+_ZABBIX_STARTUP_HEALTH_RETRY_DELAY = float(
+    os.getenv("ZABBIX_STARTUP_HEALTH_RETRY_DELAY", "5")
+)
 
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
@@ -419,16 +428,46 @@ def _seed_startup_settings() -> None:
     )
 
 
-def _log_zabbix_startup_health() -> None:
-    try:
-        from app.services.zabbix import check_zabbix_availability
+async def _log_zabbix_startup_health() -> None:
+    """Probe Zabbix availability after startup, off the critical path.
 
-        health = check_zabbix_availability(timeout=5.0)
-    except Exception:
+    The first probe can fail transiently while the process is still saturated
+    from the 100s startup seed, so retry a few times (with a generous,
+    env-tunable timeout) before logging a warning — avoiding false
+    "unavailable" alarms. Scheduled as a background task so it never delays
+    serving; the synchronous client call is offloaded to a worker thread.
+    """
+    from app.services.zabbix import check_zabbix_availability
+
+    health: dict | None = None
+    attempt = 0
+    for attempt in range(1, _ZABBIX_STARTUP_HEALTH_ATTEMPTS + 1):
+        try:
+            health = await asyncio.to_thread(
+                check_zabbix_availability,
+                timeout=_ZABBIX_STARTUP_HEALTH_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "zabbix_startup_health_attempt_failed",
+                exc_info=True,
+                extra={
+                    "event": "zabbix_startup_health_attempt_failed",
+                    "attempt": attempt,
+                },
+            )
+            health = None
+        if health and health.get("available"):
+            break
+        if attempt < _ZABBIX_STARTUP_HEALTH_ATTEMPTS:
+            await asyncio.sleep(_ZABBIX_STARTUP_HEALTH_RETRY_DELAY)
+
+    if health is None:
         logger.warning(
             "zabbix_startup_health_failed",
-            exc_info=True,
-            extra={"event": "zabbix_startup_health_failed"},
+            extra={"event": "zabbix_startup_health_failed", "attempts": attempt},
         )
         return
 
@@ -442,17 +481,19 @@ def _log_zabbix_startup_health() -> None:
             "available": health.get("available"),
             "api_url": health.get("api_url"),
             "status_message": health.get("message"),
+            "attempts": attempt,
         },
     )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _DEFERRED_ROUTER_TASK
+    global _DEFERRED_ROUTER_TASK, _ZABBIX_HEALTH_TASK
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
     _seed_startup_settings()
-    _log_zabbix_startup_health()
+    # Off the critical path: a transient probe failure must not delay serving.
+    _ZABBIX_HEALTH_TASK = asyncio.create_task(_log_zabbix_startup_health())
     _warn_on_scheduler_registry_drift()
     from app.websocket.manager import get_connection_manager
 
@@ -477,6 +518,13 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
             _DEFERRED_ROUTER_TASK = None
+        if _ZABBIX_HEALTH_TASK is not None:
+            _ZABBIX_HEALTH_TASK.cancel()
+            try:
+                await _ZABBIX_HEALTH_TASK
+            except asyncio.CancelledError:
+                pass
+            _ZABBIX_HEALTH_TASK = None
         logger.info(
             "websocket_manager_disconnect_begin",
             extra={"event": "websocket_manager_disconnect_begin"},
