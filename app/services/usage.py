@@ -609,8 +609,10 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         ) or 0
         used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
         bucket.used_gb = used_gb
-        allowed = Decimal(str(bucket.included_gb or 0)) + Decimal(
-            str(bucket.rollover_gb or 0)
+        allowed = (
+            Decimal(str(bucket.included_gb or 0))
+            + Decimal(str(bucket.rollover_gb or 0))
+            + Decimal(str(bucket.topup_gb or 0))
         )
         overage = used_gb - allowed
         bucket.overage_gb = (
@@ -619,6 +621,21 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         metered += 1
     logger.info("usage_metered_into_quota", extra={"metered": metered})
     return {"metered": metered}
+
+
+def grant_data_topup(
+    db: Session,
+    subscription: Subscription,
+    gb: int,
+    now: datetime | None = None,
+) -> QuotaBucket:
+    """Credit a purchased data top-up's GB to the subscription's current quota
+    bucket (so it counts toward the allowance before overage)."""
+    now = now or datetime.now(UTC)
+    bucket = _resolve_or_create_quota_bucket(db, subscription, now)
+    bucket.topup_gb = Decimal(str(bucket.topup_gb or 0)) + Decimal(str(gb))
+    db.flush()
+    return bucket
 
 
 def _emit_usage_events(
