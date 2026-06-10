@@ -438,4 +438,29 @@ void main() {
       expect(v.paymentId, 'p1');
     });
   });
+
+  group('AccountingSession framed IP + LiveBandwidth', () {
+    test('parses framed_ip_address from the session payload', () {
+      final s = AccountingSession.fromJson({
+        'id': '1',
+        'subscription_id': 'sub',
+        'session_id': 'sess',
+        'status_type': 'start',
+        'framed_ip_address': '100.64.3.7',
+      });
+      expect(s.framedIpAddress, '100.64.3.7');
+    });
+
+    test('LiveBandwidth binds subscriber-perspective fields only', () {
+      final b = LiveBandwidth.fromJson({
+        'current_rx_bps': 1, // NAS perspective — intentionally ignored
+        'download_bps': 12000000.0,
+        'upload_bps': 3000000.0,
+      });
+      expect(b.downloadBps, 12000000.0);
+      expect(b.uploadBps, 3000000.0);
+      expect(b.hasSignal, isTrue);
+      expect(LiveBandwidth.fromJson(const {}).hasSignal, isFalse);
+    });
+  });
 }

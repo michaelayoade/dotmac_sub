@@ -227,6 +227,15 @@ final usageSummaryProvider = FutureProvider.autoDispose
   return ref.watch(usageRepositoryProvider).usageSummary(period);
 });
 
+/// Current throughput for the active subscription (connection banner).
+/// Errors (e.g. no active subscription) just mean "no signal" — callers
+/// read it via asData and omit the figure.
+final liveBandwidthProvider =
+    FutureProvider.autoDispose<LiveBandwidth>((ref) async {
+  cacheFor(ref);
+  return ref.watch(usageRepositoryProvider).liveBandwidth();
+});
+
 final sessionsProvider =
     FutureProvider.autoDispose<List<AuthSessionInfo>>((ref) async {
   cacheFor(ref);

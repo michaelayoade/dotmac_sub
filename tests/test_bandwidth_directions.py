@@ -44,3 +44,27 @@ def test_add_directions_to_series_maps_each_point():
     assert result["data"][0]["download_bps"] == 90.0
     assert result["data"][0]["upload_bps"] == 10.0
     assert result["data"][1]["download_bps"] == 5.0
+
+
+def test_bandwidth_stats_response_model_keeps_subscriber_directions():
+    """The API response model must not drop the download/upload fields the
+    service computes — mobile binds to them (rx/tx are NAS-perspective)."""
+    from app.api.bandwidth import BandwidthStats
+
+    stats = BandwidthStats(
+        **with_subscriber_directions(
+            {
+                "current_rx_bps": 100.0,
+                "current_tx_bps": 900.0,
+                "peak_rx_bps": 200.0,
+                "peak_tx_bps": 1800.0,
+                "total_rx_bytes": 5,
+                "total_tx_bytes": 50,
+                "sample_count": 3,
+            }
+        )
+    )
+    assert stats.download_bps == 900.0
+    assert stats.upload_bps == 100.0
+    assert stats.peak_download_bps == 1800.0
+    assert stats.peak_upload_bps == 200.0

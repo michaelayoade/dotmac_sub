@@ -51,6 +51,13 @@ class BandwidthStats(BaseModel):
     total_rx_bytes: float
     total_tx_bytes: float
     sample_count: int
+    # Subscriber-perspective rates (rx/tx above are NAS-perspective). The
+    # service computes these via to_subscriber_directions(); clients should
+    # bind to them instead of guessing the rx/tx convention.
+    download_bps: float | None = None
+    upload_bps: float | None = None
+    peak_download_bps: float | None = None
+    peak_upload_bps: float | None = None
 
 
 class TopUserEntry(BaseModel):
