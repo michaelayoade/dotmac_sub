@@ -1381,6 +1381,14 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
                 "schedule": timedelta(minutes=crm_ticket_pull_interval),
             }
+            # Daily full reconciliation: heals drift the incremental runs
+            # can't see (CRM comments don't bump ticket updated_at; closed
+            # tickets are excluded from the incremental comment sweep).
+            schedule["crm_ticket_pull_full"] = {
+                "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
+                "schedule": crontab(hour=3, minute=40),
+                "kwargs": {"full": True},
+            }
 
         # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
         olt_queue_enabled = _effective_bool(
