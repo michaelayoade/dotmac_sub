@@ -63,6 +63,13 @@ final resellerAccountInvoicesProvider = FutureProvider.autoDispose
   return ref.watch(resellerRepositoryProvider).accountInvoices(accountId);
 });
 
+/// CRM tickets for one managed account (reseller portal).
+final resellerAccountTicketsProvider = FutureProvider.autoDispose
+    .family<ResellerTicketsPage, String>((ref, accountId) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).accountTickets(accountId);
+});
+
 /// The signed-in subscriber's id (== Subscriber.id == billing account_id).
 /// Used where a request needs the caller's id explicitly (e.g. new tickets);
 /// the data lists below are self-scoped server-side via the /me/* endpoints.

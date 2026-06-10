@@ -44,7 +44,21 @@ def my_reseller_dashboard(
 ) -> dict:
     """KPIs plus a first page of the caller's managed accounts."""
     reseller_id = _reseller_id(db, principal)
-    return reseller_portal.get_dashboard_summary(db, reseller_id, limit, offset)
+    summary = reseller_portal.get_dashboard_summary(db, reseller_id, limit, offset)
+    # Open-ticket count mirrors the web dashboard: best-effort against the
+    # external CRM (0 when unreachable), bounded to the page's accounts.
+    from app.services import crm_portal
+
+    try:
+        account_ids = [
+            str(a.get("id")) for a in summary.get("accounts", []) if a.get("id")
+        ]
+        summary["open_tickets"] = crm_portal.reseller_open_tickets_count(
+            db, reseller_id, account_ids
+        )
+    except Exception:
+        summary["open_tickets"] = 0
+    return summary
 
 
 @router.get("/accounts")
@@ -77,6 +91,50 @@ def my_reseller_account(
     if detail is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return detail
+
+
+@router.get("/accounts/{account_id}/tickets")
+def my_reseller_account_tickets(
+    account_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """CRM support tickets for one managed account.
+
+    CRM unavailability is a soft failure (empty list + flag), mirroring the
+    web portal: the reseller can still see the rest of the account."""
+    reseller_id = _reseller_id(db, principal)
+    detail = reseller_portal.get_account_detail(
+        db, reseller_id=reseller_id, account_id=account_id
+    )
+    if not detail:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    from app.services import crm_portal
+    from app.services.crm_client import CRMClientError
+
+    try:
+        crm_sub_id = crm_portal.resolve_crm_subscriber_id(db, account_id)
+        tickets = (
+            crm_portal.get_crm_client().list_tickets(subscriber_id=crm_sub_id)
+            if crm_sub_id
+            else []
+        )
+    except CRMClientError:
+        return {"items": [], "crm_available": False}
+
+    items = [
+        {
+            "id": str(t.get("id") or t.get("name") or ""),
+            "subject": t.get("subject") or t.get("title") or "Ticket",
+            "status": t.get("status"),
+            "priority": t.get("priority"),
+            "created_at": t.get("created_at") or t.get("creation"),
+            "updated_at": t.get("updated_at") or t.get("modified"),
+        }
+        for t in tickets
+    ]
+    return {"items": items, "crm_available": True}
 
 
 @router.get("/accounts/{account_id}/invoices")
