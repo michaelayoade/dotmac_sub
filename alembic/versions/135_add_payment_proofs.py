@@ -59,7 +59,10 @@ def upgrade() -> None:
         sa.Column("review_notes", sa.Text),
         sa.Column("verified_by", sa.String(120)),
         sa.Column(
-            "payment_id", UUID(as_uuid=True), sa.ForeignKey("payments.id"), nullable=True
+            "payment_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("payments.id"),
+            nullable=True,
         ),
         sa.Column("created_at", sa.DateTime(timezone=True)),
         sa.Column("updated_at", sa.DateTime(timezone=True)),
