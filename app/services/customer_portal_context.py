@@ -667,29 +667,85 @@ def get_customer_appointments(
     return {"appointments": appointments, "total": total, "total_pages": total_pages}
 
 
+def _filter_by_reseller_availability(
+    db: Session,
+    offers: list[CatalogOffer],
+    subscriber_id: object | None,
+) -> list[CatalogOffer]:
+    """Hide reseller-restricted offers from non-members.
+
+    An offer with active offer_reseller_availability rows is visible only to
+    subscribers whose reseller is listed; offers with no rows stay
+    unrestricted. Callers without subscriber context never see restricted
+    offers (fail closed).
+    """
+    from app.models.offer_availability import OfferResellerAvailability
+
+    if not offers:
+        return offers
+    rows = db.execute(
+        select(
+            OfferResellerAvailability.offer_id,
+            OfferResellerAvailability.reseller_id,
+        ).where(
+            OfferResellerAvailability.is_active.is_(True),
+            OfferResellerAvailability.offer_id.in_([offer.id for offer in offers]),
+        )
+    ).all()
+    restricted: dict[object, set[object]] = {}
+    for offer_id, reseller_id in rows:
+        restricted.setdefault(offer_id, set()).add(reseller_id)
+    if not restricted:
+        return offers
+
+    caller_reseller_id = None
+    if subscriber_id:
+        caller_reseller_id = db.execute(
+            select(Subscriber.reseller_id).where(Subscriber.id == subscriber_id)
+        ).scalar()
+
+    return [
+        offer
+        for offer in offers
+        if offer.id not in restricted
+        or (caller_reseller_id and caller_reseller_id in restricted[offer.id])
+    ]
+
+
 def get_available_portal_offers(
     db: Session,
     subscription: Subscription | None = None,
+    *,
+    subscriber_id: object | None = None,
 ) -> list[CatalogOffer]:
     """Get catalog offers available on the customer portal.
 
     Args:
         db: Database session
         subscription: Optional current subscription used to scope compatible offers
+        subscriber_id: Caller's subscriber id for reseller-availability scoping
+            (derived from the subscription when not given)
 
     Returns:
         List of CatalogOffer instances
     """
+    if subscription is not None and not subscriber_id:
+        subscriber_id = subscription.subscriber_id
+
     if not subscription or not subscription.offer_id:
-        return cast(
-            list[CatalogOffer],
-            db.scalars(
-                select(CatalogOffer)
-                .options(selectinload(CatalogOffer.prices))
-                .where(CatalogOffer.is_active.is_(True))
-                .where(CatalogOffer.show_on_customer_portal.is_(True))
-                .order_by(CatalogOffer.name.asc())
-            ).all(),
+        return _filter_by_reseller_availability(
+            db,
+            cast(
+                list[CatalogOffer],
+                db.scalars(
+                    select(CatalogOffer)
+                    .options(selectinload(CatalogOffer.prices))
+                    .where(CatalogOffer.is_active.is_(True))
+                    .where(CatalogOffer.show_on_customer_portal.is_(True))
+                    .order_by(CatalogOffer.name.asc())
+                ).all(),
+            ),
+            subscriber_id,
         )
 
     current_offer = db.get(CatalogOffer, subscription.offer_id)
@@ -708,6 +764,7 @@ def get_available_portal_offers(
             .order_by(CatalogOffer.name.asc())
         ).all(),
     )
+    offers = _filter_by_reseller_availability(db, offers, subscriber_id)
 
     allowed_ids = _parse_allowed_change_plan_ids(current_offer.allowed_change_plan_ids)
 

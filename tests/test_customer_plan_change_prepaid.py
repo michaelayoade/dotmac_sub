@@ -717,3 +717,116 @@ def test_available_portal_offers_eager_loads_prices(db_session, subscriber):
 
     assert offers
     assert all("prices" not in sa_inspect(o).unloaded for o in offers)
+
+
+# ---------------------------------------------------------------------------
+# Reseller availability scoping
+# ---------------------------------------------------------------------------
+
+
+def _reseller(db_session, name):
+    from app.models.subscriber import Reseller
+
+    reseller = Reseller(name=name)
+    db_session.add(reseller)
+    db_session.commit()
+    return reseller
+
+
+def _restrict_to(db_session, offer, reseller):
+    from app.models.offer_availability import OfferResellerAvailability
+
+    db_session.add(
+        OfferResellerAvailability(offer_id=offer.id, reseller_id=reseller.id)
+    )
+    db_session.commit()
+
+
+def test_reseller_restricted_offer_hidden_from_other_resellers_customer(
+    db_session, subscriber
+):
+    reseller_a = _reseller(db_session, "Partner A")
+    reseller_b = _reseller(db_session, "Partner B")
+    subscriber.reseller_id = reseller_b.id
+    db_session.commit()
+
+    current = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    restricted = _make_offer(
+        db_session,
+        name="Unlimited Partner",
+        amount=Decimal("80"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, restricted, reseller_a)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    offers = get_available_portal_offers(db_session, subscription)
+
+    ids = {str(o.id) for o in offers}
+    assert str(restricted.id) not in ids
+    assert str(current.id) in ids
+
+
+def test_reseller_restricted_offer_visible_to_member(db_session, subscriber):
+    reseller_a = _reseller(db_session, "Partner A2")
+    subscriber.reseller_id = reseller_a.id
+    db_session.commit()
+
+    current = _make_offer(
+        db_session,
+        name="Unlimited Basic2",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    restricted = _make_offer(
+        db_session,
+        name="Unlimited Partner2",
+        amount=Decimal("80"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, restricted, reseller_a)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    offers = get_available_portal_offers(db_session, subscription)
+
+    assert str(restricted.id) in {str(o.id) for o in offers}
+
+
+def test_restricted_offer_hidden_without_subscriber_context(db_session):
+    reseller_a = _reseller(db_session, "Partner A3")
+    restricted = _make_offer(
+        db_session,
+        name="Unlimited Partner3",
+        amount=Decimal("80"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, restricted, reseller_a)
+    _make_offer(
+        db_session,
+        name="Unlimited Open3",
+        amount=Decimal("90"),
+        plan_family="unlimited",
+    )
+
+    offers = get_available_portal_offers(db_session)
+
+    names = {o.name for o in offers}
+    assert "Unlimited Partner3" not in names
+    assert "Unlimited Open3" in names
