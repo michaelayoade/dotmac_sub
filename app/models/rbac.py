@@ -81,7 +81,11 @@ class SubscriberRole(Base):
     __tablename__ = "subscriber_roles"
     __table_args__ = (
         UniqueConstraint(
-            "subscriber_id", "role_id", name="uq_subscriber_roles_subscriber_role"
+            "subscriber_id",
+            "role_id",
+            "scope_type",
+            "scope_id",
+            name="uq_subscriber_roles_subscriber_role",
         ),
     )
 
@@ -96,6 +100,12 @@ class SubscriberRole(Base):
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False
     )
+    # Object scope of this grant. Empty strings mean a GLOBAL grant (the
+    # historical, unscoped behaviour). A scoped grant restricts the role's
+    # permissions to resources in one region/reseller: scope_type in
+    # {"region", "reseller"} and scope_id the region/reseller id.
+    scope_type: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    scope_id: Mapped[str] = mapped_column(String(64), default="", server_default="")
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -142,7 +152,11 @@ class SystemUserRole(Base):
     __tablename__ = "system_user_roles"
     __table_args__ = (
         UniqueConstraint(
-            "system_user_id", "role_id", name="uq_system_user_roles_user_role"
+            "system_user_id",
+            "role_id",
+            "scope_type",
+            "scope_id",
+            name="uq_system_user_roles_user_role",
         ),
     )
 
@@ -155,6 +169,9 @@ class SystemUserRole(Base):
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False
     )
+    # See SubscriberRole.scope_type / scope_id. Empty = global grant.
+    scope_type: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    scope_id: Mapped[str] = mapped_column(String(64), default="", server_default="")
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

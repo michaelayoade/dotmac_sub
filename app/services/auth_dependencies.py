@@ -531,3 +531,102 @@ def require_method_permission(
         return require_write(auth=auth, db=db)
 
     return _require_method_permission
+
+
+def grant_scopes_for_permission(auth: dict, db: Session, permission_key: str):
+    """Resolve HOW the principal holds ``permission_key``, for object scoping.
+
+    Returns:
+      * ``"global"`` — admin, a direct (unscoped) grant, or any global role
+        grant → authorized everywhere (historical behaviour).
+      * a ``set`` of ``(scope_type, scope_id)`` — the principal holds it ONLY
+        through scoped role grants; access is limited to those scopes.
+      * ``None`` — the principal does not hold the permission at all.
+    """
+    roles = set(auth.get("roles") or [])
+    if "admin" in roles:
+        return "global"
+
+    principal_id = auth["principal_id"]
+    principal_type = auth.get("principal_type", "subscriber")
+    possible_keys = _expand_permission_keys(permission_key)
+    permissions = (
+        db.query(Permission)
+        .filter(Permission.key.in_(possible_keys))
+        .filter(Permission.is_active.is_(True))
+        .all()
+    )
+    if not permissions:
+        return None
+    permission_ids = [p.id for p in permissions]
+
+    role_assign: Any
+    direct_model: Any
+    if principal_type == "system_user":
+        role_assign = SystemUserRole
+        assign_id = SystemUserRole.system_user_id
+        direct_model = SystemUserPermission
+        direct_id = SystemUserPermission.system_user_id
+    else:
+        role_assign = SubscriberRole
+        assign_id = SubscriberRole.subscriber_id
+        direct_model = SubscriberPermission
+        direct_id = SubscriberPermission.subscriber_id
+
+    # Direct grants carry no scope — they are global by design.
+    has_direct = (
+        db.query(direct_model)
+        .filter(direct_id == principal_id)
+        .filter(direct_model.permission_id.in_(permission_ids))
+        .first()
+    )
+    if has_direct is not None:
+        return "global"
+
+    rows = (
+        db.query(role_assign.scope_type, role_assign.scope_id)
+        .join(Role, role_assign.role_id == Role.id)
+        .join(RolePermission, RolePermission.role_id == Role.id)
+        .filter(assign_id == principal_id)
+        .filter(RolePermission.permission_id.in_(permission_ids))
+        .filter(Role.is_active.is_(True))
+        .all()
+    )
+    if not rows:
+        return None
+    scopes: set[tuple[str, str]] = set()
+    for scope_type, scope_id in rows:
+        if not scope_type:  # global role grant
+            return "global"
+        scopes.add((scope_type, scope_id))
+    return scopes
+
+
+def require_scoped_permission(permission_key: str, scope_extractor):
+    """Permission guard that honours object scoping.
+
+    A global grant authorizes everywhere; a region/reseller-scoped grant only
+    authorizes resources in that scope. ``scope_extractor(request, db)`` must
+    return the accessed resource's ``(scope_type, scope_id)`` (or ``None`` for
+    a genuinely scope-less resource, which a scoped-only principal cannot
+    reach). Admins and globally-granted principals never invoke the extractor.
+    """
+
+    def _require_scoped_permission(
+        request: Request,
+        auth=Depends(require_user_auth),
+        db: Session = Depends(_get_db),
+    ):
+        decision = grant_scopes_for_permission(auth, db, permission_key)
+        if decision is None:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if decision == "global":
+            return auth
+        resource_scope = scope_extractor(request, db)
+        if resource_scope is not None and tuple(resource_scope) in decision:
+            return auth
+        raise HTTPException(
+            status_code=403, detail="Forbidden for this region/reseller"
+        )
+
+    return _require_scoped_permission
