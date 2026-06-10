@@ -107,12 +107,34 @@ def list_available_addons(
         .filter(SubscriptionAddOn.subscription_id == subscription.id)
         .all()
     )
+    now = datetime.now(UTC)
+
+    def _is_expired(end_at) -> bool:
+        if end_at is None:
+            return False
+        if end_at.tzinfo is None:
+            end_at = end_at.replace(tzinfo=UTC)
+        return end_at < now
+
     active = [
         {
             "id": str(sa.id),
             "add_on_id": str(sa.add_on_id),
             "name": add_on.name,
             "quantity": int(sa.quantity or 1),
+            "addon_type": getattr(add_on.addon_type, "value", str(add_on.addon_type)),
+            # Data bundles: GB granted per unit (null for non-data add-ons).
+            "grant_gb": add_on.grant_gb,
+            "total_grant_gb": (
+                add_on.grant_gb * int(sa.quantity or 1)
+                if add_on.grant_gb is not None
+                else None
+            ),
+            "starts_at": sa.start_at,
+            # Null = lasts until the end of the billing period it was bought in.
+            "expires_at": sa.end_at,
+            "validity_days": add_on.validity_days,
+            "is_expired": _is_expired(sa.end_at),
         }
         for sa, add_on in active_rows
     ]

@@ -46,6 +46,10 @@ class QuotaBucketRead(QuotaBucketBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    # Running cost of the current overage (overage_gb × the allowance's
+    # overage_rate). Populated on customer-facing reads; None when not in
+    # overage or no rate is configured.
+    overage_amount: Decimal | None = None
 
 
 class RadiusAccountingSessionBase(BaseModel):
@@ -115,7 +119,7 @@ class FupSummary(BaseModel):
     how to restore speed, and when the limit resets.
     """
 
-    status: str = Field(description="full_speed | throttled | blocked")
+    status: str = Field(description="full_speed | approaching | throttled | blocked")
     is_reduced: bool = False
     speed_reduction_percent: float | None = None
     active_rule_name: str | None = None
@@ -123,6 +127,15 @@ class FupSummary(BaseModel):
     # Plain-language explainer for the active rule, e.g.
     # "Speed reduced to 25% after 100 GB this month".
     summary: str | None = None
+    # Headroom against the nearest throttle/block rule — present even while
+    # healthy so the app can pre-warn before enforcement.
+    threshold_gb: float | None = None
+    used_gb: float | None = None
+    gb_until_throttle: float | None = None
+    usage_ratio: float | None = None
+    # Policy terms shown regardless of state, e.g.
+    # "Speed reduces to 25% after 500 GB each month".
+    policy_summary: str | None = None
 
 
 class UsageSummaryResponse(BaseModel):

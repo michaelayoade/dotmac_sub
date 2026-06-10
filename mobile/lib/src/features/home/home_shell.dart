@@ -18,7 +18,7 @@ class HomeShell extends StatelessWidget {
       sel: Icons.receipt_long,
       label: 'Billing'
     ),
-    (icon: Icons.data_usage_outlined, sel: Icons.data_usage, label: 'Usage'),
+    (icon: Icons.wifi_outlined, sel: Icons.wifi, label: 'Service'),
     (
       icon: Icons.support_agent_outlined,
       sel: Icons.support_agent,
