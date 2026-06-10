@@ -1,4 +1,5 @@
 // Models for the reseller API (app/api/reseller.py, mounted at /api/v1).
+import '../core/parsers.dart';
 
 class ResellerAccount {
   ResellerAccount({
@@ -184,5 +185,73 @@ class ResellerDashboard {
             .cast<Map<String, dynamic>>()
             .map(ResellerAlert.fromJson)
             .toList(),
+      );
+}
+
+/// Mirrors GET /reseller/revenue (reseller_portal.get_revenue_summary).
+class ResellerRevenue {
+  ResellerRevenue({
+    required this.totalPaid,
+    required this.totalOutstanding,
+    required this.accountCount,
+    this.monthly = const [],
+  });
+
+  final double totalPaid;
+  final double totalOutstanding;
+  final int accountCount;
+  final List<ResellerRevenueMonth> monthly;
+
+  factory ResellerRevenue.fromJson(Map<String, dynamic> json) =>
+      ResellerRevenue(
+        totalPaid: asDouble(json['total_paid']),
+        totalOutstanding: asDouble(json['total_outstanding']),
+        accountCount: (json['account_count'] as num?)?.toInt() ?? 0,
+        monthly: (json['monthly'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerRevenueMonth.fromJson)
+            .toList(),
+      );
+}
+
+/// One month of paid revenue.
+class ResellerRevenueMonth {
+  ResellerRevenueMonth({
+    required this.year,
+    required this.month,
+    required this.total,
+    required this.count,
+  });
+
+  final int year;
+  final int month;
+  final double total;
+  final int count;
+
+  String get label {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final m = (month >= 1 && month <= 12) ? names[month - 1] : '$month';
+    return "$m '${year % 100}";
+  }
+
+  factory ResellerRevenueMonth.fromJson(Map<String, dynamic> json) =>
+      ResellerRevenueMonth(
+        year: (json['year'] as num?)?.toInt() ?? 0,
+        month: (json['month'] as num?)?.toInt() ?? 0,
+        total: asDouble(json['total']),
+        count: (json['count'] as num?)?.toInt() ?? 0,
       );
 }
