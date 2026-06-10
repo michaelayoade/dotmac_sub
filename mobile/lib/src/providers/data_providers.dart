@@ -7,6 +7,7 @@ import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
 import '../models/payment_method.dart';
+import '../models/payment_proof.dart';
 import '../models/session.dart';
 import '../models/page.dart';
 import '../models/subscription.dart';
@@ -257,6 +258,13 @@ enum InvoiceFilter {
 final invoiceFilterProvider = StateProvider.autoDispose<InvoiceFilter>((ref) {
   cacheFor(ref);
   return InvoiceFilter.all;
+});
+
+/// My bank-transfer payment proofs (pending + reviewed).
+final paymentProofsProvider =
+    FutureProvider.autoDispose<List<PaymentProofItem>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(billingRepositoryProvider).myPaymentProofs();
 });
 
 /// All quota buckets for the subscriber, in a single round-trip.

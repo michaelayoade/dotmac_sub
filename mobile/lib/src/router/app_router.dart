@@ -13,6 +13,7 @@ import '../features/auth/reset_password_screen.dart';
 import '../features/auth/sessions_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
 import '../features/billing/invoices_screen.dart';
+import '../features/billing/transfer_proofs_screen.dart';
 import '../features/billing/payment_methods_screen.dart';
 import '../features/billing/payment_webview_screen.dart';
 import '../features/home/dashboard_screen.dart';
@@ -203,6 +204,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               path: '/billing',
               builder: (_, __) => const InvoicesScreen(),
               routes: [
+                GoRoute(
+                  path: 'transfer-proofs',
+                  builder: (_, __) => const TransferProofsScreen(),
+                ),
                 GoRoute(
                   path: 'invoices/:id',
                   builder: (_, state) => InvoiceDetailScreen(

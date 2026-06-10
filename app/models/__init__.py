@@ -345,6 +345,10 @@ from app.models.payment_arrangement import (  # noqa: F401
     PaymentArrangementInstallment,
     PaymentFrequency,
 )
+from app.models.payment_proof import (  # noqa: F401
+    PaymentProof,
+    PaymentProofStatus,
+)
 from app.models.portal_message import (  # noqa: F401
     PortalMessage,
     PortalMessageStatus,

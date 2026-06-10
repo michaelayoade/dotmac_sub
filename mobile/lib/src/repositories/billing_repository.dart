@@ -5,6 +5,7 @@ import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/page.dart';
 import '../models/payment_flow.dart';
+import '../models/payment_proof.dart';
 import '../models/payment_method.dart';
 import '../models/topup.dart';
 
@@ -13,6 +14,36 @@ class BillingRepository {
   BillingRepository(this.dio);
 
   final Dio dio;
+
+  /// POST /payment-proofs/me — upload a bank-transfer receipt (multipart).
+  Future<PaymentProofItem> submitPaymentProof({
+    required String amount,
+    String? bankName,
+    String? reference,
+    DateTime? paidAt,
+    required String filePath,
+    required String fileName,
+  }) async {
+    final form = FormData.fromMap({
+      'amount': amount,
+      if (bankName != null && bankName.isNotEmpty) 'bank_name': bankName,
+      if (reference != null && reference.isNotEmpty) 'reference': reference,
+      if (paidAt != null) 'paid_at': paidAt.toIso8601String(),
+      'file': await MultipartFile.fromFile(filePath, filename: fileName),
+    });
+    final data = await guard(() => dio.post('/payment-proofs/me', data: form));
+    return PaymentProofItem.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// GET /payment-proofs/me — my submitted transfer proofs.
+  Future<List<PaymentProofItem>> myPaymentProofs() async {
+    final data = await guard(() => dio.get('/payment-proofs/me'));
+    final items = (data as Map<String, dynamic>)['items'] as List? ?? const [];
+    return items
+        .cast<Map<String, dynamic>>()
+        .map(PaymentProofItem.fromJson)
+        .toList();
+  }
 
   /// GET /me/invoices — the signed-in subscriber's own invoices (self-scoped).
   Future<Page<Invoice>> invoices({
