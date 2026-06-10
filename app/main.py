@@ -100,6 +100,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     # Customer self-care: self-scoped reads, auth-only (no staff permission).
     ("app.api.me", "router", "api", "user"),
     ("app.api.reseller", "router", "api", "user"),
+    ("app.api.payment_proofs", "router", "api", "user"),
     ("app.api.service_requests", "router", "api", "user"),
     ("app.api.rbac", "router", "api", "user"),
     ("app.api.customers", "router", "api", "user"),

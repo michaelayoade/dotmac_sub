@@ -22,6 +22,13 @@ class InvoicesScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Billing'),
+        actions: [
+          IconButton(
+            tooltip: 'Pay by bank transfer',
+            icon: const Icon(Icons.account_balance_outlined),
+            onPressed: () => context.go('/billing/transfer-proofs'),
+          ),
+        ],
         bottom: const TabBar(tabs: [
           Tab(text: 'Invoices'),
           Tab(text: 'Payments'),
