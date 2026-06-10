@@ -64,6 +64,10 @@ class DashboardScreen extends ConsumerWidget {
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
     final fup = todaySummary?.fup;
+    // Unlimited-with-FUP plans have no quota bucket; their "remaining" is the
+    // distance to the fair-use slowdown, which the API reports even at full
+    // speed.
+    final fupHeadroom = fup?.gbUntilThrottle;
     // Yesterday's total gives "77.3 GB" a point of reference; 0/unavailable
     // just keeps the plain label.
     final dataYesterday =
@@ -159,6 +163,7 @@ class DashboardScreen extends ConsumerWidget {
             _ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
+              serviceActive: currentService?.isActive ?? false,
               ipAddress: currentService?.ipv4Address,
               live: activeSession != null
                   ? ref.watch(liveBandwidthProvider).asData?.value
@@ -211,19 +216,26 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Capped plan: the number prepaid customers actually check
-                    // is what's LEFT, not what's used. Uncapped: today's usage
-                    // with yesterday for scale (from main).
+                    // Plan-type-aware: capped -> what's LEFT; unlimited with
+                    // a fair-use rule -> headroom to the slowdown (proactive,
+                    // not only when approaching); truly unlimited -> today's
+                    // usage with yesterday for scale.
                     label: currentQuota != null
                         ? 'Data left'
-                        : (dataYesterday ?? 0) > 0
-                            ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
-                            : 'Data today',
+                        : fupHeadroom != null
+                            ? 'To slowdown'
+                            : (dataYesterday ?? 0) > 0
+                                ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
+                                : 'Data today',
                     value: currentQuota != null
                         ? Fmt.gb(currentQuota.remainingGb ?? 0)
-                        : (dataToday == null ? null : Fmt.bytes(dataToday)),
-                    highlight: currentQuota != null &&
-                        (currentQuota.usedFraction ?? 0) >= 0.9,
+                        : fupHeadroom != null
+                            ? Fmt.gb(fupHeadroom)
+                            : (dataToday == null ? null : Fmt.bytes(dataToday)),
+                    highlight: (currentQuota != null &&
+                            (currentQuota.usedFraction ?? 0) >= 0.9) ||
+                        (fup?.isApproaching ?? false) ||
+                        (fup?.needsAttention ?? false),
                     onTap: () => context.go('/usage'),
                   ),
                 ),
@@ -344,9 +356,15 @@ class _ConnectionBanner extends StatelessWidget {
   const _ConnectionBanner({
     required this.session,
     required this.known,
+    this.serviceActive = false,
     this.ipAddress,
     this.live,
   });
+
+  /// Whether the displayed subscription is active. An active account that is
+  /// merely not connected right now (router off, brief drop) is routine — it
+  /// gets neutral styling, not the alarming red reserved for real problems.
+  final bool serviceActive;
 
   /// The active session, or null when offline. Only meaningful when [known].
   final AccountingSession? session;
@@ -389,6 +407,11 @@ class _ConnectionBanner extends StatelessWidget {
         if (live?.hasSignal ?? false)
           '↓ ${Fmt.bps(live!.downloadBps)} ↑ ${Fmt.bps(live!.uploadBps)}',
       ].join(' · ');
+    } else if (serviceActive) {
+      bg = scheme.surfaceContainerHighest;
+      fg = scheme.onSurfaceVariant;
+      icon = Icons.wifi_off_outlined;
+      text = 'Not connected — service is active, check your router';
     } else {
       bg = scheme.errorContainer;
       fg = scheme.onErrorContainer;

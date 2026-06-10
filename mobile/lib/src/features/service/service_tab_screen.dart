@@ -103,6 +103,11 @@ class ServiceTabScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
             ],
+            if (serviceBuckets.isEmpty &&
+                (summary.asData?.value.fup?.thresholdGb != null)) ...[
+              _FupHeadroomCard(fup: summary.asData!.value.fup!),
+              const SizedBox(height: 12),
+            ],
             if (service != null && canBuyData) ...[
               Align(
                 alignment: Alignment.centerLeft,
@@ -279,6 +284,83 @@ class _ActiveAddonTile extends StatelessWidget {
           style: theme.textTheme.bodySmall?.copyWith(
             color: urgent ? theme.colorScheme.error : theme.colorScheme.outline,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Fair-use position for unlimited plans (no quota bucket): how far the
+/// customer is from the slowdown, with the policy terms — shown proactively
+/// at full speed, not only once "approaching".
+class _FupHeadroomCard extends StatelessWidget {
+  const _FupHeadroomCard({required this.fup});
+  final FupStatus fup;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final used = fup.usedGb ?? 0;
+    final threshold = fup.thresholdGb ?? 0;
+    final ratio = (fup.usageRatio ?? 0).clamp(0.0, 1.0);
+    final warn = ratio >= 0.8;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Fair-use allowance', style: theme.textTheme.bodySmall),
+                Text('Unlimited',
+                    style: theme.textTheme.labelMedium
+                        ?.copyWith(color: theme.colorScheme.primary)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '${Fmt.gb(used)} / ${Fmt.gb(threshold)} full speed',
+              style: theme.textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(
+              value: ratio,
+              minHeight: 10,
+              borderRadius: BorderRadius.circular(5),
+              color: warn ? theme.colorScheme.error : null,
+            ),
+            if (fup.gbUntilThrottle != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                '${Fmt.gb(fup.gbUntilThrottle!)} until reduced speed',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: warn
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.outline,
+                ),
+              ),
+            ],
+            if (fup.policySummary != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(Icons.info_outline,
+                      size: 14, color: theme.colorScheme.outline),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      fup.policySummary!,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
         ),
       ),
     );
