@@ -18,12 +18,12 @@ from app.tasks.bandwidth import (
 from app.tasks.billing import run_invoice_cycle
 from app.tasks.catalog import expire_subscriptions
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
+from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
 )
-from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_ticket_push import (
     push_comment_to_crm,
     push_ticket_to_crm,
