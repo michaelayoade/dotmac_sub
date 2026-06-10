@@ -1,4 +1,6 @@
 // Models for the reseller API (app/api/reseller.py, mounted at /api/v1).
+import 'package:latlong2/latlong.dart';
+
 import '../core/parsers.dart';
 
 /// Money fields come back as JSON **strings** (serialized `Decimal`, e.g.
@@ -466,3 +468,63 @@ class ResellerPayIntent {
             .map((k, v) => MapEntry(k.toString(), v.toString())),
       );
 }
+
+/// Parsed fiber-plant map payload (GET /reseller/fiber-map).
+class ResellerFiberMap {
+  ResellerFiberMap({this.points = const [], this.lines = const []});
+
+  final List<FiberMapPoint> points;
+
+  /// Cable runs as lat/lng paths (LineString / MultiLineString geometries).
+  final List<List<LatLng>> lines;
+
+  factory ResellerFiberMap.fromJson(Map<String, dynamic> json) {
+    final features =
+        ((json['geojson_data'] as Map?)?['features'] as List?) ?? const [];
+    final points = <FiberMapPoint>[];
+    final lines = <List<LatLng>>[];
+    for (final f in features.cast<Map<String, dynamic>>()) {
+      final geom = (f['geometry'] as Map?) ?? const {};
+      final props = (f['properties'] as Map?) ?? const {};
+      final type = geom['type'];
+      if (type == 'Point') {
+        final c = (geom['coordinates'] as List?) ?? const [];
+        if (c.length >= 2 && c[0] != null && c[1] != null) {
+          points.add(FiberMapPoint(
+            lng: (c[0] as num).toDouble(),
+            lat: (c[1] as num).toDouble(),
+            type: props['type']?.toString() ?? 'point',
+            name: props['name']?.toString(),
+          ));
+        }
+      } else if (type == 'LineString') {
+        lines.add(_lineToLatLng(geom['coordinates'] as List? ?? const []));
+      } else if (type == 'MultiLineString') {
+        for (final seg in (geom['coordinates'] as List? ?? const [])) {
+          lines.add(_lineToLatLng(seg as List? ?? const []));
+        }
+      }
+    }
+    return ResellerFiberMap(points: points, lines: lines);
+  }
+}
+
+class FiberMapPoint {
+  FiberMapPoint({
+    required this.lat,
+    required this.lng,
+    required this.type,
+    this.name,
+  });
+
+  final double lat;
+  final double lng;
+  final String type;
+  final String? name;
+}
+
+List<LatLng> _lineToLatLng(List coords) => [
+      for (final c in coords)
+        if (c is List && c.length >= 2 && c[0] != null && c[1] != null)
+          LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
+    ];
