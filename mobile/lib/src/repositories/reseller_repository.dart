@@ -39,6 +39,12 @@ class ResellerRepository {
         data as Map<String, dynamic>, ResellerAccount.fromJson);
   }
 
+  /// GET /reseller/revenue — 12-month paid revenue + outstanding totals.
+  Future<ResellerRevenue> revenue() async {
+    final data = await guard(() => dio.get('/reseller/revenue'));
+    return ResellerRevenue.fromJson(data as Map<String, dynamic>);
+  }
+
   /// GET /reseller/accounts/{id} — one managed account (404 if not owned).
   Future<ResellerAccountDetail> account(String accountId) async {
     final data = await guard(() => dio.get('/reseller/accounts/$accountId'));
