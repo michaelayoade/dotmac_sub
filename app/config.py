@@ -63,6 +63,8 @@ class Settings:
     crm_base_url: str = os.getenv("CRM_BASE_URL", "")
     crm_username: str = os.getenv("CRM_USERNAME", "")
     crm_password: str = os.getenv("CRM_PASSWORD", "")
+    # Shared secret for inbound CRM webhook deliveries (HMAC-SHA256).
+    crm_webhook_secret: str = os.getenv("CRM_WEBHOOK_SECRET", "")
 
     # Mono lookup API
     mono_secret_key: str = os.getenv("MONO_SECRET_KEY", "")

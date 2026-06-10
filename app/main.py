@@ -74,6 +74,7 @@ _CORE_ROUTER_SPECS = [
     # payment confirmations / monitoring alerts on every restart.
     ("app.api.billing", "webhook_router", "api", "none"),
     ("app.api.zabbix_webhook", "router", "api", "none"),
+    ("app.api.crm_webhooks", "router", "api", "none"),
     ("app.api.search", "router", "api", "user"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
