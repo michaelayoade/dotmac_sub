@@ -56,16 +56,14 @@ def _list_alias_work_orders(client: CRMClient, alias_id: str) -> list[dict[str, 
 
 
 def merge_alias(
-    db: Session,
     client: CRMClient,
-    subscriber: Subscriber,
+    primary_id: str,
     alias_id: str,
     *,
     dry_run: bool,
     stats: dict[str, int],
 ) -> bool:
-    """Merge one alias CRM record into the subscriber's primary. True if merged."""
-    primary_id = str(subscriber.crm_subscriber_id)
+    """Merge one alias CRM record into the primary. True if merged (live)."""
     try:
         alias = client.get_subscriber(alias_id)
     except CRMClientError:
@@ -111,19 +109,25 @@ def merge_duplicates(
         "errors": 0,
     }
 
-    subscribers = (
-        db.query(Subscriber)
-        .filter(
-            Subscriber.crm_subscriber_id.isnot(None),
-            Subscriber.metadata_.isnot(None),
+    # Materialize plain rows and end the transaction: the CRM-heavy loop can
+    # run for an hour, and an idle-in-transaction connection gets killed by
+    # the server (observed live). pool_pre_ping reconnects per live write.
+    rows = [
+        (row_id, str(crm_id), [str(a) for a in (md or {}).get("crm_alias_ids") or []])
+        for row_id, crm_id, md in (
+            db.query(Subscriber.id, Subscriber.crm_subscriber_id, Subscriber.metadata_)
+            .filter(
+                Subscriber.crm_subscriber_id.isnot(None),
+                Subscriber.metadata_.isnot(None),
+            )
+            .order_by(Subscriber.id)
+            .all()
         )
-        .order_by(Subscriber.id)
-        .all()
-    )
+    ]
+    db.commit()
+
     processed = 0
-    for subscriber in subscribers:
-        metadata = dict(subscriber.metadata_ or {})
-        aliases = [str(a) for a in metadata.get("crm_alias_ids") or []]
+    for subscriber_id, primary_crm_id, aliases in rows:
         if not aliases:
             continue
         if limit is not None and processed >= limit:
@@ -136,7 +140,7 @@ def merge_duplicates(
         for alias_id in aliases:
             try:
                 merged = merge_alias(
-                    db, client, subscriber, alias_id, dry_run=dry_run, stats=stats
+                    client, primary_crm_id, alias_id, dry_run=dry_run, stats=stats
                 )
             except CRMClientError as exc:
                 stats["errors"] += 1
@@ -144,11 +148,13 @@ def merge_duplicates(
                 remaining.append(alias_id)
                 continue
             (merged_now if merged else remaining).append(alias_id)
-            if not merged and dry_run:
-                # dry-run keeps everything in place
-                pass
 
         if not dry_run and merged_now:
+            # Fresh short transaction per write; pre_ping revives stale conns.
+            subscriber = db.get(Subscriber, subscriber_id)
+            if subscriber is None:
+                continue
+            metadata = dict(subscriber.metadata_ or {})
             metadata["crm_alias_ids"] = remaining or None
             merged_history = [
                 str(a) for a in metadata.get("crm_merged_alias_ids") or []
