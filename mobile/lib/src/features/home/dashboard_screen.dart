@@ -64,6 +64,10 @@ class DashboardScreen extends ConsumerWidget {
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
     final fup = todaySummary?.fup;
+    // Yesterday's total gives "77.3 GB" a point of reference; 0/unavailable
+    // just keeps the plain label.
+    final dataYesterday =
+        ref.watch(usageSummaryProvider('yesterday')).asData?.value.totalBytes;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -209,8 +213,13 @@ class DashboardScreen extends ConsumerWidget {
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
                     // Capped plan: the number prepaid customers actually check
-                    // is what's LEFT, not what's used. Uncapped: today's usage.
-                    label: currentQuota != null ? 'Data left' : 'Data today',
+                    // is what's LEFT, not what's used. Uncapped: today's usage
+                    // with yesterday for scale (from main).
+                    label: currentQuota != null
+                        ? 'Data left'
+                        : (dataYesterday ?? 0) > 0
+                            ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
+                            : 'Data today',
                     value: currentQuota != null
                         ? Fmt.gb(currentQuota.remainingGb ?? 0)
                         : (dataToday == null ? null : Fmt.bytes(dataToday)),

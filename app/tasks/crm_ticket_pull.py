@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from app.celery_app import celery_app
 from app.db import task_session
-from app.services.crm_ticket_pull import pull_tickets, sync_ticket_by_id
+from app.services.crm_ticket_pull import sync_ticket_by_id
 
 
 @celery_app.task(name="app.tasks.crm_ticket_pull.pull_crm_tickets")
-def pull_crm_tickets(limit: int = 200, max_pages: int = 50) -> dict:
+def pull_crm_tickets(limit: int = 200, max_pages: int = 50, full: bool = False) -> dict:
+    from app.services.integration_sync import run_scheduled_pull
+
     with task_session() as db:
-        return pull_tickets(db, limit=limit, max_pages=max_pages).as_dict()
+        return run_scheduled_pull(db, limit=limit, max_pages=max_pages, full=full)
 
 
 @celery_app.task(name="app.tasks.crm_ticket_pull.sync_crm_ticket")

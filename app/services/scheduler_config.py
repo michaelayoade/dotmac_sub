@@ -1389,6 +1389,29 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
                 "schedule": timedelta(minutes=crm_ticket_pull_interval),
             }
+            # Daily full reconciliation: heals drift the incremental runs
+            # can't see (CRM comments don't bump ticket updated_at; closed
+            # tickets are excluded from the incremental comment sweep).
+            schedule["crm_ticket_pull_full"] = {
+                "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
+                "schedule": crontab(hour=3, minute=40),
+                "kwargs": {"full": True},
+            }
+
+        # Nightly billing snapshot to the CRM (balance / next bill date /
+        # billing cycle on the CRM subscriber record for support agents).
+        crm_billing_push_enabled = _effective_bool(
+            session,
+            SettingDomain.scheduler,
+            "crm_billing_push_enabled",
+            "CRM_BILLING_PUSH_ENABLED",
+            False,
+        )
+        if crm_billing_push_enabled:
+            schedule["crm_billing_push"] = {
+                "task": "app.tasks.crm_billing_push.push_crm_billing_snapshots",
+                "schedule": crontab(hour=2, minute=30),
+            }
 
         # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
         olt_queue_enabled = _effective_bool(

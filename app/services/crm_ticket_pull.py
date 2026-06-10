@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -30,6 +30,7 @@ class CrmTicketPullResult:
     fetched: int = 0
     created: int = 0
     updated: int = 0
+    unchanged: int = 0
     skipped_leads: int = 0
     skipped_unmapped_subscribers: int = 0
     comments_created: int = 0
@@ -40,6 +41,7 @@ class CrmTicketPullResult:
             "fetched": self.fetched,
             "created": self.created,
             "updated": self.updated,
+            "unchanged": self.unchanged,
             "skipped_leads": self.skipped_leads,
             "skipped_unmapped_subscribers": self.skipped_unmapped_subscribers,
             "comments_created": self.comments_created,
@@ -402,6 +404,7 @@ def sync_ticket(
     *,
     client: CRMClient | None = None,
     sync_comments: bool = True,
+    fetch_comments_when_unchanged: bool = True,
     subscriber_cache: dict[str, UUID] | None = None,
     local_by_splynx: dict[int, UUID] | None = None,
     local_by_crm_id: dict[str, UUID] | None = None,
@@ -442,6 +445,18 @@ def sync_ticket(
 
     existing = _find_existing_ticket(db, crm_ticket)
     if existing:
+        # Unchanged in the CRM since we last synced it → skip the rewrite.
+        # CRM comment creation does not bump the ticket's updated_at, so the
+        # caller decides whether comments still need a look (full sweeps yes,
+        # incremental runs handle open tickets separately).
+        incoming_updated = str(crm_ticket.get("updated_at") or "")
+        stored_updated = str((existing.metadata_ or {}).get("crm_updated_at") or "")
+        if incoming_updated and incoming_updated == stored_updated:
+            comments_created = 0
+            if sync_comments and fetch_comments_when_unchanged:
+                comments_created = _sync_comments(db, client, existing, crm_ticket_id)
+                db.flush()
+            return "unchanged", comments_created, existing
         local_ticket = existing
         outcome = "updated"
     else:
@@ -493,6 +508,65 @@ def sync_ticket_by_id(
     return result
 
 
+# Synced tickets in these states get a comment look on every incremental run:
+# new CRM comments do not bump the ticket's updated_at, so the watermark alone
+# would miss them. Closed-ticket comments are rare and heal in the full sweep.
+# Overlap margin on the incremental watermark: tolerates clock skew between
+# the CRM and us, and tickets updated while a previous run was paging.
+WATERMARK_MARGIN = timedelta(minutes=10)
+
+OPEN_SWEEP_STATUSES = (
+    "new",
+    "open",
+    "pending",
+    "waiting_on_customer",
+    "on_hold",
+    "lastmile_rerun",
+    "site_under_construction",
+)
+
+
+def latest_crm_updated_at(db: Session) -> datetime | None:
+    """Most recent CRM updated_at across synced tickets (the pull watermark)."""
+    latest: datetime | None = None
+    rows = db.query(Ticket.metadata_).filter(
+        Ticket.metadata_["sync_source"].as_string() == "crm"
+    )
+    for (metadata,) in rows:
+        parsed = _parse_datetime((metadata or {}).get("crm_updated_at"))
+        if parsed and (latest is None or parsed > latest):
+            latest = parsed
+    return latest
+
+
+def _sweep_open_ticket_comments(
+    db: Session,
+    client: CRMClient,
+    already_synced: set[str],
+) -> int:
+    """Fetch comments for open-state synced tickets not covered this run."""
+    created = 0
+    open_tickets = (
+        db.query(Ticket)
+        .filter(
+            Ticket.metadata_["sync_source"].as_string() == "crm",
+            Ticket.status.in_(OPEN_SWEEP_STATUSES),
+        )
+        .all()
+    )
+    for ticket in open_tickets:
+        crm_ticket_id = str((ticket.metadata_ or {}).get("crm_ticket_id") or "")
+        if not crm_ticket_id or crm_ticket_id in already_synced:
+            continue
+        try:
+            created += _sync_comments(db, client, ticket, crm_ticket_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("comment sweep failed ticket=%s: %s", crm_ticket_id, exc)
+    if created:
+        db.flush()
+    return created
+
+
 def pull_tickets(
     db: Session,
     *,
@@ -500,11 +574,21 @@ def pull_tickets(
     limit: int = 200,
     max_pages: int = 50,
     sync_comments: bool = True,
+    since: datetime | None = None,
     subscriber_cache: dict[str, UUID] | None = None,
     local_by_splynx: dict[int, UUID] | None = None,
     local_by_crm_id: dict[str, UUID] | None = None,
     record_callback: CrmTicketRecordCallback | None = None,
 ) -> CrmTicketPullResult:
+    """Pull CRM tickets into local support tickets.
+
+    With ``since`` set (incremental mode), pages are walked in updated_at
+    descending order and the walk stops at the first ticket older than
+    ``since``; unchanged tickets skip the field rewrite and the per-ticket
+    comment fetch, and open synced tickets get a separate comment sweep.
+    Without ``since`` (full mode) every ticket is visited and comments are
+    fetched even for unchanged tickets — the drift-healing reconciliation.
+    """
     client = client or get_crm_client()
     page_size = min(max(limit, 1), 200)
     result = CrmTicketPullResult()
@@ -514,11 +598,20 @@ def pull_tickets(
     )
     if local_by_crm_id is None:
         local_by_crm_id = load_local_crm_id_map(db)
+    incremental = since is not None
+    comments_synced: set[str] = set()
+    reached_watermark = False
     for page in range(max(max_pages, 1)):
+        if reached_watermark:
+            break
         offset = page * page_size
         try:
             tickets = client.list_tickets(
-                limit=page_size, offset=offset, use_cache=False
+                limit=page_size,
+                offset=offset,
+                order_by="updated_at",
+                order_dir="desc",
+                use_cache=False,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("CRM ticket page fetch failed offset=%s", offset)
@@ -527,6 +620,13 @@ def pull_tickets(
         if not tickets:
             break
         for crm_ticket in tickets:
+            if incremental:
+                updated_at = _parse_datetime(crm_ticket.get("updated_at"))
+                if updated_at and since is not None and updated_at < since:
+                    # Pages are updated_at-descending: everything from here
+                    # back was already synced.
+                    reached_watermark = True
+                    break
             result.fetched += 1
             try:
                 outcome, comments_created, local_ticket = sync_ticket(
@@ -534,6 +634,7 @@ def pull_tickets(
                     crm_ticket,
                     client=client,
                     sync_comments=sync_comments,
+                    fetch_comments_when_unchanged=not incremental,
                     subscriber_cache=subscriber_cache,
                     local_by_splynx=local_by_splynx,
                     local_by_crm_id=local_by_crm_id,
@@ -549,11 +650,15 @@ def pull_tickets(
                 result.created += 1
             elif outcome == "updated":
                 result.updated += 1
+            elif outcome == "unchanged":
+                result.unchanged += 1
             elif outcome == "skipped_lead":
                 result.skipped_leads += 1
             elif outcome == "skipped_unmapped_subscriber":
                 result.skipped_unmapped_subscribers += 1
             result.comments_created += comments_created
+            if sync_comments and outcome in ("created", "updated"):
+                comments_synced.add(str(crm_ticket.get("id") or ""))
             if record_callback:
                 record_callback(
                     crm_ticket,
@@ -564,6 +669,10 @@ def pull_tickets(
                 )
         if len(tickets) < page_size:
             break
+    if incremental and sync_comments:
+        result.comments_created += _sweep_open_ticket_comments(
+            db, client, comments_synced
+        )
     return result
 
 

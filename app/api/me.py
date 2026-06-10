@@ -586,13 +586,15 @@ def my_accounting_sessions(
 
 @router.get("/usage-summary", response_model=UsageSummaryResponse)
 async def my_usage_summary(
-    period: str = Query(default="today", pattern="^(hour|today|week|cycle|all)$"),
+    period: str = Query(
+        default="today", pattern="^(hour|today|yesterday|week|cycle|all)$"
+    ),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
     """Time-windowed data-usage total + bucketed series for the caller.
 
-    period: hour | today | week | cycle | all. The total is billing-grade for
+    period: hour | today | yesterday | week | cycle | all. The total is billing-grade for
     cycle (rated quota) and all (session octets), and throughput-integrated for
     sub-day windows — see total_source / is_authoritative on the response. The
     window has a defined start/end (unlike the legacy "last 50 sessions" sum)
@@ -675,9 +677,14 @@ def my_create_ticket(
         channel=TicketChannel.web,
         subscriber_id=UUID(subscriber_id),
     )
-    return support_service.tickets.create(
+    ticket = support_service.tickets.create(
         db, ticket_payload, actor_id=subscriber_id, request=request
     )
+    from app.services.crm_ticket_push import enqueue_crm_ticket_push
+
+    if getattr(ticket, "id", None):
+        enqueue_crm_ticket_push(ticket.id, source="me_ticket_create")
+    return ticket
 
 
 @router.get(
@@ -719,10 +726,15 @@ def my_add_ticket_comment(
     customer can never create a staff-only note."""
     subscriber_id = _subscriber_id(principal)
     _owned_ticket(db, subscriber_id, ticket_id)
-    return support_service.tickets.create_comment(
+    comment = support_service.tickets.create_comment(
         db,
         ticket_id,
         TicketCommentCreate(body=payload.body, is_internal=False),
         actor_id=subscriber_id,
         request=request,
     )
+    from app.services.crm_ticket_push import enqueue_crm_comment_push
+
+    if getattr(comment, "id", None):
+        enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
+    return comment

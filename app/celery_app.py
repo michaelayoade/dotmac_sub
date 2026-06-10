@@ -67,6 +67,9 @@ celery_app.conf.task_routes = {
     # would push it far past its 5-minute schedule.
     "app.tasks.crm_ticket_pull.pull_crm_tickets": {"queue": "crm"},
     "app.tasks.crm_ticket_pull.sync_crm_ticket": {"queue": "crm"},
+    "app.tasks.crm_ticket_push.push_ticket_to_crm": {"queue": "crm"},
+    "app.tasks.crm_ticket_push.push_comment_to_crm": {"queue": "crm"},
+    "app.tasks.crm_billing_push.push_crm_billing_snapshots": {"queue": "crm"},
     "app.tasks.crm_sync.push_subscriber_change": {"queue": "crm"},
 }
 

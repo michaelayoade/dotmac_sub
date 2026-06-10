@@ -240,6 +240,14 @@ class CRMClient:
             f"/api/v1/subscribers/{subscriber_id}", None, _CACHE_DETAIL_TTL
         )
 
+    def update_subscriber(
+        self, subscriber_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Patch fields on a CRM subscriber (e.g. billing snapshot)."""
+        return self._request(
+            "PATCH", f"/api/v1/subscribers/{subscriber_id}", json_data=payload
+        )
+
     def list_subscribers(
         self,
         *,
@@ -298,6 +306,10 @@ class CRMClient:
         """Create a new ticket in the CRM."""
         return self._request("POST", "/api/v1/tickets", json_data=payload)
 
+    def update_ticket(self, ticket_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch fields on a CRM ticket (e.g. re-point its subscriber)."""
+        return self._request("PATCH", f"/api/v1/tickets/{ticket_id}", json_data=payload)
+
     def list_ticket_comments(
         self, ticket_id: str, *, use_cache: bool = True
     ) -> list[dict[str, Any]]:
@@ -335,6 +347,18 @@ class CRMClient:
         return self._cached_get(
             f"/api/v1/work-orders/{work_order_id}", None, _CACHE_DETAIL_TTL
         )
+
+    def update_work_order(
+        self, work_order_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Patch fields on a CRM work order."""
+        return self._request(
+            "PATCH", f"/api/v1/work-orders/{work_order_id}", json_data=payload
+        )
+
+    def delete_subscriber(self, subscriber_id: str) -> None:
+        """Soft-delete a CRM subscriber (sets is_active=False CRM-side)."""
+        self._request("DELETE", f"/api/v1/subscribers/{subscriber_id}")
 
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""

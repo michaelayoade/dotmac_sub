@@ -522,6 +522,15 @@ async def get_usage_summary(
         start = local_midnight.astimezone(UTC)
         end, bucket = now, "hour"
         points = _raw_samples(db, sub_ids, start, end)
+    elif period == "yesterday":
+        # The full prior local day. Postgres samples only retain ~24h, so the
+        # early hours of yesterday come from the metrics store instead.
+        local_midnight = now.astimezone(tz).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end = local_midnight.astimezone(UTC)
+        start, bucket = end - timedelta(days=1), "hour"
+        points = await _vm_points(db, sub_ids, start, end)
     else:  # week
         start, end, bucket = now - timedelta(days=7), now, "day"
         points = await _vm_points(db, sub_ids, start, end)
@@ -529,9 +538,11 @@ async def get_usage_summary(
     series = _integrate(points, bucket, tz, end=end)
     total = int(round(sum(series.values())))
     total_source, authoritative = "samples", False
-    if total == 0 and not series:
+    if total == 0 and not series and period != "yesterday":
         # Interim accounting / metrics store not flowing — don't report a false
-        # zero; fall back to session octets started in the window.
+        # zero; fall back to session octets started in the window. Not for
+        # "yesterday": _session_octets has no upper bound, so the fallback
+        # would leak today's sessions into the comparison figure.
         total = _session_octets(db, sub_ids, since=start)
         total_source = "sessions"
     return {

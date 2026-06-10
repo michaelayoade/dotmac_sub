@@ -378,3 +378,41 @@ def test_usage_summary_scopes_to_caller(monkeypatch):
     _run_async(me_api.my_usage_summary(period="week", db=None, principal=principal))
     assert captured["subscriber_id"] == principal["subscriber_id"]
     assert captured["period"] == "week"
+
+
+def test_yesterday_window_is_the_full_prior_local_day(db_session, subscriber):
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "yesterday", now=now)
+    )
+    assert out["period"] == "yesterday"
+    # End is local midnight (UTC instant), start exactly one day earlier.
+    assert out["end"] - out["start"] == timedelta(days=1)
+    assert out["end"] <= now
+    assert out["bucket"] == "hour"
+
+
+def test_yesterday_does_not_fall_back_to_unbounded_sessions(
+    db_session, subscriber, subscription
+):
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    # A session TODAY must not leak into yesterday's comparison figure via the
+    # sessions fallback (_session_octets has no upper bound).
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="today-2",
+            status_type=AccountingStatus.stop,
+            session_start=now - timedelta(hours=1),
+            session_end=now,
+            input_octets=4000,
+            output_octets=1000,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "yesterday", now=now)
+    )
+    assert out["total_bytes"] == 0
+    assert out["total_source"] == "samples"
