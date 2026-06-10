@@ -7,6 +7,7 @@ from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
 from app.models.subscriber import Subscriber
 
 DEFAULT_PERMISSIONS = [
+    ("*", "Full access (wildcard) — grants every permission"),
     # Audit
     ("audit:read", "Read audit events"),
     # Auth & System
