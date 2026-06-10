@@ -154,7 +154,10 @@ services:
     - --concurrency=1
     - --max-tasks-per-child=50
     - -Q
-    - nin
+    # nin is near-idle, so this worker also serves the daily business runners
+    # (billing/dunning/expiry/rating/FUP) — they must never queue behind the
+    # default queue's backlog.
+    - nin,billing
   celery-worker-crm:
     build: .
     container_name: dotmac_sub_celery_worker_crm

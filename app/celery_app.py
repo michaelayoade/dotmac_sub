@@ -71,6 +71,14 @@ celery_app.conf.task_routes = {
     "app.tasks.crm_ticket_push.push_comment_to_crm": {"queue": "crm"},
     "app.tasks.crm_billing_push.push_crm_billing_snapshots": {"queue": "crm"},
     "app.tasks.crm_sync.push_subscriber_change": {"queue": "crm"},
+    # Daily business runners must not sit behind the default queue's backlog —
+    # a buried invoice cycle is a missed billing day (the 2026-06-10 00:55
+    # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).
+    "app.tasks.billing.run_invoice_cycle": {"queue": "billing"},
+    "app.tasks.collections.run_dunning": {"queue": "billing"},
+    "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
+    "app.tasks.usage.run_usage_rating": {"queue": "billing"},
+    "app.tasks.usage.evaluate_fup_rules": {"queue": "billing"},
 }
 
 celery_app.conf.task_queues = (
@@ -81,6 +89,7 @@ celery_app.conf.task_queues = (
     Queue("bandwidth"),  # High-volume bandwidth processing
     Queue("ingestion"),  # High-volume data ingestion (Zabbix, usage)
     Queue("crm"),  # CRM ticket/comment pull (external API paced)
+    Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
 )
 
 # Ensure all tasks are registered by importing the tasks package
