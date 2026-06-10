@@ -181,12 +181,14 @@ class _OutstandingHeader extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('Outstanding balance',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.onErrorContainer,
-                    )),
+            Expanded(
+              child: Text('Outstanding balance',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                      )),
+            ),
+            const SizedBox(width: 12),
             Text(
               Fmt.money(amount, currency),
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -295,9 +297,11 @@ class _BalanceCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: Theme.of(context).textTheme.titleMedium),
+            Expanded(
+              child: Text(label, style: Theme.of(context).textTheme.titleMedium),
+            ),
+            const SizedBox(width: 12),
             Text(
               Fmt.money(balance.creditBalance.abs(), balance.currency),
               style: Theme.of(context)
