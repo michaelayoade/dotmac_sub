@@ -169,7 +169,12 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                   style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               if (b.recentPayments.isEmpty)
-                const Card(child: ListTile(title: Text('No payments yet')))
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: EmptyState(
+                      icon: Icons.payments_outlined,
+                      message: 'No payments yet'),
+                )
               else
                 for (final pmt in b.recentPayments)
                   Card(

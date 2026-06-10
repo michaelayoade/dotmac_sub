@@ -15,54 +15,12 @@ class ResellerHomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final dashboard = ref.watch(resellerDashboardProvider);
-    final name = ref.watch(currentUserProvider)?.fullName ?? 'Reseller';
+    final name = ref.watch(currentUserProvider)?.greetingName ?? 'Reseller';
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Reseller Portal'),
         actions: [
-          PopupMenuButton<String>(
-            tooltip: 'Menu',
-            icon: const Icon(Icons.menu),
-            onSelected: (route) => context.push(route),
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: '/reseller/billing',
-                child: ListTile(
-                  leading: Icon(Icons.receipt_long_outlined),
-                  title: Text('Billing'),
-                ),
-              ),
-              PopupMenuItem(
-                value: '/reseller/revenue',
-                child: ListTile(
-                  leading: Icon(Icons.bar_chart_outlined),
-                  title: Text('Revenue'),
-                ),
-              ),
-              PopupMenuItem(
-                value: '/reseller/service-requests',
-                child: ListTile(
-                  leading: Icon(Icons.add_business_outlined),
-                  title: Text('Service requests'),
-                ),
-              ),
-              PopupMenuItem(
-                value: '/reseller/fiber-map',
-                child: ListTile(
-                  leading: Icon(Icons.map_outlined),
-                  title: Text('Coverage map'),
-                ),
-              ),
-              PopupMenuItem(
-                value: '/reseller/profile',
-                child: ListTile(
-                  leading: Icon(Icons.manage_accounts_outlined),
-                  title: Text('Profile & security'),
-                ),
-              ),
-            ],
-          ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
@@ -85,6 +43,8 @@ class ResellerHomeScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 12),
               _Totals(totals: d.totals),
+              const SizedBox(height: 12),
+              const _SectionTiles(),
               if (d.openTickets > 0) ...[
                 const SizedBox(height: 8),
                 Card(
@@ -104,7 +64,8 @@ class ResellerHomeScreen extends ConsumerWidget {
               if (d.accounts.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(child: Text('No accounts yet.')),
+                  child: EmptyState(
+                      icon: Icons.people_outline, message: 'No accounts yet.'),
                 )
               else
                 for (final a in d.accounts) _AccountTile(account: a),
@@ -115,6 +76,58 @@ class ResellerHomeScreen extends ConsumerWidget {
     );
   }
 }
+
+class _SectionTiles extends StatelessWidget {
+  const _SectionTiles();
+
+  static const _sections = [
+    (Icons.receipt_long_outlined, 'Billing', '/reseller/billing'),
+    (Icons.bar_chart_outlined, 'Revenue', '/reseller/revenue'),
+    (Icons.add_business_outlined, 'Service requests', '/reseller/service-requests'),
+    (Icons.map_outlined, 'Coverage map', '/reseller/fiber-map'),
+    (Icons.manage_accounts_outlined, 'Profile & security', '/reseller/profile'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 3,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 8,
+      crossAxisSpacing: 8,
+      childAspectRatio: 1.15,
+      children: [
+        for (final (icon, label, route) in _sections)
+          Card(
+            margin: EdgeInsets.zero,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => context.push(route),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(icon, size: 28),
+                    const SizedBox(height: 6),
+                    Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 
 class _Totals extends StatelessWidget {
   const _Totals({required this.totals});
@@ -130,7 +143,7 @@ class _Totals extends StatelessWidget {
         Expanded(
           child: _Kpi(
             label: 'Open balance',
-            value: Fmt.money(totals.openBalance, 'NGN'),
+            value: Fmt.moneyCompact(totals.openBalance, 'NGN'),
           ),
         ),
         const SizedBox(width: 8),
@@ -157,7 +170,11 @@ class _Kpi extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(value, style: Theme.of(context).textTheme.titleLarge),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child:
+                  Text(value, style: Theme.of(context).textTheme.titleLarge),
+            ),
             const SizedBox(height: 4),
             Text(label, style: Theme.of(context).textTheme.bodySmall),
           ],
