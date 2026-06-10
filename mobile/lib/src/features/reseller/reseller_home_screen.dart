@@ -93,7 +93,11 @@ class _SectionTiles extends StatelessWidget {
   static const _sections = [
     (Icons.receipt_long_outlined, 'Billing', '/reseller/billing'),
     (Icons.bar_chart_outlined, 'Revenue', '/reseller/revenue'),
-    (Icons.add_business_outlined, 'Service requests', '/reseller/service-requests'),
+    (
+      Icons.add_business_outlined,
+      'Service requests',
+      '/reseller/service-requests'
+    ),
     (Icons.map_outlined, 'Coverage map', '/reseller/fiber-map'),
     (Icons.manage_accounts_outlined, 'Profile & security', '/reseller/profile'),
   ];
@@ -138,7 +142,6 @@ class _SectionTiles extends StatelessWidget {
   }
 }
 
-
 class _Totals extends StatelessWidget {
   const _Totals({required this.totals});
 
@@ -182,8 +185,7 @@ class _Kpi extends StatelessWidget {
           children: [
             FittedBox(
               fit: BoxFit.scaleDown,
-              child:
-                  Text(value, style: Theme.of(context).textTheme.titleLarge),
+              child: Text(value, style: Theme.of(context).textTheme.titleLarge),
             ),
             const SizedBox(height: 4),
             Text(label, style: Theme.of(context).textTheme.bodySmall),
