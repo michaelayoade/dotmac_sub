@@ -346,3 +346,99 @@ def test_billing_endpoints_scope_and_translate_errors(monkeypatch):
             principal=_subscriber_principal(),
         )
     assert exc.value.status_code == 400
+
+
+def _reseller_with_customer(db_session):
+    from app.models.subscriber import Reseller, Subscriber, UserType
+
+    reseller = Reseller(name="ViewAs Networks")
+    db_session.add(reseller)
+    db_session.commit()
+    actor = Subscriber(
+        first_name="Acting",
+        last_name="Reseller",
+        email="actor.viewas@example.com",
+        user_type=UserType.reseller,
+    )
+    customer = Subscriber(
+        first_name="Jane",
+        last_name="Customer",
+        email="jane.viewas@example.com",
+        reseller_id=reseller.id,
+    )
+    db_session.add_all([actor, customer])
+    db_session.commit()
+    return reseller, actor, customer
+
+
+def test_impersonation_token_is_read_only_and_audited(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    from app.models.audit import AuditEvent
+    from app.services import auth_dependencies, reseller_portal
+
+    reseller, actor, customer = _reseller_with_customer(db_session)
+
+    out = reseller_portal.create_customer_impersonation_token(
+        db_session,
+        str(reseller.id),
+        str(customer.id),
+        acting_subscriber_id=str(actor.id),
+    )
+    assert out["account_id"] == str(customer.id)
+    assert out["customer_name"] == "Jane Customer"
+
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "reseller_impersonate")
+        .filter(AuditEvent.entity_id == str(customer.id))
+        .one()
+    )
+    assert audit.actor_id == str(actor.id)
+
+    class _Req:
+        def __init__(self, method):
+            self.method = method
+            self.cookies = {}
+            self.state = type("S", (), {})()
+
+    # Reads pass and identify the impersonated principal + the actor.
+    principal = auth_dependencies.require_user_auth(
+        authorization=f"Bearer {out['access_token']}",
+        request=_Req("GET"),
+        db=db_session,
+    )
+    assert principal["subscriber_id"] == str(customer.id)
+    assert principal["impersonated_by"] == str(actor.id)
+
+    # Any mutation under the impersonation token is rejected at the door.
+    with pytest.raises(HTTPException) as exc:
+        auth_dependencies.require_user_auth(
+            authorization=f"Bearer {out['access_token']}",
+            request=_Req("POST"),
+            db=db_session,
+        )
+    assert exc.value.status_code == 403
+
+
+def test_impersonation_404_for_foreign_account(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    from app.models.subscriber import Subscriber
+    from app.services import reseller_portal
+
+    reseller, actor, _ = _reseller_with_customer(db_session)
+    stranger = Subscriber(
+        first_name="Not",
+        last_name="Yours",
+        email="stranger.viewas@example.com",
+    )
+    db_session.add(stranger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        reseller_portal.create_customer_impersonation_token(
+            db_session,
+            str(reseller.id),
+            str(stranger.id),
+            acting_subscriber_id=str(actor.id),
+        )
+    assert exc.value.status_code == 404

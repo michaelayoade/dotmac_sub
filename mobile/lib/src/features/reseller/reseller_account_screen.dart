@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../models/reseller.dart';
 import '../../providers/data_providers.dart';
+import '../../providers/impersonation.dart';
 import '../../widgets/async_value_view.dart';
 
 /// A reseller's drill-down into one managed customer account: profile,
@@ -26,7 +28,22 @@ class ResellerAccountScreen extends ConsumerWidget {
     final tickets = ref.watch(resellerAccountTicketsProvider(accountId));
 
     return Scaffold(
-      appBar: AppBar(title: Text(title ?? 'Account')),
+      appBar: AppBar(title: Text(title ?? 'Account'), actions: [
+        IconButton(
+          tooltip: 'View as customer (read-only)',
+          icon: const Icon(Icons.supervisor_account_outlined),
+          onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            try {
+              await ref.read(impersonationProvider.notifier).start(accountId);
+              if (context.mounted) context.go('/dashboard');
+            } catch (_) {
+              messenger.showSnackBar(const SnackBar(
+                  content: Text('Could not start customer view.')));
+            }
+          },
+        ),
+      ]),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(resellerAccountProvider(accountId));

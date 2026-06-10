@@ -116,6 +116,14 @@ class ResellerRepository {
     return ResellerTicketsPage.fromJson(data as Map<String, dynamic>);
   }
 
+  /// POST /reseller/accounts/{id}/impersonate — short-lived read-only
+  /// customer token for "view as customer".
+  Future<ResellerImpersonationGrant> impersonate(String accountId) async {
+    final data = await guard(
+        () => dio.post('/reseller/accounts/$accountId/impersonate'));
+    return ResellerImpersonationGrant.fromJson(data as Map<String, dynamic>);
+  }
+
   /// GET /reseller/accounts/{id}/invoices — invoices for a managed account.
   Future<List<ResellerInvoiceSummary>> accountInvoices(
     String accountId, {

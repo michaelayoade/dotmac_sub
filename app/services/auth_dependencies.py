@@ -173,6 +173,15 @@ def require_user_auth(
     if not token:
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_access_token(db, token)
+    # Reseller "view as customer" tokens are strictly read-only: any mutation
+    # under impersonation is rejected at the door, regardless of endpoint.
+    if payload.get("imp"):
+        method = getattr(request, "method", None) if request is not None else None
+        if method is not None and method.upper() not in ("GET", "HEAD", "OPTIONS"):
+            raise HTTPException(
+                status_code=403,
+                detail="Read-only impersonation session",
+            )
     principal_id = payload.get("principal_id") or payload.get("sub")
     principal_type = payload.get("principal_type") or "subscriber"
     session_id = payload.get("session_id")
@@ -209,6 +218,7 @@ def require_user_auth(
         "session_id": str(session_id),
         "roles": roles,
         "scopes": scopes,
+        "impersonated_by": payload.get("imp_by"),
     }
 
 
