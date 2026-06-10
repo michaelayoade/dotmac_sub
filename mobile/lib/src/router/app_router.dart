@@ -26,6 +26,7 @@ import '../features/reseller/reseller_fiber_map_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
 import '../features/reseller/reseller_revenue_screen.dart';
+import '../features/reseller/reseller_service_requests_screen.dart';
 import '../features/service/add_ons_screen.dart';
 import '../features/service/change_plan_screen.dart';
 import '../features/service/data_bundle_screen.dart';
@@ -124,6 +125,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'fiber-map',
             builder: (_, __) => const ResellerFiberMapScreen(),
+          ),
+          GoRoute(
+            path: 'service-requests',
+            builder: (_, __) => const ResellerServiceRequestsScreen(),
           ),
           GoRoute(
             path: 'profile',

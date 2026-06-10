@@ -92,6 +92,13 @@ final resellerFiberMapProvider =
   return ref.watch(resellerRepositoryProvider).fiberMap();
 });
 
+/// The reseller's submitted service requests.
+final resellerServiceRequestsProvider =
+    FutureProvider.autoDispose<List<ResellerServiceRequest>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).serviceRequests();
+});
+
 /// CRM tickets for one managed account (reseller portal).
 final resellerAccountTicketsProvider = FutureProvider.autoDispose
     .family<ResellerTicketsPage, String>((ref, accountId) async {

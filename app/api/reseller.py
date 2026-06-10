@@ -44,6 +44,17 @@ class PayVerifyRequest(BaseModel):
     provider: str | None = Field(default=None, max_length=40)
 
 
+class ServiceRequestCreate(BaseModel):
+    subscriber_id: str | None = None
+    contact_name: str | None = Field(default=None, max_length=160)
+    contact_phone: str | None = Field(default=None, max_length=40)
+    contact_email: str | None = Field(default=None, max_length=255)
+    address: str | None = Field(default=None, max_length=2000)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 def _reseller_id(db: Session, principal: dict) -> str:
     """Return the caller's reseller_id, or 403 for non-reseller principals."""
     if principal.get("principal_type") != "subscriber":
@@ -257,6 +268,49 @@ def my_reseller_fiber_map(
     from app.services import web_network_fiber
 
     return web_network_fiber.get_fiber_plant_map_data(db)
+
+
+@router.post("/service-requests")
+def my_reseller_service_request_create(
+    payload: ServiceRequestCreate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Submit a new-service / installation request (existing customer or
+    lead). Serviceability is pre-flagged from fiber-plant proximity."""
+    from app.services import reseller_service_requests
+
+    reseller_id = _reseller_id(db, principal)
+    return reseller_service_requests.create_request(
+        db,
+        reseller_id,
+        subscriber_id=payload.subscriber_id,
+        contact_name=payload.contact_name,
+        contact_phone=payload.contact_phone,
+        contact_email=payload.contact_email,
+        address=payload.address,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        notes=payload.notes,
+    )
+
+
+@router.get("/service-requests")
+def my_reseller_service_requests(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """The caller's submitted service requests, newest first."""
+    from app.services import reseller_service_requests
+
+    reseller_id = _reseller_id(db, principal)
+    return {
+        "items": reseller_service_requests.list_for_reseller(
+            db, reseller_id, limit, offset
+        )
+    }
 
 
 @router.get("/accounts/{account_id}/tickets")

@@ -368,6 +368,12 @@ def _reseller_with_customer(db_session):
     )
     db_session.add_all([actor, customer])
     db_session.commit()
+    from app.models.subscriber import ResellerUser
+
+    db_session.add(
+        ResellerUser(subscriber_id=actor.id, reseller_id=reseller.id, is_active=True)
+    )
+    db_session.commit()
     return reseller, actor, customer
 
 
@@ -442,3 +448,108 @@ def test_impersonation_404_for_foreign_account(db_session, monkeypatch):
             acting_subscriber_id=str(actor.id),
         )
     assert exc.value.status_code == 404
+
+
+def test_service_request_lifecycle(db_session, monkeypatch):
+    from app.models.notification import Notification
+    from app.services import reseller_service_requests as svc
+
+    reseller, actor, customer = _reseller_with_customer(db_session)
+
+    # Lead without contact info is rejected.
+    with pytest.raises(HTTPException) as exc:
+        svc.create_request(
+            db_session,
+            str(reseller.id),
+            subscriber_id=None,
+            contact_name=None,
+            contact_phone=None,
+            contact_email=None,
+            address=None,
+            latitude=None,
+            longitude=None,
+            notes=None,
+        )
+    assert exc.value.status_code == 400
+
+    out = svc.create_request(
+        db_session,
+        str(reseller.id),
+        subscriber_id=str(customer.id),
+        contact_name=None,
+        contact_phone=None,
+        contact_email=None,
+        address="12 Fiber Close",
+        latitude=6.5,
+        longitude=3.4,
+        notes="Wants 100mbps",
+    )
+    assert out["status"] == "new"
+    # No mapped plant in the fixture DB -> honest 'unknown'.
+    assert out["serviceability"] == "unknown"
+
+    mine = svc.list_for_reseller(db_session, str(reseller.id))
+    assert [r["id"] for r in mine] == [out["id"]]
+
+    updated = svc.update_status(
+        db_session, out["id"], status="scheduled", admin_notes="Crew on Friday"
+    )
+    assert updated["status"] == "scheduled"
+    notes = (
+        db_session.query(Notification)
+        .filter(Notification.subscriber_id == actor.id)
+        .filter(Notification.event_type == "service_request_status")
+        .all()
+    )
+    assert len(notes) == 2  # push + email
+    assert "Friday" in notes[0].body
+
+    with pytest.raises(HTTPException) as exc:
+        svc.update_status(db_session, out["id"], status="bogus")
+    assert exc.value.status_code == 400
+
+
+def test_service_request_rejects_foreign_customer(db_session):
+    from app.models.subscriber import Subscriber
+    from app.services import reseller_service_requests as svc
+
+    reseller, _, _ = _reseller_with_customer(db_session)
+    stranger = Subscriber(
+        first_name="Other", last_name="Person", email="other.sr@example.com"
+    )
+    db_session.add(stranger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        svc.create_request(
+            db_session,
+            str(reseller.id),
+            subscriber_id=str(stranger.id),
+            contact_name=None,
+            contact_phone=None,
+            contact_email=None,
+            address=None,
+            latitude=None,
+            longitude=None,
+            notes=None,
+        )
+    assert exc.value.status_code == 404
+
+
+def test_serviceability_distance_flag(db_session):
+    from app.models.network import FdhCabinet
+    from app.models.service_request import Serviceability
+    from app.services import reseller_service_requests as svc
+
+    db_session.add(
+        FdhCabinet(
+            name="FDH-1", code="FDH1", latitude=6.50, longitude=3.40, is_active=True
+        )
+    )
+    db_session.commit()
+
+    near, near_km = svc.check_serviceability(db_session, 6.501, 3.401)
+    assert near == Serviceability.serviceable and near_km is not None
+
+    far, far_km = svc.check_serviceability(db_session, 7.5, 4.4)
+    assert far == Serviceability.not_serviceable and far_km > 100

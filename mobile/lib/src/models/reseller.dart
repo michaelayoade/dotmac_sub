@@ -554,3 +554,41 @@ List<LatLng> _lineToLatLng(List coords) => [
         if (c is List && c.length >= 2 && c[0] != null && c[1] != null)
           LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
     ];
+
+/// A reseller new-service / installation request
+/// (POST/GET /reseller/service-requests).
+class ResellerServiceRequest {
+  ResellerServiceRequest({
+    required this.id,
+    required this.status,
+    required this.serviceability,
+    this.contactName,
+    this.address,
+    this.adminNotes,
+    this.createdAt,
+    this.nearestPlantKm,
+  });
+
+  final String id;
+  final String status;
+  final String serviceability;
+  final String? contactName;
+  final String? address;
+  final String? adminNotes;
+  final DateTime? createdAt;
+  final double? nearestPlantKm;
+
+  factory ResellerServiceRequest.fromJson(Map<String, dynamic> json) =>
+      ResellerServiceRequest(
+        id: json['id'].toString(),
+        status: json['status'] as String? ?? 'new',
+        serviceability: json['serviceability'] as String? ?? 'unknown',
+        contactName: json['contact_name'] as String?,
+        address: json['address'] as String?,
+        adminNotes: json['admin_notes'] as String?,
+        createdAt: json['created_at'] == null
+            ? null
+            : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
+        nearestPlantKm: (json['nearest_plant_km'] as num?)?.toDouble(),
+      );
+}

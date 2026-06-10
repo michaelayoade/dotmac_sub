@@ -41,6 +41,13 @@ class ResellerHomeScreen extends ConsumerWidget {
                 ),
               ),
               PopupMenuItem(
+                value: '/reseller/service-requests',
+                child: ListTile(
+                  leading: Icon(Icons.add_business_outlined),
+                  title: Text('Service requests'),
+                ),
+              ),
+              PopupMenuItem(
                 value: '/reseller/fiber-map',
                 child: ListTile(
                   leading: Icon(Icons.map_outlined),
