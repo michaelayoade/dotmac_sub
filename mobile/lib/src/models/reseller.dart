@@ -175,11 +175,15 @@ class ResellerDashboard {
     required this.accounts,
     required this.totals,
     required this.alerts,
+    this.openTickets = 0,
   });
 
   final List<ResellerAccount> accounts;
   final ResellerTotals totals;
   final List<ResellerAlert> alerts;
+
+  /// Open CRM tickets across the page's accounts (0 when CRM unreachable).
+  final int openTickets;
 
   factory ResellerDashboard.fromJson(Map<String, dynamic> json) =>
       ResellerDashboard(
@@ -193,5 +197,56 @@ class ResellerDashboard {
             .cast<Map<String, dynamic>>()
             .map(ResellerAlert.fromJson)
             .toList(),
+        openTickets: (json['open_tickets'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One CRM support ticket on a managed account
+/// (GET /reseller/accounts/{id}/tickets).
+class ResellerTicket {
+  ResellerTicket({
+    required this.id,
+    required this.subject,
+    this.status,
+    this.priority,
+    this.createdAt,
+  });
+
+  final String id;
+  final String subject;
+  final String? status;
+  final String? priority;
+  final DateTime? createdAt;
+
+  bool get isOpen =>
+      status == 'open' ||
+      status == 'in_progress' ||
+      status == 'waiting_on_agent';
+
+  factory ResellerTicket.fromJson(Map<String, dynamic> json) => ResellerTicket(
+        id: json['id'].toString(),
+        subject: json['subject'] as String? ?? 'Ticket',
+        status: json['status'] as String?,
+        priority: json['priority'] as String?,
+        createdAt: json['created_at'] == null
+            ? null
+            : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
+      );
+}
+
+/// Tickets payload with the CRM-availability soft-failure flag.
+class ResellerTicketsPage {
+  ResellerTicketsPage({required this.items, required this.crmAvailable});
+
+  final List<ResellerTicket> items;
+  final bool crmAvailable;
+
+  factory ResellerTicketsPage.fromJson(Map<String, dynamic> json) =>
+      ResellerTicketsPage(
+        items: (json['items'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerTicket.fromJson)
+            .toList(),
+        crmAvailable: json['crm_available'] as bool? ?? true,
       );
 }

@@ -43,6 +43,18 @@ class ResellerHomeScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 12),
               _Totals(totals: d.totals),
+              if (d.openTickets > 0) ...[
+                const SizedBox(height: 8),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.confirmation_number_outlined),
+                    title: Text(
+                        '${d.openTickets} open support ticket${d.openTickets == 1 ? '' : 's'}'),
+                  ),
+                ),
+              ],
               for (final a in d.alerts) _AlertTile(alert: a),
               const SizedBox(height: 16),
               Text('Accounts', style: Theme.of(context).textTheme.titleSmall),

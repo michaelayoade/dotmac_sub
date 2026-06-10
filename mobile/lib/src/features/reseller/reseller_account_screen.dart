@@ -23,6 +23,7 @@ class ResellerAccountScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final detail = ref.watch(resellerAccountProvider(accountId));
     final invoices = ref.watch(resellerAccountInvoicesProvider(accountId));
+    final tickets = ref.watch(resellerAccountTicketsProvider(accountId));
 
     return Scaffold(
       appBar: AppBar(title: Text(title ?? 'Account')),
@@ -75,6 +76,31 @@ class ResellerAccountScreen extends ConsumerWidget {
                           for (final i in items) _InvoiceTile(invoice: i)
                         ],
                       ),
+              ),
+              const SizedBox(height: 16),
+              Text('Support tickets',
+                  style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 8),
+              tickets.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (_, __) => const Card(
+                  child: ListTile(title: Text('Could not load tickets')),
+                ),
+                data: (page) => !page.crmAvailable
+                    ? const Card(
+                        child: ListTile(
+                            title: Text('Ticket system unavailable right now')),
+                      )
+                    : page.items.isEmpty
+                        ? const Card(child: ListTile(title: Text('No tickets')))
+                        : Column(
+                            children: [
+                              for (final t in page.items) _TicketTile(ticket: t)
+                            ],
+                          ),
               ),
             ],
           ),
@@ -230,6 +256,38 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(status, style: TextStyle(color: color, fontSize: 12)),
+    );
+  }
+}
+
+class _TicketTile extends StatelessWidget {
+  const _TicketTile({required this.ticket});
+
+  final ResellerTicket ticket;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = ticket;
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        dense: true,
+        leading: Icon(
+          t.isOpen
+              ? Icons.confirmation_number_outlined
+              : Icons.check_circle_outline,
+          color: t.isOpen ? theme.colorScheme.primary : null,
+        ),
+        title: Text(t.subject, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text([
+          if (t.status != null) t.status!.replaceAll('_', ' '),
+          if (t.createdAt != null) Fmt.date(t.createdAt!),
+        ].join(' · ')),
+        trailing: t.priority == null
+            ? null
+            : Text(t.priority!, style: theme.textTheme.labelSmall),
+      ),
     );
   }
 }

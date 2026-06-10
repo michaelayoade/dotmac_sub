@@ -45,6 +45,13 @@ class ResellerRepository {
     return ResellerAccountDetail.fromJson(data as Map<String, dynamic>);
   }
 
+  /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
+  Future<ResellerTicketsPage> accountTickets(String accountId) async {
+    final data =
+        await guard(() => dio.get('/reseller/accounts/$accountId/tickets'));
+    return ResellerTicketsPage.fromJson(data as Map<String, dynamic>);
+  }
+
   /// GET /reseller/accounts/{id}/invoices — invoices for a managed account.
   Future<List<ResellerInvoiceSummary>> accountInvoices(
     String accountId, {
