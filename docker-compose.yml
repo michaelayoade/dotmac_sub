@@ -115,7 +115,10 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=2
+    # 3 processes: the default queue mixes long jobs (Splynx sync) with
+    # short periodic ones; at 2, one long job halves throughput and the
+    # queue grows faster than it drains.
+    - --concurrency=3
     - --max-tasks-per-child=50
     - -Q
     - celery
