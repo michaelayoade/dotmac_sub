@@ -298,6 +298,33 @@ def _issue_access_token(
     return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
 
+def issue_impersonation_access_token(
+    db: Session | None,
+    subscriber_id: str,
+    session_id: str,
+    acting_subscriber_id: str,
+    ttl_minutes: int = 15,
+) -> str:
+    """Short-lived customer-scoped token for reseller "view as customer".
+
+    Carries ``imp``/``imp_by`` claims: the auth dependency enforces read-only
+    (GET/HEAD/OPTIONS) for these tokens, and ``imp_by`` keeps the acting
+    reseller attributable in request logs."""
+    now = _now()
+    payload = {
+        "sub": subscriber_id,
+        "principal_id": subscriber_id,
+        "principal_type": "subscriber",
+        "session_id": session_id,
+        "typ": "access",
+        "imp": True,
+        "imp_by": acting_subscriber_id,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ttl_minutes)).timestamp()),
+    }
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+
+
 def issue_web_session_token(db: Session | None, access_token: str) -> str:
     """Issue a compact web session JWT for cookie transport.
 

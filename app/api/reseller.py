@@ -290,6 +290,26 @@ def my_reseller_account_tickets(
     return {"items": items, "crm_available": True}
 
 
+@router.post("/accounts/{account_id}/impersonate")
+def my_reseller_impersonate(
+    account_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Mint a short-lived, READ-ONLY customer token for "view as customer".
+
+    Enforcement lives in the auth layer (any non-GET under an impersonation
+    token is 403), the grant is audited, and the session lapses in 15 minutes.
+    """
+    reseller_id = _reseller_id(db, principal)
+    return reseller_portal.create_customer_impersonation_token(
+        db,
+        reseller_id,
+        account_id,
+        acting_subscriber_id=str(principal["subscriber_id"]),
+    )
+
+
 @router.get("/accounts/{account_id}/invoices")
 def my_reseller_account_invoices(
     account_id: str,

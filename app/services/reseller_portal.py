@@ -961,6 +961,72 @@ def update_profile(
     return get_profile(db, reseller_id, subscriber_id)
 
 
+def create_customer_impersonation_token(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    *,
+    acting_subscriber_id: str,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> dict:
+    """Bearer counterpart of the web "view as": a 15-minute, read-only,
+    customer-scoped access token + an audit trail of who impersonated whom."""
+    import hashlib
+    import secrets
+    from datetime import timedelta
+
+    from app.models.audit import AuditActorType, AuditEvent
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+    from app.services import auth_flow as auth_flow_service
+
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found"
+        )
+
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(minutes=15)
+    session = AuthSession(
+        subscriber_id=account.id,
+        status=SessionStatus.active,
+        token_hash=hashlib.sha256(secrets.token_urlsafe(32).encode()).hexdigest(),
+        ip_address=ip_address,
+        user_agent=f"[reseller-impersonation by {acting_subscriber_id}]",
+        expires_at=expires_at,
+    )
+    db.add(session)
+    db.add(
+        AuditEvent(
+            actor_type=AuditActorType.user,
+            actor_id=str(acting_subscriber_id),
+            action="reseller_impersonate",
+            entity_type="subscriber",
+            entity_id=str(account.id),
+            status_code=200,
+            is_success=True,
+            ip_address=ip_address,
+            user_agent=(user_agent or "")[:255] or None,
+        )
+    )
+    db.commit()
+    db.refresh(session)
+
+    token = auth_flow_service.issue_impersonation_access_token(
+        db, str(account.id), str(session.id), str(acting_subscriber_id)
+    )
+    return {
+        "access_token": token,
+        "expires_at": expires_at,
+        "account_id": str(account.id),
+        "customer_name": f"{account.first_name or ''} {account.last_name or ''}".strip()
+        or account.email
+        or "Customer",
+    }
+
+
 def create_customer_impersonation_session(
     db: Session,
     reseller_id: str,

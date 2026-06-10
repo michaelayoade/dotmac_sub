@@ -466,3 +466,29 @@ class ResellerPayIntent {
             .map((k, v) => MapEntry(k.toString(), v.toString())),
       );
 }
+
+/// Short-lived read-only customer token grant
+/// (POST /reseller/accounts/{id}/impersonate).
+class ResellerImpersonationGrant {
+  ResellerImpersonationGrant({
+    required this.accessToken,
+    required this.accountId,
+    required this.customerName,
+    this.expiresAt,
+  });
+
+  final String accessToken;
+  final String accountId;
+  final String customerName;
+  final DateTime? expiresAt;
+
+  factory ResellerImpersonationGrant.fromJson(Map<String, dynamic> json) =>
+      ResellerImpersonationGrant(
+        accessToken: json['access_token'].toString(),
+        accountId: json['account_id'].toString(),
+        customerName: json['customer_name'] as String? ?? 'Customer',
+        expiresAt: json['expires_at'] == null
+            ? null
+            : DateTime.tryParse(json['expires_at'].toString())?.toLocal(),
+      );
+}

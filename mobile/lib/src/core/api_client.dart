@@ -91,6 +91,14 @@ class ApiClient {
   late final Dio _dio;
   Dio get dio => _dio;
 
+  /// When set, every request authenticates as the impersonated customer
+  /// (reseller "view as" — short-lived, server-enforced read-only). The
+  /// reseller's own tokens stay in storage untouched; clearing this restores
+  /// them instantly. 401s under impersonation mean the 15-minute session
+  /// lapsed — they must NOT trigger a refresh of the reseller's token into
+  /// customer requests.
+  String? impersonationToken;
+
   // Single-flight guard so concurrent 401s share one refresh round-trip.
   Future<bool>? _refreshing;
 
@@ -99,9 +107,15 @@ class ApiClient {
     RequestInterceptorHandler handler,
   ) async {
     if (options.extra['skipAuth'] != true) {
-      final token = await _storage.readAccessToken();
-      if (token != null) {
-        options.headers['Authorization'] = 'Bearer $token';
+      final override = impersonationToken;
+      if (override != null) {
+        options.headers['Authorization'] = 'Bearer $override';
+        options.extra['impersonated'] = true;
+      } else {
+        final token = await _storage.readAccessToken();
+        if (token != null) {
+          options.headers['Authorization'] = 'Bearer $token';
+        }
       }
     }
     handler.next(options);
@@ -114,7 +128,12 @@ class ApiClient {
     final isAuthRetry = response.requestOptions.extra['authRetried'] == true;
     final skipAuth = response.requestOptions.extra['skipAuth'] == true;
 
-    if (response.statusCode == 401 && !isAuthRetry && !skipAuth) {
+    final wasImpersonated =
+        response.requestOptions.extra['impersonated'] == true;
+    if (response.statusCode == 401 &&
+        !isAuthRetry &&
+        !skipAuth &&
+        !wasImpersonated) {
       final refreshed = await _refreshToken();
       if (refreshed) {
         try {
