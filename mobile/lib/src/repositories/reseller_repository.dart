@@ -109,6 +109,44 @@ class ResellerRepository {
     return ResellerFiberMap.fromJson(data as Map<String, dynamic>);
   }
 
+  /// GET /reseller/service-requests — my submitted requests.
+  Future<List<ResellerServiceRequest>> serviceRequests() async {
+    final data = await guard(() => dio.get('/reseller/service-requests'));
+    final items = (data as Map<String, dynamic>)['items'] as List? ?? const [];
+    return items
+        .cast<Map<String, dynamic>>()
+        .map(ResellerServiceRequest.fromJson)
+        .toList();
+  }
+
+  /// POST /reseller/service-requests — submit a new-service request.
+  Future<ResellerServiceRequest> createServiceRequest({
+    String? subscriberId,
+    String? contactName,
+    String? contactPhone,
+    String? contactEmail,
+    String? address,
+    double? latitude,
+    double? longitude,
+    String? notes,
+  }) async {
+    final data =
+        await guard(() => dio.post('/reseller/service-requests', data: {
+              if (subscriberId != null) 'subscriber_id': subscriberId,
+              if (contactName != null && contactName.isNotEmpty)
+                'contact_name': contactName,
+              if (contactPhone != null && contactPhone.isNotEmpty)
+                'contact_phone': contactPhone,
+              if (contactEmail != null && contactEmail.isNotEmpty)
+                'contact_email': contactEmail,
+              if (address != null && address.isNotEmpty) 'address': address,
+              if (latitude != null) 'latitude': latitude,
+              if (longitude != null) 'longitude': longitude,
+              if (notes != null && notes.isNotEmpty) 'notes': notes,
+            }));
+    return ResellerServiceRequest.fromJson(data as Map<String, dynamic>);
+  }
+
   /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
   Future<ResellerTicketsPage> accountTickets(String accountId) async {
     final data =
