@@ -418,6 +418,11 @@ from app.models.router_management import (  # noqa: F401
     RouterTemplateCategory,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
+from app.models.service_request import (  # noqa: F401
+    ResellerServiceRequest,
+    Serviceability,
+    ServiceRequestStatus,
+)
 from app.models.snmp import (  # noqa: F401
     SnmpAuthProtocol,
     SnmpCredential,
@@ -501,11 +506,6 @@ from app.models.usage import (  # noqa: F401
     UsageRatingRunStatus,
     UsageRecord,
     UsageSource,
-)
-from app.models.service_request import (  # noqa: F401
-    ResellerServiceRequest,
-    Serviceability,
-    ServiceRequestStatus,
 )
 from app.models.webhook import (  # noqa: F401
     WebhookDelivery,
