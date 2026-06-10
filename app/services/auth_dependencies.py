@@ -308,6 +308,21 @@ def _expand_permission_key_single(permission_key: str) -> list[str]:
     return keys
 
 
+def _wildcard_ancestors(permission_key: str) -> list[str]:
+    """Wildcard keys that, if HELD, satisfy ``permission_key``.
+
+    ``network:nas:write`` -> ``["*", "network:*", "network:nas:*"]``. A role
+    or direct grant of any of these authorizes the requirement, so access can
+    be granted by domain (``network:*``) or globally (``*``) instead of
+    enumerating every leaf permission.
+    """
+    parts = permission_key.split(":")
+    ancestors = ["*"]
+    for i in range(1, len(parts)):
+        ancestors.append(":".join(parts[:i]) + ":*")
+    return ancestors
+
+
 def _expand_permission_keys(permission_key: str) -> list[str]:
     keys: list[str] = []
     seen: set[str] = set()
@@ -315,6 +330,11 @@ def _expand_permission_keys(permission_key: str) -> list[str]:
         for key in _expand_permission_key_single(alias):
             if key in seen:
                 continue
+            seen.add(key)
+            keys.append(key)
+    # Wildcard grants satisfy any matching requirement.
+    for key in _wildcard_ancestors(permission_key):
+        if key not in seen:
             seen.add(key)
             keys.append(key)
     return keys
