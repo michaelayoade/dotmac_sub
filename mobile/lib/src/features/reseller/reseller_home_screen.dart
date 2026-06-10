@@ -59,7 +59,17 @@ class ResellerHomeScreen extends ConsumerWidget {
               ],
               for (final a in d.alerts) _AlertTile(alert: a),
               const SizedBox(height: 16),
-              Text('Accounts', style: Theme.of(context).textTheme.titleSmall),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Accounts',
+                      style: Theme.of(context).textTheme.titleSmall),
+                  TextButton(
+                    onPressed: () => context.push('/reseller/accounts'),
+                    child: const Text('View all'),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               if (d.accounts.isEmpty)
                 const Padding(
