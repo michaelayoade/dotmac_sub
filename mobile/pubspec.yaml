@@ -49,6 +49,19 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_test:
     sdk: flutter
+  # Generates the native splash screens from the brand assets below
+  # (`dart run flutter_native_splash:create` after changing them).
+  flutter_native_splash: ^2.4.1
+
+# Splash: brand wordmark centered on white. NOTE: the wordmark (219x50) is
+# fine here and on the login screen, but a proper LAUNCHER ICON still needs
+# square artwork >=512px — flutter_launcher_icons is intentionally not wired
+# until that asset exists.
+flutter_native_splash:
+  color: "#ffffff"
+  image: assets/images/login_logo.png
+  android_12:
+    color: "#ffffff"
 
 flutter:
   uses-material-design: true

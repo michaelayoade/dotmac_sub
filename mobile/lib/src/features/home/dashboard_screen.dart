@@ -127,7 +127,24 @@ class DashboardScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Hi, ${me?.firstName ?? 'there'}'),
+        title: Row(
+          children: [
+            // Brand wordmark (white-label drop-in asset); falls back to just
+            // the greeting if a deployment ships without one.
+            Image.asset(
+              'assets/images/login_logo.png',
+              height: 22,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Hi, ${me?.firstName ?? 'there'}',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: 'Notifications',
