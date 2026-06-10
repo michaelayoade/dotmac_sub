@@ -14,6 +14,7 @@ Mounted at ``/api/v1/reseller`` with router-level ``require_user_auth`` (main.py
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -21,6 +22,17 @@ from app.services import reseller_portal
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
+
+
+class ResellerProfileUpdate(BaseModel):
+    contact_email: str | None = Field(default=None, max_length=255)
+    contact_phone: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class MfaConfirmRequest(BaseModel):
+    method_id: str
+    code: str = Field(min_length=4, max_length=10)
 
 
 def _reseller_id(db: Session, principal: dict) -> str:
@@ -91,6 +103,118 @@ def my_reseller_account(
     if detail is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return detail
+
+
+def _profile_payload(db: Session, reseller_id: str, subscriber_id: str) -> dict:
+    from app.models.auth import MFAMethod
+    from app.models.subscriber import Reseller
+    from app.services.common import coerce_uuid
+
+    reseller = db.get(Reseller, coerce_uuid(reseller_id))
+    if reseller is None:
+        raise HTTPException(status_code=404, detail="Reseller not found")
+    methods = (
+        db.query(MFAMethod)
+        .filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
+        .filter(MFAMethod.is_active.is_(True))
+        .order_by(MFAMethod.created_at.desc())
+        .all()
+    )
+    return {
+        "name": reseller.name,
+        "code": reseller.code,
+        "contact_email": reseller.contact_email,
+        "contact_phone": reseller.contact_phone,
+        "notes": reseller.notes,
+        "mfa_enabled": any(m.enabled and m.verified_at is not None for m in methods),
+        "mfa_methods": [
+            {
+                "id": str(m.id),
+                "label": m.label,
+                "method_type": m.method_type.value,
+                "verified_at": m.verified_at,
+                "enabled": m.enabled,
+            }
+            for m in methods
+        ],
+    }
+
+
+@router.get("/profile")
+def my_reseller_profile(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """The caller's reseller organization profile + MFA state."""
+    reseller_id = _reseller_id(db, principal)
+    return _profile_payload(db, reseller_id, str(principal["subscriber_id"]))
+
+
+@router.patch("/profile")
+def my_reseller_profile_update(
+    payload: ResellerProfileUpdate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Update contact details (same fields the web profile form edits)."""
+    from app.models.subscriber import Reseller
+    from app.services.common import coerce_uuid
+
+    reseller_id = _reseller_id(db, principal)
+    reseller = db.get(Reseller, coerce_uuid(reseller_id))
+    if reseller is None:
+        raise HTTPException(status_code=404, detail="Reseller not found")
+    fields = payload.model_fields_set
+    if "contact_email" in fields:
+        reseller.contact_email = (payload.contact_email or "").strip() or None
+    if "contact_phone" in fields:
+        reseller.contact_phone = (payload.contact_phone or "").strip() or None
+    if "notes" in fields:
+        reseller.notes = (payload.notes or "").strip() or None
+    db.commit()
+    return _profile_payload(db, reseller_id, str(principal["subscriber_id"]))
+
+
+@router.post("/profile/mfa/setup")
+def my_reseller_mfa_setup(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Begin TOTP enrollment: returns the secret + otpauth URI to present in
+    the app. The method stays unverified until /profile/mfa/confirm."""
+    _reseller_id(db, principal)  # 403 unless the caller is a reseller
+    from app.services import auth_flow as auth_flow_service
+
+    setup = auth_flow_service.auth_flow.mfa_setup(
+        db, str(principal["subscriber_id"]), "Authenticator app"
+    )
+    return {
+        "method_id": str(setup["method_id"]),
+        "secret": setup["secret"],
+        "otpauth_uri": setup["otpauth_uri"],
+    }
+
+
+@router.post("/profile/mfa/confirm")
+def my_reseller_mfa_confirm(
+    payload: MfaConfirmRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Verify the first TOTP code and activate the method. The service binds
+    the method to the caller, so a foreign method_id can't be confirmed."""
+    reseller_id = _reseller_id(db, principal)
+    from app.services import auth_flow as auth_flow_service
+
+    try:
+        auth_flow_service.auth_flow.mfa_confirm(
+            db, payload.method_id, payload.code.strip(), str(principal["subscriber_id"])
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=400, detail="Invalid verification code"
+        ) from None
+    return _profile_payload(db, reseller_id, str(principal["subscriber_id"]))
 
 
 @router.get("/accounts/{account_id}/tickets")

@@ -250,3 +250,73 @@ class ResellerTicketsPage {
         crmAvailable: json['crm_available'] as bool? ?? true,
       );
 }
+
+/// Reseller organization profile + MFA state (GET/PATCH /reseller/profile).
+class ResellerProfile {
+  ResellerProfile({
+    required this.name,
+    this.code,
+    this.contactEmail,
+    this.contactPhone,
+    this.notes,
+    this.mfaEnabled = false,
+    this.mfaMethods = const [],
+  });
+
+  final String name;
+  final String? code;
+  final String? contactEmail;
+  final String? contactPhone;
+  final String? notes;
+  final bool mfaEnabled;
+  final List<ResellerMfaMethod> mfaMethods;
+
+  factory ResellerProfile.fromJson(Map<String, dynamic> json) =>
+      ResellerProfile(
+        name: json['name'] as String? ?? 'Reseller',
+        code: json['code'] as String?,
+        contactEmail: json['contact_email'] as String?,
+        contactPhone: json['contact_phone'] as String?,
+        notes: json['notes'] as String?,
+        mfaEnabled: json['mfa_enabled'] as bool? ?? false,
+        mfaMethods: (json['mfa_methods'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerMfaMethod.fromJson)
+            .toList(),
+      );
+}
+
+class ResellerMfaMethod {
+  ResellerMfaMethod({required this.id, this.label, this.verified = false});
+
+  final String id;
+  final String? label;
+  final bool verified;
+
+  factory ResellerMfaMethod.fromJson(Map<String, dynamic> json) =>
+      ResellerMfaMethod(
+        id: json['id'].toString(),
+        label: json['label'] as String?,
+        verified: json['verified_at'] != null,
+      );
+}
+
+/// TOTP enrollment material (POST /reseller/profile/mfa/setup).
+class ResellerMfaSetup {
+  ResellerMfaSetup({
+    required this.methodId,
+    required this.secret,
+    required this.otpauthUri,
+  });
+
+  final String methodId;
+  final String secret;
+  final String otpauthUri;
+
+  factory ResellerMfaSetup.fromJson(Map<String, dynamic> json) =>
+      ResellerMfaSetup(
+        methodId: json['method_id'].toString(),
+        secret: json['secret'] as String? ?? '',
+        otpauthUri: json['otpauth_uri'] as String? ?? '',
+      );
+}

@@ -63,6 +63,13 @@ final resellerAccountInvoicesProvider = FutureProvider.autoDispose
   return ref.watch(resellerRepositoryProvider).accountInvoices(accountId);
 });
 
+/// Reseller organization profile + MFA state.
+final resellerProfileProvider =
+    FutureProvider.autoDispose<ResellerProfile>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).profile();
+});
+
 /// CRM tickets for one managed account (reseller portal).
 final resellerAccountTicketsProvider = FutureProvider.autoDispose
     .family<ResellerTicketsPage, String>((ref, accountId) async {
