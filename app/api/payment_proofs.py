@@ -97,9 +97,7 @@ async def submit_account_payment_proof(
     )
 
 
-@router.get(
-    "/admin", dependencies=[Depends(require_permission("billing:read"))]
-)
+@router.get("/admin", dependencies=[Depends(require_permission("billing:read"))])
 def list_payment_proofs(
     status: str | None = "submitted",
     limit: int = Query(default=100, ge=1, le=500),
