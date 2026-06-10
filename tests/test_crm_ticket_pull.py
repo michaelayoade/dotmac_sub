@@ -344,7 +344,7 @@ def test_pull_crm_ticket_maps_via_alias_crm_id(db_session, subscriber):
     assert ticket.subscriber_id == subscriber.id
 
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from app.services.crm_ticket_pull import latest_crm_updated_at
 
@@ -364,7 +364,7 @@ def _crm_ticket(crm_ticket_id, number, updated_at, status="open", **extra):
         "id": crm_ticket_id,
         "subscriber_id": None,
         "number": number,
-        "title": f"Acme Ltd (100024296 - 24296)",
+        "title": "Acme Ltd (100024296 - 24296)",
         "status": status,
         "priority": "normal",
         "channel": "phone",
