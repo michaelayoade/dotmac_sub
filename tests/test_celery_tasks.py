@@ -463,3 +463,34 @@ class TestUsageTask:
                     run_usage_rating()
 
                 mock_session.close.assert_called_once()
+
+
+class TestDailyRunnerQueueRouting:
+    """Daily business runners must not share the (backlogged) default queue."""
+
+    def test_daily_runners_route_to_billing_queue(self):
+        from app.celery_app import celery_app
+
+        for task in (
+            "app.tasks.billing.run_invoice_cycle",
+            "app.tasks.collections.run_dunning",
+            "app.tasks.catalog.expire_subscriptions",
+            "app.tasks.usage.run_usage_rating",
+            "app.tasks.usage.evaluate_fup_rules",
+        ):
+            assert celery_app.conf.task_routes[task] == {"queue": "billing"}, task
+
+    def test_billing_queue_is_declared(self):
+        from app.celery_app import celery_app
+
+        assert "billing" in {q.name for q in celery_app.conf.task_queues}
+
+    def test_whole_base_runners_get_long_time_limits(self):
+        from app.services.scheduler_config import get_celery_config
+
+        annotations = get_celery_config()["task_annotations"]
+        for task in (
+            "app.tasks.billing.run_invoice_cycle",
+            "app.tasks.collections.run_dunning",
+        ):
+            assert annotations[task]["time_limit"] >= 1800, task
