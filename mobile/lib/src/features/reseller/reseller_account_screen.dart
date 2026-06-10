@@ -143,15 +143,19 @@ class _Row extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label, style: theme.textTheme.bodySmall),
-          Text(
-            value,
-            style: emphasise
-                ? theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.error)
-                : theme.textTheme.bodyMedium,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: emphasise
+                  ? theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.colorScheme.error)
+                  : theme.textTheme.bodyMedium,
+            ),
           ),
         ],
       ),
@@ -167,27 +171,42 @@ class _InvoiceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = invoice.invoiceNumber ?? invoice.id;
+    final theme = Theme.of(context);
+    // A plain Row instead of ListTile: the trailing budget is too tight for
+    // "NGN 200,000.00 due" and overflows.
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        dense: true,
-        title: Text(label),
-        subtitle: Text(
-          'Due ${Fmt.date(invoice.dueDate)} · ${invoice.status}',
-        ),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(Fmt.money(invoice.totalAmount, 'NGN')),
-            if (invoice.balanceDue > 0)
-              Text(
-                '${Fmt.money(invoice.balanceDue, 'NGN')} due',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Theme.of(context).colorScheme.error),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Due ${Fmt.date(invoice.dueDate)} · ${invoice.status}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
               ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(Fmt.money(invoice.totalAmount, 'NGN')),
+                if (invoice.balanceDue > 0)
+                  Text(
+                    '${Fmt.money(invoice.balanceDue, 'NGN')} due',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.error),
+                  ),
+              ],
+            ),
           ],
         ),
       ),

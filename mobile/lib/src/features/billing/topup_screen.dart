@@ -106,7 +106,16 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Top up')),
+      appBar: AppBar(
+        title: const Text('Top up'),
+        // Pushed entries pop back automatically; a deep link / cold start
+        // has no stack, so fall back to the dashboard instead of a dead end.
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/dashboard'),
+        ),
+      ),
       body: _loadingPage
           ? const Center(child: CircularProgressIndicator())
           : _page == null
