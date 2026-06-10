@@ -5,6 +5,14 @@ record, but those columns were never populated — support quoted stale or
 empty billing info. This pushes a small snapshot to every CRM-linked
 subscriber, skipping ones whose snapshot hasn't changed since the last push
 (stored in subscriber metadata) so steady-state nights are mostly no-ops.
+
+Delivery goes through the CRM's sync webhook, NOT the subscriber PATCH
+endpoint: the CRM's SubscriberUpdate schema only accepts person/org/status/
+notes and silently drops billing fields (verified live — 200 with no
+effect), while the webhook upsert applies any Subscriber column. Splynx-
+linked subscribers use the splynx-shaped payload (its mapper reads balance/
+currency/next_bill_date; it has no billing_cycle output); natives use the
+generic dotmac payload with CRM column names.
 """
 
 from __future__ import annotations
@@ -18,7 +26,6 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber
-from app.services.crm_client import CRMClient, CRMClientError, get_crm_client
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +60,11 @@ def build_snapshot(db: Session, subscriber: Subscriber) -> dict[str, Any]:
 def push_billing_snapshots(
     db: Session,
     *,
-    client: CRMClient | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Push changed billing snapshots to all CRM-linked subscribers."""
-    client = client or get_crm_client()
+    from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM, push_subscriber_change
+
     stats = {"considered": 0, "pushed": 0, "unchanged": 0, "failed": 0}
 
     query = (
@@ -79,13 +86,18 @@ def push_billing_snapshots(
         if metadata.get(_SNAPSHOT_KEY) == sendable:
             stats["unchanged"] += 1
             continue
-        try:
-            client.update_subscriber(str(subscriber.crm_subscriber_id), sendable)
-        except CRMClientError as exc:
+        if subscriber.splynx_customer_id:
+            external_id: int | str = subscriber.splynx_customer_id
+            external_system = "splynx"
+            # The splynx mapper has no billing_cycle output.
+            payload = {k: v for k, v in sendable.items() if k != "billing_cycle"}
+        else:
+            external_id = str(subscriber.id)
+            external_system = NATIVE_EXTERNAL_SYSTEM
+            payload = sendable
+        if not push_subscriber_change(external_id, payload, external_system):
             stats["failed"] += 1
-            logger.warning(
-                "CRM billing push failed subscriber=%s: %s", subscriber.id, exc
-            )
+            logger.warning("CRM billing push failed subscriber=%s", subscriber.id)
             continue
         metadata[_SNAPSHOT_KEY] = sendable
         subscriber.metadata_ = metadata
