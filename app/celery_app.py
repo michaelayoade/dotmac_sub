@@ -79,6 +79,9 @@ celery_app.conf.task_routes = {
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
     "app.tasks.usage.run_usage_rating": {"queue": "billing"},
     "app.tasks.usage.evaluate_fup_rules": {"queue": "billing"},
+    # Daily customer-facing heads-up; must not sit behind a default-queue
+    # backlog or "expires tomorrow" arrives after the bundle already lapsed.
+    "app.tasks.usage.notify_expiring_data_bundles": {"queue": "billing"},
 }
 
 celery_app.conf.task_queues = (
