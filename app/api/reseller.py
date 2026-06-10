@@ -105,41 +105,6 @@ def my_reseller_account(
     return detail
 
 
-def _profile_payload(db: Session, reseller_id: str, subscriber_id: str) -> dict:
-    from app.models.auth import MFAMethod
-    from app.models.subscriber import Reseller
-    from app.services.common import coerce_uuid
-
-    reseller = db.get(Reseller, coerce_uuid(reseller_id))
-    if reseller is None:
-        raise HTTPException(status_code=404, detail="Reseller not found")
-    methods = (
-        db.query(MFAMethod)
-        .filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
-        .filter(MFAMethod.is_active.is_(True))
-        .order_by(MFAMethod.created_at.desc())
-        .all()
-    )
-    return {
-        "name": reseller.name,
-        "code": reseller.code,
-        "contact_email": reseller.contact_email,
-        "contact_phone": reseller.contact_phone,
-        "notes": reseller.notes,
-        "mfa_enabled": any(m.enabled and m.verified_at is not None for m in methods),
-        "mfa_methods": [
-            {
-                "id": str(m.id),
-                "label": m.label,
-                "method_type": m.method_type.value,
-                "verified_at": m.verified_at,
-                "enabled": m.enabled,
-            }
-            for m in methods
-        ],
-    }
-
-
 @router.get("/profile")
 def my_reseller_profile(
     db: Session = Depends(get_db),
@@ -147,7 +112,12 @@ def my_reseller_profile(
 ) -> dict:
     """The caller's reseller organization profile + MFA state."""
     reseller_id = _reseller_id(db, principal)
-    return _profile_payload(db, reseller_id, str(principal["subscriber_id"]))
+    profile = reseller_portal.get_profile(
+        db, reseller_id, str(principal["subscriber_id"])
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Reseller not found")
+    return profile
 
 
 @router.patch("/profile")
@@ -157,22 +127,20 @@ def my_reseller_profile_update(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Update contact details (same fields the web profile form edits)."""
-    from app.models.subscriber import Reseller
-    from app.services.common import coerce_uuid
-
     reseller_id = _reseller_id(db, principal)
-    reseller = db.get(Reseller, coerce_uuid(reseller_id))
-    if reseller is None:
+    profile = reseller_portal.update_profile(
+        db,
+        reseller_id,
+        str(principal["subscriber_id"]),
+        fields={
+            k: getattr(payload, k)
+            for k in payload.model_fields_set
+            if k in {"contact_email", "contact_phone", "notes"}
+        },
+    )
+    if profile is None:
         raise HTTPException(status_code=404, detail="Reseller not found")
-    fields = payload.model_fields_set
-    if "contact_email" in fields:
-        reseller.contact_email = (payload.contact_email or "").strip() or None
-    if "contact_phone" in fields:
-        reseller.contact_phone = (payload.contact_phone or "").strip() or None
-    if "notes" in fields:
-        reseller.notes = (payload.notes or "").strip() or None
-    db.commit()
-    return _profile_payload(db, reseller_id, str(principal["subscriber_id"]))
+    return profile
 
 
 @router.post("/profile/mfa/setup")
@@ -214,7 +182,9 @@ def my_reseller_mfa_confirm(
         raise HTTPException(
             status_code=400, detail="Invalid verification code"
         ) from None
-    return _profile_payload(db, reseller_id, str(principal["subscriber_id"]))
+    return reseller_portal.get_profile(
+        db, reseller_id, str(principal["subscriber_id"])
+    ) or {"mfa_enabled": True}
 
 
 @router.get("/accounts/{account_id}/tickets")

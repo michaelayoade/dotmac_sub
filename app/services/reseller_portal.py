@@ -906,6 +906,61 @@ def get_revenue_summary(
     }
 
 
+def get_profile(db: Session, reseller_id: str, subscriber_id: str) -> dict | None:
+    """Org profile + MFA state for the reseller portal (web and bearer)."""
+    from app.models.auth import MFAMethod
+    from app.models.subscriber import Reseller
+
+    reseller = db.get(Reseller, coerce_uuid(reseller_id))
+    if reseller is None:
+        return None
+    methods = (
+        db.query(MFAMethod)
+        .filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
+        .filter(MFAMethod.is_active.is_(True))
+        .order_by(MFAMethod.created_at.desc())
+        .all()
+    )
+    return {
+        "name": reseller.name,
+        "code": reseller.code,
+        "contact_email": reseller.contact_email,
+        "contact_phone": reseller.contact_phone,
+        "notes": reseller.notes,
+        "mfa_enabled": any(m.enabled and m.verified_at is not None for m in methods),
+        "mfa_methods": [
+            {
+                "id": str(m.id),
+                "label": m.label,
+                "method_type": m.method_type.value,
+                "verified_at": m.verified_at,
+                "enabled": m.enabled,
+            }
+            for m in methods
+        ],
+    }
+
+
+def update_profile(
+    db: Session,
+    reseller_id: str,
+    subscriber_id: str,
+    *,
+    fields: dict,
+) -> dict | None:
+    """Apply contact-detail updates (present keys only; blank clears)."""
+    from app.models.subscriber import Reseller
+
+    reseller = db.get(Reseller, coerce_uuid(reseller_id))
+    if reseller is None:
+        return None
+    for key in ("contact_email", "contact_phone", "notes"):
+        if key in fields:
+            setattr(reseller, key, (fields[key] or "").strip() or None)
+    db.commit()
+    return get_profile(db, reseller_id, subscriber_id)
+
+
 def create_customer_impersonation_session(
     db: Session,
     reseller_id: str,
