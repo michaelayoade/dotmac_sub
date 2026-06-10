@@ -86,3 +86,104 @@ def test_emit_fup_notifications_skips_unknown_subscriber(db_session):
 
 def test_emit_fup_notifications_empty_is_noop(db_session):
     assert _emit_fup_notifications(db_session, []) == 0
+
+
+def _notif(db_session, subscriber, event_type, created_at):
+    n = Notification(
+        channel=NotificationChannel.push,
+        subscriber_id=subscriber.id,
+        recipient=subscriber.email or "x@example.com",
+        subject="s",
+        body="b",
+        category="fup",
+        event_type=event_type,
+    )
+    db_session.add(n)
+    db_session.flush()
+    n.created_at = created_at
+    db_session.commit()
+    return n
+
+
+def test_repeat_upsell_fires_after_two_of_three_cycles(
+    db_session, subscriber, subscription
+):
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.usage import QuotaBucket
+    from app.tasks.usage import _maybe_queue_repeat_upsell
+
+    subscriber.email = "fup.customer3@example.com"
+    db_session.commit()
+    now = datetime.now(UTC)
+    bucket = QuotaBucket(
+        subscription_id=subscription.id,
+        period_start=now - timedelta(days=10),
+        period_end=now + timedelta(days=20),
+        included_gb=Decimal("100"),
+        used_gb=Decimal("100"),
+    )
+    db_session.add(bucket)
+    db_session.commit()
+
+    # Throttled last cycle too (one of the previous two windows).
+    _notif(db_session, subscriber, "fup_throttled", now - timedelta(days=25))
+
+    pending = []
+    _maybe_queue_repeat_upsell(
+        db_session,
+        subscription,
+        bucket,
+        {"name": "Monthly 100GB cap", "threshold_gb": 100},
+        pending,
+    )
+    assert len(pending) == 1
+    assert pending[0]["kind"] == "repeat_upsell"
+
+    # Emitting it creates the once-per-cycle marker...
+    sent = _emit_fup_notifications(db_session, pending)
+    assert sent == 1
+    # ...so a second evaluation in the same cycle queues nothing.
+    pending2 = []
+    _maybe_queue_repeat_upsell(
+        db_session,
+        subscription,
+        bucket,
+        {"name": "Monthly 100GB cap", "threshold_gb": 100},
+        pending2,
+    )
+    assert pending2 == []
+
+
+def test_repeat_upsell_silent_on_first_offense(db_session, subscriber, subscription):
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.usage import QuotaBucket
+    from app.tasks.usage import _maybe_queue_repeat_upsell
+
+    now = datetime.now(UTC)
+    bucket = QuotaBucket(
+        subscription_id=subscription.id,
+        period_start=now - timedelta(days=10),
+        period_end=now + timedelta(days=20),
+        included_gb=Decimal("100"),
+        used_gb=Decimal("100"),
+    )
+    db_session.add(bucket)
+    db_session.commit()
+
+    pending = []
+    _maybe_queue_repeat_upsell(
+        db_session, subscription, bucket, {"name": "Cap", "threshold_gb": 100}, pending
+    )
+    assert pending == []
+
+
+def test_build_repeat_upsell_message():
+    subj, body = _build_fup_notification(
+        "repeat_upsell", "Monthly 100GB cap", 100, None
+    )
+    assert "every month" in subj.lower()
+    assert "upgrade" in body.lower()
