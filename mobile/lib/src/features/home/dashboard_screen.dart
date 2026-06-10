@@ -90,8 +90,7 @@ class DashboardScreen extends ConsumerWidget {
     // buyable data add-ons — uncapped plans never see it.
     Subscription? buyDataService;
     if (currentService != null) {
-      final addons =
-          ref.watch(addonsProvider(currentService.id)).asData?.value;
+      final addons = ref.watch(addonsProvider(currentService.id)).asData?.value;
       if (addons?.available.any((o) => o.isDataTopup) ?? false) {
         buyDataService = currentService;
       }

@@ -194,7 +194,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           StatefulShellBranch(routes: [
             // Path kept as /usage so old deep links and notifications keep working;
             // the tab itself is now the Service tab (plan + data + add-ons + usage).
-            GoRoute(path: '/usage', builder: (_, __) => const ServiceTabScreen()),
+            GoRoute(
+                path: '/usage', builder: (_, __) => const ServiceTabScreen()),
           ]),
           StatefulShellBranch(routes: [
             GoRoute(

@@ -277,8 +277,7 @@ class _ActiveAddonTile extends StatelessWidget {
         subtitle: Text(
           expiry,
           style: theme.textTheme.bodySmall?.copyWith(
-            color:
-                urgent ? theme.colorScheme.error : theme.colorScheme.outline,
+            color: urgent ? theme.colorScheme.error : theme.colorScheme.outline,
           ),
         ),
       ),

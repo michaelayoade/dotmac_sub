@@ -32,7 +32,8 @@ void main() {
       expect(find.byIcon(Icons.speed), findsOneWidget);
     });
 
-    testWidgets('blocked: paused title, block icon, upgrade-only when plan '
+    testWidgets(
+        'blocked: paused title, block icon, upgrade-only when plan '
         'sells no data bundles', (tester) async {
       await tester.pumpWidget(_wrap(FupCard(
         serviceId: 'sub-1',

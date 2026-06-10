@@ -100,7 +100,8 @@ class FupCard extends StatelessWidget {
                 children: [
                   if (canBuyData)
                     FilledButton.tonalIcon(
-                      onPressed: () => context.push('/service/$serviceId/buy-data'),
+                      onPressed: () =>
+                          context.push('/service/$serviceId/buy-data'),
                       icon: const Icon(Icons.add_chart_outlined, size: 18),
                       label: Text(fup.needsAttention
                           ? 'Buy data to restore'
