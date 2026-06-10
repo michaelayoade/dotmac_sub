@@ -306,12 +306,12 @@ def test_billing_endpoints_scope_and_translate_errors(monkeypatch):
     )
     captured = {}
 
+    def _summary(db, rid):
+        captured["summary_rid"] = rid
+        return {"total_outstanding": 5}
+
     monkeypatch.setattr(
-        reseller_portal_billing,
-        "get_billing_account_summary",
-        lambda db, rid: (
-            captured.setdefault("summary_rid", rid) or {"total_outstanding": 5}
-        ),
+        reseller_portal_billing, "get_billing_account_summary", _summary
     )
     out = reseller_api.my_reseller_billing(db=None, principal=_subscriber_principal())
     assert out == {"total_outstanding": 5}
