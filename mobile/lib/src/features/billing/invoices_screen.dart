@@ -189,12 +189,21 @@ class _OutstandingHeader extends StatelessWidget {
                       )),
             ),
             const SizedBox(width: 12),
-            Text(
-              Fmt.money(amount, currency),
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: scheme.onErrorContainer,
-                    fontWeight: FontWeight.w700,
-                  ),
+            // Scale the figure down rather than letting it overflow — same
+            // idiom as the dashboard stat cards (a cut-off amount is worse
+            // than a smaller one).
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  Fmt.money(amount, currency),
+                  maxLines: 1,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: scheme.onErrorContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
             ),
           ],
         ),
@@ -299,15 +308,22 @@ class _BalanceCard extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text(label, style: Theme.of(context).textTheme.titleMedium),
+              child:
+                  Text(label, style: Theme.of(context).textTheme.titleMedium),
             ),
             const SizedBox(width: 12),
-            Text(
-              Fmt.money(balance.creditBalance.abs(), balance.currency),
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: color, fontWeight: FontWeight.w700),
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  Fmt.money(balance.creditBalance.abs(), balance.currency),
+                  maxLines: 1,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(color: color, fontWeight: FontWeight.w700),
+                ),
+              ),
             ),
           ],
         ),
