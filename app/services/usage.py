@@ -590,12 +590,18 @@ def _refresh_open_sessions_from_radacct(
     sessions are included too, so one the reaper guessed wrong on (or whose
     real Stop arrived late) gets corrected with the real close.
 
-    Stalest first, so a large backlog drains across consecutive runs.
+    Round-robin by refresh_attempted_at (least-recently-attempted first), so
+    open sessions whose radacct rows never change — ghosts the reaper hasn't
+    closed yet — can't pin the window and starve live sessions of refreshes.
     Returns (candidates_checked, rows_updated).
     """
     now = datetime.now(UTC)
     candidates = (
-        db.query(RadiusAccountingSession.session_id, AccessCredential.username)
+        db.query(
+            RadiusAccountingSession.id,
+            RadiusAccountingSession.session_id,
+            AccessCredential.username,
+        )
         .join(
             AccessCredential,
             RadiusAccountingSession.access_credential_id == AccessCredential.id,
@@ -609,15 +615,22 @@ def _refresh_open_sessions_from_radacct(
                 ),
             )
         )
-        .order_by(RadiusAccountingSession.last_update_at.asc().nullsfirst())
+        .order_by(
+            RadiusAccountingSession.refresh_attempted_at.asc().nullsfirst(),
+            RadiusAccountingSession.last_update_at.asc().nullsfirst(),
+        )
         .limit(batch)
         .all()
     )
     if not candidates:
         return 0, 0
 
-    session_ids = sorted({sid for sid, _ in candidates})
-    usernames = sorted({username for _, username in candidates if username})
+    db.query(RadiusAccountingSession).filter(
+        RadiusAccountingSession.id.in_([row_id for row_id, _, _ in candidates])
+    ).update({"refresh_attempted_at": now}, synchronize_session=False)
+
+    session_ids = sorted({sid for _, sid, _ in candidates})
+    usernames = sorted({username for _, _, username in candidates if username})
     if not usernames:
         return len(candidates), 0
     stmt = text(
@@ -680,7 +693,7 @@ def import_radius_accounting(
         # refresh set), then re-read radacct for whatever is still open.
         db.flush()
         refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
-            db, conn, select_list
+            db, conn, select_list, batch=_RADIUS_REFRESH_BATCH
         )
 
     if cursor > last_radacctid:
@@ -1137,7 +1150,22 @@ class QuotaBuckets(ListResponseMixin):
             .filter(QuotaBucket.subscription_id.in_(sub_ids))
             .order_by(QuotaBucket.period_start.desc())
         )
-        return apply_pagination(query, limit, offset).all()
+        buckets = apply_pagination(query, limit, offset).all()
+        # Customer-facing overage cost: overage_gb is metered continuously but
+        # only priced at rating time — surface the running amount so the app
+        # can warn "in overage — ₦X so far" instead of a surprise invoice.
+        for bucket in buckets:
+            amount = None
+            if (bucket.overage_gb or Decimal("0")) > Decimal("0"):
+                subscription = db.get(Subscription, bucket.subscription_id)
+                allowance = _resolve_allowance(subscription) if subscription else None
+                if allowance is not None and allowance.overage_rate is not None:
+                    amount = _round_money(
+                        Decimal(str(bucket.overage_gb))
+                        * Decimal(str(allowance.overage_rate))
+                    )
+            bucket.overage_amount = amount  # transient, picked up by the schema
+        return buckets
 
     @classmethod
     def list_response_for_subscriber(

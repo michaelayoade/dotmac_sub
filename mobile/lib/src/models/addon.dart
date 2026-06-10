@@ -47,16 +47,57 @@ class ActiveAddon {
     required this.id,
     required this.name,
     required this.quantity,
+    this.addonType,
+    this.grantGb,
+    this.totalGrantGb,
+    this.startsAt,
+    this.expiresAt,
+    this.validityDays,
+    this.isExpired = false,
   });
 
   final String id;
   final String name;
   final int quantity;
+  final String? addonType;
+
+  /// GB granted per unit — set only for data bundles.
+  final int? grantGb;
+
+  /// GB granted across the whole purchase (grantGb × quantity).
+  final int? totalGrantGb;
+  final DateTime? startsAt;
+
+  /// Null = the bundle lasts until the end of the billing period.
+  final DateTime? expiresAt;
+  final int? validityDays;
+  final bool isExpired;
+
+  bool get isDataBundle => grantGb != null && grantGb! > 0;
+
+  /// Days until the bundle lapses; null when it tracks the billing period.
+  int? get daysLeft {
+    final exp = expiresAt;
+    if (exp == null) return null;
+    final d = exp.difference(DateTime.now()).inDays;
+    return d < 0 ? 0 : d;
+  }
 
   factory ActiveAddon.fromJson(Map<String, dynamic> json) => ActiveAddon(
         id: json['id'].toString(),
         name: json['name'] as String? ?? 'Add-on',
         quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+        addonType: json['addon_type'] as String?,
+        grantGb: (json['grant_gb'] as num?)?.toInt(),
+        totalGrantGb: (json['total_grant_gb'] as num?)?.toInt(),
+        startsAt: json['starts_at'] == null
+            ? null
+            : DateTime.tryParse(json['starts_at'].toString())?.toLocal(),
+        expiresAt: json['expires_at'] == null
+            ? null
+            : DateTime.tryParse(json['expires_at'].toString())?.toLocal(),
+        validityDays: (json['validity_days'] as num?)?.toInt(),
+        isExpired: json['is_expired'] as bool? ?? false,
       );
 }
 

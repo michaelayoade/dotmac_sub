@@ -30,7 +30,7 @@ import '../features/settings/settings_screen.dart';
 import '../features/support/create_ticket_screen.dart';
 import '../features/support/ticket_detail_screen.dart';
 import '../features/support/tickets_screen.dart';
-import '../features/usage/usage_screen.dart';
+import '../features/service/service_tab_screen.dart';
 import '../models/subscription.dart';
 import '../providers/auth_controller.dart';
 
@@ -192,7 +192,9 @@ final routerProvider = Provider<GoRouter>((ref) {
             ),
           ]),
           StatefulShellBranch(routes: [
-            GoRoute(path: '/usage', builder: (_, __) => const UsageScreen()),
+            // Path kept as /usage so old deep links and notifications keep working;
+            // the tab itself is now the Service tab (plan + data + add-ons + usage).
+            GoRoute(path: '/usage', builder: (_, __) => const ServiceTabScreen()),
           ]),
           StatefulShellBranch(routes: [
             GoRoute(

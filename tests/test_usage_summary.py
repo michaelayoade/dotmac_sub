@@ -235,7 +235,76 @@ def test_fup_summary_none_db_guard():
 
 def test_fup_summary_full_speed_when_no_state(db_session, subscriber, subscription):
     out = svc.fup_summary(db_session, str(subscriber.id))
-    assert out == {"status": "full_speed", "is_reduced": False}
+    assert out["status"] == "full_speed"
+    assert out["is_reduced"] is False
+    # No FUP policy on the offer → no headroom/policy context to show.
+    assert out["threshold_gb"] is None
+    assert out["policy_summary"] is None
+
+
+def _add_throttle_rule(db_session, subscription, threshold_gb=100):
+    from app.models.fup import FupAction, FupConsumptionPeriod, FupDataUnit, FupRule
+    from app.services.fup import fup_policies
+
+    policy = fup_policies.get_or_create(db_session, str(subscription.offer_id))
+    rule = FupRule(
+        policy_id=policy.id,
+        name=f"Monthly {threshold_gb}GB cap",
+        consumption_period=FupConsumptionPeriod.monthly,
+        threshold_amount=threshold_gb,
+        threshold_unit=FupDataUnit.gb,
+        action=FupAction.reduce_speed,
+        speed_reduction_percent=75,
+    )
+    db_session.add(rule)
+    db_session.commit()
+    return rule
+
+
+def _put_bucket(db_session, subscription, used_gb):
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from app.models.usage import QuotaBucket
+
+    now = datetime.now(UTC)
+    bucket = QuotaBucket(
+        subscription_id=subscription.id,
+        period_start=now - timedelta(days=5),
+        period_end=now + timedelta(days=25),
+        included_gb=Decimal("100"),
+        used_gb=Decimal(str(used_gb)),
+    )
+    db_session.add(bucket)
+    db_session.commit()
+    return bucket
+
+
+def test_fup_summary_healthy_shows_policy_terms_and_headroom(
+    db_session, subscriber, subscription
+):
+    _add_throttle_rule(db_session, subscription, threshold_gb=100)
+    _put_bucket(db_session, subscription, used_gb=40)
+
+    out = svc.fup_summary(db_session, str(subscriber.id))
+    assert out["status"] == "full_speed"
+    assert out["threshold_gb"] == 100.0
+    assert out["used_gb"] == 40.0
+    assert out["gb_until_throttle"] == 60.0
+    assert out["policy_summary"] == "Speed reduces to 25% after 100 GB each month"
+
+
+def test_fup_summary_approaching_before_enforcement(
+    db_session, subscriber, subscription
+):
+    _add_throttle_rule(db_session, subscription, threshold_gb=100)
+    _put_bucket(db_session, subscription, used_gb=85)
+
+    out = svc.fup_summary(db_session, str(subscriber.id))
+    assert out["status"] == "approaching"
+    assert out["is_reduced"] is False
+    assert out["gb_until_throttle"] == 15.0
+    assert "until it applies" in out["summary"]
 
 
 def test_fup_summary_throttled_with_plain_language(

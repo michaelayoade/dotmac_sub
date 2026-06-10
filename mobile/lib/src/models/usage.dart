@@ -12,6 +12,7 @@ class QuotaBucket {
     this.rolloverGb = 0,
     this.topupGb = 0,
     this.overageGb = 0,
+    this.overageAmount,
   });
 
   final String id;
@@ -23,6 +24,10 @@ class QuotaBucket {
   final double rolloverGb;
   final double topupGb;
   final double overageGb;
+
+  /// Running cost of the current overage (₦), when the plan has an overage
+  /// rate. Null when not in overage or unmetered.
+  final double? overageAmount;
 
   /// Total data available this period (included + rolled-over + top-ups).
   double? get allowanceGb =>
@@ -55,6 +60,7 @@ class QuotaBucket {
         rolloverGb: asDouble(json['rollover_gb']),
         topupGb: asDouble(json['topup_gb']),
         overageGb: asDouble(json['overage_gb']),
+        overageAmount: asDoubleOrNull(json['overage_amount']),
       );
 }
 
@@ -157,17 +163,34 @@ class FupStatus {
     this.activeRuleName,
     this.resetsAt,
     this.summary,
+    this.thresholdGb,
+    this.usedGb,
+    this.gbUntilThrottle,
+    this.usageRatio,
+    this.policySummary,
   });
 
-  final String status; // full_speed | throttled | blocked
+  final String status; // full_speed | approaching | throttled | blocked
   final bool isReduced;
   final double? speedReductionPercent;
   final String? activeRuleName;
   final DateTime? resetsAt;
   final String? summary; // plain-language explainer
 
+  /// Headroom against the nearest throttle/block rule — present even while
+  /// healthy so the app can pre-warn before enforcement.
+  final double? thresholdGb;
+  final double? usedGb;
+  final double? gbUntilThrottle;
+  final double? usageRatio;
+
+  /// Policy terms shown regardless of state, e.g.
+  /// "Speed reduces to 25% after 500 GB each month".
+  final String? policySummary;
+
   bool get isThrottled => status == 'throttled';
   bool get isBlocked => status == 'blocked';
+  bool get isApproaching => status == 'approaching';
 
   /// Whether the customer should see a banner / restore CTA.
   bool get needsAttention => isThrottled || isBlocked;
@@ -180,6 +203,11 @@ class FupStatus {
         activeRuleName: json['active_rule_name'] as String?,
         resetsAt: _toDate(json['resets_at']),
         summary: json['summary'] as String?,
+        thresholdGb: (json['threshold_gb'] as num?)?.toDouble(),
+        usedGb: (json['used_gb'] as num?)?.toDouble(),
+        gbUntilThrottle: (json['gb_until_throttle'] as num?)?.toDouble(),
+        usageRatio: (json['usage_ratio'] as num?)?.toDouble(),
+        policySummary: json['policy_summary'] as String?,
       );
 }
 

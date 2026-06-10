@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/addon.dart';
 import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
@@ -174,6 +175,30 @@ Subscription pickCurrentService(List<Subscription> services) {
 final selectedServiceIdProvider = StateProvider.autoDispose<String?>((ref) {
   cacheFor(ref);
   return null;
+});
+
+/// The service the dashboard card and the Service tab display: the user's
+/// switcher pick when set, else the shared current-service rule.
+final displayedServiceProvider =
+    Provider.autoDispose<AsyncValue<Subscription?>>((ref) {
+  final selectedId = ref.watch(selectedServiceIdProvider);
+  return ref.watch(subscriptionsProvider).whenData((page) {
+    if (page.items.isEmpty) return null;
+    if (selectedId != null) {
+      for (final s in page.items) {
+        if (s.id == selectedId) return s;
+      }
+    }
+    return pickCurrentService(page.items);
+  });
+});
+
+/// Add-ons (buyable options + active purchases) for a subscription. Drives the
+/// plan-conditional "Buy data" entry points and the active-bundles section.
+final addonsProvider = FutureProvider.autoDispose
+    .family<AddonsAvailable, String>((ref, subscriptionId) async {
+  cacheFor(ref);
+  return ref.watch(catalogRepositoryProvider).addons(subscriptionId);
 });
 
 /// How the Invoices tab list is filtered.

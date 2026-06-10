@@ -4,68 +4,151 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
 import '../../models/usage.dart';
-import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
-import 'fup_card.dart';
 
-class UsageScreen extends ConsumerWidget {
-  const UsageScreen({super.key});
+/// The usage half of the Service tab: period chips, windowed total + chart,
+/// and the recent RADIUS sessions list. Extracted from the former Usage tab.
+class UsageSection extends StatelessWidget {
+  const UsageSection({
+    super.key,
+    required this.period,
+    required this.summary,
+    required this.sessions,
+    required this.onSelectPeriod,
+    required this.onRetry,
+  });
+
+  final String period;
+  final AsyncValue<UsageSummary> summary;
+  final List<AccountingSession> sessions;
+  final ValueChanged<String> onSelectPeriod;
+  final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final period = ref.watch(selectedUsagePeriodProvider);
-    final summary = ref.watch(usageSummaryProvider(period));
-    final buckets = ref.watch(quotaBucketsProvider);
-    final sessions = ref.watch(accountingSessionsProvider);
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Usage', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        _PeriodChips(selected: period, onSelect: onSelectPeriod),
+        const SizedBox(height: 12),
+        AsyncValueView(
+          value: summary,
+          onRetry: onRetry,
+          skeleton: const CardSkeleton(height: 160),
+          data: (s) => _WindowSummaryCard(summary: s),
+        ),
+        if (sessions.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text('Recent sessions',
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          for (final s in sessions) _SessionTile(session: s),
+        ],
+      ],
+    );
+  }
+}
 
-    final quotaList = buckets.asData?.value ?? const <QuotaBucket>[];
-    final sessionList =
-        sessions.asData?.value.items ?? const <AccountingSession>[];
+/// Quota bar for one bucket, with the plan's FUP terms underneath (visible
+/// while healthy, not just once capped) and the running overage cost when the
+/// customer is past their allowance on a metered plan.
+class QuotaCard extends StatelessWidget {
+  const QuotaCard({super.key, required this.bucket, this.policyLine});
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Usage')),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          ref.invalidate(usageSummaryProvider(period));
-          ref.invalidate(quotaBucketsProvider);
-          ref.invalidate(accountingSessionsProvider);
-          await ref.read(usageSummaryProvider(period).future);
-        },
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+  final QuotaBucket bucket;
+  final String? policyLine;
+
+  @override
+  Widget build(BuildContext context) {
+    final b = bucket;
+    final theme = Theme.of(context);
+    final fraction = b.usedFraction;
+    final overLimit = b.overageGb > 0;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _PeriodChips(
-              selected: period,
-              onSelect: (p) =>
-                  ref.read(selectedUsagePeriodProvider.notifier).state = p,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('${Fmt.date(b.periodStart)} – ${Fmt.date(b.periodEnd)}',
+                    style: theme.textTheme.bodySmall),
+                if (b.isUnlimited)
+                  Text('Unlimited',
+                      style: theme.textTheme.labelMedium
+                          ?.copyWith(color: theme.colorScheme.primary)),
+              ],
             ),
             const SizedBox(height: 12),
-            AsyncValueView(
-              value: summary,
-              onRetry: () => ref.invalidate(usageSummaryProvider(period)),
-              skeleton: const CardSkeleton(height: 160),
-              data: (s) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            Text(
+              b.isUnlimited
+                  ? Fmt.gb(b.usedGb)
+                  : '${Fmt.gb(b.usedGb)} / ${Fmt.gb(b.allowanceGb ?? 0)}',
+              style: theme.textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(
+              value: fraction,
+              minHeight: 10,
+              borderRadius: BorderRadius.circular(5),
+              color: overLimit ? theme.colorScheme.error : null,
+            ),
+            if (!b.isUnlimited) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  if (s.fup?.needsAttention ?? false) ...[
-                    FupCard(fup: s.fup!),
-                    const SizedBox(height: 12),
-                  ],
-                  _WindowSummaryCard(summary: s),
+                  Text(
+                    overLimit
+                        ? '${Fmt.gb(b.overageGb)} over'
+                        : '${Fmt.gb(b.remainingGb ?? 0)} left',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: overLimit
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.outline,
+                    ),
+                  ),
+                  if (b.topupGb > 0)
+                    Text(
+                      '+${Fmt.gb(b.topupGb)} top-up',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.primary),
+                    ),
                 ],
               ),
-            ),
-            for (final b in quotaList) ...[
-              const SizedBox(height: 12),
-              _QuotaCard(bucket: b),
             ],
-            if (sessionList.isNotEmpty) ...[
-              const SizedBox(height: 20),
-              Text('Recent sessions',
-                  style: Theme.of(context).textTheme.titleMedium),
+            if (overLimit && b.overageAmount != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                'In overage — ${Fmt.money(b.overageAmount!, 'NGN')} so far',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            if (policyLine != null) ...[
               const SizedBox(height: 8),
-              for (final s in sessionList) _SessionTile(session: s),
+              Row(
+                children: [
+                  Icon(Icons.info_outline,
+                      size: 14, color: theme.colorScheme.outline),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      policyLine!,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ],
         ),
@@ -276,79 +359,6 @@ class _SessionTile extends StatelessWidget {
           '${s.isActive ? ' · active · seen ${Fmt.dateTime(s.lastSeenAt)}' : ''}',
         ),
         isThreeLine: true,
-      ),
-    );
-  }
-}
-
-class _QuotaCard extends StatelessWidget {
-  const _QuotaCard({required this.bucket});
-  final QuotaBucket bucket;
-
-  @override
-  Widget build(BuildContext context) {
-    final b = bucket;
-    final theme = Theme.of(context);
-    final fraction = b.usedFraction;
-    final overLimit = b.overageGb > 0;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('${Fmt.date(b.periodStart)} – ${Fmt.date(b.periodEnd)}',
-                    style: theme.textTheme.bodySmall),
-                if (b.isUnlimited)
-                  Text('Unlimited',
-                      style: theme.textTheme.labelMedium
-                          ?.copyWith(color: theme.colorScheme.primary)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              b.isUnlimited
-                  ? Fmt.gb(b.usedGb)
-                  : '${Fmt.gb(b.usedGb)} / ${Fmt.gb(b.allowanceGb ?? 0)}',
-              style: theme.textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              value: fraction,
-              minHeight: 10,
-              borderRadius: BorderRadius.circular(5),
-              color: overLimit ? theme.colorScheme.error : null,
-            ),
-            if (!b.isUnlimited) ...[
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    overLimit
-                        ? '${Fmt.gb(b.overageGb)} over'
-                        : '${Fmt.gb(b.remainingGb ?? 0)} left',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: overLimit
-                          ? theme.colorScheme.error
-                          : theme.colorScheme.outline,
-                    ),
-                  ),
-                  if (b.topupGb > 0)
-                    Text(
-                      '+${Fmt.gb(b.topupGb)} top-up',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.primary),
-                    ),
-                ],
-              ),
-            ],
-          ],
-        ),
       ),
     );
   }
