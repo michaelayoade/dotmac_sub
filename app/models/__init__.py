@@ -502,6 +502,11 @@ from app.models.usage import (  # noqa: F401
     UsageRecord,
     UsageSource,
 )
+from app.models.service_request import (  # noqa: F401
+    ResellerServiceRequest,
+    Serviceability,
+    ServiceRequestStatus,
+)
 from app.models.webhook import (  # noqa: F401
     WebhookDelivery,
     WebhookDeliveryStatus,
