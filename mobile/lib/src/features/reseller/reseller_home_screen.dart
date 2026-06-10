@@ -22,6 +22,11 @@ class ResellerHomeScreen extends ConsumerWidget {
         title: const Text('Reseller Portal'),
         actions: [
           IconButton(
+            tooltip: 'Profile & security',
+            icon: const Icon(Icons.manage_accounts_outlined),
+            onPressed: () => context.push('/reseller/profile'),
+          ),
+          IconButton(
             tooltip: 'Revenue',
             icon: const Icon(Icons.bar_chart_outlined),
             onPressed: () => context.push('/reseller/revenue'),

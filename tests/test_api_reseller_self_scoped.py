@@ -199,3 +199,98 @@ def test_account_tickets_normalizes_crm_fields(monkeypatch):
             "updated_at": None,
         }
     ]
+
+
+def test_profile_403_for_non_reseller(monkeypatch):
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "reseller_id_for_subscriber",
+        lambda db, sid: None,
+    )
+    with pytest.raises(HTTPException) as exc:
+        reseller_api.my_reseller_profile(db=None, principal=_subscriber_principal())
+    assert exc.value.status_code == 403
+
+
+def test_profile_roundtrip_and_update(db_session, monkeypatch):
+    from app.models.subscriber import Reseller, Subscriber, UserType
+
+    sub = Subscriber(
+        first_name="Res",
+        last_name="Eller",
+        email="reseller.profile@example.com",
+        user_type=UserType.reseller,
+    )
+    reseller = Reseller(name="Acme Networks", code="ACME")
+    db_session.add_all([sub, reseller])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "reseller_id_for_subscriber",
+        lambda db, sid: str(reseller.id),
+    )
+    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
+
+    out = reseller_api.my_reseller_profile(db=db_session, principal=principal)
+    assert out["name"] == "Acme Networks"
+    assert out["mfa_enabled"] is False
+
+    updated = reseller_api.my_reseller_profile_update(
+        payload=reseller_api.ResellerProfileUpdate(
+            contact_email="  ops@acme.example  ", contact_phone=""
+        ),
+        db=db_session,
+        principal=principal,
+    )
+    assert updated["contact_email"] == "ops@acme.example"
+    assert updated["contact_phone"] is None  # blank clears the field
+
+
+def test_mfa_setup_and_confirm_flow(db_session, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    from app.models.subscriber import Reseller, Subscriber, UserType
+
+    sub = Subscriber(
+        first_name="Mfa",
+        last_name="User",
+        email="reseller.mfa@example.com",
+        user_type=UserType.reseller,
+    )
+    reseller = Reseller(name="Mfa Networks")
+    db_session.add_all([sub, reseller])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "reseller_id_for_subscriber",
+        lambda db, sid: str(reseller.id),
+    )
+    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
+
+    setup = reseller_api.my_reseller_mfa_setup(db=db_session, principal=principal)
+    assert setup["method_id"] and setup["secret"] and setup["otpauth_uri"]
+
+    # Wrong code -> 400, method stays unverified.
+    with pytest.raises(HTTPException) as exc:
+        reseller_api.my_reseller_mfa_confirm(
+            payload=reseller_api.MfaConfirmRequest(
+                method_id=setup["method_id"], code="000000"
+            ),
+            db=db_session,
+            principal=principal,
+        )
+    assert exc.value.status_code == 400
+
+    # Correct TOTP -> enabled.
+    import pyotp
+
+    code = pyotp.TOTP(setup["secret"]).now()
+    out = reseller_api.my_reseller_mfa_confirm(
+        payload=reseller_api.MfaConfirmRequest(method_id=setup["method_id"], code=code),
+        db=db_session,
+        principal=principal,
+    )
+    assert out["mfa_enabled"] is True

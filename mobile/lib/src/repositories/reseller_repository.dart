@@ -51,6 +51,39 @@ class ResellerRepository {
     return ResellerAccountDetail.fromJson(data as Map<String, dynamic>);
   }
 
+  /// GET /reseller/profile — organization profile + MFA state.
+  Future<ResellerProfile> profile() async {
+    final data = await guard(() => dio.get('/reseller/profile'));
+    return ResellerProfile.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// PATCH /reseller/profile — update contact details.
+  Future<ResellerProfile> updateProfile({
+    String? contactEmail,
+    String? contactPhone,
+    String? notes,
+  }) async {
+    final data = await guard(() => dio.patch('/reseller/profile', data: {
+          if (contactEmail != null) 'contact_email': contactEmail,
+          if (contactPhone != null) 'contact_phone': contactPhone,
+          if (notes != null) 'notes': notes,
+        }));
+    return ResellerProfile.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// POST /reseller/profile/mfa/setup — begin TOTP enrollment.
+  Future<ResellerMfaSetup> mfaSetup() async {
+    final data = await guard(() => dio.post('/reseller/profile/mfa/setup'));
+    return ResellerMfaSetup.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// POST /reseller/profile/mfa/confirm — verify the first code.
+  Future<void> mfaConfirm(
+      {required String methodId, required String code}) async {
+    await guard(() => dio.post('/reseller/profile/mfa/confirm',
+        data: {'method_id': methodId, 'code': code}));
+  }
+
   /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
   Future<ResellerTicketsPage> accountTickets(String accountId) async {
     final data =
