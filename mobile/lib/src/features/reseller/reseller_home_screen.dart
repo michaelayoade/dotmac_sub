@@ -21,20 +21,40 @@ class ResellerHomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Reseller Portal'),
         actions: [
-          IconButton(
-            tooltip: 'Profile & security',
-            icon: const Icon(Icons.manage_accounts_outlined),
-            onPressed: () => context.push('/reseller/profile'),
-          ),
-          IconButton(
-            tooltip: 'Billing',
-            icon: const Icon(Icons.receipt_long_outlined),
-            onPressed: () => context.push('/reseller/billing'),
-          ),
-          IconButton(
-            tooltip: 'Revenue',
-            icon: const Icon(Icons.bar_chart_outlined),
-            onPressed: () => context.push('/reseller/revenue'),
+          PopupMenuButton<String>(
+            tooltip: 'Menu',
+            icon: const Icon(Icons.menu),
+            onSelected: (route) => context.push(route),
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: '/reseller/billing',
+                child: ListTile(
+                  leading: Icon(Icons.receipt_long_outlined),
+                  title: Text('Billing'),
+                ),
+              ),
+              PopupMenuItem(
+                value: '/reseller/revenue',
+                child: ListTile(
+                  leading: Icon(Icons.bar_chart_outlined),
+                  title: Text('Revenue'),
+                ),
+              ),
+              PopupMenuItem(
+                value: '/reseller/fiber-map',
+                child: ListTile(
+                  leading: Icon(Icons.map_outlined),
+                  title: Text('Coverage map'),
+                ),
+              ),
+              PopupMenuItem(
+                value: '/reseller/profile',
+                child: ListTile(
+                  leading: Icon(Icons.manage_accounts_outlined),
+                  title: Text('Profile & security'),
+                ),
+              ),
+            ],
           ),
           IconButton(
             tooltip: 'Sign out',

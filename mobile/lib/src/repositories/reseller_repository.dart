@@ -103,6 +103,12 @@ class ResellerRepository {
         .post('/reseller/billing/pay/verify', data: {'reference': reference}));
   }
 
+  /// GET /reseller/fiber-map — fiber plant GeoJSON for the coverage map.
+  Future<ResellerFiberMap> fiberMap() async {
+    final data = await guard(() => dio.get('/reseller/fiber-map'));
+    return ResellerFiberMap.fromJson(data as Map<String, dynamic>);
+  }
+
   /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
   Future<ResellerTicketsPage> accountTickets(String accountId) async {
     final data =
