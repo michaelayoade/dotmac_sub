@@ -1113,3 +1113,51 @@ def test_create_impersonation_session_with_pending_subscription(
     assert session["subscription_id"] == str(subscription.id)
     assert session["is_impersonation"] is True
     assert session["return_to"] == "/dashboard"
+
+
+def test_list_accounts_filters_and_sorts(db_session, reseller, subscriber):
+    """Overdue filter + balance sort use the pre-pagination invoice aggregate."""
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus
+    from app.models.subscriber import Subscriber as Sub
+    from app.services import reseller_portal
+
+    subscriber.reseller_id = reseller.id
+    quiet = Sub(
+        first_name="Quiet",
+        last_name="Customer",
+        email=f"q-{subscriber.id}@x.com",
+        reseller_id=reseller.id,
+    )
+    db_session.add(quiet)
+    db_session.commit()
+
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            status=InvoiceStatus.overdue,
+            total=Decimal("500"),
+            balance_due=Decimal("500"),
+            due_at=datetime.now(UTC) - timedelta(days=10),
+        )
+    )
+    db_session.commit()
+
+    overdue = reseller_portal.list_accounts(
+        db_session, str(reseller.id), 50, 0, status_filter="overdue"
+    )
+    assert [a["id"] for a in overdue] == [str(subscriber.id)]
+    assert (
+        reseller_portal.count_accounts(
+            db_session, str(reseller.id), status_filter="overdue"
+        )
+        == 1
+    )
+
+    by_balance = reseller_portal.list_accounts(
+        db_session, str(reseller.id), 50, 0, order_by="balance", order_dir="desc"
+    )
+    assert by_balance[0]["id"] == str(subscriber.id)
+    assert by_balance[0]["open_balance"] == 500

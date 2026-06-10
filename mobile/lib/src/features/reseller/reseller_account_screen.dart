@@ -62,8 +62,10 @@ class ResellerAccountScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               if (account.subscriptions.isEmpty)
-                const Card(
-                  child: ListTile(title: Text('No subscriptions')),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: EmptyState(
+                      icon: Icons.wifi_outlined, message: 'No subscriptions'),
                 )
               else
                 for (final s in account.subscriptions)
@@ -87,7 +89,12 @@ class ResellerAccountScreen extends ConsumerWidget {
                   child: ListTile(title: Text('Could not load invoices')),
                 ),
                 data: (items) => items.isEmpty
-                    ? const Card(child: ListTile(title: Text('No invoices')))
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: EmptyState(
+                            icon: Icons.receipt_long_outlined,
+                            message: 'No invoices'),
+                      )
                     : Column(
                         children: [
                           for (final i in items) _InvoiceTile(invoice: i)
@@ -112,7 +119,12 @@ class ResellerAccountScreen extends ConsumerWidget {
                             title: Text('Ticket system unavailable right now')),
                       )
                     : page.items.isEmpty
-                        ? const Card(child: ListTile(title: Text('No tickets')))
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: EmptyState(
+                                icon: Icons.support_agent_outlined,
+                                message: 'No tickets'),
+                          )
                         : Column(
                             children: [
                               for (final t in page.items) _TicketTile(ticket: t)

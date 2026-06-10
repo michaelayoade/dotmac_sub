@@ -25,12 +25,18 @@ class ResellerRepository {
   /// GET /reseller/accounts — the reseller's managed customer accounts.
   Future<Page<ResellerAccount>> accounts({
     String? search,
+    String? status,
+    String orderBy = 'created_at',
+    String orderDir = 'desc',
     int limit = 50,
     int offset = 0,
   }) async {
     final data = await guard(
       () => dio.get('/reseller/accounts', queryParameters: {
         if (search != null && search.isNotEmpty) 'search': search,
+        if (status != null && status.isNotEmpty) 'status': status,
+        'order_by': orderBy,
+        'order_dir': orderDir,
         'limit': limit,
         'offset': offset,
       }),

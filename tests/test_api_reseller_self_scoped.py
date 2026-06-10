@@ -57,13 +57,15 @@ def test_accounts_scopes_to_caller_reseller(monkeypatch):
         lambda db, sid: "reseller-1",
     )
 
-    def fake_list(db, reseller_id, limit, offset, search):
+    def fake_list(db, reseller_id, limit, offset, search, **kwargs):
         captured["reseller_id"] = reseller_id
         return []
 
     monkeypatch.setattr(reseller_api.reseller_portal, "list_accounts", fake_list)
     monkeypatch.setattr(
-        reseller_api.reseller_portal, "count_accounts", lambda db, rid, search: 0
+        reseller_api.reseller_portal,
+        "count_accounts",
+        lambda db, rid, search, **kwargs: 0,
     )
 
     out = reseller_api.my_reseller_accounts(
