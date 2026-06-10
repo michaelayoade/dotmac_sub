@@ -61,6 +61,25 @@ from app.services.response import ListResponseMixin, list_response
 logger = logging.getLogger(__name__)
 
 _MAC_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
+
+# Long-lived workers run the importer every minute; a fresh Engine per run
+# leaked its connection pool (never disposed) until the prefork child hit
+# max-tasks-per-child — one of the two leaks behind the 2026-06-10 ingestion
+# worker OOM loop. Cache per URL; NullPool so no idle connections linger
+# between runs.
+_RADACCT_ENGINES: dict[str, object] = {}
+
+
+def _radacct_engine(db_url: str):
+    engine = _RADACCT_ENGINES.get(db_url)
+    if engine is None:
+        from sqlalchemy.pool import NullPool
+
+        engine = create_engine(db_url, poolclass=NullPool)
+        _RADACCT_ENGINES[db_url] = engine
+    return engine
+
+
 _RADIUS_ACCOUNTING_CURSOR_KEY = "radius_accounting_last_radacctid"
 # terminate_cause stamped on sessions the reaper closes synthetically (no Stop
 # packet ever arrived). Distinguishable from any real RADIUS terminate cause.
@@ -262,6 +281,24 @@ def _status_from_radacct(row: dict[str, object]) -> AccountingStatus:
     return AccountingStatus.start
 
 
+# (url, client) cache: the emit runs per interim upsert, every importer cycle.
+# Building a fresh client (and its connection pool) each call leaked sockets
+# for the life of the prefork child — the second leak behind the 2026-06-10
+# ingestion worker OOM loop. The leak was dormant until the open-session
+# refresh pass (PR #142) made interim re-reads routine.
+_BANDWIDTH_REDIS: tuple[str, object] | None = None
+
+
+def _bandwidth_redis_client(redis_sync, redis_url: str):
+    global _BANDWIDTH_REDIS
+    if _BANDWIDTH_REDIS is None or _BANDWIDTH_REDIS[0] != redis_url:
+        _BANDWIDTH_REDIS = (
+            redis_url,
+            redis_sync.from_url(redis_url, decode_responses=True),
+        )
+    return _BANDWIDTH_REDIS[1]
+
+
 def _emit_bandwidth_sample_from_radius_delta(
     *,
     subscription_id: uuid.UUID,
@@ -295,7 +332,7 @@ def _emit_bandwidth_sample_from_radius_delta(
         return
 
     state_key = f"radius_bandwidth_state:{session_id}"
-    client = redis_sync.from_url(redis_url, decode_responses=True)
+    client = _bandwidth_redis_client(redis_sync, redis_url)
     try:
         prev = client.hgetall(state_key)
     except Exception as exc:
@@ -668,7 +705,7 @@ def import_radius_accounting(
     created_or_updated = 0
     refreshed = 0
     cursor = last_radacctid
-    engine = create_engine(db_url)
+    engine = _radacct_engine(db_url)
     with engine.begin() as conn:
         select_list = _radacct_select_list(conn)
         result = conn.execute(

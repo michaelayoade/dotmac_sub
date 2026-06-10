@@ -338,7 +338,7 @@ services:
     build: .
     container_name: dotmac_sub_celery_worker_ingestion
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 768m
     mem_reservation: 256m
     cpus: 0.5
     pids_limit: 64
