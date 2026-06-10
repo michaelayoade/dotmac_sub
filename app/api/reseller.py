@@ -246,6 +246,19 @@ def my_reseller_pay_verify(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/fiber-map")
+def my_reseller_fiber_map(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Fiber plant map data (GeoJSON + stats) — same payload the web
+    /reseller/fiber-map page renders, for the app's coverage map."""
+    _reseller_id(db, principal)  # 403 unless the caller is a reseller
+    from app.services import web_network_fiber
+
+    return web_network_fiber.get_fiber_plant_map_data(db)
+
+
 @router.get("/accounts/{account_id}/tickets")
 def my_reseller_account_tickets(
     account_id: str,

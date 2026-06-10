@@ -84,6 +84,13 @@ final resellerBillingProvider =
   return ref.watch(resellerRepositoryProvider).billing();
 });
 
+/// Fiber-plant map for the reseller coverage screen.
+final resellerFiberMapProvider =
+    FutureProvider.autoDispose<ResellerFiberMap>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).fiberMap();
+});
+
 /// CRM tickets for one managed account (reseller portal).
 final resellerAccountTicketsProvider = FutureProvider.autoDispose
     .family<ResellerTicketsPage, String>((ref, accountId) async {
