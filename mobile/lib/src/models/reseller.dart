@@ -1,6 +1,15 @@
 // Models for the reseller API (app/api/reseller.py, mounted at /api/v1).
 import '../core/parsers.dart';
 
+/// Money fields come back as JSON **strings** (serialized `Decimal`, e.g.
+/// "749012363.52"); counts come back as numbers. Parse defensively so a String
+/// value never throws a `num` type-cast at runtime.
+num _toNum(dynamic v) {
+  if (v is num) return v;
+  if (v is String) return num.tryParse(v) ?? 0;
+  return 0;
+}
+
 class ResellerAccount {
   ResellerAccount({
     required this.id,
@@ -25,8 +34,8 @@ class ResellerAccount {
         id: json['id'].toString(),
         subscriberName: json['subscriber_name'] as String? ?? '',
         status: json['status'] as String? ?? 'active',
-        openBalance: (json['open_balance'] as num?) ?? 0,
-        openInvoices: (json['open_invoices'] as num?)?.toInt() ?? 0,
+        openBalance: _toNum(json['open_balance']),
+        openInvoices: _toNum(json['open_invoices']).toInt(),
         accountNumber: json['account_number'] as String?,
         lastPaymentAt: json['last_payment_at'] == null
             ? null
@@ -81,8 +90,8 @@ class ResellerInvoiceSummary {
       ResellerInvoiceSummary(
         id: json['id'].toString(),
         status: json['status'] as String? ?? 'draft',
-        totalAmount: (json['total_amount'] as num?) ?? 0,
-        balanceDue: (json['balance_due'] as num?) ?? 0,
+        totalAmount: _toNum(json['total_amount']),
+        balanceDue: _toNum(json['balance_due']),
         invoiceNumber: json['invoice_number'] as String?,
         issuedAt: json['issued_at'] == null
             ? null
@@ -119,7 +128,7 @@ class ResellerAccountDetail {
         id: json['id'].toString(),
         subscriberName: json['subscriber_name'] as String? ?? '',
         status: json['status'] as String? ?? 'active',
-        openBalance: (json['open_balance'] as num?) ?? 0,
+        openBalance: _toNum(json['open_balance']),
         subscriptions: (json['subscriptions'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(ResellerSubscriptionRef.fromJson)
@@ -142,9 +151,9 @@ class ResellerTotals {
   final int openInvoices;
 
   factory ResellerTotals.fromJson(Map<String, dynamic> json) => ResellerTotals(
-        accounts: (json['accounts'] as num?)?.toInt() ?? 0,
-        openBalance: (json['open_balance'] as num?) ?? 0,
-        openInvoices: (json['open_invoices'] as num?)?.toInt() ?? 0,
+        accounts: _toNum(json['accounts']).toInt(),
+        openBalance: _toNum(json['open_balance']),
+        openInvoices: _toNum(json['open_invoices']).toInt(),
       );
 }
 
@@ -167,11 +176,15 @@ class ResellerDashboard {
     required this.accounts,
     required this.totals,
     required this.alerts,
+    this.openTickets = 0,
   });
 
   final List<ResellerAccount> accounts;
   final ResellerTotals totals;
   final List<ResellerAlert> alerts;
+
+  /// Open CRM tickets across the page's accounts (0 when CRM unreachable).
+  final int openTickets;
 
   factory ResellerDashboard.fromJson(Map<String, dynamic> json) =>
       ResellerDashboard(
@@ -185,6 +198,57 @@ class ResellerDashboard {
             .cast<Map<String, dynamic>>()
             .map(ResellerAlert.fromJson)
             .toList(),
+        openTickets: (json['open_tickets'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One CRM support ticket on a managed account
+/// (GET /reseller/accounts/{id}/tickets).
+class ResellerTicket {
+  ResellerTicket({
+    required this.id,
+    required this.subject,
+    this.status,
+    this.priority,
+    this.createdAt,
+  });
+
+  final String id;
+  final String subject;
+  final String? status;
+  final String? priority;
+  final DateTime? createdAt;
+
+  bool get isOpen =>
+      status == 'open' ||
+      status == 'in_progress' ||
+      status == 'waiting_on_agent';
+
+  factory ResellerTicket.fromJson(Map<String, dynamic> json) => ResellerTicket(
+        id: json['id'].toString(),
+        subject: json['subject'] as String? ?? 'Ticket',
+        status: json['status'] as String?,
+        priority: json['priority'] as String?,
+        createdAt: json['created_at'] == null
+            ? null
+            : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
+      );
+}
+
+/// Tickets payload with the CRM-availability soft-failure flag.
+class ResellerTicketsPage {
+  ResellerTicketsPage({required this.items, required this.crmAvailable});
+
+  final List<ResellerTicket> items;
+  final bool crmAvailable;
+
+  factory ResellerTicketsPage.fromJson(Map<String, dynamic> json) =>
+      ResellerTicketsPage(
+        items: (json['items'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerTicket.fromJson)
+            .toList(),
+        crmAvailable: json['crm_available'] as bool? ?? true,
       );
 }
 
