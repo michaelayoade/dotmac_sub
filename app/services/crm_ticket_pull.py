@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -511,6 +511,10 @@ def sync_ticket_by_id(
 # Synced tickets in these states get a comment look on every incremental run:
 # new CRM comments do not bump the ticket's updated_at, so the watermark alone
 # would miss them. Closed-ticket comments are rare and heal in the full sweep.
+# Overlap margin on the incremental watermark: tolerates clock skew between
+# the CRM and us, and tickets updated while a previous run was paging.
+WATERMARK_MARGIN = timedelta(minutes=10)
+
 OPEN_SWEEP_STATUSES = (
     "new",
     "open",
