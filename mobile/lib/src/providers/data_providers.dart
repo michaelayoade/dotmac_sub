@@ -49,6 +49,13 @@ final resellerDashboardProvider =
   return ref.watch(resellerRepositoryProvider).dashboard();
 });
 
+/// 12-month revenue summary for the reseller portal.
+final resellerRevenueProvider =
+    FutureProvider.autoDispose<ResellerRevenue>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).revenue();
+});
+
 /// One managed account's detail (subscriptions + open balance).
 final resellerAccountProvider = FutureProvider.autoDispose
     .family<ResellerAccountDetail, String>((ref, accountId) async {

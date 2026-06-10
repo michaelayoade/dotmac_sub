@@ -22,6 +22,7 @@ import '../features/home/splash_screen.dart';
 import '../features/reseller/reseller_account_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
+import '../features/reseller/reseller_revenue_screen.dart';
 import '../features/service/add_ons_screen.dart';
 import '../features/service/change_plan_screen.dart';
 import '../features/service/data_bundle_screen.dart';
@@ -116,6 +117,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'profile',
             builder: (_, __) => const ResellerProfileScreen(),
+          ),
+          GoRoute(
+            path: 'revenue',
+            builder: (_, __) => const ResellerRevenueScreen(),
           ),
           GoRoute(
             path: 'accounts/:id',

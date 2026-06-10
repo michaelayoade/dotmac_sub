@@ -27,6 +27,11 @@ class ResellerHomeScreen extends ConsumerWidget {
             onPressed: () => context.push('/reseller/profile'),
           ),
           IconButton(
+            tooltip: 'Revenue',
+            icon: const Icon(Icons.bar_chart_outlined),
+            onPressed: () => context.push('/reseller/revenue'),
+          ),
+          IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
             onPressed: () => ref.read(authControllerProvider.notifier).logout(),
