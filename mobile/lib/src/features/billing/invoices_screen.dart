@@ -181,18 +181,29 @@ class _OutstandingHeader extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('Outstanding balance',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.onErrorContainer,
-                    )),
-            Text(
-              Fmt.money(amount, currency),
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: scheme.onErrorContainer,
-                    fontWeight: FontWeight.w700,
-                  ),
+            Expanded(
+              child: Text('Outstanding balance',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                      )),
+            ),
+            const SizedBox(width: 12),
+            // Scale the figure down rather than letting it overflow — same
+            // idiom as the dashboard stat cards (a cut-off amount is worse
+            // than a smaller one).
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  Fmt.money(amount, currency),
+                  maxLines: 1,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: scheme.onErrorContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
             ),
           ],
         ),
@@ -295,15 +306,24 @@ class _BalanceCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: Theme.of(context).textTheme.titleMedium),
-            Text(
-              Fmt.money(balance.creditBalance.abs(), balance.currency),
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: color, fontWeight: FontWeight.w700),
+            Expanded(
+              child:
+                  Text(label, style: Theme.of(context).textTheme.titleMedium),
+            ),
+            const SizedBox(width: 12),
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  Fmt.money(balance.creditBalance.abs(), balance.currency),
+                  maxLines: 1,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(color: color, fontWeight: FontWeight.w700),
+                ),
+              ),
             ),
           ],
         ),
