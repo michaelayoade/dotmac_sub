@@ -458,6 +458,14 @@ def build_beat_schedule() -> dict:
             900,
         )
         radius_reap_interval_seconds = max(radius_reap_interval_seconds, 60)
+        # Daily heads-up before a purchased data bundle lapses (push + email).
+        _sync_scheduled_task(
+            session,
+            name="data_bundle_expiry_notifier",
+            task_name="app.tasks.usage.notify_expiring_data_bundles",
+            enabled=usage_enabled,
+            interval_seconds=86400,
+        )
         _sync_scheduled_task(
             session,
             name="radius_session_reaper",

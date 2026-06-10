@@ -252,7 +252,7 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.usage_warning: EventNotificationSpec(
         template_code="usage_warning",
         category="usage",
-        channels=(NotificationChannel.email,),
+        channels=(NotificationChannel.push, NotificationChannel.email),
         subject="Data usage warning — {usage_percent}% used",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -262,11 +262,22 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.usage_exhausted: EventNotificationSpec(
         template_code="usage_exhausted",
         category="usage",
-        channels=(NotificationChannel.email,),
+        channels=(NotificationChannel.push, NotificationChannel.email),
         subject="Data allowance exhausted",
         body=(
             "Dear {subscriber_name},\n\n"
             "Your monthly data allowance on {offer_name} has been exhausted."
+        ),
+    ),
+    EventType.addon_expiring: EventNotificationSpec(
+        template_code="addon_expiring",
+        category="usage",
+        channels=(NotificationChannel.push, NotificationChannel.email),
+        subject="Your data bundle expires soon",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {addon_name} data bundle expires on {expires_at}. "
+            "Unused data lapses with it — top up again to stay connected."
         ),
     ),
     EventType.usage_topped_up: EventNotificationSpec(
@@ -527,6 +538,10 @@ class NotificationHandler:
 
             subscriber = db.get(Subscriber, subscriber_id)
             if channel == NotificationChannel.email and subscriber and subscriber.email:
+                return subscriber.email
+            # Push delivery targets the subscriber's device tokens; the
+            # recipient string is only the in-app record's address field.
+            if channel == NotificationChannel.push and subscriber and subscriber.email:
                 return subscriber.email
             if (
                 channel in {NotificationChannel.sms, NotificationChannel.whatsapp}

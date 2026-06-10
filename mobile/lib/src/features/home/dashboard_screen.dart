@@ -85,6 +85,17 @@ class DashboardScreen extends ConsumerWidget {
       }
     }
 
+    // Plans that sell data bundles get a "Buy data" quick action, distinct
+    // from the wallet "Top up". Gated on the current service actually having
+    // buyable data add-ons — uncapped plans never see it.
+    Subscription? buyDataService;
+    if (currentService != null) {
+      final addons = ref.watch(addonsProvider(currentService.id)).asData?.value;
+      if (addons?.available.any((o) => o.isDataTopup) ?? false) {
+        buyDataService = currentService;
+      }
+    }
+
     // Expiry urgency: lift a renew prompt to the banner area when the current
     // service is within 3 days of lapsing (the payment banner takes priority).
     final daysLeft = currentService?.daysUntilExpiry;
@@ -166,9 +177,9 @@ class DashboardScreen extends ConsumerWidget {
               onTap:
                   needsPayment.isNotEmpty ? () => context.go('/billing') : null,
             ),
-            if (fup?.needsAttention ?? false) ...[
+            if (fup != null && (fup.needsAttention || fup.isApproaching)) ...[
               const SizedBox(height: 12),
-              _FupBanner(fup: fup!, onTap: () => context.go('/usage')),
+              _FupBanner(fup: fup, onTap: () => context.go('/usage')),
             ],
             if (renewMessage != null) ...[
               const SizedBox(height: 12),
@@ -200,10 +211,19 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    label: (dataYesterday ?? 0) > 0
-                        ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
-                        : 'Data today',
-                    value: dataToday == null ? null : Fmt.bytes(dataToday),
+                    // Capped plan: the number prepaid customers actually check
+                    // is what's LEFT, not what's used. Uncapped: today's usage
+                    // with yesterday for scale (from main).
+                    label: currentQuota != null
+                        ? 'Data left'
+                        : (dataYesterday ?? 0) > 0
+                            ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
+                            : 'Data today',
+                    value: currentQuota != null
+                        ? Fmt.gb(currentQuota.remainingGb ?? 0)
+                        : (dataToday == null ? null : Fmt.bytes(dataToday)),
+                    highlight: currentQuota != null &&
+                        (currentQuota.usedFraction ?? 0) >= 0.9,
                     onTap: () => context.go('/usage'),
                   ),
                 ),
@@ -226,7 +246,7 @@ class DashboardScreen extends ConsumerWidget {
             Text('Quick actions',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 10),
-            const _QuickActions(),
+            _QuickActions(buyDataService: buyDataService),
             const SizedBox(height: 20),
 
             // --- Current service (with a switcher when there are several) ---
@@ -511,12 +531,23 @@ class _FupBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final blocked = fup.isBlocked;
-    final bg = blocked ? scheme.errorContainer : scheme.tertiaryContainer;
-    final fg = blocked ? scheme.onErrorContainer : scheme.onTertiaryContainer;
+    final approaching = fup.isApproaching;
+    final bg = blocked
+        ? scheme.errorContainer
+        : approaching
+            ? scheme.secondaryContainer
+            : scheme.tertiaryContainer;
+    final fg = blocked
+        ? scheme.onErrorContainer
+        : approaching
+            ? scheme.onSecondaryContainer
+            : scheme.onTertiaryContainer;
     final text = fup.summary ??
         (blocked
             ? 'Service paused — fair-usage limit reached'
-            : 'Speed reduced — fair-usage limit reached');
+            : approaching
+                ? 'Approaching your fair-usage limit'
+                : 'Speed reduced — fair-usage limit reached');
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(14),
@@ -527,7 +558,14 @@ class _FupBanner extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
             children: [
-              Icon(blocked ? Icons.block : Icons.speed, color: fg),
+              Icon(
+                blocked
+                    ? Icons.block
+                    : approaching
+                        ? Icons.data_usage
+                        : Icons.speed,
+                color: fg,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(text,
@@ -644,19 +682,32 @@ class _StatCard extends StatelessWidget {
 }
 
 class _QuickActions extends StatelessWidget {
-  const _QuickActions();
+  const _QuickActions({this.buyDataService});
 
-  static const _actions = <(IconData, String, String)>[
-    (Icons.payment, 'Pay bill', '/billing'),
-    (Icons.add_card_outlined, 'Top up', '/topup'),
-    (Icons.receipt_long_outlined, 'Invoices', '/billing'),
-    (Icons.data_usage_outlined, 'Usage', '/usage'),
-    (Icons.support_agent_outlined, 'Support', '/support'),
-    (Icons.person_outline, 'Profile', '/profile'),
-  ];
+  /// When set, the plan sells data bundles — show "Buy data" (GB for this
+  /// service) distinct from "Top up" (wallet cash).
+  final Subscription? buyDataService;
 
   @override
   Widget build(BuildContext context) {
+    final buyData = buyDataService;
+    final actions = <(IconData, String, VoidCallback)>[
+      (Icons.payment, 'Pay bill', () => context.go('/billing')),
+      // Wallet cash — pushed so the back gesture returns here.
+      (Icons.add_card_outlined, 'Top up', () => context.push('/topup')),
+      if (buyData != null)
+        (
+          Icons.add_chart_outlined,
+          'Buy data',
+          () => context.push('/service/${buyData.id}/buy-data', extra: buyData),
+        )
+      else
+        (Icons.wifi_outlined, 'Service', () => context.go('/usage')),
+      (Icons.receipt_long_outlined, 'Invoices', () => context.go('/billing')),
+      (Icons.support_agent_outlined, 'Support', () => context.go('/support')),
+      (Icons.person_outline, 'Profile', () => context.go('/profile')),
+    ];
+
     return GridView.count(
       crossAxisCount: 3,
       shrinkWrap: true,
@@ -665,15 +716,8 @@ class _QuickActions extends StatelessWidget {
       crossAxisSpacing: 10,
       childAspectRatio: 1.4,
       children: [
-        for (final (icon, label, path) in _actions)
-          _ActionTile(
-            icon: icon,
-            label: label,
-            // Tabs are switched with go; the top-up task is pushed so the
-            // back gesture returns here instead of exiting the app.
-            onTap: () =>
-                path == '/topup' ? context.push(path) : context.go(path),
-          ),
+        for (final (icon, label, onTap) in actions)
+          _ActionTile(icon: icon, label: label, onTap: onTap),
       ],
     );
   }

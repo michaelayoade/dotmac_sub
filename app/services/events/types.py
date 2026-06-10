@@ -54,11 +54,12 @@ class EventType(enum.Enum):
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"
 
-    # Usage events (4)
+    # Usage events (5)
     usage_recorded = "usage.recorded"
     usage_warning = "usage.warning"
     usage_exhausted = "usage.exhausted"
     usage_topped_up = "usage.topped_up"
+    addon_expiring = "usage.addon_expiring"
 
     # Operations - Provisioning events (3)
     provisioning_started = "provisioning.started"

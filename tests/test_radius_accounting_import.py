@@ -143,6 +143,53 @@ def test_import_persists_last_update_at(
     assert local.status_type == AccountingStatus.interim
 
 
+def test_refresh_window_round_robins_instead_of_starving(
+    db_session, subscription, tmp_path, monkeypatch
+):
+    """An unchanging ghost must not pin the refresh window: with batch=1, the
+    second pass must attempt the session the first pass skipped."""
+    engine = _make_radacct(tmp_path, monkeypatch)
+    credential = _credential(db_session, subscription)
+    ghost_start = datetime.now(UTC) - timedelta(days=30)
+    live_update = datetime.now(UTC) - timedelta(minutes=3)
+    # Stalest session: a ghost whose radacct row never changes.
+    _insert_radacct_row(
+        engine,
+        radacctid=1,
+        acctsessionid="ghost-1",
+        username=credential.username,
+        acctstarttime=ghost_start.isoformat(),
+        acctupdatetime=ghost_start.isoformat(),
+        acctinputoctets=10,
+        acctoutputoctets=10,
+    )
+    # Fresher session that would starve under stalest-first ordering.
+    _insert_radacct_row(
+        engine,
+        radacctid=2,
+        acctsessionid="live-1",
+        username=credential.username,
+        acctstarttime=live_update.isoformat(),
+        acctupdatetime=live_update.isoformat(),
+        acctinputoctets=20,
+        acctoutputoctets=20,
+    )
+    usage_service.import_radius_accounting(db_session)  # ingest both via cursor
+
+    monkeypatch.setattr(usage_service, "_RADIUS_REFRESH_BATCH", 1)
+    usage_service.import_radius_accounting(db_session)  # refresh attempts ghost
+    usage_service.import_radius_accounting(db_session)  # must attempt live-1
+
+    sessions = {
+        s.session_id: s
+        for s in db_session.query(RadiusAccountingSession)
+        .filter(RadiusAccountingSession.access_credential_id == credential.id)
+        .all()
+    }
+    assert sessions["ghost-1"].refresh_attempted_at is not None
+    assert sessions["live-1"].refresh_attempted_at is not None
+
+
 def test_refresh_pass_picks_up_in_place_stop(
     db_session, subscription, tmp_path, monkeypatch
 ):

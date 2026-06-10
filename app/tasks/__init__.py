@@ -116,6 +116,7 @@ from app.tasks.tr069 import (
 )
 from app.tasks.usage import (
     import_radius_accounting,
+    notify_expiring_data_bundles,
     reap_stale_radius_sessions,
     run_usage_rating,
 )
@@ -177,6 +178,7 @@ __all__ = [
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",
+    "notify_expiring_data_bundles",
     "cleanup_nas_backups",
     "refresh_expiring_tokens",
     "check_token_health",

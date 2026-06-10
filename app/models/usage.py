@@ -105,6 +105,12 @@ class RadiusAccountingSession(Base):
     # session keeps advancing this via interim updates; an open session whose
     # last_update_at goes stale is a ghost and gets reaped.
     last_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the importer's refresh pass last re-read this session from radacct.
+    # Round-robin key: least-recently-attempted first, so unchanging ghosts
+    # can't pin the refresh window.
+    refresh_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     input_octets: Mapped[int | None] = mapped_column(BigInteger)
     output_octets: Mapped[int | None] = mapped_column(BigInteger)
     terminate_cause: Mapped[str | None] = mapped_column(String(120))

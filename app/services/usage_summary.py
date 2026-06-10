@@ -78,13 +78,85 @@ _FUP_STATUS_MAP = {
 }
 
 
+_PERIOD_WORDS = {"daily": "day", "weekly": "week", "monthly": "month"}
+
+
+def _policy_terms_line(
+    *, action: str, threshold_gb: float, reduction: float | None, period: str
+) -> str:
+    """Customer-readable policy terms, shown even while healthy — e.g.
+    "Speed reduced to 25% after 500 GB each month"."""
+    period_word = _PERIOD_WORDS.get(period, period)
+    limit = f"{threshold_gb:g} GB"
+    if action == "block":
+        return f"Access pauses after {limit} each {period_word}"
+    if reduction is not None:
+        kept = max(0.0, 100.0 - reduction)
+        return f"Speed reduces to {kept:g}% after {limit} each {period_word}"
+    return f"Fair-usage limit applies after {limit} each {period_word}"
+
+
+def _current_bucket_used_gb(db: Session, sub_id) -> float | None:
+    """used_gb of the subscription's current-period quota bucket (no create)."""
+    from app.models.usage import QuotaBucket
+
+    now = datetime.now(UTC)
+    bucket = (
+        db.query(QuotaBucket)
+        .filter(QuotaBucket.subscription_id == sub_id)
+        .filter(QuotaBucket.period_start <= now)
+        .filter(QuotaBucket.period_end > now)
+        .order_by(QuotaBucket.period_start.desc())
+        .first()
+    )
+    if bucket is None:
+        return None
+    return float(bucket.used_gb or 0)
+
+
+def _fup_warn_ratio(db: Session) -> float:
+    """Lowest configured usage-warning threshold (same knob the enforcement
+    task warns at), default 0.8."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+    from app.services.usage import _parse_warning_thresholds
+
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.usage, "usage_warning_thresholds"
+    )
+    parsed = _parse_warning_thresholds(str(raw) if raw is not None else None)
+    return float(parsed[0]) if parsed else 0.8
+
+
+def _nearest_enforcement_rule(db: Session, offer_id):
+    """The lowest-threshold active throttle/block rule for the offer — the one
+    the customer will hit first. None when the offer has no active FUP policy."""
+    from app.models.fup import FupAction, FupPolicy, FupRule
+
+    rows = (
+        db.query(FupRule)
+        .join(FupPolicy, FupPolicy.id == FupRule.policy_id)
+        .filter(FupPolicy.offer_id == offer_id)
+        .filter(FupPolicy.is_active.is_(True))
+        .filter(FupRule.is_active.is_(True))
+        .filter(FupRule.action.in_([FupAction.reduce_speed, FupAction.block]))
+        .all()
+    )
+    if not rows:
+        return None
+    from app.services.fup import _threshold_gb
+
+    return min(rows, key=_threshold_gb)
+
+
 def fup_summary(db: Session, subscriber_id: str) -> dict | None:
     """Customer-facing Fair-Usage status for the caller's subscriptions.
 
     Reads the per-subscription ``FupState`` the enforcement engine maintains and
-    surfaces the most severe active state. Returns ``None`` when the caller has
-    no subscriptions (nothing to report); otherwise always returns a summary so
-    the app gets a definite signal (``full_speed`` when nothing is breached).
+    surfaces the most severe active state. Healthy subscribers still get the
+    policy terms plus headroom (threshold_gb / used_gb / gb_until_throttle) so
+    the app can pre-warn ("approaching") before enforcement instead of only
+    reporting it after. Returns ``None`` when the caller has no subscriptions.
     """
     if db is None:
         return None
@@ -92,36 +164,89 @@ def fup_summary(db: Session, subscriber_id: str) -> dict | None:
     from app.models.fup_state import FupState
     from app.services.fup_state import fup_state as fup_state_mgr
 
-    sub_ids = _subscription_ids(db, subscriber_id)
-    if not sub_ids:
+    subs = (
+        db.query(Subscription.id, Subscription.offer_id)
+        .filter(Subscription.subscriber_id == subscriber_id)
+        .all()
+    )
+    if not subs:
         return None
 
     best: tuple[int, FupState] | None = None  # (severity, state)
-    for sub_id in sub_ids:
+    best_sub = None  # (sub_id, offer_id) the state belongs to
+    for sub_id, offer_id in subs:
         state = fup_state_mgr.get(db, str(sub_id))
         if state is None:
             continue
         _, severity = _FUP_STATUS_MAP.get(state.action_status.value, ("full_speed", 0))
         if best is None or severity > best[0]:
             best = (severity, state)
+            best_sub = (sub_id, offer_id)
 
-    if best is None or best[0] == 0:
-        return {"status": "full_speed", "is_reduced": False}
+    # Policy context (threshold / headroom / terms). When enforced, use the
+    # enforced subscription; otherwise the one closest to its threshold.
+    from app.services.fup import _threshold_gb as rule_threshold_gb
+
+    context = None  # (ratio, used_gb, rule_row)
+    context_candidates = [best_sub] if (best and best[0] >= 2 and best_sub) else subs
+    for sub_id, offer_id in context_candidates:
+        if offer_id is None:
+            continue
+        used = _current_bucket_used_gb(db, sub_id)
+        rule = _nearest_enforcement_rule(db, offer_id)
+        if rule is None:
+            continue
+        ratio = (used or 0.0) / rule_threshold_gb(rule)
+        if context is None or ratio > context[0]:
+            context = (ratio, used or 0.0, rule)
+
+    threshold_gb = used_gb = gb_until = usage_ratio = None
+    policy_summary = None
+    if context is not None:
+        usage_ratio, used_gb, rule_row = context
+        threshold_gb = rule_threshold_gb(rule_row)
+        gb_until = max(0.0, threshold_gb - used_gb)
+        policy_summary = _policy_terms_line(
+            action=rule_row.action.value,
+            threshold_gb=threshold_gb,
+            reduction=rule_row.speed_reduction_percent,
+            period=rule_row.consumption_period.value,
+        )
+
+    if best is None or best[0] < 2:
+        status = "full_speed"
+        summary = None
+        if usage_ratio is not None and usage_ratio >= _fup_warn_ratio(db):
+            status = "approaching"
+            summary = (
+                f"{min(usage_ratio, 1.0):.0%} of your fair-use allowance used "
+                f"— {gb_until:g} GB until it applies"
+            )
+        return {
+            "status": status,
+            "is_reduced": False,
+            "threshold_gb": threshold_gb,
+            "used_gb": used_gb,
+            "gb_until_throttle": gb_until,
+            "usage_ratio": usage_ratio,
+            "policy_summary": policy_summary,
+            "summary": summary,
+        }
 
     state = best[1]
     status, _ = _FUP_STATUS_MAP.get(state.action_status.value, ("full_speed", 0))
-    rule = (
+    rule_obj = (
         db.query(FupRule).filter(FupRule.id == state.active_rule_id).first()
         if state.active_rule_id
         else None
     )
     reduction = state.speed_reduction_percent
     summary = None
-    if rule is not None:
-        period = {"daily": "day", "weekly": "week", "monthly": "month"}.get(
-            rule.consumption_period.value, rule.consumption_period.value
+    if rule_obj is not None:
+        period = _PERIOD_WORDS.get(
+            rule_obj.consumption_period.value, rule_obj.consumption_period.value
         )
-        limit = f"{rule.threshold_amount:g} {rule.threshold_unit.value.upper()}"
+        limit = f"{rule_obj.threshold_amount:g} {rule_obj.threshold_unit.value.upper()}"
         if status == "blocked":
             summary = f"Access paused after {limit} this {period}"
         elif reduction is not None:
@@ -134,9 +259,14 @@ def fup_summary(db: Session, subscriber_id: str) -> dict | None:
         "status": status,
         "is_reduced": status in {"throttled", "blocked"},
         "speed_reduction_percent": reduction,
-        "active_rule_name": rule.name if rule is not None else None,
+        "active_rule_name": rule_obj.name if rule_obj is not None else None,
         "resets_at": _as_utc(state.cap_resets_at),
         "summary": summary,
+        "threshold_gb": threshold_gb,
+        "used_gb": used_gb,
+        "gb_until_throttle": gb_until,
+        "usage_ratio": usage_ratio,
+        "policy_summary": policy_summary,
     }
 
 

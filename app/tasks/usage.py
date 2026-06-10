@@ -54,6 +54,61 @@ def reap_stale_radius_sessions():
         session.close()
 
 
+@celery_app.task(name="app.tasks.usage.notify_expiring_data_bundles")
+def notify_expiring_data_bundles():
+    """Warn customers whose data bundles lapse within the next 24 hours.
+
+    Runs daily, so each bundle falls inside the [now, now+24h) window exactly
+    once — natural dedupe without extra state. Emits usage.addon_expiring,
+    which the notification handler fans out to push + email."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.catalog import AddOn, SubscriptionAddOn
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    session = SessionLocal()
+    try:
+        now = datetime.now(UTC)
+        window_end = now + timedelta(hours=24)
+        rows = (
+            session.query(SubscriptionAddOn, AddOn)
+            .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+            .filter(AddOn.grant_gb.isnot(None))
+            .filter(SubscriptionAddOn.end_at.isnot(None))
+            .filter(SubscriptionAddOn.end_at >= now)
+            .filter(SubscriptionAddOn.end_at < window_end)
+            .all()
+        )
+        notified = 0
+        for sub_add_on, add_on in rows:
+            subscription = sub_add_on.subscription
+            if subscription is None:
+                continue
+            grant = (add_on.grant_gb or 0) * int(sub_add_on.quantity or 1)
+            emit_event(
+                session,
+                EventType.addon_expiring,
+                {
+                    "subscription_id": str(sub_add_on.subscription_id),
+                    "account_id": str(subscription.subscriber_id),
+                    "addon_name": add_on.name,
+                    "grant_gb": str(grant),
+                    "expires_at": sub_add_on.end_at.isoformat(),
+                },
+                subscription_id=sub_add_on.subscription_id,
+                account_id=subscription.subscriber_id,
+            )
+            notified += 1
+        session.commit()
+        return {"notified": notified}
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.usage.meter_usage_into_quota")
 def meter_usage_into_quota():
     """Roll imported RADIUS accounting into the current period's quota buckets
