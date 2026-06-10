@@ -59,9 +59,10 @@ class ResellerServiceRequestsScreen extends ConsumerWidget {
               ? ListView(children: const [
                   Padding(
                     padding: EdgeInsets.symmetric(vertical: 48),
-                    child: Center(
-                        child: Text('No service requests yet — submit one '
-                            'with the button below.')),
+                    child: EmptyState(
+                        icon: Icons.assignment_outlined,
+                        message: 'No service requests yet — submit one '
+                            'with the button below.'),
                   ),
                 ])
               : ListView(

@@ -86,6 +86,19 @@ class Me {
     return '$firstName $lastName'.trim();
   }
 
+  /// fullName cleaned up for greetings: title-cased, consecutive duplicate
+  /// words collapsed ("Hyperia hyperia" -> "Hyperia").
+  String get greetingName {
+    final words = fullName.split(RegExp(r'\s+'));
+    final out = <String>[];
+    for (final w in words) {
+      if (w.isEmpty) continue;
+      if (out.isNotEmpty && out.last.toLowerCase() == w.toLowerCase()) continue;
+      out.add(w[0].toUpperCase() + w.substring(1));
+    }
+    return out.isEmpty ? fullName : out.join(' ');
+  }
+
   String get initials {
     final f = firstName.isNotEmpty ? firstName[0] : '';
     final l = lastName.isNotEmpty ? lastName[0] : '';

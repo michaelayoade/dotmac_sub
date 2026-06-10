@@ -55,7 +55,9 @@ class ResellerRevenueScreen extends ConsumerWidget {
               if (r.monthly.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 32),
-                  child: Center(child: Text('No paid invoices yet.')),
+                  child: EmptyState(
+                      icon: Icons.bar_chart_outlined,
+                      message: 'No paid invoices yet.'),
                 )
               else ...[
                 Text('Paid revenue — last ${r.monthly.length} months',

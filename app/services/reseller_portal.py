@@ -21,7 +21,13 @@ from app.models.billing import (
 )
 from app.models.catalog import CatalogOffer, Subscription
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
+from app.models.subscriber import (
+    Reseller,
+    ResellerUser,
+    Subscriber,
+    SubscriberStatus,
+    UserType,
+)
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services.common import coerce_uuid
@@ -429,25 +435,101 @@ def get_remember_max_age(db: Session | None = None) -> int:
     return _session_ttl_seconds(remember=True, db=db)
 
 
+ACCOUNT_ORDER_FIELDS = ("created_at", "balance", "overdue", "name")
+ACCOUNT_STATUS_FILTERS = ("overdue", "suspended")
+
+
+def _apply_account_search(query, search: str | None):
+    if not search:
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.filter(
+        (Subscriber.first_name.ilike(pattern))
+        | (Subscriber.last_name.ilike(pattern))
+        | (Subscriber.email.ilike(pattern))
+        | (Subscriber.account_number.ilike(pattern))
+        | (Subscriber.phone.ilike(pattern))
+    )
+
+
+def _open_invoice_subquery(db: Session):
+    """Per-account open balance / open + overdue invoice counts."""
+    from sqlalchemy import case
+
+    open_statuses = (
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.overdue,
+    )
+    return (
+        db.query(
+            Invoice.account_id.label("aid"),
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
+            func.count(Invoice.id).label("open_invoices"),
+            func.sum(case((Invoice.status == InvoiceStatus.overdue, 1), else_=0)).label(
+                "overdue_invoices"
+            ),
+        )
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_(open_statuses))
+        .group_by(Invoice.account_id)
+        .subquery()
+    )
+
+
+def _filtered_accounts_query(
+    db: Session,
+    reseller_id: str,
+    search: str | None,
+    status_filter: str | None,
+    invoice_sq,
+):
+    query = _customer_accounts_query(db, reseller_id).outerjoin(
+        invoice_sq, invoice_sq.c.aid == Subscriber.id
+    )
+    query = _apply_account_search(query, search)
+    if status_filter == "overdue":
+        query = query.filter(func.coalesce(invoice_sq.c.overdue_invoices, 0) > 0)
+    elif status_filter == "suspended":
+        query = query.filter(
+            Subscriber.status.in_(
+                [SubscriberStatus.suspended, SubscriberStatus.blocked]
+            )
+        )
+    return query
+
+
 def list_accounts(
     db: Session,
     reseller_id: str,
     limit: int,
     offset: int,
     search: str | None = None,
+    status_filter: str | None = None,
+    order_by: str = "created_at",
+    order_dir: str = "desc",
 ) -> list[dict]:
-    query = _customer_accounts_query(db, reseller_id)
-    if search:
-        pattern = f"%{search.strip()}%"
-        query = query.filter(
-            (Subscriber.first_name.ilike(pattern))
-            | (Subscriber.last_name.ilike(pattern))
-            | (Subscriber.email.ilike(pattern))
-            | (Subscriber.account_number.ilike(pattern))
+    invoice_sq = _open_invoice_subquery(db)
+    query = _filtered_accounts_query(db, reseller_id, search, status_filter, invoice_sq)
+
+    descending = order_dir != "asc"
+    if order_by == "balance":
+        sort_col = func.coalesce(invoice_sq.c.open_balance, 0)
+    elif order_by == "overdue":
+        sort_col = func.coalesce(invoice_sq.c.overdue_invoices, 0)
+    elif order_by == "name":
+        sort_col = func.lower(
+            func.coalesce(Subscriber.display_name, Subscriber.first_name)
         )
-    accounts = (
-        query.order_by(Subscriber.created_at.desc()).limit(limit).offset(offset).all()
+        descending = order_dir == "desc"
+    else:
+        sort_col = Subscriber.created_at
+    query = query.order_by(
+        sort_col.desc() if descending else sort_col.asc(),
+        Subscriber.id,
     )
+
+    accounts = query.limit(limit).offset(offset).all()
     account_ids = [account.id for account in accounts]
     if not account_ids:
         return []
@@ -507,16 +589,10 @@ def count_accounts(
     db: Session,
     reseller_id: str,
     search: str | None = None,
+    status_filter: str | None = None,
 ) -> int:
-    query = _customer_accounts_query(db, reseller_id)
-    if search:
-        pattern = f"%{search.strip()}%"
-        query = query.filter(
-            (Subscriber.first_name.ilike(pattern))
-            | (Subscriber.last_name.ilike(pattern))
-            | (Subscriber.email.ilike(pattern))
-            | (Subscriber.account_number.ilike(pattern))
-        )
+    invoice_sq = _open_invoice_subquery(db)
+    query = _filtered_accounts_query(db, reseller_id, search, status_filter, invoice_sq)
     return query.with_entities(func.count(Subscriber.id)).scalar() or 0
 
 
