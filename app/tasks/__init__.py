@@ -23,6 +23,7 @@ from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
 )
+from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_ticket_push import (
     push_comment_to_crm,
     push_ticket_to_crm,
@@ -167,6 +168,7 @@ __all__ = [
     "sync_crm_ticket",
     "push_ticket_to_crm",
     "push_comment_to_crm",
+    "push_crm_billing_snapshots",
     "run_scheduled_export",
     "run_export_job",
     "retry_failed_events",
