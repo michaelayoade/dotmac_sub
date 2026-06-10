@@ -52,16 +52,28 @@ dev_dependencies:
   # Generates the native splash screens from the brand assets below
   # (`dart run flutter_native_splash:create` after changing them).
   flutter_native_splash: ^2.4.1
+  # Generates launcher icons from the square brand icon below
+  # (`dart run flutter_launcher_icons` after changing it).
+  flutter_launcher_icons: ^0.14.1
 
-# Splash: brand wordmark centered on white. NOTE: the wordmark (219x50) is
-# fine here and on the login screen, but a proper LAUNCHER ICON still needs
-# square artwork >=512px — flutter_launcher_icons is intentionally not wired
-# until that asset exists.
+# Launcher icon: the same square brand icon the web app serves as its PWA
+# icon (static/branding/favicon/icon-512.png).
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/images/app_icon.png
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: assets/images/app_icon.png
+  remove_alpha_ios: true
+
+# Splash: brand wordmark centered on white; Android 12+ uses the square
+# brand icon (its splash style masks a centered icon, not a wordmark).
 flutter_native_splash:
   color: "#ffffff"
   image: assets/images/login_logo.png
   android_12:
     color: "#ffffff"
+    image: assets/images/app_icon.png
 
 flutter:
   uses-material-design: true
