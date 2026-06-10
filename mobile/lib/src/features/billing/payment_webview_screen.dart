@@ -3,6 +3,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../config/env.dart';
 import '../../models/payment_flow.dart';
+import '../../models/reseller.dart';
 import '../../models/topup.dart';
 
 /// Provider-agnostic checkout arguments shared by invoice payment and top-up.
@@ -48,6 +49,17 @@ class CheckoutArgs {
           'payment_flow': 'account_topup',
           'topup_intent_id': t.intentId,
         },
+      );
+
+  /// Reseller consolidated payment — metadata comes ready-made from the
+  /// intent endpoint (payment_flow: reseller_consolidated).
+  factory CheckoutArgs.resellerBilling(ResellerPayIntent i) => CheckoutArgs(
+        providerType: i.providerType,
+        reference: i.reference,
+        amount: i.amount,
+        currency: i.currency,
+        publicKey: i.publicKey,
+        metadata: i.metadata,
       );
 }
 

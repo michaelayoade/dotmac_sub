@@ -35,6 +35,15 @@ class MfaConfirmRequest(BaseModel):
     code: str = Field(min_length=4, max_length=10)
 
 
+class PayIntentRequest(BaseModel):
+    amount: str = Field(min_length=1, max_length=20)
+
+
+class PayVerifyRequest(BaseModel):
+    reference: str = Field(min_length=1, max_length=120)
+    provider: str | None = Field(default=None, max_length=40)
+
+
 def _reseller_id(db: Session, principal: dict) -> str:
     """Return the caller's reseller_id, or 403 for non-reseller principals."""
     if principal.get("principal_type") != "subscriber":
@@ -185,6 +194,56 @@ def my_reseller_mfa_confirm(
     return reseller_portal.get_profile(
         db, reseller_id, str(principal["subscriber_id"])
     ) or {"mfa_enabled": True}
+
+
+@router.get("/billing")
+def my_reseller_billing(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Consolidated billing statement for the caller's reseller account."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    return reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+
+
+@router.post("/billing/pay/intent")
+def my_reseller_pay_intent(
+    payload: PayIntentRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Start a consolidated payment; returns the gateway checkout context the
+    app feeds into its payment webview (same shape as the web checkout)."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    try:
+        return reseller_portal_billing.start_consolidated_payment(
+            db, reseller_id, payload.amount
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/billing/pay/verify")
+def my_reseller_pay_verify(
+    payload: PayVerifyRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Verify a gateway charge and record it against the reseller's billing
+    account. The service rejects references issued to anyone else."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    try:
+        return reseller_portal_billing.verify_and_record_consolidated_payment(
+            db, reseller_id, payload.reference, provider=payload.provider
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/accounts/{account_id}/tickets")
