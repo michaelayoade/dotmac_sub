@@ -71,15 +71,19 @@ def _payload_snapshot(ticket: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_crm_ticket_pull(db: Session, job: IntegrationJob, run_id) -> dict[str, Any]:
-    client = _crm_client_from_job(job)
-    filter_config = job.filter_config or {}
-    page_size = int(filter_config.get("page_size") or filter_config.get("limit") or 200)
-    max_pages = int(filter_config.get("max_pages") or 50)
-    sync_comments = bool(filter_config.get("sync_comments", True))
+def make_ticket_recorder(
+    db: Session,
+    run_id,
+    *,
+    entity_type: str = "ticket",
+    direction: str = "pull",
+    skip_actions: tuple[str, ...] = ("unchanged",),
+):
+    """Per-ticket IntegrationRecord callback for pull_tickets.
 
-    local_by_splynx = load_local_subscriber_map(db)
-    subscriber_cache = build_subscriber_cache_from_map(local_by_splynx, client)
+    Unchanged tickets are not recorded by default — a steady-state run would
+    otherwise write thousands of no-op rows per day.
+    """
 
     def record_ticket(
         crm_ticket: dict[str, Any],
@@ -88,11 +92,13 @@ def run_crm_ticket_pull(db: Session, job: IntegrationJob, run_id) -> dict[str, A
         error: str | None,
         local_ticket_id,
     ) -> None:
+        if action in skip_actions:
+            return
         db.add(
             IntegrationRecord(
                 run_id=run_id,
-                entity_type=job.entity_type or "ticket",
-                direction=job.direction or "pull",
+                entity_type=entity_type,
+                direction=direction,
                 local_id=str(local_ticket_id) if local_ticket_id else None,
                 remote_id=_value(crm_ticket.get("id")),
                 remote_number=_value(crm_ticket.get("number")),
@@ -107,6 +113,19 @@ def run_crm_ticket_pull(db: Session, job: IntegrationJob, run_id) -> dict[str, A
             )
         )
 
+    return record_ticket
+
+
+def run_crm_ticket_pull(db: Session, job: IntegrationJob, run_id) -> dict[str, Any]:
+    client = _crm_client_from_job(job)
+    filter_config = job.filter_config or {}
+    page_size = int(filter_config.get("page_size") or filter_config.get("limit") or 200)
+    max_pages = int(filter_config.get("max_pages") or 50)
+    sync_comments = bool(filter_config.get("sync_comments", True))
+
+    local_by_splynx = load_local_subscriber_map(db)
+    subscriber_cache = build_subscriber_cache_from_map(local_by_splynx, client)
+
     result = pull_tickets(
         db,
         client=client,
@@ -115,9 +134,120 @@ def run_crm_ticket_pull(db: Session, job: IntegrationJob, run_id) -> dict[str, A
         sync_comments=sync_comments,
         subscriber_cache=subscriber_cache,
         local_by_splynx=local_by_splynx,
-        record_callback=record_ticket,
+        record_callback=make_ticket_recorder(
+            db,
+            run_id,
+            entity_type=job.entity_type or "ticket",
+            direction=job.direction or "pull",
+        ),
     )
     return result.as_dict()
+
+
+def run_scheduled_pull(
+    db: Session,
+    *,
+    client: CRMClient | None = None,
+    limit: int = 200,
+    max_pages: int = 50,
+    full: bool = False,
+) -> dict[str, Any]:
+    """Beat-scheduled CRM ticket pull with run history and alerting.
+
+    Records an IntegrationRun (+ per-change IntegrationRecords) against the
+    active crm/pull_tickets job so scheduled runs show up in the admin
+    Integrations UI alongside manual ones. Falls back to an unrecorded pull
+    when no such job is configured.
+    """
+    import logging
+
+    from app.models.integration import IntegrationRun, IntegrationRunStatus
+    from app.services.crm_ticket_pull import (
+        WATERMARK_MARGIN,
+        latest_crm_updated_at,
+    )
+
+    logger = logging.getLogger(__name__)
+
+    since = None
+    if not full:
+        watermark = latest_crm_updated_at(db)
+        if watermark:
+            since = watermark - WATERMARK_MARGIN
+
+    job = (
+        db.query(IntegrationJob)
+        .filter(
+            IntegrationJob.adapter_key == "crm",
+            IntegrationJob.action == "pull_tickets",
+            IntegrationJob.is_active.is_(True),
+        )
+        .first()
+    )
+    run = None
+    record_callback = None
+    if job is not None:
+        run = IntegrationRun(
+            job_id=job.id,
+            status=IntegrationRunStatus.running,
+            trigger="scheduled_full" if full else "scheduled",
+            requested_by="celery-beat",
+        )
+        db.add(run)
+        db.flush()
+        record_callback = make_ticket_recorder(
+            db,
+            run.id,
+            entity_type=job.entity_type or "ticket",
+            direction=job.direction or "pull",
+        )
+
+    try:
+        result = pull_tickets(
+            db,
+            client=client,
+            limit=limit,
+            max_pages=max_pages,
+            since=since,
+            record_callback=record_callback,
+        )
+    except Exception as exc:
+        if run is not None:
+            run.status = IntegrationRunStatus.failed
+            run.error = str(exc)
+            run.finished_at = datetime.now(UTC)
+            db.commit()
+        raise
+
+    metrics = {
+        "mode": "incremental" if since else "full",
+        "since": since.isoformat() if since else None,
+        **result.as_dict(),
+    }
+    if run is not None:
+        run.status = (
+            IntegrationRunStatus.failed
+            if result.errors and not result.fetched
+            else IntegrationRunStatus.success
+        )
+        run.metrics = metrics
+        run.finished_at = datetime.now(UTC)
+        if job is not None:
+            job.last_run_at = run.finished_at
+        db.commit()
+
+    if result.errors:
+        logger.warning(
+            "crm_ticket_pull_errors count=%d first=%s",
+            len(result.errors),
+            result.errors[0],
+        )
+    if since and result.skipped_unmapped_subscribers:
+        logger.warning(
+            "crm_ticket_pull_unmapped_subscribers count=%d (incremental run)",
+            result.skipped_unmapped_subscribers,
+        )
+    return metrics
 
 
 def run_sync_job(db: Session, job: IntegrationJob, run_id) -> dict[str, Any] | None:
