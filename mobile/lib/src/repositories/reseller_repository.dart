@@ -84,6 +84,25 @@ class ResellerRepository {
         data: {'method_id': methodId, 'code': code}));
   }
 
+  /// GET /reseller/billing — consolidated statement.
+  Future<ResellerBillingSummary> billing() async {
+    final data = await guard(() => dio.get('/reseller/billing'));
+    return ResellerBillingSummary.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// POST /reseller/billing/pay/intent — start a consolidated payment.
+  Future<ResellerPayIntent> payIntent(String amount) async {
+    final data = await guard(() =>
+        dio.post('/reseller/billing/pay/intent', data: {'amount': amount}));
+    return ResellerPayIntent.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// POST /reseller/billing/pay/verify — confirm + record the charge.
+  Future<void> payVerify(String reference) async {
+    await guard(() => dio
+        .post('/reseller/billing/pay/verify', data: {'reference': reference}));
+  }
+
   /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
   Future<ResellerTicketsPage> accountTickets(String accountId) async {
     final data =

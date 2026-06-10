@@ -389,3 +389,80 @@ class ResellerRevenueMonth {
         count: (json['count'] as num?)?.toInt() ?? 0,
       );
 }
+
+/// Consolidated billing statement (GET /reseller/billing).
+class ResellerBillingSummary {
+  ResellerBillingSummary({
+    required this.totalOutstanding,
+    required this.unallocatedBalance,
+    this.recentPayments = const [],
+  });
+
+  final double totalOutstanding;
+  final double unallocatedBalance;
+  final List<ResellerPaymentSummary> recentPayments;
+
+  factory ResellerBillingSummary.fromJson(Map<String, dynamic> json) =>
+      ResellerBillingSummary(
+        totalOutstanding: asDouble(json['total_outstanding']),
+        unallocatedBalance: asDouble(json['unallocated_balance']),
+        recentPayments: (json['recent_payments'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerPaymentSummary.fromJson)
+            .toList(),
+      );
+}
+
+class ResellerPaymentSummary {
+  ResellerPaymentSummary({
+    required this.amount,
+    this.currency = 'NGN',
+    this.method,
+    this.receivedAt,
+  });
+
+  final double amount;
+  final String currency;
+  final String? method;
+  final DateTime? receivedAt;
+
+  factory ResellerPaymentSummary.fromJson(Map<String, dynamic> json) =>
+      ResellerPaymentSummary(
+        amount: asDouble(json['amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        method: (json['method'] ?? json['payment_method'])?.toString(),
+        receivedAt: json['received_at'] == null
+            ? null
+            : DateTime.tryParse(json['received_at'].toString())?.toLocal(),
+      );
+}
+
+/// Gateway checkout context (POST /reseller/billing/pay/intent).
+class ResellerPayIntent {
+  ResellerPayIntent({
+    required this.providerType,
+    required this.reference,
+    required this.amount,
+    required this.currency,
+    this.publicKey,
+    this.metadata = const {},
+  });
+
+  final String providerType;
+  final String reference;
+  final double amount;
+  final String currency;
+  final String? publicKey;
+  final Map<String, String> metadata;
+
+  factory ResellerPayIntent.fromJson(Map<String, dynamic> json) =>
+      ResellerPayIntent(
+        providerType: json['provider_type'] as String? ?? 'paystack',
+        reference: json['reference'].toString(),
+        amount: asDouble(json['requested_amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        publicKey: json['provider_public_key'] as String?,
+        metadata: ((json['checkout_metadata'] as Map?) ?? const {})
+            .map((k, v) => MapEntry(k.toString(), v.toString())),
+      );
+}

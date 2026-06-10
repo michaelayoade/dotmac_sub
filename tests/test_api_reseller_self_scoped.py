@@ -294,3 +294,55 @@ def test_mfa_setup_and_confirm_flow(db_session, monkeypatch):
         principal=principal,
     )
     assert out["mfa_enabled"] is True
+
+
+def test_billing_endpoints_scope_and_translate_errors(monkeypatch):
+    from app.services import reseller_portal_billing
+
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "reseller_id_for_subscriber",
+        lambda db, sid: "res-1",
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        reseller_portal_billing,
+        "get_billing_account_summary",
+        lambda db, rid: (
+            captured.setdefault("summary_rid", rid) or {"total_outstanding": 5}
+        ),
+    )
+    out = reseller_api.my_reseller_billing(db=None, principal=_subscriber_principal())
+    assert out == {"total_outstanding": 5}
+    assert captured["summary_rid"] == "res-1"
+
+    def _bad_amount(db, rid, amount):
+        raise ValueError("Payment amount must be greater than 0")
+
+    monkeypatch.setattr(
+        reseller_portal_billing, "start_consolidated_payment", _bad_amount
+    )
+    with pytest.raises(HTTPException) as exc:
+        reseller_api.my_reseller_pay_intent(
+            payload=reseller_api.PayIntentRequest(amount="0"),
+            db=None,
+            principal=_subscriber_principal(),
+        )
+    assert exc.value.status_code == 400
+
+    def _foreign_ref(db, rid, reference, provider=None):
+        raise ValueError("Payment reference was not issued for this billing account")
+
+    monkeypatch.setattr(
+        reseller_portal_billing,
+        "verify_and_record_consolidated_payment",
+        _foreign_ref,
+    )
+    with pytest.raises(HTTPException) as exc:
+        reseller_api.my_reseller_pay_verify(
+            payload=reseller_api.PayVerifyRequest(reference="ref-x"),
+            db=None,
+            principal=_subscriber_principal(),
+        )
+    assert exc.value.status_code == 400
