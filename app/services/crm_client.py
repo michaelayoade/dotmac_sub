@@ -240,6 +240,14 @@ class CRMClient:
             f"/api/v1/subscribers/{subscriber_id}", None, _CACHE_DETAIL_TTL
         )
 
+    def update_subscriber(
+        self, subscriber_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Patch fields on a CRM subscriber (e.g. billing snapshot)."""
+        return self._request(
+            "PATCH", f"/api/v1/subscribers/{subscriber_id}", json_data=payload
+        )
+
     def list_subscribers(
         self,
         *,
