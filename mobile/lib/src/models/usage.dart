@@ -71,6 +71,7 @@ class AccountingSession {
     this.inputOctets,
     this.outputOctets,
     this.terminateCause,
+    this.framedIpAddress,
   });
 
   final String id;
@@ -87,6 +88,10 @@ class AccountingSession {
   final int? inputOctets;
   final int? outputOctets;
   final String? terminateCause;
+
+  /// The IP the NAS assigned this session (RADIUS Framed-IP-Address) — the
+  /// subscriber's live address, present even for dynamically-addressed plans.
+  final String? framedIpAddress;
 
   /// Total bytes transferred (down + up). RADIUS input = from the NAS toward
   /// the subscriber's perspective varies by vendor; we just sum both.
@@ -108,6 +113,24 @@ class AccountingSession {
         inputOctets: (json['input_octets'] as num?)?.toInt(),
         outputOctets: (json['output_octets'] as num?)?.toInt(),
         terminateCause: json['terminate_cause'] as String?,
+        framedIpAddress: json['framed_ip_address'] as String?,
+      );
+}
+
+/// Live throughput for the customer's active subscription, subscriber
+/// perspective. Mirrors BandwidthStats from api/bandwidth.py (we bind only
+/// the download/upload fields — rx/tx are NAS-perspective).
+class LiveBandwidth {
+  LiveBandwidth({this.downloadBps, this.uploadBps});
+
+  final double? downloadBps;
+  final double? uploadBps;
+
+  bool get hasSignal => (downloadBps ?? 0) > 0 || (uploadBps ?? 0) > 0;
+
+  factory LiveBandwidth.fromJson(Map<String, dynamic> json) => LiveBandwidth(
+        downloadBps: (json['download_bps'] as num?)?.toDouble(),
+        uploadBps: (json['upload_bps'] as num?)?.toDouble(),
       );
 }
 

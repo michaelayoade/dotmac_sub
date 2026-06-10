@@ -47,6 +47,21 @@ class Fmt {
     return '${value.toStringAsFixed(digits)} ${units[unit]}';
   }
 
+  /// Link rate: decimal units (1 Mbps = 1,000,000 bps), unlike [bytes].
+  static String bps(num? value) {
+    final v = (value ?? 0).toDouble();
+    if (v <= 0) return '0 bps';
+    const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+    var amount = v;
+    var unit = 0;
+    while (amount >= 1000 && unit < units.length - 1) {
+      amount /= 1000;
+      unit++;
+    }
+    final digits = amount >= 100 || unit == 0 ? 0 : 1;
+    return '${amount.toStringAsFixed(digits)} ${units[unit]}';
+  }
+
   static String gb(num value) =>
       '${value.toStringAsFixed(value >= 100 ? 0 : 1)} GB';
 

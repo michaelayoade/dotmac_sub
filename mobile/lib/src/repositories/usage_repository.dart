@@ -42,4 +42,12 @@ class UsageRepository {
         dio.get('/me/usage-summary', queryParameters: {'period': period}));
     return UsageSummary.fromJson(data as Map<String, dynamic>);
   }
+
+  /// GET /bandwidth/my/stats — current throughput for the subscriber's active
+  /// subscription (subscriber-perspective download/upload).
+  Future<LiveBandwidth> liveBandwidth({String period = '1h'}) async {
+    final data = await guard(() =>
+        dio.get('/bandwidth/my/stats', queryParameters: {'period': period}));
+    return LiveBandwidth.fromJson(data as Map<String, dynamic>);
+  }
 }

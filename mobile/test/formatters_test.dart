@@ -40,4 +40,13 @@ void main() {
       expect(Fmt.uptime(future), 'just now');
     });
   });
+
+  group('Fmt.bps', () {
+    test('formats decimal link rates', () {
+      expect(Fmt.bps(null), '0 bps');
+      expect(Fmt.bps(950), '950 bps');
+      expect(Fmt.bps(12000000), '12.0 Mbps');
+      expect(Fmt.bps(1500000000), '1.5 Gbps');
+    });
+  });
 }

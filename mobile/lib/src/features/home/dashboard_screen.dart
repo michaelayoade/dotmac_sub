@@ -132,6 +132,7 @@ class DashboardScreen extends ConsumerWidget {
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(usageSummaryProvider('today'));
           ref.invalidate(quotaBucketsProvider);
+          ref.invalidate(liveBandwidthProvider);
           await Future.wait([
             ref.read(subscriptionsProvider.future),
             ref.read(invoicesProvider.future),
@@ -144,6 +145,9 @@ class DashboardScreen extends ConsumerWidget {
               session: activeSession,
               known: sessions.hasValue,
               ipAddress: currentService?.ipv4Address,
+              live: activeSession != null
+                  ? ref.watch(liveBandwidthProvider).asData?.value
+                  : null,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
@@ -315,6 +319,7 @@ class _ConnectionBanner extends StatelessWidget {
     required this.session,
     required this.known,
     this.ipAddress,
+    this.live,
   });
 
   /// The active session, or null when offline. Only meaningful when [known].
@@ -323,8 +328,12 @@ class _ConnectionBanner extends StatelessWidget {
   /// True once the sessions request has resolved with data.
   final bool known;
 
-  /// The current service's IPv4 address, when assigned.
+  /// Fallback IP when the live session carries no framed address
+  /// (statically-assigned plans).
   final String? ipAddress;
+
+  /// Current throughput, when the bandwidth poller has a recent sample.
+  final LiveBandwidth? live;
 
   @override
   Widget build(BuildContext context) {
@@ -341,7 +350,9 @@ class _ConnectionBanner extends StatelessWidget {
       text = 'Checking connection…';
     } else if (session != null) {
       final start = session!.sessionStart;
-      final ip = ipAddress;
+      // The session's framed IP is the live address (covers dynamic plans);
+      // the subscription's assigned IP is the fallback.
+      final ip = session!.framedIpAddress ?? ipAddress;
       bg = scheme.secondaryContainer;
       fg = scheme.onSecondaryContainer;
       icon = Icons.wifi;
@@ -349,6 +360,8 @@ class _ConnectionBanner extends StatelessWidget {
         'Connected',
         if (start != null) 'up ${Fmt.uptime(start)}',
         if (ip != null && ip.isNotEmpty) ip,
+        if (live?.hasSignal ?? false)
+          '↓ ${Fmt.bps(live!.downloadBps)} ↑ ${Fmt.bps(live!.uploadBps)}',
       ].join(' · ');
     } else {
       bg = scheme.errorContainer;
