@@ -357,6 +357,21 @@ def get_celery_config() -> dict:
     return config
 
 
+def _entry_expires_seconds(interval_seconds: int) -> int:
+    """Message expiry for a periodic task.
+
+    A periodic message that hasn't been consumed within its own interval is
+    obsolete — its successor is already queued behind it. Expiring it lets a
+    backlogged worker discard stale duplicates instead of executing hours of
+    identical runs back to back (the default queue once held 115 queued copies
+    of one cache refresh). Day-or-longer tasks get 12h: still ample room for
+    queue latency, but a dead queue can't accumulate days of business runs.
+    """
+    if interval_seconds >= 86400:
+        return 43200
+    return interval_seconds
+
+
 def _interval_to_beat_schedule(task_id, interval_seconds: int):
     """Beat schedule object for an interval task.
 
@@ -1496,14 +1511,16 @@ def build_beat_schedule() -> dict:
             if task.schedule_type != ScheduleType.interval:
                 continue
             interval_seconds = max(task.interval_seconds or 0, 1)
+            options: dict = {"expires": _entry_expires_seconds(interval_seconds)}
+            if task.task_name in TR069_TASK_QUEUE_NAMES:
+                options["queue"] = "acs"
             schedule[f"scheduled_task_{task.id}"] = {
                 "task": task.task_name,
                 "schedule": _interval_to_beat_schedule(task.id, interval_seconds),
                 "args": task.args_json or [],
                 "kwargs": task.kwargs_json or {},
+                "options": options,
             }
-            if task.task_name in TR069_TASK_QUEUE_NAMES:
-                schedule[f"scheduled_task_{task.id}"]["options"] = {"queue": "acs"}
     except Exception:
         logger.exception("Failed to build Celery beat schedule.")
     finally:
