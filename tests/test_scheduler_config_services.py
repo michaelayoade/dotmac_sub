@@ -835,3 +835,14 @@ class TestIntervalToBeatSchedule:
 
         result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 7 * 86400)
         assert result == timedelta(days=7)
+
+
+class TestEntryExpires:
+    """Periodic messages self-discard once their successor is queued."""
+
+    def test_sub_daily_expiry_equals_interval(self):
+        assert scheduler_config._entry_expires_seconds(300) == 300
+        assert scheduler_config._entry_expires_seconds(3600) == 3600
+
+    def test_daily_tasks_get_twelve_hours(self):
+        assert scheduler_config._entry_expires_seconds(86400) == 43200
