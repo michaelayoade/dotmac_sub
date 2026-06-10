@@ -677,9 +677,14 @@ def my_create_ticket(
         channel=TicketChannel.web,
         subscriber_id=UUID(subscriber_id),
     )
-    return support_service.tickets.create(
+    ticket = support_service.tickets.create(
         db, ticket_payload, actor_id=subscriber_id, request=request
     )
+    from app.services.crm_ticket_push import enqueue_crm_ticket_push
+
+    if getattr(ticket, "id", None):
+        enqueue_crm_ticket_push(ticket.id, source="me_ticket_create")
+    return ticket
 
 
 @router.get(
@@ -721,10 +726,15 @@ def my_add_ticket_comment(
     customer can never create a staff-only note."""
     subscriber_id = _subscriber_id(principal)
     _owned_ticket(db, subscriber_id, ticket_id)
-    return support_service.tickets.create_comment(
+    comment = support_service.tickets.create_comment(
         db,
         ticket_id,
         TicketCommentCreate(body=payload.body, is_internal=False),
         actor_id=subscriber_id,
         request=request,
     )
+    from app.services.crm_ticket_push import enqueue_crm_comment_push
+
+    if getattr(comment, "id", None):
+        enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
+    return comment

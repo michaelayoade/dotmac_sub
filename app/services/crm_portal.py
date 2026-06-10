@@ -342,6 +342,10 @@ def handle_ticket_create(
             ),
             actor_id=None,
         )
+        from app.services.crm_ticket_push import enqueue_crm_ticket_push
+
+        if getattr(ticket, "id", None):
+            enqueue_crm_ticket_push(ticket.id, source="portal_ticket_create")
         return {"success": True, "ticket": _ticket_to_dict(ticket)}
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to create portal ticket: %s", e)
@@ -379,7 +383,7 @@ def handle_ticket_comment(
             author_person_id = coerce_uuid(ticket.subscriber_id)
         except (TypeError, ValueError):
             author_person_id = None
-        support_service.TicketComments.create(
+        comment = support_service.TicketComments.create(
             db,
             ticket=ticket,
             payload=TicketCommentCreate(
@@ -391,6 +395,10 @@ def handle_ticket_comment(
             actor_id=None,
         )
         db.commit()
+        from app.services.crm_ticket_push import enqueue_crm_comment_push
+
+        if getattr(comment, "id", None):
+            enqueue_crm_comment_push(comment.id, source="portal_ticket_comment")
         return {"success": True}
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to add portal ticket comment: %s", e)
