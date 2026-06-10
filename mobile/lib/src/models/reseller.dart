@@ -1,5 +1,14 @@
 // Models for the reseller API (app/api/reseller.py, mounted at /api/v1).
 
+/// Money fields come back as JSON **strings** (serialized `Decimal`, e.g.
+/// "749012363.52"); counts come back as numbers. Parse defensively so a String
+/// value never throws a `num` type-cast at runtime.
+num _toNum(dynamic v) {
+  if (v is num) return v;
+  if (v is String) return num.tryParse(v) ?? 0;
+  return 0;
+}
+
 class ResellerAccount {
   ResellerAccount({
     required this.id,
@@ -24,8 +33,8 @@ class ResellerAccount {
         id: json['id'].toString(),
         subscriberName: json['subscriber_name'] as String? ?? '',
         status: json['status'] as String? ?? 'active',
-        openBalance: (json['open_balance'] as num?) ?? 0,
-        openInvoices: (json['open_invoices'] as num?)?.toInt() ?? 0,
+        openBalance: _toNum(json['open_balance']),
+        openInvoices: _toNum(json['open_invoices']).toInt(),
         accountNumber: json['account_number'] as String?,
         lastPaymentAt: json['last_payment_at'] == null
             ? null
@@ -80,8 +89,8 @@ class ResellerInvoiceSummary {
       ResellerInvoiceSummary(
         id: json['id'].toString(),
         status: json['status'] as String? ?? 'draft',
-        totalAmount: (json['total_amount'] as num?) ?? 0,
-        balanceDue: (json['balance_due'] as num?) ?? 0,
+        totalAmount: _toNum(json['total_amount']),
+        balanceDue: _toNum(json['balance_due']),
         invoiceNumber: json['invoice_number'] as String?,
         issuedAt: json['issued_at'] == null
             ? null
@@ -118,7 +127,7 @@ class ResellerAccountDetail {
         id: json['id'].toString(),
         subscriberName: json['subscriber_name'] as String? ?? '',
         status: json['status'] as String? ?? 'active',
-        openBalance: (json['open_balance'] as num?) ?? 0,
+        openBalance: _toNum(json['open_balance']),
         subscriptions: (json['subscriptions'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(ResellerSubscriptionRef.fromJson)
@@ -141,9 +150,9 @@ class ResellerTotals {
   final int openInvoices;
 
   factory ResellerTotals.fromJson(Map<String, dynamic> json) => ResellerTotals(
-        accounts: (json['accounts'] as num?)?.toInt() ?? 0,
-        openBalance: (json['open_balance'] as num?) ?? 0,
-        openInvoices: (json['open_invoices'] as num?)?.toInt() ?? 0,
+        accounts: _toNum(json['accounts']).toInt(),
+        openBalance: _toNum(json['open_balance']),
+        openInvoices: _toNum(json['open_invoices']).toInt(),
       );
 }
 
