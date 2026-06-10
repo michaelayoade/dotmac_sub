@@ -347,6 +347,10 @@ def get_celery_config() -> dict:
             "app.tasks.olt_firmware.rollback": long_limits,
             "app.tasks.provisioning.run_bulk_activation_job": long_limits,
             "app.tasks.provisioning.run_service_migration_job": long_limits,
+            # Whole-base daily runs (4k+ subscriptions); the default 900s
+            # limit can kill a catch-up billing or dunning pass mid-run.
+            "app.tasks.billing.run_invoice_cycle": long_limits,
+            "app.tasks.collections.run_dunning": long_limits,
         }
     )
     config["task_annotations"] = annotations
