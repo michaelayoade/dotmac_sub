@@ -192,7 +192,11 @@ def _build_migration_offers(
     if not current_offer:
         return []
 
-    all_portal_offers = get_available_portal_offers(db)
+    # No subscription arg on purpose (migration targets live in OTHER plan
+    # families), but reseller scoping still applies via the subscriber.
+    all_portal_offers = get_available_portal_offers(
+        db, subscriber_id=subscription.subscriber_id
+    )
     offers: list[CatalogOffer] = []
     for offer in all_portal_offers:
         family = str(offer.plan_family or "").strip().lower()
