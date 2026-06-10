@@ -255,6 +255,9 @@ def evaluate_fup_rules() -> dict[str, int]:
                                     "used_gb": current_usage,
                                 }
                             )
+                        _maybe_queue_repeat_upsell(
+                            session, sub, bucket, rule_result, pending_notifs
+                        )
                         break
                     elif rule_result.get("action") == "reduce_speed":
                         emit_event(
@@ -288,6 +291,9 @@ def evaluate_fup_rules() -> dict[str, int]:
                                     "used_gb": current_usage,
                                 }
                             )
+                        _maybe_queue_repeat_upsell(
+                            session, sub, bucket, rule_result, pending_notifs
+                        )
                         break
             elif prior_status == "none" and warn_enabled:
                 # Not yet enforced — warn once when usage crosses the configured
@@ -353,6 +359,75 @@ def evaluate_fup_rules() -> dict[str, int]:
         session.close()
 
 
+def _hit_fup_in_window(session, subscriber_id, start, end) -> bool:
+    """Did this subscriber get a throttled/blocked notification in [start, end)?
+    Enforcement notifications fire once per transition, so one per cycle —
+    making them a usable cross-cycle FUP-hit history without a new table."""
+    from app.models.notification import Notification
+
+    return (
+        session.query(Notification.id)
+        .filter(Notification.subscriber_id == subscriber_id)
+        .filter(Notification.event_type.in_(["fup_throttled", "fup_blocked"]))
+        .filter(Notification.created_at >= start)
+        .filter(Notification.created_at < end)
+        .first()
+        is not None
+    )
+
+
+def _maybe_queue_repeat_upsell(session, sub, bucket, rule_result, pending_notifs):
+    """Habitual-maxing nudge: enforced this cycle AND in >=1 of the previous
+    two cycles (>=2 of the last 3) -> suggest a bigger plan, once per cycle.
+
+    Best-effort: a failure here must never affect enforcement itself."""
+    try:
+        from app.models.notification import Notification
+
+        if bucket is None or not bucket.period_start or not bucket.period_end:
+            return
+        period_len = bucket.period_end - bucket.period_start
+        if period_len.total_seconds() <= 0:
+            return
+
+        # Once per cycle.
+        already = (
+            session.query(Notification.id)
+            .filter(Notification.subscriber_id == sub.subscriber_id)
+            .filter(Notification.event_type == "fup_repeat_upsell")
+            .filter(Notification.created_at >= bucket.period_start)
+            .first()
+        )
+        if already is not None:
+            return
+
+        prior_hits = sum(
+            1
+            for k in (1, 2)
+            if _hit_fup_in_window(
+                session,
+                sub.subscriber_id,
+                bucket.period_start - period_len * k,
+                bucket.period_start - period_len * (k - 1),
+            )
+        )
+        if prior_hits < 1:
+            return
+
+        pending_notifs.append(
+            {
+                "subscriber_id": sub.subscriber_id,
+                "kind": "repeat_upsell",
+                "rule_name": rule_result.get("name"),
+                "threshold_gb": rule_result.get("threshold_gb"),
+                "used_gb": None,
+                "cycles": prior_hits + 1,
+            }
+        )
+    except Exception:
+        logger.warning("repeat-upsell check failed", exc_info=True)
+
+
 def _build_fup_notification(kind: str, rule_name, threshold_gb, used_gb):
     """(subject, body) for a customer FUP notification."""
     plan = rule_name or "your plan"
@@ -367,6 +442,13 @@ def _build_fup_notification(kind: str, rule_name, threshold_gb, used_gb):
             "Speed reduced",
             f"You've reached the fair-usage limit on {plan}. Your speed is "
             "reduced until your next cycle — top up to restore full speed.",
+        )
+    if kind == "repeat_upsell":
+        return (
+            "Hitting your limit every month?",
+            f"You've reached the fair-usage limit on {plan} several months "
+            "in a row. A bigger plan gives you more full-speed data every "
+            "cycle — see your upgrade options in the app.",
         )
     # approaching
     try:
@@ -385,6 +467,7 @@ _FUP_NOTIFICATION_CHANNELS = {
     "approaching": ("push",),
     "throttled": ("push", "email"),
     "blocked": ("push", "email"),
+    "repeat_upsell": ("push", "email"),
 }
 
 
