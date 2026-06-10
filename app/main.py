@@ -75,7 +75,7 @@ _CORE_ROUTER_SPECS = [
     ("app.api.billing", "webhook_router", "api", "none"),
     ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.crm_webhooks", "router", "api", "none"),
-    ("app.api.search", "router", "api", "user"),
+    ("app.api.search", "router", "api", "readperm:customer:read"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
     ("app.web.auth", "router", "web", "none"),
@@ -90,10 +90,10 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.web.public", "router", "web", "none"),
     ("app.web.admin.network_routers", "router", "admin", "none"),
     ("app.websocket.router", "router", "ws", "none"),
-    ("app.api.notifications", "router", "api", "user"),
-    ("app.api.external", "router", "api", "user"),
+    ("app.api.notifications", "router", "api", "perm:monitoring"),
+    ("app.api.external", "router", "api", "admin"),
     ("app.api.billing", "router", "api", "user"),
-    ("app.api.files", "router", "api", "user"),
+    ("app.api.files", "router", "api", "admin"),
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
@@ -114,29 +114,29 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.network_catalog", "router", "api", "user"),
     ("app.api.domains_network_fiber", "router", "api", "user"),
     ("app.api.domains_usage", "router", "api", "user"),
-    ("app.api.imports", "router", "api", "user"),
+    ("app.api.imports", "router", "api", "perm:system:settings"),
     ("app.api.audit", "router", "api", "none"),
-    ("app.api.gis", "router", "api", "user"),
-    ("app.api.geocoding", "router", "api", "user"),
-    ("app.api.qualification", "router", "api", "user"),
-    ("app.api.settings", "router", "api", "user"),
-    ("app.api.webhooks", "router", "api", "user"),
-    ("app.api.connectors", "router", "api", "user"),
-    ("app.api.integrations", "router", "api", "user"),
+    ("app.api.gis", "router", "api", "admin"),
+    ("app.api.geocoding", "router", "api", "readperm:network:read"),
+    ("app.api.qualification", "router", "api", "perm:provisioning"),
+    ("app.api.settings", "router", "api", "perm:system:settings"),
+    ("app.api.webhooks", "router", "api", "admin"),
+    ("app.api.connectors", "router", "api", "admin"),
+    ("app.api.integrations", "router", "api", "admin"),
     ("app.api.scheduler", "router", "api", "user"),
-    ("app.api.comms", "router", "api", "user"),
-    ("app.api.analytics", "router", "api", "user"),
-    ("app.api.fiber_plant", "router", "api", "user"),
-    ("app.api.nextcloud_talk", "router", "api", "user"),
-    ("app.api.wireguard", "router", "api", "user"),
-    ("app.api.nas", "router", "api", "user"),
+    ("app.api.comms", "router", "api", "admin"),
+    ("app.api.analytics", "router", "api", "admin"),
+    ("app.api.fiber_plant", "router", "api", "perm:network:fiber"),
+    ("app.api.nextcloud_talk", "router", "api", "admin"),
+    ("app.api.wireguard", "router", "api", "perm:network:vpn"),
+    ("app.api.nas", "router", "api", "perm:network:nas"),
     ("app.api.router_management", "router", "api", "user"),
     ("app.api.router_management", "jump_host_router", "api", "user"),
     ("app.api.provisioning", "router", "api", "user"),
-    ("app.api.bandwidth", "router", "api", "user"),
-    ("app.api.validation", "router", "api", "user"),
-    ("app.api.defaults", "router", "api", "user"),
-    ("app.api.zabbix", "router", "api", "user"),
+    ("app.api.bandwidth", "router", "api", "perm:monitoring"),
+    ("app.api.validation", "router", "api", "admin"),
+    ("app.api.defaults", "router", "api", "perm:system:settings"),
+    ("app.api.zabbix", "router", "api", "perm:monitoring"),
     ("app.api.wireguard", "public_router", "api", "none"),
 ]
 
@@ -172,6 +172,18 @@ def _router_dependencies(mode: str):
         from app.api.deps import require_role
 
         return [Depends(require_role("admin"))]
+    # "perm:<domain>" guards the whole router with method-aware permissions:
+    # GET/HEAD/OPTIONS need <domain>:read, mutations need <domain>:write.
+    if mode.startswith("perm:"):
+        from app.services.auth_dependencies import require_method_permission
+
+        domain = mode[len("perm:") :]
+        return [Depends(require_method_permission(f"{domain}:read", f"{domain}:write"))]
+    # "readperm:<key>" guards a read-only router with a single permission.
+    if mode.startswith("readperm:"):
+        from app.services.auth_dependencies import require_permission
+
+        return [Depends(require_permission(mode[len("readperm:") :]))]
     return None
 
 
