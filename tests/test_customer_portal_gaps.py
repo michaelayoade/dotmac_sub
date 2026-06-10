@@ -1961,3 +1961,43 @@ class TestPlaywrightPortalRoutes:
         defaults = CustomerUsagePage.goto.__defaults__
         assert defaults is not None
         assert defaults[0] == "/portal/usage"
+
+
+class TestDashboardLiveFramedIp:
+    def test_live_framed_ip_prefers_open_session(self, db_session, subscription):
+        from datetime import timedelta
+
+        from app.models.usage import AccountingStatus, RadiusAccountingSession
+        from app.services.customer_portal_context import _live_framed_ips
+
+        now = datetime.now(UTC)
+        db_session.add_all(
+            [
+                # Closed session with a stale framed IP — must not win.
+                RadiusAccountingSession(
+                    subscription_id=subscription.id,
+                    session_id="closed-1",
+                    status_type=AccountingStatus.stop,
+                    session_start=now - timedelta(hours=5),
+                    session_end=now - timedelta(hours=4),
+                    framed_ip_address="100.64.0.1",
+                ),
+                RadiusAccountingSession(
+                    subscription_id=subscription.id,
+                    session_id="open-1",
+                    status_type=AccountingStatus.interim,
+                    session_start=now - timedelta(hours=1),
+                    framed_ip_address="100.64.9.9",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        ips = _live_framed_ips(db_session, [subscription.id])
+        assert ips == {subscription.id: "100.64.9.9"}
+
+    def test_live_framed_ip_empty_without_open_sessions(self, db_session, subscription):
+        from app.services.customer_portal_context import _live_framed_ips
+
+        assert _live_framed_ips(db_session, [subscription.id]) == {}
+        assert _live_framed_ips(db_session, []) == {}

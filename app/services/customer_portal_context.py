@@ -122,6 +122,34 @@ def get_dashboard_template_context(db: Session, session: dict) -> tuple[str, dic
     )
 
 
+def _live_framed_ips(db: Session, subscription_ids: list) -> dict:
+    """Framed IP of each subscription's open accounting session, newest first.
+
+    The live session address covers dynamically-addressed plans, where the
+    subscription's own ipv4_address is empty; callers fall back to the
+    assigned IP when there is no open session.
+    """
+    if not subscription_ids:
+        return {}
+    from app.models.usage import RadiusAccountingSession
+
+    rows = (
+        db.query(
+            RadiusAccountingSession.subscription_id,
+            RadiusAccountingSession.framed_ip_address,
+        )
+        .filter(RadiusAccountingSession.subscription_id.in_(subscription_ids))
+        .filter(RadiusAccountingSession.session_end.is_(None))
+        .filter(RadiusAccountingSession.framed_ip_address.isnot(None))
+        .order_by(RadiusAccountingSession.session_start.desc())
+        .all()
+    )
+    ips: dict = {}
+    for sub_id, ip in rows:
+        ips.setdefault(sub_id, ip)
+    return ips
+
+
 def _format_address(address) -> str:
     if not address:
         return "No address on file"
@@ -244,6 +272,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     )
 
     services = []
+    live_ips = _live_framed_ips(db, [s.id for s in subscriptions])
     for subscription in subscriptions:
         offer = subscription.offer
         speed = "N/A"
@@ -263,7 +292,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 name=offer.name if offer else "Service",
                 speed=speed,
                 address=address,
-                ip_address=subscription.ipv4_address,
+                ip_address=live_ips.get(subscription.id) or subscription.ipv4_address,
                 status=subscription.status.value if subscription.status else "pending",
                 monthly_cost=monthly_cost,
             )
