@@ -342,3 +342,148 @@ def test_pull_crm_ticket_maps_via_alias_crm_id(db_session, subscriber):
     assert result.created == 1
     ticket = db_session.query(Ticket).filter(Ticket.number == "30004").one()
     assert ticket.subscriber_id == subscriber.id
+
+
+from datetime import UTC, datetime, timedelta
+
+from app.services.crm_ticket_pull import latest_crm_updated_at
+
+
+class CountingCrmClient(FakeCrmClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.comment_calls: list[str] = []
+
+    def list_ticket_comments(self, ticket_id, **kwargs):
+        self.comment_calls.append(ticket_id)
+        return super().list_ticket_comments(ticket_id, **kwargs)
+
+
+def _crm_ticket(crm_ticket_id, number, updated_at, status="open", **extra):
+    return {
+        "id": crm_ticket_id,
+        "subscriber_id": None,
+        "number": number,
+        "title": f"Acme Ltd (100024296 - 24296)",
+        "status": status,
+        "priority": "normal",
+        "channel": "phone",
+        "is_active": True,
+        "updated_at": updated_at,
+        **extra,
+    }
+
+
+def test_incremental_unchanged_skips_rewrite_and_comments(db_session, subscriber):
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    crm_ticket_id = str(uuid4())
+    ts = "2026-06-09T10:00:00Z"
+    client = CountingCrmClient(
+        tickets=[_crm_ticket(crm_ticket_id, "40001", ts)],
+        subscribers={},
+        comments={crm_ticket_id: []},
+    )
+
+    first = pull_tickets(db_session, client=client)
+    db_session.commit()
+    assert first.created == 1
+    calls_after_first = len(client.comment_calls)
+
+    since = datetime(2026, 6, 9, 9, 0, tzinfo=UTC)
+    second = pull_tickets(db_session, client=client, since=since)
+    db_session.commit()
+
+    assert second.unchanged == 1
+    assert second.created == 0 and second.updated == 0
+    # open-state ticket gets a comment look via the sweep, not the per-ticket
+    # fetch — exactly one extra call for this open ticket.
+    assert len(client.comment_calls) == calls_after_first + 1
+
+
+def test_incremental_stops_at_watermark(db_session, subscriber):
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    new_id, old_id = str(uuid4()), str(uuid4())
+    client = CountingCrmClient(
+        tickets=[
+            _crm_ticket(new_id, "40002", "2026-06-09T12:00:00Z"),
+            _crm_ticket(old_id, "40003", "2026-06-09T08:00:00Z"),
+        ],
+        subscribers={},
+        comments={},
+    )
+    since = datetime(2026, 6, 9, 10, 0, tzinfo=UTC)
+
+    result = pull_tickets(db_session, client=client, since=since)
+
+    assert result.fetched == 1  # stopped before the pre-watermark ticket
+    assert result.created == 1
+
+
+def test_incremental_sweep_pulls_new_comment_on_unchanged_open_ticket(
+    db_session, subscriber
+):
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    crm_ticket_id = str(uuid4())
+    ts = "2026-06-09T10:00:00Z"
+    client = CountingCrmClient(
+        tickets=[_crm_ticket(crm_ticket_id, "40004", ts)],
+        subscribers={},
+        comments={crm_ticket_id: []},
+    )
+    pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    # New CRM comment arrives without bumping the ticket's updated_at.
+    client._comments[crm_ticket_id] = [
+        {"id": str(uuid4()), "body": "Any update?", "is_internal": False}
+    ]
+    since = datetime(2026, 6, 9, 9, 0, tzinfo=UTC)
+    result = pull_tickets(db_session, client=client, since=since)
+    db_session.commit()
+
+    assert result.unchanged == 1
+    assert result.comments_created == 1
+
+
+def test_full_mode_fetches_comments_for_unchanged_closed_ticket(db_session, subscriber):
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    crm_ticket_id = str(uuid4())
+    ts = "2026-06-09T10:00:00Z"
+    client = CountingCrmClient(
+        tickets=[_crm_ticket(crm_ticket_id, "40005", ts, status="closed")],
+        subscribers={},
+        comments={crm_ticket_id: []},
+    )
+    pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    client._comments[crm_ticket_id] = [
+        {"id": str(uuid4()), "body": "Late note", "is_internal": True}
+    ]
+    result = pull_tickets(db_session, client=client)  # full mode: no since
+    db_session.commit()
+
+    assert result.unchanged == 1
+    assert result.comments_created == 1
+
+
+def test_latest_crm_updated_at_watermark(db_session, subscriber):
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    client = CountingCrmClient(
+        tickets=[
+            _crm_ticket(str(uuid4()), "40006", "2026-06-09T12:30:00Z"),
+            _crm_ticket(str(uuid4()), "40007", "2026-06-08T01:00:00Z"),
+        ],
+        subscribers={},
+        comments={},
+    )
+    pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    watermark = latest_crm_updated_at(db_session)
+    assert watermark == datetime(2026, 6, 9, 12, 30, tzinfo=UTC)
