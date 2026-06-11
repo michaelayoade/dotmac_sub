@@ -34,7 +34,7 @@ def _invite_login_route_for_user(_system_user: SystemUser) -> str:
 def _user_invite_expiry_minutes(db: Session) -> int:
     value = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 1440
     try:
-        parsed = int(value)
+        parsed = int(str(value))
     except (TypeError, ValueError):
         return 1440
     return parsed if parsed > 0 else 1440
