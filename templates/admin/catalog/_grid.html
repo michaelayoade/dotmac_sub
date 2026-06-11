@@ -17,6 +17,13 @@
         <option value="ip_address" {% if plan_kind == "ip_address" %}selected{% endif %}>IP Address</option>
         <option value="device_replacement" {% if plan_kind == "device_replacement" %}selected{% endif %}>Device Replacement</option>
     </select>
+    <select name="plan_family" class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        <option value="">All families</option>
+        {% for item in plan_families %}
+        <option value="{{ item }}" {% if plan_family == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
+        {% endfor %}
+        <option value="unclassified" {% if plan_family == "unclassified" %}selected{% endif %}>Unclassified</option>
+    </select>
     <button type="submit" class="inline-flex items-center rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700">Filter</button>
 </form>
 {% endset %}
@@ -34,6 +41,7 @@
     columns=[
         {"key": "name",     "label": "Tariff",        "sortable": true},
         {"key": "category", "label": "Category"},
+        {"key": "family",   "label": "Family"},
         {"key": "type",     "label": "Type"},
         {"key": "plan",     "label": "Plan",         "hidden": true},
         {"key": "speed",    "label": "Bandwidth"},
@@ -75,6 +83,13 @@
             {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
             {{ cat_labels.get(cat_val, cat_val | replace('_', ' ') | title) }}
         </span>
+    {% endcall %}
+    {% call cell_custom("family") %}
+        {% if row.plan_family %}
+        <span class="inline-flex items-center rounded-lg bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{{ row.plan_family | replace('_', ' ') | title }}</span>
+        {% else %}
+        <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">Unclassified</span>
+        {% endif %}
     {% endcall %}
     {{ cell("type", row.service_type.value if row.service_type is not string and row.service_type else row.service_type) }}
     {{ cell_badge("plan", plan_kind_value | replace('_', ' ') | title,
