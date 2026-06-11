@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import statistics
 from collections import Counter
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -37,7 +38,7 @@ from app.db import SessionLocal
 from app.models.billing import Invoice
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services.billing_automation import _resolve_price
+from app.services.billing_automation import _effective_unit_price, _resolve_price
 
 
 def _splynx_median_charge(db) -> dict[str, Decimal]:
@@ -89,11 +90,15 @@ def main() -> None:
         )
         stats["scanned"] = len(subs)
 
+        now = datetime.now(UTC)
         for sub in subs:
-            amount, _currency, _cycle = _resolve_price(db, sub)
-            if amount is None:
+            catalog_amount, _currency, _cycle = _resolve_price(db, sub)
+            if catalog_amount is None:
                 stats["no_local_price"] += 1
                 continue
+            # Use the real billing price: per-subscriber negotiated unit_price
+            # override + any active discount, exactly as run_invoice_cycle bills.
+            amount = _effective_unit_price(sub, Decimal(str(catalog_amount)), now)
             ref = splynx_med.get(str(sub.subscriber_id))
             if ref is None or ref == 0:
                 stats["no_splynx_ref"] += 1
