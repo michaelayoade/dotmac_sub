@@ -93,9 +93,7 @@ def upgrade() -> None:
             sa.Column(
                 "previous_next_billing_at", sa.DateTime(timezone=True), nullable=True
             ),
-            sa.Column(
-                "new_next_billing_at", sa.DateTime(timezone=True), nullable=True
-            ),
+            sa.Column("new_next_billing_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         )
         op.create_index(

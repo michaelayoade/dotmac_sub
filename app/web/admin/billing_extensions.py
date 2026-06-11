@@ -31,16 +31,7 @@ def _context(request: Request, db: Session, extra: dict) -> dict:
 
 
 def _form_context(db: Session, error: str | None = None) -> dict:
-    from app.models.catalog import NasDevice
-    from app.models.network_monitoring import PopSite
-
-    return {
-        "pop_sites": db.query(PopSite).order_by(PopSite.name).all(),
-        "nas_devices": db.query(NasDevice).order_by(NasDevice.name).all(),
-        "scope_types": [item.value for item in ServiceExtensionScope],
-        "max_days": service_extensions_service.MAX_EXTENSION_DAYS,
-        "error": error,
-    }
+    return {**service_extensions_service.scope_options(db), "error": error}
 
 
 def _parse_window(value: str, label: str) -> datetime:

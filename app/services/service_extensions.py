@@ -237,6 +237,21 @@ def apply_extension(
     return extension
 
 
+def scope_options(db: Session) -> dict:
+    """POP sites and NAS devices for the extension form's scope selectors."""
+    from app.models.catalog import NasDevice
+    from app.models.network_monitoring import PopSite
+
+    return {
+        "pop_sites": list(db.scalars(select(PopSite).order_by(PopSite.name)).all()),
+        "nas_devices": list(
+            db.scalars(select(NasDevice).order_by(NasDevice.name)).all()
+        ),
+        "scope_types": [item.value for item in ServiceExtensionScope],
+        "max_days": MAX_EXTENSION_DAYS,
+    }
+
+
 def list_extensions(
     db: Session, *, limit: int = 50, offset: int = 0
 ) -> list[ServiceExtension]:
