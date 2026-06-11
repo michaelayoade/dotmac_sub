@@ -199,6 +199,32 @@ def _resolve_nas_device(
     return None
 
 
+def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
+    """Operative shared secret from the radius ``nas`` table — the value
+    FreeRADIUS actually authenticates this NAS with. Fallback for
+    nas_devices rows whose Fernet-encrypted secret no longer decrypts
+    (key-rotation drift, see 2026-06-11)."""
+    import os
+
+    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    if not dsn or not nas_ip:
+        return None
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT secret FROM nas WHERE nasname = %s LIMIT 1", (nas_ip,)
+            )
+            row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "radius nas-table secret lookup failed for %s: %s", nas_ip, exc
+        )
+        return None
+
+
 def _send_coa_disconnect(
     db: Session,
     nas_device: NasDevice,
@@ -213,9 +239,6 @@ def _send_coa_disconnect(
             "Skipping CoA disconnect for NAS %s (negative-cached).", nas_device.id
         )
         return False
-    if not nas_device.shared_secret:
-        logger.warning("Missing NAS shared secret for CoA disconnect.")
-        return False
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
         logger.warning("Missing NAS host for CoA disconnect.")
@@ -229,10 +252,24 @@ def _send_coa_disconnect(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
-    # Decrypt the shared secret before use
-    decrypted_secret = decrypt_credential(nas_device.shared_secret)
-    if decrypted_secret is None:
-        logger.warning("Missing NAS shared secret for CoA disconnect.")
+    # Resolve the shared secret: nas_devices first, then the radius `nas`
+    # table — the value FreeRADIUS actually authenticates this NAS with.
+    # Many nas_devices rows carry Fernet ciphertext from a rotated key
+    # (decrypt drift), which blocked ALL CoA until 2026-06-11.
+    decrypted_secret = None
+    if nas_device.shared_secret:
+        try:
+            decrypted_secret = decrypt_credential(nas_device.shared_secret)
+        except Exception:  # noqa: BLE001
+            decrypted_secret = None
+    if not decrypted_secret:
+        decrypted_secret = _nas_secret_from_radius_db(str(host))
+    if not decrypted_secret:
+        logger.warning(
+            "No usable shared secret for CoA disconnect to NAS %s "
+            "(nas_devices decrypt failed and no radius.nas row).",
+            host,
+        )
         return False
     client = Client(
         server=host,
@@ -536,35 +573,122 @@ def _remove_mikrotik_address_list(
         return False
 
 
+def _open_radacct_sessions_for_username(username: str) -> list[dict]:
+    """Open sessions straight from radacct (the source of truth).
+
+    The imported RadiusAccountingSession rows lag behind radacct and their
+    subscription_id linkage is unreliable for multi-subscription
+    subscribers, so live sessions were silently missed on suspend/disable
+    (incident 2026-06-11).
+    """
+    import os
+
+    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    if not dsn or not username:
+        return []
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT acctsessionid, host(nasipaddress), "
+                    "host(framedipaddress) FROM radacct "
+                    "WHERE username = %s AND acctstoptime IS NULL",
+                    (username,),
+                )
+                rows = cur.fetchall()
+        return [
+            {"session_id": r[0], "nas_ip": r[1], "framed_ip": r[2] or None}
+            for r in rows
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "radacct open-session lookup failed for %s: %s", username, exc
+        )
+        return []
+
+
+def _nas_device_by_ip(db: Session, nas_ip: str) -> NasDevice | None:
+    if not nas_ip:
+        return None
+    from sqlalchemy import or_
+
+    return (
+        db.query(NasDevice)
+        .filter(
+            or_(
+                NasDevice.nas_ip == nas_ip,
+                NasDevice.management_ip == nas_ip,
+                NasDevice.ip_address == nas_ip,
+            )
+        )
+        .filter(NasDevice.is_active.is_(True))
+        .first()
+    )
+
+
 def disconnect_subscription_sessions(
     db: Session, subscription_id: str, reason: str | None = None
 ) -> int:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    sessions = (
+
+    login = (subscription.login or "").strip()
+
+    # Primary source: open radacct sessions by login. Keyed by session_id
+    # to dedupe against the legacy app-side rows added below.
+    targets: dict[str, tuple[Any, str | None, str, str | None]] = {}
+    for sess in _open_radacct_sessions_for_username(login):
+        nas_device = _nas_device_by_ip(db, sess["nas_ip"])
+        if not nas_device:
+            logger.warning(
+                "No active NasDevice matches NAS IP %s (session %s, user %s)",
+                sess["nas_ip"],
+                sess["session_id"],
+                login,
+            )
+            continue
+        targets[sess["session_id"]] = (
+            nas_device,
+            login,
+            sess["session_id"],
+            sess["framed_ip"],
+        )
+
+    # Secondary source: app-side imported sessions (covers sessions whose
+    # login changed after they started).
+    legacy_sessions = (
         db.query(RadiusAccountingSession)
         .filter(RadiusAccountingSession.subscription_id == subscription.id)
         .filter(RadiusAccountingSession.session_end.is_(None))
         .filter(RadiusAccountingSession.status_type != AccountingStatus.stop)
         .all()
     )
-    if not sessions:
-        return 0
-    framed_ip = subscription.ipv4_address
-
-    # Group sessions by NAS so we open at most one SSH connection per device
-    # for the SSH-kick fallback, instead of one per session.
-    by_nas: dict[Any, list[tuple[Any, str | None, str]]] = {}
-    for session in sessions:
+    for session in legacy_sessions:
+        if session.session_id in targets:
+            continue
         nas_device = _resolve_nas_device(db, session)
         if not nas_device:
             continue
         credential = db.get(AccessCredential, session.access_credential_id)
-        username = credential.username if credential else None
-        by_nas.setdefault(nas_device.id, []).append(
-            (nas_device, username, session.session_id)
+        username = (credential.username if credential else None) or login or None
+        targets[session.session_id] = (
+            nas_device,
+            username,
+            session.session_id,
+            subscription.ipv4_address,
         )
+
+    if not targets:
+        return 0
+
+    # Group sessions by NAS so we open at most one SSH connection per device
+    # for the SSH-kick fallback, instead of one per session.
+    by_nas: dict[Any, list[tuple[Any, str | None, str, str | None]]] = {}
+    for entry in targets.values():
+        by_nas.setdefault(entry[0].id, []).append(entry)
 
     count = 0
     for entries in by_nas.values():
@@ -572,7 +696,7 @@ def disconnect_subscription_sessions(
         # Try CoA for every session first (UDP, no connection cost worth sharing).
         coa_ok: set[int] = set()
         needs_ssh_kick = False
-        for idx, (_, username, session_id) in enumerate(entries):
+        for idx, (_, username, session_id, framed_ip) in enumerate(entries):
             if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
                 coa_ok.add(idx)
                 count += 1
@@ -585,7 +709,7 @@ def disconnect_subscription_sessions(
         # Only open SSH if at least one session needs the fallback.
         try:
             with DeviceProvisioner.ssh_session(nas_device) as ssh:
-                for idx, (_, username, _session_id) in enumerate(entries):
+                for idx, (_, username, _session_id, _framed_ip) in enumerate(entries):
                     if idx in coa_ok:
                         continue
                     if _disconnect_mikrotik_session(db, nas_device, username, ssh=ssh):

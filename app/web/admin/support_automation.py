@@ -54,7 +54,7 @@ def _parse_json_field(raw: str | None, field: str) -> dict:
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:automation:read"))],
 )
 def automation_list(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db)
@@ -65,7 +65,7 @@ def automation_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_new(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db)
@@ -76,7 +76,7 @@ def automation_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_create(
     request: Request,
@@ -134,7 +134,7 @@ def automation_create(
 @router.get(
     "/{rule_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_edit_page(
     request: Request, rule_id: UUID, db: Session = Depends(get_db)
@@ -148,7 +148,7 @@ def automation_edit_page(
 @router.post(
     "/{rule_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_update(
     request: Request,
@@ -193,7 +193,7 @@ def automation_update(
 @router.post(
     "/{rule_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_delete(rule_id: UUID, db: Session = Depends(get_db)):
     automation_service.delete_rule(db, str(rule_id))
@@ -204,7 +204,7 @@ def automation_delete(rule_id: UUID, db: Session = Depends(get_db)):
 @router.post(
     "/{rule_id}/toggle",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_toggle(
     rule_id: UUID,

@@ -253,6 +253,17 @@ def enforce_subscription_reject_ip(
     if subscription.status not in _STATUS_BLOCKED:
         return {"ok": True, "changed": False, "mode": "noop"}
 
+    # Dual-run decision 2026-06-11: do NOT swap blocked/suspended
+    # subscriptions onto reject-pool IPs. Enforcement is the walled-garden
+    # path (Mikrotik-Address-List=suspended + BNG filter chains); the
+    # reject pools (10.11-10.14/16) have no NAT/redirect treatment on the
+    # BNGs, so a swapped customer is black-holed and cannot even reach the
+    # payment portal (incident: cust 100025880 pinned to 10.11.112.38).
+    # The restore branch above stays live so any previously swapped
+    # subscription still recovers its original IP on reactivation.
+    # Re-enable deliberately at Phase 5 if pool-based captive is built out.
+    return {"ok": True, "changed": False, "mode": "noop_block_swap_disabled"}
+
     reject_key = normalize_reject_reason(reject_reason)
 
     # Per-subscriber captive redirect: route to the "negative" pool
