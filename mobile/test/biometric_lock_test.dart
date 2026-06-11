@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,6 +30,18 @@ class _FakeBiometric extends BiometricService {
   }
 }
 
+/// Like [_FakeBiometric], but the prompt stays open until [gate] completes —
+/// lets tests observe the controller while the prompt is in flight.
+class _GatedBiometric extends _FakeBiometric {
+  final gate = Completer<bool>();
+
+  @override
+  Future<bool> authenticate({required String reason}) {
+    authCalls++;
+    return gate.future;
+  }
+}
+
 /// Auth repository stub — returns a fixed user, never hits the network.
 class _FakeAuthRepository extends AuthRepository {
   _FakeAuthRepository(TokenStorage storage)
@@ -40,6 +55,20 @@ class _FakeAuthRepository extends AuthRepository {
 
   @override
   Future<void> logout() async => logoutCalls++;
+}
+
+/// Like [_FakeAuthRepository], but `/auth/me` hangs until [gate] completes —
+/// simulates a slow network during bootstrap.
+class _GatedAuthRepository extends _FakeAuthRepository {
+  _GatedAuthRepository(super.storage);
+
+  final gate = Completer<void>();
+
+  @override
+  Future<Me> me() async {
+    await gate.future;
+    return super.me();
+  }
 }
 
 void main() {
@@ -201,7 +230,8 @@ void main() {
       expect(c.read(authControllerProvider).locked, isFalse);
     });
 
-    test('logout clears the biometric opt-in', () async {
+    test('logout clears the biometric opt-in and any stashed location',
+        () async {
       final ts = TokenStorage();
       await ts.save(accessToken: 'a');
       await ts.setBiometricEnabled(true);
@@ -209,11 +239,143 @@ void main() {
       final c = build(ts, _FakeBiometric(), repo);
       final n = c.read(authControllerProvider.notifier);
       await n.bootstrap();
+      n.stashLockReturnLocation('/billing');
 
       await n.logout();
       expect(c.read(authControllerProvider).isAuthenticated, isFalse);
       expect(await ts.isBiometricEnabled(), isFalse);
       expect(repo.logoutCalls, 1);
+      expect(n.takeLockReturnLocation(), isNull,
+          reason: 'a later login must not bounce to a stale screen');
+    });
+
+    test('bootstrap resolving /auth/me after an unlock must not re-lock',
+        () async {
+      final ts = TokenStorage();
+      await ts.save(accessToken: 'a');
+      await ts.setBiometricEnabled(true);
+      // Cached profile so bootstrap renders the optimistic locked session
+      // while /auth/me is still in flight.
+      await ts.saveProfile(jsonEncode(
+          Me(id: '1', firstName: 'A', lastName: 'B', email: 'a@b.c').toJson()));
+
+      final repo = _GatedAuthRepository(ts);
+      final c = build(ts, _FakeBiometric(), repo);
+      final n = c.read(authControllerProvider.notifier);
+
+      final boot = n.bootstrap();
+      await pumpEventQueue();
+      expect(c.read(authControllerProvider).locked, isTrue,
+          reason: 'optimistic cached session starts locked');
+
+      expect(await n.unlock(), isTrue);
+      expect(c.read(authControllerProvider).locked, isFalse);
+
+      repo.gate.complete();
+      await boot;
+      final s = c.read(authControllerProvider);
+      expect(s.isAuthenticated, isTrue);
+      expect(s.locked, isFalse,
+          reason: 'a late /auth/me must not re-apply the stale launch lock');
+    });
+
+    test('bootstrap does not resurrect a session signed out mid-flight',
+        () async {
+      final ts = TokenStorage();
+      await ts.save(accessToken: 'a');
+      await ts.setBiometricEnabled(true);
+      await ts.saveProfile(jsonEncode(
+          Me(id: '1', firstName: 'A', lastName: 'B', email: 'a@b.c').toJson()));
+
+      final repo = _GatedAuthRepository(ts);
+      final c = build(ts, _FakeBiometric(), repo);
+      final n = c.read(authControllerProvider.notifier);
+
+      final boot = n.bootstrap();
+      await pumpEventQueue();
+      expect(c.read(authControllerProvider).locked, isTrue);
+
+      // "Sign out instead" from the lock screen while /auth/me is in flight.
+      await n.logout();
+      expect(c.read(authControllerProvider).isAuthenticated, isFalse);
+
+      repo.gate.complete();
+      await boot;
+      expect(c.read(authControllerProvider).isAuthenticated, isFalse,
+          reason: 'a late /auth/me must not revive a signed-out session');
+    });
+
+    test('promptActive is true only while the unlock prompt is in flight',
+        () async {
+      final ts = TokenStorage();
+      await ts.save(accessToken: 'a');
+      await ts.setBiometricEnabled(true);
+      final bio = _GatedBiometric();
+      final c = build(ts, bio, _FakeAuthRepository(ts));
+      final n = c.read(authControllerProvider.notifier);
+      await n.bootstrap();
+      expect(n.promptActive, isFalse);
+
+      // The lifecycle observer reads this to suppress pauses caused by the
+      // prompt's own activity (Android prompt-loop fix).
+      final unlocking = n.unlock();
+      await pumpEventQueue();
+      expect(n.promptActive, isTrue);
+
+      bio.gate.complete(true);
+      expect(await unlocking, isTrue);
+      expect(n.promptActive, isFalse);
+      expect(c.read(authControllerProvider).locked, isFalse);
+    });
+
+    test('lockOnResume locks synchronously when armed (no content flash)',
+        () async {
+      final ts = TokenStorage();
+      await ts.save(accessToken: 'a');
+      await ts.setBiometricEnabled(true);
+      final c = build(ts, _FakeBiometric(), _FakeAuthRepository(ts));
+      final n = c.read(authControllerProvider.notifier);
+      await n.bootstrap();
+      await n.unlock();
+
+      final pending = n.lockOnResume();
+      expect(c.read(authControllerProvider).locked, isTrue,
+          reason: 'must lock before any storage/platform await');
+      await pending;
+      expect(c.read(authControllerProvider).locked, isTrue);
+    });
+
+    test('lockOnResume rolls back when biometrics became unavailable',
+        () async {
+      final ts = TokenStorage();
+      await ts.save(accessToken: 'a');
+      await ts.setBiometricEnabled(true);
+      final bio = _FakeBiometric();
+      final c = build(ts, bio, _FakeAuthRepository(ts));
+      final n = c.read(authControllerProvider.notifier);
+      await n.bootstrap();
+      await n.unlock();
+
+      bio.available = false;
+      await n.lockOnResume();
+      expect(c.read(authControllerProvider).locked, isFalse,
+          reason: 'never trap the user behind a lock they cannot satisfy');
+    });
+
+    test('lock return location is one-shot and skips launch/auth routes', () {
+      final ts = TokenStorage();
+      final c = build(ts, _FakeBiometric(), _FakeAuthRepository(ts));
+      final n = c.read(authControllerProvider.notifier);
+
+      n.stashLockReturnLocation('/billing/invoices/42');
+      expect(n.takeLockReturnLocation(), '/billing/invoices/42');
+      expect(n.takeLockReturnLocation(), isNull, reason: 'consumed on read');
+
+      for (final loc in ['/splash', '/login', '/lock', '/mfa']) {
+        n.stashLockReturnLocation(loc);
+        expect(n.takeLockReturnLocation(), isNull,
+            reason: '$loc must fall back to the portal home');
+      }
     });
   });
 }

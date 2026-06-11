@@ -322,12 +322,16 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
   Widget build(BuildContext context) {
     if (_loading) return const SizedBox.shrink();
     if (!_available) {
-      return const Card(
+      // Availability can change mid-session (the user enrolls a fingerprint in
+      // OS settings) and this tile stays alive in the IndexedStack shell, so
+      // let a tap re-check rather than caching the verdict forever.
+      return Card(
         child: ListTile(
-          enabled: false,
-          leading: Icon(Icons.fingerprint),
-          title: Text('Biometric unlock'),
-          subtitle: Text('Not available on this device'),
+          leading: const Icon(Icons.fingerprint),
+          title: const Text('Biometric unlock'),
+          subtitle: const Text(
+              'Not available on this device. Tap to check again.'),
+          onTap: _load,
         ),
       );
     }
