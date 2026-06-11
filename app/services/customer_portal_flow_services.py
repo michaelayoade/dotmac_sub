@@ -889,6 +889,48 @@ def get_service_detail(
     }
 
 
+def _ont_reboot_cooldown_remaining(db: Session, ont_id: str) -> int:
+    """Seconds until this ONT may be customer-rebooted again, 0 if allowed.
+
+    Counts any recent reboot operation against the device (admin- or
+    customer-initiated) — the device-side disruption is the same either way.
+    """
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import resolve_value
+
+    cooldown_val = resolve_value(
+        db, SettingDomain.network, "customer_ont_reboot_cooldown_seconds"
+    )
+    try:
+        cooldown_seconds = int(str(cooldown_val)) if cooldown_val is not None else 300
+    except (TypeError, ValueError):
+        cooldown_seconds = 300
+    if cooldown_seconds <= 0:
+        return 0
+
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+
+    last = (
+        db.query(NetworkOperation.created_at)
+        .filter(NetworkOperation.operation_type == NetworkOperationType.ont_reboot)
+        .filter(NetworkOperation.target_type == NetworkOperationTargetType.ont)
+        .filter(NetworkOperation.target_id == coerce_uuid(ont_id))
+        .order_by(NetworkOperation.created_at.desc())
+        .first()
+    )
+    if not last or not last.created_at:
+        return 0
+    last_at = last.created_at
+    if last_at.tzinfo is None:
+        last_at = last_at.replace(tzinfo=UTC)
+    elapsed = (datetime.now(UTC) - last_at).total_seconds()
+    return max(0, int(cooldown_seconds - elapsed))
+
+
 def reboot_customer_subscription_ont(
     db: Session,
     customer: dict,
@@ -910,6 +952,14 @@ def reboot_customer_subscription_ont(
     ont = _resolve_customer_subscription_ont(db, subscription)
     if ont is None:
         return False, "No active ONT is linked to this service"
+
+    remaining = _ont_reboot_cooldown_remaining(db, str(ont.id))
+    if remaining > 0:
+        minutes = max(1, -(-remaining // 60))
+        return False, (
+            "Your device was restarted recently. Please wait about "
+            f"{minutes} minute{'s' if minutes != 1 else ''} before trying again."
+        )
 
     actor = f"customer:{customer.get('id') or customer.get('account_id') or account_id}"
     result = ont_device_actions.execute_reboot(
