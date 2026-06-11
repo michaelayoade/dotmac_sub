@@ -910,6 +910,7 @@ def _ont_reboot_cooldown_remaining(db: Session, ont_id: str) -> int:
 
     from app.models.network_operation import (
         NetworkOperation,
+        NetworkOperationStatus,
         NetworkOperationTargetType,
         NetworkOperationType,
     )
@@ -919,6 +920,13 @@ def _ont_reboot_cooldown_remaining(db: Session, ont_id: str) -> int:
         .filter(NetworkOperation.operation_type == NetworkOperationType.ont_reboot)
         .filter(NetworkOperation.target_type == NetworkOperationTargetType.ont)
         .filter(NetworkOperation.target_id == coerce_uuid(ont_id))
+        # A reboot that never reached the device must not lock the customer
+        # out with "your device was restarted recently" — it wasn't.
+        .filter(
+            NetworkOperation.status.notin_(
+                [NetworkOperationStatus.failed, NetworkOperationStatus.canceled]
+            )
+        )
         .order_by(NetworkOperation.created_at.desc())
         .first()
     )

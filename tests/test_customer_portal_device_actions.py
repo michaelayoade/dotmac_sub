@@ -215,3 +215,37 @@ def test_customer_reboot_allowed_after_cooldown(db_session, monkeypatch):
         str(subscription.id),
     )
     assert ok is True
+
+
+def test_failed_reboot_does_not_arm_cooldown(db_session, monkeypatch):
+    """A reboot that errored never disrupted the device — it must not lock
+    the customer out with 'restarted recently'."""
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+
+    subscriber, subscription, ont = _active_subscription_with_ont(db_session)
+    db_session.add(
+        NetworkOperation(
+            operation_type=NetworkOperationType.ont_reboot,
+            target_type=NetworkOperationTargetType.ont,
+            target_id=ont.id,
+            status=NetworkOperationStatus.failed,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        lambda *a, **k: SimpleNamespace(success=True, message="sent"),
+    )
+
+    ok, _ = reboot_customer_subscription_ont(
+        db_session,
+        {"account_id": str(subscriber.id), "id": "customer-user-1"},
+        str(subscription.id),
+    )
+    assert ok is True
