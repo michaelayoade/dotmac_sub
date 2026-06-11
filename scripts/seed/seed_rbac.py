@@ -39,6 +39,9 @@ DEFAULT_PERMISSIONS = [
     ("billing:payment:update", "Update payments"),
     ("billing:payment:delete", "Delete/refund payments"),
     # Billing - Credit Notes
+    ("billing:extension:read", "View service extensions"),
+    ("billing:extension:create", "Create service extensions"),
+    ("billing:extension:apply", "Apply or cancel service extensions"),
     ("billing:credit_note:read", "View credit notes"),
     ("billing:credit_note:create", "Create credit notes"),
     ("billing:credit_note:update", "Update credit notes"),

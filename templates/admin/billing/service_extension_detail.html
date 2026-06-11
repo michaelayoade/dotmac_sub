@@ -1,0 +1,87 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge %}
+
+{% block title %}Service Extension - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+    {% call(content) page_header(
+        title="Service Extension",
+        subtitle=extension.reason,
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3"/></svg>',
+        color="amber",
+        color2="orange",
+        breadcrumbs=[
+            {"label": "Billing", "href": "/admin/billing"},
+            {"label": "Service Extensions", "href": "/admin/billing/service-extensions"},
+            {"label": "Detail"}
+        ]
+    ) %}{% endcall %}
+
+    {% call card(color="amber") %}
+    <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+        <div><dt class="text-slate-500 dark:text-slate-400">Status</dt><dd class="mt-1">{% set variant = {"pending": "warning", "applied": "active", "canceled": "inactive"} %}{{ status_badge(extension.status.value | title, variant.get(extension.status.value, "default"), size="sm") }}</dd></div>
+        <div><dt class="text-slate-500 dark:text-slate-400">Days extended</dt><dd class="mt-1 font-semibold tabular-nums">{{ extension.days }}</dd></div>
+        <div><dt class="text-slate-500 dark:text-slate-400">Scope</dt><dd class="mt-1">{{ extension.scope_type.value | replace("_", " ") | title }}</dd></div>
+        <div><dt class="text-slate-500 dark:text-slate-400">Outage window</dt><dd class="mt-1">{{ extension.window_start.strftime("%Y-%m-%d %H:%M") }} → {{ extension.window_end.strftime("%Y-%m-%d %H:%M") }}</dd></div>
+    </dl>
+    {% endcall %}
+
+    {% if extension.status.value == "pending" %}
+    {% call card(color="amber") %}
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <p class="text-sm text-slate-700 dark:text-slate-300">
+                    Applying will extend <strong class="text-amber-700 dark:text-amber-400">{{ preview.extendable_count }}</strong> active subscription(s) by <strong>{{ extension.days }}</strong> day(s).
+                    {% if preview.skipped_count %}<span class="text-slate-500">{{ preview.skipped_count }} will be skipped (no billing date).</span>{% endif %}
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Each affected customer gets a push + email notification. This cannot be undone in bulk.</p>
+            </div>
+            <div class="flex gap-3">
+                <form method="post" action="/admin/billing/service-extensions/{{ extension.id }}/apply"
+                      onsubmit="return confirm('Extend {{ preview.extendable_count }} subscription(s) by {{ extension.days }} day(s)?');">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">Apply to {{ preview.extendable_count }} subscription(s)</button>
+                </form>
+                <form method="post" action="/admin/billing/service-extensions/{{ extension.id }}/cancel">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" class="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</button>
+                </form>
+            </div>
+        </div>
+    {% endcall %}
+    {% elif extension.status.value == "applied" %}
+    <div class="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Applied {{ extension.applied_at.strftime("%Y-%m-%d %H:%M") }} — {{ extension.affected_count }} subscription(s) extended{% if extension.skipped_count %}, {{ extension.skipped_count }} skipped{% endif %}.
+    </div>
+    {% endif %}
+
+    {% call card("Affected subscriptions (sample)", color="amber") %}
+    {% if sample %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-sm">
+            <thead><tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                <th class="px-4 py-3">Subscriber</th>
+                <th class="px-4 py-3">Login</th>
+                <th class="px-4 py-3">Next billing</th>
+            </tr></thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% for sub in sample %}
+                <tr>
+                    <td class="px-4 py-3">{{ sub.subscriber.display_name if sub.subscriber else "—" }}</td>
+                    <td class="px-4 py-3 font-mono text-xs">{{ sub.login or "—" }}</td>
+                    <td class="px-4 py-3">{{ sub.next_billing_at.strftime("%Y-%m-%d") if sub.next_billing_at else "—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ sample | length }} of {{ preview.subscriptions | length }} in scope.</p>
+    {% else %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">No active subscriptions currently match this scope.</p>
+    {% endif %}
+    {% endcall %}
+</div>
+{% endblock %}
