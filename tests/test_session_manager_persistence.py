@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from app.models.auth import Session as AuthSession
 from app.models.auth import SessionStatus
@@ -9,7 +10,7 @@ def _session(subscriber_id):
     return AuthSession(
         subscriber_id=subscriber_id,
         status=SessionStatus.active,
-        token_hash=f"token-{datetime.now(UTC).timestamp()}",
+        token_hash=f"token-{uuid4()}",
         expires_at=datetime.now(UTC) + timedelta(days=1),
     )
 
