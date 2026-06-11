@@ -13,8 +13,8 @@ from app.api.auth_flow import router as auth_flow_router
 from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.models.subscriber import UserType
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.services import auth_flow as auth_flow_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
