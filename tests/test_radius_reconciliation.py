@@ -26,6 +26,7 @@ def _seed_radius_sqlite(
     db_path,
     *,
     radcheck=(),
+    radreply=(),
     radusergroup=(),
     radacct=(),
 ):
@@ -34,12 +35,16 @@ def _seed_radius_sqlite(
         conn.execute(
             "CREATE TABLE radcheck (username TEXT, attribute TEXT, value TEXT)"
         )
+        conn.execute(
+            "CREATE TABLE radreply (username TEXT, attribute TEXT, value TEXT)"
+        )
         conn.execute("CREATE TABLE radusergroup (username TEXT, groupname TEXT)")
         conn.execute(
             "CREATE TABLE radacct (username TEXT, acctstoptime TIMESTAMP, "
             "acctupdatetime TIMESTAMP)"
         )
         conn.executemany("INSERT INTO radcheck VALUES (?, ?, ?)", radcheck)
+        conn.executemany("INSERT INTO radreply VALUES (?, ?, ?)", radreply)
         conn.executemany("INSERT INTO radusergroup VALUES (?, ?)", radusergroup)
         conn.executemany("INSERT INTO radacct VALUES (?, ?, ?)", radacct)
         conn.commit()
@@ -142,11 +147,11 @@ class TestAuditSuspensionEnforcement:
 
         assert result["checked_usernames"] == 1
         assert result["counts"] == {
-            "usable_password": 1,
+            "open_access": 1,
             "in_active_group": 1,
             "open_session": 1,
         }
-        assert result["usable_password"] == ["blocked-user"]
+        assert result["open_access"] == ["blocked-user"]
         assert result["ok"] is False
 
     def test_reject_row_clears_password_leak(self, db_session, tmp_path, catalog_offer):
@@ -165,7 +170,42 @@ class TestAuditSuspensionEnforcement:
             offer=catalog_offer,
         )
         result = _run_audit(db_session, db_path)
-        assert result["counts"]["usable_password"] == 0
+        assert result["counts"]["open_access"] == 0
+        assert result["ok"] is True
+
+    def test_walled_garden_marker_is_by_design(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        """Captive-by-default: a blocked subscriber with the walled-garden
+        address-list radreply (or captive group) keeps a usable password ON
+        PURPOSE — they can reach the pay page. Their open session is equally
+        by design."""
+        now = datetime.now(UTC)
+        db_path = tmp_path / "radius.db"
+        _seed_radius_sqlite(
+            db_path,
+            radcheck=[
+                ("walled-user", "Cleartext-Password", "pw"),
+                ("captive-group-user", "Cleartext-Password", "pw"),
+            ],
+            radreply=[("walled-user", "Mikrotik-Address-List", "suspended")],
+            radusergroup=[("captive-group-user", "dotmac-captive")],
+            radacct=[("walled-user", None, _ts(now - timedelta(minutes=5)))],
+        )
+        for username in ("walled-user", "captive-group-user"):
+            _seed_subscriber(
+                db_session,
+                username=username,
+                statuses=[SubscriptionStatus.suspended],
+                offer=catalog_offer,
+            )
+        result = _run_audit(db_session, db_path)
+        assert result["checked_usernames"] == 2
+        assert result["counts"] == {
+            "open_access": 0,
+            "in_active_group": 0,
+            "open_session": 0,
+        }
         assert result["ok"] is True
 
     def test_stale_open_session_not_counted(self, db_session, tmp_path, catalog_offer):
@@ -221,3 +261,74 @@ class TestAuditSuspensionEnforcement:
             result = audit_suspension_enforcement(db_session)
         assert result["ok"] is False
         assert result["errors"] == 1
+
+
+class TestAuditResultStorageAndCollector:
+    def _fake_redis(self):
+        class FakeRedis:
+            def __init__(self):
+                self.store = {}
+
+            def set(self, key, value, ex=None):
+                self.store[key] = value
+
+            def get(self, key):
+                return self.store.get(key)
+
+        return FakeRedis()
+
+    def test_store_and_load_roundtrip(self):
+        from app.services import radius_reconciliation as rr
+
+        fake = self._fake_redis()
+        with patch.object(rr, "_get_redis", return_value=fake):
+            assert rr.store_latest_audit(
+                {"counts": {"open_access": 2}, "mixed_status_subscribers": 5}
+            )
+            loaded = rr.load_latest_audit()
+        assert loaded["counts"] == {"open_access": 2}
+        assert loaded["mixed_status_subscribers"] == 5
+        assert "ran_at" in loaded
+
+    def test_store_without_redis_is_failsoft(self):
+        from app.services import radius_reconciliation as rr
+
+        with patch.object(rr, "_get_redis", return_value=None):
+            assert rr.store_latest_audit({"counts": {}}) is False
+            assert rr.load_latest_audit() is None
+
+    def test_collector_exports_counts_and_age(self):
+        """The audit runs in a worker; the web process's collector must
+        export the stored result as gauges at scrape time."""
+        from datetime import UTC, datetime
+
+        from app.metrics import _SuspensionAuditCollector
+
+        data = {
+            "counts": {"open_access": 3, "in_active_group": 0, "open_session": 1},
+            "mixed_status_subscribers": 7,
+            "ran_at": datetime.now(UTC).isoformat(),
+        }
+        with patch(
+            "app.services.radius_reconciliation.load_latest_audit",
+            return_value=data,
+        ):
+            families = list(_SuspensionAuditCollector().collect())
+
+        by_name = {f.name: f for f in families}
+        leaks = by_name["radius_suspension_audit_leaks"]
+        samples = {s.labels["kind"]: s.value for s in leaks.samples}
+        assert samples["open_access"] == 3
+        assert samples["open_session"] == 1
+        assert samples["mixed_status_subscribers"] == 7
+        age = by_name["radius_suspension_audit_age_seconds"]
+        assert age.samples[0].value >= 0
+
+    def test_collector_silent_without_data(self):
+        from app.metrics import _SuspensionAuditCollector
+
+        with patch(
+            "app.services.radius_reconciliation.load_latest_audit",
+            return_value=None,
+        ):
+            assert list(_SuspensionAuditCollector().collect()) == []

@@ -1,4 +1,4 @@
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import REGISTRY, Counter, Histogram
 
 REQUEST_COUNT = Counter(
     "http_requests_total",
@@ -28,15 +28,64 @@ VICTORIAMETRICS_WRITE_FAILURES = Counter(
     ["adapter", "operation"],
 )
 
-# Set by app.tasks.radius.audit_suspension_enforcement. Non-zero means a
-# fully-blocked subscriber can still reach the network (kind=usable_password /
-# in_active_group / open_session) or per-service suspension is being defeated
-# by a shared credential (kind=mixed_status_subscribers).
-RADIUS_SUSPENSION_AUDIT_LEAKS = Gauge(
-    "radius_suspension_audit_leaks",
-    "Suspension-enforcement audit leak count by class",
-    ["kind"],
-)
+
+class _SuspensionAuditCollector:
+    """Exports the latest suspension-audit result at scrape time.
+
+    The audit runs in a Celery worker; a Gauge set there is invisible to the
+    web process that serves /metrics (no multiprocess mode, workers recycle).
+    The task stores its result in Redis and this collector reads it back on
+    each scrape — one cached-client GET, fail-soft.
+
+    Non-zero radius_suspension_audit_leaks means a fully-blocked subscriber
+    can still reach the network unrestricted (kind=open_access /
+    in_active_group / open_session) or per-service suspension is structurally
+    defeated by a shared credential (kind=mixed_status_subscribers).
+    """
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.radius_reconciliation import load_latest_audit
+
+            data = load_latest_audit()
+        except Exception:
+            return
+        if not data:
+            return
+        leaks = GaugeMetricFamily(
+            "radius_suspension_audit_leaks",
+            "Suspension-enforcement audit leak count by class",
+            labels=["kind"],
+        )
+        for kind, count in (data.get("counts") or {}).items():
+            leaks.add_metric([kind], float(count or 0))
+        leaks.add_metric(
+            ["mixed_status_subscribers"],
+            float(data.get("mixed_status_subscribers") or 0),
+        )
+        yield leaks
+
+        ran_at = data.get("ran_at")
+        if ran_at:
+            from datetime import UTC, datetime
+
+            try:
+                age = (
+                    datetime.now(UTC) - datetime.fromisoformat(ran_at)
+                ).total_seconds()
+            except ValueError:
+                return
+            age_metric = GaugeMetricFamily(
+                "radius_suspension_audit_age_seconds",
+                "Seconds since the last completed suspension audit",
+            )
+            age_metric.add_metric([], max(age, 0))
+            yield age_metric
+
+
+REGISTRY.register(_SuspensionAuditCollector())
 
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     "genieacs_identity_recovery_events_total",
