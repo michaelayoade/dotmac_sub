@@ -31,7 +31,13 @@ from app.models.subscriber import (
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services.common import coerce_uuid
-from app.services.session_store import delete_session, load_session, store_session
+from app.services.session_store import (
+    delete_session,
+    get_session_revocation_epoch,
+    load_session,
+    set_session_revocation_epoch,
+    store_session,
+)
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -54,8 +60,10 @@ SESSION_COOKIE_NAME = "reseller_session"
 # Default values for fallback
 _DEFAULT_SESSION_TTL = 86400  # 24 hours
 _DEFAULT_REMEMBER_TTL = 2592000  # 30 days
+_DEFAULT_ABSOLUTE_TTL = 2592000  # 30 days
 
 _RESELLER_SESSIONS: dict[str, dict] = {}
+_RESELLER_SESSION_EPOCHS: dict[str, str] = {}
 _RESELLER_SESSION_PREFIX = "session:reseller_portal"
 
 
@@ -230,7 +238,45 @@ def _get_session(session_token: str) -> dict | None:
     if _now() > expires_at:
         invalidate_session(session_token)
         return None
+    if _reseller_session_revoked(session):
+        invalidate_session(session_token)
+        return None
     return session
+
+
+def _reseller_session_revoked(session: dict) -> bool:
+    """True when a revoke-all epoch postdates this session's creation."""
+    subscriber_id = session.get("subscriber_id") or session.get("person_id")
+    if not subscriber_id:
+        return False
+    epoch = get_session_revocation_epoch(
+        _RESELLER_SESSION_PREFIX, str(subscriber_id), _RESELLER_SESSION_EPOCHS
+    )
+    if not epoch:
+        return False
+    created_raw = session.get("created_at")
+    if not created_raw:
+        return True
+    try:
+        created = datetime.fromisoformat(str(created_raw))
+        epoch_at = datetime.fromisoformat(epoch)
+    except ValueError:
+        return True
+    return created <= epoch_at
+
+
+def revoke_reseller_sessions_for_subscriber(
+    subscriber_id: object, db: Session | None = None
+) -> None:
+    """Invalidate every existing reseller portal session for a subscriber."""
+    ttl = max(
+        _session_ttl_seconds(remember=True, db=db),
+        _session_ttl_seconds(remember=False, db=db),
+        _absolute_ttl_seconds(db),
+    )
+    set_session_revocation_epoch(
+        _RESELLER_SESSION_PREFIX, str(subscriber_id), ttl, _RESELLER_SESSION_EPOCHS
+    )
 
 
 def _revoke_auth_session(db: Session, auth_session_id: str | None) -> None:
@@ -385,13 +431,29 @@ def refresh_session(
     session = _get_session(session_token)
     if not session:
         return None
+    now = _now()
     ttl_seconds = _session_ttl_seconds(session.get("remember", False), db)
-    session["expires_at"] = (_now() + timedelta(seconds=ttl_seconds)).isoformat()
+    new_expires_at = now + timedelta(seconds=ttl_seconds)
+    # Sliding refresh is capped at an absolute lifetime from creation so a
+    # keepalive tab can't extend a session forever.
+    created_raw = session.get("created_at")
+    if created_raw:
+        try:
+            created = datetime.fromisoformat(str(created_raw))
+        except ValueError:
+            created = None
+        if created:
+            absolute_limit = created + timedelta(seconds=_absolute_ttl_seconds(db))
+            if now >= absolute_limit:
+                invalidate_session(session_token)
+                return None
+            new_expires_at = min(new_expires_at, absolute_limit)
+    session["expires_at"] = new_expires_at.isoformat()
     store_session(
         _RESELLER_SESSION_PREFIX,
         session_token,
         session,
-        ttl_seconds,
+        max(1, int((new_expires_at - now).total_seconds())),
         _RESELLER_SESSIONS,
     )
     return session
@@ -423,6 +485,21 @@ def _session_ttl_seconds(remember: bool, db: Session | None = None) -> int:
             return int(str(ttl))
         except (TypeError, ValueError):
             return _DEFAULT_SESSION_TTL
+
+
+def _absolute_ttl_seconds(db: Session | None = None) -> int:
+    """Absolute cap on a session's lifetime regardless of sliding refreshes."""
+    ttl = (
+        resolve_value(db, SettingDomain.auth, "reseller_session_absolute_ttl_seconds")
+        if db
+        else None
+    )
+    if ttl is None:
+        return _DEFAULT_ABSOLUTE_TTL
+    try:
+        return int(str(ttl))
+    except (TypeError, ValueError):
+        return _DEFAULT_ABSOLUTE_TTL
 
 
 def get_session_max_age(db: Session | None = None) -> int:

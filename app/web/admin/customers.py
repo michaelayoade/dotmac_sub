@@ -842,6 +842,56 @@ def customer_user_send_reset_link(
 
 
 @router.post(
+    "/{customer_type}/{customer_id}/user/reset-mfa",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
+def customer_user_reset_mfa(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        result = web_customer_user_access_service.reset_customer_mfa(
+            db,
+            customer_type=customer_type,
+            customer_id=customer_id,
+            request=request,
+            actor_id=actor_id,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=bool(result["ok"]),
+            title=str(result["title"]),
+            message=str(result["message"]),
+        )
+    except Exception as exc:
+        web_customer_user_access_service.log_customer_user_access_error(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.MFA_RESET_AUDIT_ACTION,
+            customer_type=customer_type,
+            customer_id=customer_id,
+            actor_id=actor_id,
+            error=exc,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="MFA reset",
+            message=str(exc),
+        )
+
+
+@router.post(
     "/{customer_type}/{customer_id}/user/activate-login",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
