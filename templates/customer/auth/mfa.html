@@ -1,6 +1,6 @@
 {% extends "layouts/customer_auth.html" %}
 
-{% block title %}Verification - Customer Portal{% endblock %}
+{% block title %}Verification - {{ portal_name or (brand.product_name if brand is defined and brand else 'DotMac Subs') }}{% endblock %}
 
 {% block auth_content %}
 <div class="sm:mx-auto sm:w-full sm:max-w-md">

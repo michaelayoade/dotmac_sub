@@ -9,10 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.services import vendor_portal
 from app.services.db_session_adapter import db_session_adapter
+from app.web.portal_branding import auth_branding_context
 
 logger = logging.getLogger(__name__)
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(
+    directory="templates", context_processors=[auth_branding_context]
+)
 
 
 def vendor_login_page(request: Request, error: str | None = None):

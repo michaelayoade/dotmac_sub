@@ -10,10 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.services import auth_flow as auth_flow_service
 from app.services.auth_flow import AuthFlow
+from app.web.portal_branding import auth_branding_context
 
 logger = logging.getLogger(__name__)
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(
+    directory="templates", context_processors=[auth_branding_context]
+)
 MFA_ENROLLMENT_COOKIE = "mfa_enrollment_pending"
 
 

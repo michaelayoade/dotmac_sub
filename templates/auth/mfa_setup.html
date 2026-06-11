@@ -1,6 +1,6 @@
 {% extends "layouts/auth.html" %}
 
-{% block title %}Set Up Two-Factor Authentication - DotMac Subs{% endblock %}
+{% block title %}Set Up Two-Factor Authentication - {{ brand.product_name if brand is defined and brand else "DotMac Subs" }}{% endblock %}
 
 {% block content %}
 <div class="rounded-2xl bg-white p-8 shadow-xl dark:bg-slate-800 max-w-lg mx-auto">
