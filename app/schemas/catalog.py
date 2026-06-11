@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from app.models.catalog import (
     AccessType,
@@ -291,7 +298,14 @@ class AddOnPriceUpdate(BaseModel):
     is_active: bool | None = None
 
 
-PlanFamilyValue = Literal["unlimited", "dedicated", "home_flex"]
+# Families are settings-driven (catalog.plan_families) — validate the shape,
+# not membership; the offer form select constrains the choices.
+PlanFamilyValue = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, to_lower=True, pattern=r"^[a-z0-9_ -]{1,60}$"
+    ),
+]
 
 
 class CatalogOfferBase(BaseModel):
