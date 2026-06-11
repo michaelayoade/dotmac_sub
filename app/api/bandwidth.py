@@ -21,7 +21,11 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_current_user, get_db
-from app.services.bandwidth import bandwidth_samples
+from app.services.bandwidth import (
+    add_directions_to_series,
+    bandwidth_samples,
+    live_event_payload,
+)
 from app.services.metrics_store import get_metrics_store
 
 # The MikroTik poller skips devices with no live viewer when running in
@@ -41,6 +45,12 @@ class BandwidthSeriesPoint(BaseModel):
     timestamp: datetime
     rx_bps: float
     tx_bps: float
+    # Subscriber-perspective rates (rx/tx above are NAS-perspective). Derived
+    # via to_subscriber_directions(); clients must bind to these instead of
+    # guessing the rx/tx convention. Without them the chart JS (which reads
+    # download_bps/upload_bps exclusively) renders a flat-zero series.
+    download_bps: float | None = None
+    upload_bps: float | None = None
 
 
 class BandwidthStats(BaseModel):
@@ -102,7 +112,10 @@ def get_bandwidth_series(
         interval,
     )
 
-    data = [BandwidthSeriesPoint(**point) for point in result["data"]]
+    data = [
+        BandwidthSeriesPoint(**point)
+        for point in add_directions_to_series(result)["data"]
+    ]
     return BandwidthSeriesResponse(
         data=data, total=result["total"], source=result["source"]
     )
@@ -209,16 +222,9 @@ def get_live_bandwidth(
                         e,
                     )
 
-                now = datetime.now(UTC)
                 yield {
                     "event": "bandwidth",
-                    "data": json.dumps(
-                        {
-                            "timestamp": now.isoformat(),
-                            "rx_bps": float(current.get("rx_bps", 0) or 0),
-                            "tx_bps": float(current.get("tx_bps", 0) or 0),
-                        }
-                    ),
+                    "data": json.dumps(live_event_payload(current, datetime.now(UTC))),
                 }
 
                 await asyncio.sleep(1)
@@ -292,7 +298,10 @@ def get_my_bandwidth_series(
         end_at,
         interval,
     )
-    data = [BandwidthSeriesPoint(**point) for point in result["data"]]
+    data = [
+        BandwidthSeriesPoint(**point)
+        for point in add_directions_to_series(result)["data"]
+    ]
     return BandwidthSeriesResponse(
         data=data, total=result["total"], source=result["source"]
     )
