@@ -951,6 +951,7 @@ def send_password_reset_email(
     reset_token: str,
     person_name: str | None = None,
     next_login_path: str | None = None,
+    expires_minutes: int | None = None,
 ) -> bool:
     """
     Send a password reset email.
@@ -960,6 +961,7 @@ def send_password_reset_email(
         to_email: Recipient email address
         reset_token: The JWT reset token
         person_name: Optional name to personalize the email
+        expires_minutes: Actual token TTL; falls back to the configured setting
 
     Returns:
         True if email was sent successfully, False otherwise
@@ -970,8 +972,8 @@ def send_password_reset_email(
         query["next_login"] = next_login_path
     reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
 
-    # Get configurable expiry minutes
-    expiry_minutes = (
+    # Prefer the actual token TTL; fall back to the configured setting
+    expiry_minutes = expires_minutes or (
         resolve_value(db, SettingDomain.auth, "password_reset_expiry_minutes") or 1440
     )
     expiry_duration = _format_expiry_duration(expiry_minutes)

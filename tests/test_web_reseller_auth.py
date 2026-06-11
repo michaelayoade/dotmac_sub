@@ -124,7 +124,9 @@ def test_reseller_login_redirects_to_shared_reset_flow(monkeypatch):
         "/auth/reset-password?token=reset-token&next_login="
         "%2Freseller%2Fauth%2Flogin%3Fnext%3D%2Freseller%2Fdashboard"
     )
-    reset_request.assert_called_once_with(db=db, email="reseller@example.com")
+    reset_request.assert_called_once_with(
+        db=db, email="reseller@example.com", ttl_minutes=15
+    )
 
 
 def test_reseller_login_returns_error_when_reset_token_not_generated(monkeypatch):
@@ -198,21 +200,11 @@ def test_reseller_login_error_hides_http_status_prefix(monkeypatch):
 def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
     request = _request()
     db = object()
-    reset_request = MagicMock(
-        return_value={
-            "token": "reset-token",
-            "email": "reseller@example.com",
-            "subscriber_name": "Reseller User",
-        }
-    )
-    send_email = MagicMock(return_value=True)
+    forgot_flow = MagicMock()
     monkeypatch.setattr(
         web_reseller_auth_service.auth_flow_service,
-        "request_password_reset",
-        reset_request,
-    )
-    monkeypatch.setattr(
-        web_reseller_auth_service, "send_password_reset_email", send_email
+        "forgot_password_flow",
+        forgot_flow,
     )
 
     response = web_reseller_auth_service.reseller_forgot_password_submit(
@@ -223,11 +215,8 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
 
     assert response.status_code == 200
     assert "Check your email" in response.body.decode()
-    reset_request.assert_called_once_with(db=db, email="reseller@example.com")
-    send_email.assert_called_once_with(
-        db=db,
-        to_email="reseller@example.com",
-        reset_token="reset-token",
-        person_name="Reseller User",
+    forgot_flow.assert_called_once_with(
+        db,
+        "reseller@example.com",
         next_login_path="/reseller/auth/login?next=/reseller/dashboard",
     )

@@ -234,6 +234,7 @@ def send_password_reset_link_for_user(db: Session, *, user_id: str) -> str:
         reset_token=reset["token"],
         person_name=reset.get("subscriber_name"),
         next_login_path=_invite_login_route_for_user(system_user),
+        expires_minutes=reset.get("ttl_minutes"),
     )
     if sent:
         return "Password reset link sent successfully."
