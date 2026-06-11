@@ -173,6 +173,7 @@ class AddonPurchaseResult {
   final double? shortfall;
 
   bool get insufficient => reason == 'insufficient_balance';
+  bool get serviceNotActive => reason == 'subscription_not_active';
 
   factory AddonPurchaseResult.fromJson(Map<String, dynamic> json) =>
       AddonPurchaseResult(

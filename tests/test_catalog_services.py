@@ -316,3 +316,73 @@ def test_offer_form_context_exposes_full_billing_cycle_set(db_session):
     )
 
     assert context["billing_cycles"] == [item.value for item in BillingCycle]
+
+
+def test_overview_page_data_filters_plan_family(db_session):
+    catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Unlimited Basic",
+            code="FAM-UNL",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="unlimited",
+            status=OfferStatus.active,
+        ),
+    )
+    catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Lonely IP Block",
+            code="FAM-NONE",
+            service_type=ServiceType.business,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            status=OfferStatus.active,
+        ),
+    )
+
+    unlimited = web_catalog_offers_service.overview_page_data(
+        db_session, plan_family="unlimited", page=1, per_page=50
+    )
+    names = {offer.name for offer in unlimited["offers"]}
+    assert names == {"Unlimited Basic"}
+    assert unlimited["plan_family"] == "unlimited"
+
+    unclassified = web_catalog_offers_service.overview_page_data(
+        db_session, plan_family="unclassified", page=1, per_page=50
+    )
+    names = {offer.name for offer in unclassified["offers"]}
+    assert "Lonely IP Block" in names
+    assert "Unlimited Basic" not in names
+
+
+def test_plan_family_values_settings_driven(db_session):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    # Default: the built-in tuple
+    assert web_catalog_offers_service.plan_family_values(db_session) == [
+        "unlimited",
+        "dedicated",
+        "home_flex",
+    ]
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.catalog,
+            key="plan_families",
+            value_type=SettingValueType.string,
+            value_text="unlimited, dedicated, home_flex, Business Fiber",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    assert web_catalog_offers_service.plan_family_values(db_session) == [
+        "unlimited",
+        "dedicated",
+        "home_flex",
+        "business_fiber",
+    ]

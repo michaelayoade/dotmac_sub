@@ -281,6 +281,7 @@ def list_sessions(
         db,
         subscriber_id=auth["subscriber_id"],
         current_session_id=auth.get("session_id"),
+        principal_type=auth.get("principal_type", "subscriber"),
     )
 
 
@@ -302,6 +303,7 @@ def revoke_session(
         db,
         session_id=session_id,
         subscriber_id=auth["subscriber_id"],
+        principal_type=auth.get("principal_type", "subscriber"),
     )
 
 
@@ -321,6 +323,7 @@ def revoke_all_other_sessions(
         db,
         subscriber_id=auth["subscriber_id"],
         current_session_id=auth.get("session_id"),
+        principal_type=auth.get("principal_type", "subscriber"),
     )
 
 
@@ -344,6 +347,7 @@ def change_password(
         subscriber_id=str(auth["subscriber_id"]),
         current_password=payload.current_password,
         new_password=payload.new_password,
+        current_session_id=auth.get("session_id"),
     )
     return PasswordChangeResponse(changed_at=changed_at)
 

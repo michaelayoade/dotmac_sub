@@ -79,14 +79,27 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (!auth.isAuthenticated) {
         return publicPaths.contains(loc) ? null : '/login';
       }
-      // Authenticated but held behind the biometric lock: stay on /lock.
-      if (auth.locked) return loc == '/lock' ? null : '/lock';
+      // Authenticated but held behind the biometric lock: stay on /lock,
+      // remembering where the lock interrupted so unlock can return there.
+      if (auth.locked) {
+        if (loc == '/lock') return null;
+        ref.read(authControllerProvider.notifier).stashLockReturnLocation(loc);
+        return '/lock';
+      }
 
       final isReseller = auth.me?.isReseller ?? false;
-      // Authenticated and unlocked: leave the splash/login/lock behind.
-      if (loc == '/splash' || loc == '/login' || loc == '/lock') {
-        return isReseller ? '/reseller' : '/dashboard';
+      final home = isReseller ? '/reseller' : '/dashboard';
+      // Unlocked: go back to wherever the lock interrupted (the redirect
+      // re-runs on that location, so the portal checks below still apply),
+      // falling back to the portal home when there is nothing stashed.
+      if (loc == '/lock') {
+        return ref
+                .read(authControllerProvider.notifier)
+                .takeLockReturnLocation() ??
+            home;
       }
+      // Authenticated and unlocked: leave the splash/login behind.
+      if (loc == '/splash' || loc == '/login') return home;
       // Keep each principal in its own portal even when /auth/me resolves
       // *after* the first route decision. On relaunch the controller shows a
       // cached/empty profile first, so a reseller can briefly land on

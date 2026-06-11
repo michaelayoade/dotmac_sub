@@ -422,6 +422,12 @@ from app.models.router_management import (  # noqa: F401
     RouterTemplateCategory,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
+from app.models.service_extension import (  # noqa: F401
+    ServiceExtension,
+    ServiceExtensionEntry,
+    ServiceExtensionScope,
+    ServiceExtensionStatus,
+)
 from app.models.service_request import (  # noqa: F401
     ResellerServiceRequest,
     Serviceability,

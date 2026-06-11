@@ -169,6 +169,27 @@ class TestOffersCRUD:
         )
         assert updated.name == "Updated Offer Name"
 
+    def test_update_offer_status_archived_syncs_is_active(self, db_session):
+        offer = _make_offer(db_session)
+        assert offer.is_active is True
+        updated = catalog_service.offers.update(
+            db_session,
+            str(offer.id),
+            CatalogOfferUpdate(status=OfferStatus.archived),
+        )
+        assert updated.status == OfferStatus.archived
+        assert updated.is_active is False
+
+    def test_update_offer_status_inactive_syncs_is_active(self, db_session):
+        offer = _make_offer(db_session)
+        updated = catalog_service.offers.update(
+            db_session,
+            str(offer.id),
+            CatalogOfferUpdate(status=OfferStatus.inactive),
+        )
+        assert updated.status == OfferStatus.inactive
+        assert updated.is_active is False
+
     def test_delete_offer_soft(self, db_session):
         offer = _make_offer(db_session)
         catalog_service.offers.delete(db_session, str(offer.id))

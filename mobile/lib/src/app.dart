@@ -32,13 +32,19 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Re-arm the biometric lock only across a real background→foreground cycle.
-    // The biometric prompt reports `inactive`/`hidden` (not `paused`), so gating
-    // on `paused` avoids re-locking the app under its own unlock prompt.
+    // On iOS the prompt reports `inactive`/`hidden` (not `paused`), so gating on
+    // `paused` is enough there. Some Android OEMs host the prompt in a separate
+    // activity, which emits a real `paused` — and its auth result can reach
+    // Dart before the `resumed` event, by which point the prompt no longer
+    // counts as active and lockOnResume would re-lock straight after a
+    // successful unlock (prompt loop). Ignoring pauses raised while our own
+    // prompt is up breaks that loop.
+    final auth = ref.read(authControllerProvider.notifier);
     if (state == AppLifecycleState.paused) {
-      _wasPaused = true;
+      if (!auth.promptActive) _wasPaused = true;
     } else if (state == AppLifecycleState.resumed && _wasPaused) {
       _wasPaused = false;
-      ref.read(authControllerProvider.notifier).lockOnResume();
+      auth.lockOnResume();
     }
   }
 
