@@ -16,20 +16,29 @@ final gate.
 
 ## 0. Blockers & decisions (do these first)
 
-- [ ] ⚠️ Purge test catalog data: 45 of 82 active `catalog_offers` look like
-      test/E2E artifacts (counted 2026-06-11) and many are customer-visible in
-      change-plan/add-ons. Also 2 e2e subscribers remain. Leftovers from the
-      Playwright-vs-prod incident (guard added in PR #75).
-- [ ] ⚠️ Decide visibility for the 11 "odd" portal-visible offers flagged during
-      offer scoping (PR #179) — product decision pending.
-- [ ] ⚠️ Merge PR #187 (password-reset hardening: single-use tokens, rate
-      limiting, audit events, system-user TTL cap) — reset links are a
-      customer-facing attack surface.
-- [ ] ⚠️ Fix customer login copy: placeholder still says "Enter your PPPoE
-      username" but email/local login is supported (PR #185). Suggest
-      "Username or email".
+- [x] Deactivated all 6 synthetic e2e/QA accounts with working portal
+      credentials (2026-06-11: admin@example.com, e2e.agent, e2e.user,
+      playwright-admin, qa.testcustomer, qa.testreseller — credentials +
+      subscriber rows flag-flipped, reversible; 0 synthetic accounts with
+      active credentials remain).
+- [ ] Cleanup (downgraded from blocker 2026-06-11): 43 active test/E2E
+      `catalog_offers` remain in the catalog but are **no longer
+      customer-visible** (offer scoping PR #179). Purge at leisure.
+- [ ] ⚠️ Decide visibility for the 12 "odd" customer-visible change-plan offers
+      (IP blocks, Device Replacement ×2, Fiber Last Mile, 4 leased/dedicated
+      plans) — product decision pending.
+- [x] Password-reset hardening + UX merged & deployed (2026-06-11, PRs #187 +
+      #188): fixed web forgot-form never sending the email; single-use tokens;
+      60-min admin TTL cap (15-min for login-redirect tokens); server-side
+      8-char minimum; session revocation on reset; rate limit 3/email/15min;
+      audit events; working staff/reseller forgot forms; new customer
+      self-service page at /portal/auth/forgot-password; 14 new reset tests
+      + MFA coverage (reset does not bypass MFA).
+- [x] Customer login copy fixed to "Username or email"; removed untrue
+      "resets interrupt connectivity" warning (2026-06-11, PR #188).
 - [ ] ⚠️ Set GLITCHTIP_DSN (brand.json / env) — mobile crash reporting is
-      currently off; you will be blind to app crashes during onboarding.
+      currently off. Needs a DSN from the GlitchTip account + a mobile rebuild
+      (build-time dart-define); only the operator can supply this.
 
 ## 1. Auth & account access
 
@@ -37,17 +46,41 @@ final gate.
       never PPPoE/RADIUS (2026-06-11, verified on prod via rollback test, PR #185)
 - [x] Branding/logo on all login, MFA, forgot/reset pages across customer,
       reseller and staff portals (2026-06-11, visual verification, PR #186)
-- [ ] Forgot-password round-trip on a real mailbox: email arrives, link works,
-      24h expiry honored, token is single-use (re-test after PR #187)
+- [ ] Forgot-password round-trip on a real mailbox: email arrives, link
+      works, expiry honored (24h customer / 60min staff), token rejected on
+      second use, sessions revoked (flow hardened in #187/#188 with automated
+      tests; the real-mailbox deliverability pass is what remains)
+- [ ] Customer self-service reset page /portal/auth/forgot-password (new in
+      #188): full round-trip from the portal login link
 - [ ] Portal invite flow: admin customer page → invite email → set password →
       first login
-- [ ] MFA: enroll, login challenge, wrong-code rejection — on all three portals
+- [ ] MFA: enroll, login challenge, wrong-code rejection — on all three portals.
+      Wrong-code lockout (5 codes / 15 min per method, migration 138) and the
+      admin "Reset MFA" recovery button on the customer page are new in the
+      auth-hardening PR — include both in the manual pass.
 - [ ] Account lockout after 5 failed attempts, 15 min unlock; "account
-      disabled" and canceled-subscriber rejections
+      disabled" and canceled-subscriber rejections. Hardening PR notes: lock is
+      now checked before password verify (no oracle, no indefinite re-locking);
+      the customer RADIUS/PPPoE web path gets a per-username attempt throttle
+      (10/15min, in-memory per-worker) plus canceled/disabled status checks;
+      admin "reset password" now clears an existing lockout.
 - [ ] Session expiry/refresh, remember-me duration, logout, revoke-all-sessions
-      (mobile sessions screen)
-- [ ] Mobile biometric app-lock arm/resume cycle on a **real device**
-      (only `flutter analyze`'d so far — lifecycle timing untested on hardware)
+      (mobile sessions screen). Hardening PR notes: admin remember-me now real
+      (session cookies unless ticked — verify a non-remembered admin is logged
+      out after browser restart); portal sessions capped at 30 days absolute
+      (`customer/reseller_session_absolute_ttl_seconds`); password change/reset
+      now also revokes customer/reseller web portal sessions and mobile tokens;
+      staff can see/revoke their own sessions via /auth/me/sessions.
+- [ ] Mobile biometric app-lock arm/resume cycle on a **real device**.
+      Code-reviewed + controller tests added (cold-start re-lock, prompt-loop
+      race, resume flash, unlock returns to previous screen). Device script:
+      1) slow network, force-kill, relaunch, unlock immediately — must NOT
+      re-lock seconds later; 2) arm → background → resume ×5 rapidly (Samsung/
+      Xiaomi face unlock especially) — no double prompts; 3) background mid-form
+      → unlock — should return to the same screen; 4) app-switcher snapshot
+      still shows content (known gap, FLAG_SECURE deliberately not added);
+      5) fail biometric 5× — OS passcode fallback must appear; 6) delete all
+      fingerprints in OS settings, relaunch — app must open unlocked.
 
 ## 2. Service lifecycle & network
 
@@ -128,8 +161,8 @@ final gate.
 - [ ] PPPoE password reveal endpoint (`/admin/customers/person/{id}/pppoe-password`)
       restricted to the intended staff role (currently `customer:read` —
       confirm that is the intended bar)
-- [ ] Rate limits on login / forgot-password / speedtest endpoints
-      (forgot-password lands with PR #187)
+- [ ] Rate limits on login / speedtest endpoints (forgot-password done in
+      #187: 3/email/15min, per-worker)
 
 ## 8. Performance & capacity
 

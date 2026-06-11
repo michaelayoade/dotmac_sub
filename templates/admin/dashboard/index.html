@@ -62,7 +62,7 @@
                 {{ icon_view("h-4 w-4") }}
                 <span>Page Tips</span>
             </button>
-            {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
+            {{ action_button("Add Customer", "https://selfcare.dotmac.io/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
         </div>
     </div>
 
@@ -265,31 +265,31 @@
             </div>
             <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-1">
                 {% if show_network %}
-                <a href="/admin/network/monitoring" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-blue-500/40 dark:hover:bg-blue-900/10">
+                <a href="https://selfcare.dotmac.io/admin/network/network-devices" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-blue-500/40 dark:hover:bg-blue-900/10">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ icon_server("h-4 w-4") }}</div>
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Monitoring</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{% if total_alarms_count > 0 %}{{ total_alarms_count }} alarms to review{% else %}All clear right now{% endif %}</p>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Network Devices</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Manage network equipment</p>
                     </div>
                 </a>
-                <a href="/admin/network/onts?view=unconfigured" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-violet-300 hover:bg-violet-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-violet-500/40 dark:hover:bg-violet-900/10">
+                <a href="https://selfcare.dotmac.io/admin/network/onts?view=unconfigured" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-violet-300 hover:bg-violet-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-violet-500/40 dark:hover:bg-violet-900/10">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{{ icon_cpu("h-4 w-4") }}</div>
                     <div class="min-w-0">
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ unconfigured_ont_count | default(0, true) }} awaiting setup</p>
                     </div>
                 </a>
-                <a href="/admin/network/olts/profile-sync-tasks" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-cyan-300 hover:bg-cyan-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-900/10">
+                <a href="https://selfcare.dotmac.io/admin/network/olts" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-cyan-300 hover:bg-cyan-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-900/10">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">{{ icon_clipboard("h-4 w-4") }}</div>
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Profile Sync Tasks</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Review, drift-check, and run tasks</p>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">OLT Devices</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Open OLT device list</p>
                     </div>
                 </a>
                 {% endif %}
 
                 {% if show_subscribers %}
-                <a href="/admin/customers/new" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-amber-300 hover:bg-amber-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                <a href="https://selfcare.dotmac.io/admin/customers/new" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-amber-300 hover:bg-amber-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ icon_plus("h-4 w-4") }}</div>
                     <div class="min-w-0">
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">Add Customer</p>
@@ -299,27 +299,27 @@
                 {% endif %}
 
                 {% if show_financials %}
-                <a href="/admin/billing/invoices" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-900/10">
+                <a href="https://selfcare.dotmac.io/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-900/10">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ icon_credit_card("h-4 w-4") }}</div>
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Billing</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Open invoices and payments</p>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">ONT Signal Diagnostics</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Review ONT signal levels</p>
                     </div>
                 </a>
                 {% endif %}
 
-                <button type="button" data-dashboard-tour-inline class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
+                <a href="https://selfcare.dotmac.io/admin/network/onts" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_view("h-4 w-4") }}</div>
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Quick Tour</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Learn the dashboard layout faster</p>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">ONTs</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Open ONT list</p>
                     </div>
-                </button>
-                <a href="/admin/settings" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
+                </a>
+                <a href="https://selfcare.dotmac.io/admin/system/users" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_cog("h-4 w-4") }}</div>
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Settings</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Open the settings hub</p>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Users & Roles</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Manage users and roles</p>
                     </div>
                 </a>
             </div>
