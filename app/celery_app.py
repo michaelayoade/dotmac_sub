@@ -82,6 +82,8 @@ celery_app.conf.task_routes = {
     # Daily customer-facing heads-up; must not sit behind a default-queue
     # backlog or "expires tomorrow" arrives after the bundle already lapsed.
     "app.tasks.usage.notify_expiring_data_bundles": {"queue": "billing"},
+    # Read-only enforcement audit; keep with the business runners.
+    "app.tasks.radius.audit_suspension_enforcement": {"queue": "billing"},
 }
 
 celery_app.conf.task_queues = (

@@ -22,3 +22,27 @@ def run_radius_sync_job(job_id: str) -> dict[str, int]:
         raise
     finally:
         session.close()
+
+
+@celery_app.task(name="app.tasks.radius.audit_suspension_enforcement")
+def audit_suspension_enforcement() -> dict:
+    """Periodic read-only check that fully-blocked subscribers are actually
+    unreachable in the external RADIUS DB. Logs a warning and bumps the
+    radius_suspension_audit_leaks gauge per leak class — drift here used to
+    accumulate invisibly (suspended subscribers staying online)."""
+    from app.metrics import RADIUS_SUSPENSION_AUDIT_LEAKS
+    from app.services.radius_reconciliation import (
+        audit_suspension_enforcement as run_audit,
+    )
+
+    session = SessionLocal()
+    try:
+        result = run_audit(session)
+        for kind, count in result["counts"].items():
+            RADIUS_SUSPENSION_AUDIT_LEAKS.labels(kind=kind).set(count)
+        RADIUS_SUSPENSION_AUDIT_LEAKS.labels(kind="mixed_status_subscribers").set(
+            result["mixed_status_subscribers"]
+        )
+        return result
+    finally:
+        session.close()

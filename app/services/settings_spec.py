@@ -779,6 +779,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="suspension_audit_enabled",
+        env_var="RADIUS_SUSPENSION_AUDIT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Suspension Enforcement Audit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="suspension_audit_interval_seconds",
+        env_var="RADIUS_SUSPENSION_AUDIT_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=21600,
+        min_value=900,
+        label="Suspension Audit Interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="refresh_sessions_on_profile_change",
         env_var="RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE",
         value_type=SettingValueType.boolean,

@@ -1,4 +1,4 @@
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 REQUEST_COUNT = Counter(
     "http_requests_total",
@@ -26,6 +26,16 @@ VICTORIAMETRICS_WRITE_FAILURES = Counter(
     "victoriametrics_write_failures_total",
     "Total VictoriaMetrics write failures",
     ["adapter", "operation"],
+)
+
+# Set by app.tasks.radius.audit_suspension_enforcement. Non-zero means a
+# fully-blocked subscriber can still reach the network (kind=usable_password /
+# in_active_group / open_session) or per-service suspension is being defeated
+# by a shared credential (kind=mixed_status_subscribers).
+RADIUS_SUSPENSION_AUDIT_LEAKS = Gauge(
+    "radius_suspension_audit_leaks",
+    "Suspension-enforcement audit leak count by class",
+    ["kind"],
 )
 
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
