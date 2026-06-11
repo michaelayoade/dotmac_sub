@@ -89,6 +89,15 @@ def _billing_run_extra(
     return extra
 
 
+def _setting_truthy(db: Session, key: str, *, default: bool) -> bool:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _coerce_int_setting(value: object) -> int | None:
     # settings_spec.resolve_value() returns object | None.
     if value is None:
@@ -644,6 +653,24 @@ def run_invoice_cycle(
         auto_activate_pending: If True, auto-activate pending subscriptions when billed
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
+
+    # Global kill-switch. While Splynx remains the billing system of record,
+    # local invoice generation must stay off (it duplicates Splynx). dry_run is
+    # exempt so the shadow reconciler can still compute would-be invoices for
+    # validation without writing anything.
+    if not dry_run and not _setting_truthy(db, "billing_enabled", default=True):
+        logger.info("billing_disabled_skip", extra={"run_at": run_at.isoformat()})
+        return {
+            "run_at": run_at,
+            "run_id": None,
+            "billing_disabled": True,
+            "subscriptions_scanned": 0,
+            "subscriptions_billed": 0,
+            "invoices_created": 0,
+            "lines_created": 0,
+            "skipped": 0,
+        }
+
     global_due_days = resolve_payment_due_days(db)
 
     # Read auto-activate setting if not explicitly specified
@@ -739,6 +766,35 @@ def run_invoice_cycle(
         if period_start > run_at:
             continue
         period_end = _period_end(period_start, effective_cycle)
+
+        # Skip wholly-past billing periods instead of invoicing every missed
+        # month. Migrated (Splynx) subscribers carry next_billing_at/start_at at
+        # their original signup date — without this, the runner generated a
+        # backdated invoice per missed period per run, double-billing periods
+        # already settled in Splynx (the 2026-05/06 phantom-invoice incident).
+        # We fast-forward next_billing_at to the current period and bill only
+        # that. Set billing.bill_backdated_periods=true to restore arrears
+        # billing if an operator genuinely needs it.
+        if not is_pending and period_end <= run_at:
+            if not _setting_truthy(db, "bill_backdated_periods", default=False):
+                skipped_periods = 0
+                while period_end <= run_at:
+                    period_start = period_end
+                    period_end = _period_end(period_start, effective_cycle)
+                    skipped_periods += 1
+                subscription.next_billing_at = period_start
+                logger.info(
+                    "billing_fast_forward",
+                    extra={
+                        "run_id": str(run_uuid) if run_uuid else None,
+                        "subscription_id": str(subscription.id),
+                        "skipped_periods": skipped_periods,
+                        "new_period_start": period_start.isoformat(),
+                    },
+                )
+                if period_start > run_at:
+                    summary["skipped"] += 1
+                    continue
         end_at = _as_utc(subscription.end_at)
         start_at = _as_utc(subscription.start_at) or period_start
         if end_at and end_at <= period_start:
@@ -1323,9 +1379,17 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
     marked = 0
     escalated = 0
     errors = 0
+    skipped_on_hold = 0
     for invoice in invoices:
         # Check idempotency flag before changing status
         metadata = dict(invoice.metadata_ or {})
+        # Reconciliation hold: invoices flagged as under reconciliation (e.g. the
+        # phantom Splynx duplicate-billing cleanup) must not be marked overdue or
+        # drive suspension/dunning. Setting this flag immediately stops dunning
+        # before the invoices are voided.
+        if metadata.get("reconciliation_hold"):
+            skipped_on_hold += 1
+            continue
         if metadata.get("overdue_event_sent"):
             # Already announced in a prior run — just ensure status is overdue
             if invoice.status != InvoiceStatus.overdue:
@@ -1388,6 +1452,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         "escalated": escalated,
         "errors": errors,
         "scanned": len(invoices),
+        "skipped_on_hold": skipped_on_hold,
     }
 
 
