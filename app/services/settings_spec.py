@@ -285,6 +285,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.notification,
+        key="notification_max_queue_age_hours",
+        env_var="NOTIFICATION_MAX_QUEUE_AGE_HOURS",
+        value_type=SettingValueType.integer,
+        default=72,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
         key="alert_notifications_enabled",
         env_var="ALERT_NOTIFICATIONS_ENABLED",
         value_type=SettingValueType.boolean,

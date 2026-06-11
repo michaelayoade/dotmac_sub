@@ -819,17 +819,26 @@ def _send_export_link_email(
     row_count: int,
     download_url: str,
 ) -> bool:
+    from app.services.email_template import wrap_email_html
+
+    subject = f"Export Ready: {EXPORT_CONFIG.get(module, {}).get('label', module)}"
     return email_service.send_email(
         db=db,
         to_email=recipient_email,
-        subject=f"Export Ready: {EXPORT_CONFIG.get(module, {}).get('label', module)}",
-        body_html=(
-            "<p>Your export file is ready.</p>"
-            f"<p>Module: <strong>{module}</strong><br>"
-            f"Rows: <strong>{row_count}</strong></p>"
-            f'<p><a href="{download_url}">Download export file</a></p>'
+        subject=subject,
+        body_html=wrap_email_html(
+            (
+                "<p>Your export file is ready.</p>"
+                f"<p>Module: <strong>{module}</strong><br>"
+                f"Rows: <strong>{row_count}</strong></p>"
+                f'<p><a href="{download_url}">Download export file</a></p>'
+            ),
+            subject=subject,
         ),
-        body_text=None,
+        body_text=(
+            f"Your export file is ready.\n\nModule: {module}\nRows: {row_count}\n\n"
+            f"Download: {download_url}"
+        ),
         track=True,
         activity="notification_queue",
     )
@@ -1072,13 +1081,22 @@ def _send_export_email(
     content: bytes,
     media_type: str,
 ) -> bool:
+    from app.services.branding_config import get_brand
+
     config = email_service.get_smtp_config(db, activity="notification_queue")
+    brand = get_brand()
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = (
-        f"{config.get('from_name', 'DotMac SM')} <{config.get('from_email', 'noreply@example.com')}>"
+        f"{config.get('from_name') or brand['from_name']} "
+        f"<{config.get('from_email') or brand['from_email']}>"
     )
     msg["To"] = to_email
+    from app.services.email_template import render_email_bodies
+
+    # Wrap fragments/plain text in the branded template; leave full documents.
+    if "<html" not in body_html.lower():
+        body_html, _ = render_email_bodies(body_html, subject=subject)
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(body_html, "html"))
     msg.attach(alt)
