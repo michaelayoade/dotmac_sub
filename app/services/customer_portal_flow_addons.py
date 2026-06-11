@@ -27,6 +27,7 @@ from app.models.catalog import (
     OfferAddOn,
     PriceType,
     SubscriptionAddOn,
+    SubscriptionStatus,
 )
 from app.models.idempotency import IdempotencyKey
 from app.services import catalog as catalog_service
@@ -245,6 +246,17 @@ def purchase_addon(
             if str(prior.account_id) != account_id:
                 raise ValueError("Idempotency key already used")
             return _replay_addon_result(db, prior.ref_id)
+
+    # A non-active service can't use the bundle it pays for — reject before any
+    # wallet work instead of charging for unusable data.
+    if subscription.status != SubscriptionStatus.active:
+        return {
+            "success": False,
+            "reason": "subscription_not_active",
+            "subscription_status": str(
+                getattr(subscription.status, "value", subscription.status)
+            ),
+        }
 
     # Serialize the wallet read-modify-write against concurrent add-on/autopay/
     # plan-change debits so two writers can't both read the same balance and
