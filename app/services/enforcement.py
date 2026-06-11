@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
-from pyrad.packet import CoARequest, DisconnectRequest
+from pyrad.packet import CoAACK, CoARequest, DisconnectACK, DisconnectRequest
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -30,6 +30,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
 from app.services.radius import sync_credential_to_radius
+from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -222,9 +223,22 @@ def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
     impossible for their subscribers.
     """
     if nas_device.shared_secret:
-        decrypted = decrypt_credential(nas_device.shared_secret)
-        if decrypted:
-            return decrypted
+        try:
+            decrypted = decrypt_credential(nas_device.shared_secret)
+            if decrypted:
+                resolved = resolve_secret(decrypted)
+                if resolved:
+                    return resolved
+        except Exception as exc:
+            # An undecryptable/unresolvable local secret must not abort the
+            # enforcement loop — fall through to the external lookup.
+            logger.warning(
+                "Local CoA secret unusable for NAS %s (%s): %s — trying "
+                "external nas table.",
+                nas_device.name,
+                nas_device.id,
+                exc,
+            )
 
     cache_key = str(nas_device.id)
     with _COA_SECRET_CACHE_LOCK:
@@ -339,9 +353,24 @@ def _send_coa_disconnect(
     if session_id:
         req["Acct-Session-Id"] = session_id
     try:
-        client.SendPacket(req)
+        reply = client.SendPacket(req)
+        # Any reply means the NAS speaks CoA — keep the negative cache clear.
         _mark_coa_supported(nas_device.id)
-        return True
+        # Only an ACK actually killed the session. A Disconnect-NAK (e.g. the
+        # AND-matched Framed-IP-Address is stale) must fall through to the
+        # SSH kick instead of counting as a kill.
+        reply_code = getattr(reply, "code", None)
+        if reply_code == DisconnectACK:
+            return True
+        logger.warning(
+            "CoA disconnect NAKed/unexpected reply (code=%s) for user=%s on "
+            "NAS %s (%s) — falling back to SSH kick.",
+            reply_code,
+            username,
+            nas_device.name,
+            nas_device.id,
+        )
+        return False
     except Timeout:
         _mark_coa_unsupported(nas_device.id)
         logger.warning(
@@ -456,10 +485,21 @@ def _send_coa_update(
         except KeyError:
             pass
     try:
-        client.SendPacket(req)
+        reply = client.SendPacket(req)
         _mark_coa_supported(nas_device.id)
+        reply_code = getattr(reply, "code", None)
+        if reply_code != CoAACK:
+            logger.warning(
+                "CoA update NAKed/unexpected reply (code=%s) for user=%s on "
+                "NAS %s (%s).",
+                reply_code,
+                username,
+                nas_device.name,
+                nas_device.id,
+            )
+            return False
         logger.info(
-            "CoA update sent for user=%s on NAS %s (profile=%s).",
+            "CoA update acknowledged for user=%s on NAS %s (profile=%s).",
             username,
             nas_device.id,
             profile.name,
