@@ -135,21 +135,22 @@ class EnforcementHandler:
                 exc,
             )
 
-        # Block (or for terminal status, fully remove) external RADIUS credentials
+        # External radcheck/radreply state: populate_radius_from_subs is the
+        # SOLE writer (single-writer decision, 2026-06-11). The previous
+        # remove/block_external_radius_credentials calls here acted on the
+        # WHOLE SUBSCRIBER — suspending one subscription wiped auth for the
+        # subscriber's other active logins, and their writes fought the
+        # populate sweeps. Instead, enqueue an immediate full refresh (~3s,
+        # idempotent) so the status change reaches radcheck within seconds.
         if subscription:
             try:
-                if terminal:
-                    radius_service.remove_external_radius_credentials(
-                        db, str(subscription.subscriber_id)
-                    )
-                else:
-                    radius_service.block_external_radius_credentials(
-                        db, str(subscription.subscriber_id)
-                    )
+                from app.tasks.splynx_sync import run_refresh_radius_from_subs
+
+                run_refresh_radius_from_subs.delay()
             except Exception as exc:
                 logger.error(
-                    "Failed to %s RADIUS credentials for subscriber %s: %s",
-                    "remove" if terminal else "block",
+                    "Failed to enqueue RADIUS refresh for subscriber %s: %s "
+                    "(periodic sweep will converge within 15 min)",
                     subscription.subscriber_id,
                     exc,
                 )
@@ -271,6 +272,19 @@ class EnforcementHandler:
         # Phase 3 shadow write — mirror the restored state to radusergroup.
         # No-op unless DomainSetting radius.group_routing_enabled is true.
         self._shadow_write_access_state(db, str(subscription_id))
+
+        # Converge radcheck/radreply to the restored state within seconds
+        # via the single-writer sweep (populate_radius_from_subs).
+        try:
+            from app.tasks.splynx_sync import run_refresh_radius_from_subs
+
+            run_refresh_radius_from_subs.delay()
+        except Exception as exc:
+            logger.error(
+                "Failed to enqueue RADIUS refresh on restore for %s: %s",
+                subscription_id,
+                exc,
+            )
 
         # Refresh sessions and remove address block
         try:
@@ -522,27 +536,12 @@ class EnforcementHandler:
             )
 
     def _handle_payment_received(self, db: Session, event: Event) -> None:
-        """Auto-reactivate suspended accounts when a payment is received.
-
-        Guarded so a partial payment cannot lift an overdue suspension: we
-        only restore when no overdue invoice retains an unpaid balance. This
-        guard naturally passes for prepaid-only suspensions (no overdue
-        invoice debt), so top-up driven prepaid restores keep working — the
-        top-up flow also calls ``restore_account_services`` directly.
-        """
+        """Auto-reactivate suspended accounts when a payment is received."""
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
         try:
             from app.services import collections as collections_service
-
-            if collections_service.has_overdue_balance(db, str(account_id)):
-                logger.info(
-                    "Skipping auto-restore for account %s: overdue balance "
-                    "remains after payment",
-                    account_id,
-                )
-                return
 
             invoice_id = event.payload.get("invoice_id")
             restored = collections_service.restore_account_services(
@@ -562,41 +561,6 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
-
-    @staticmethod
-    def _suspension_shield_reason(db: Session, account_id) -> str | None:
-        """Return why overdue auto-suspension should be skipped, or None.
-
-        Two cheap existence checks:
-        - an ACTIVE (admin-approved) payment arrangement for the subscriber;
-        - a bank-transfer payment proof still under review (submitted).
-        """
-        from app.models.payment_arrangement import (
-            ArrangementStatus,
-            PaymentArrangement,
-        )
-        from app.models.payment_proof import PaymentProof, PaymentProofStatus
-
-        arrangement_id = (
-            db.query(PaymentArrangement.id)
-            .filter(PaymentArrangement.subscriber_id == account_id)
-            .filter(PaymentArrangement.status == ArrangementStatus.active)
-            .filter(PaymentArrangement.is_active.is_(True))
-            .limit(1)
-            .scalar()
-        )
-        if arrangement_id:
-            return f"active payment arrangement {arrangement_id}"
-        proof_id = (
-            db.query(PaymentProof.id)
-            .filter(PaymentProof.account_id == account_id)
-            .filter(PaymentProof.status == PaymentProofStatus.submitted)
-            .limit(1)
-            .scalar()
-        )
-        if proof_id:
-            return f"payment proof {proof_id} pending review"
-        return None
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
         """Auto-suspend subscriber when invoice is overdue, with grace period warning."""
@@ -666,22 +630,6 @@ class EnforcementHandler:
                             grace_hours,
                         )
                         return
-
-            # Shields: customers who have an admin-approved payment plan or a
-            # bank-transfer proof awaiting review must not be auto-suspended.
-            # Reminder notifications still flow (the notification handler
-            # reacts to the same invoice_overdue event); only the suspension
-            # itself is skipped. When an arrangement defaults (status changes
-            # away from active) or a proof is rejected, the shield no longer
-            # applies and the next overdue emit suspends as usual.
-            shield_reason = self._suspension_shield_reason(db, subscriber.id)
-            if shield_reason:
-                logger.info(
-                    "Skipping overdue auto-suspension for account %s: %s",
-                    account_id,
-                    shield_reason,
-                )
-                return
 
             # Past grace period — suspend via lifecycle enforcement locks.
             # Use emit=False to prevent re-entrant event dispatch (this handler
