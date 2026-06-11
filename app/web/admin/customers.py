@@ -629,12 +629,19 @@ def person_detail(
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
+    pppoe_access = detail_data.get("pppoe_access") or {
+        "has_credential": False,
+        "credential_id": None,
+        "login": None,
+        "has_password": False,
+    }
 
     return templates.TemplateResponse(
         "admin/customers/detail.html",
         {
             "request": request,
             **detail_data,
+            "pppoe_access": pppoe_access,
             "usage_period": usage_period,
             "usage_page": usage_page,
             "usage_per_page": usage_per_page,
@@ -687,6 +694,25 @@ def person_detail_stats(
             ),
         },
     )
+
+
+@router.get(
+    "/person/{customer_id}/pppoe-password",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def person_pppoe_password(
+    customer_id: str,
+    credential_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    password, found = web_customer_details_service.reveal_customer_pppoe_password(
+        db,
+        customer_id,
+        credential_id=credential_id,
+    )
+    if not found:
+        return JSONResponse({"password": ""}, status_code=404)
+    return JSONResponse({"password": password})
 
 
 @router.get(

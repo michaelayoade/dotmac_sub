@@ -133,12 +133,12 @@ def _send_subscriber_reset_link(
 
 
 def _invite_expiry_minutes(db: Session) -> int:
-    value = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
+    value = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 1440
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return 60
-    return parsed if parsed > 0 else 60
+        return 1440
+    return parsed if parsed > 0 else 1440
 
 
 def _resolve_business_primary_contact(

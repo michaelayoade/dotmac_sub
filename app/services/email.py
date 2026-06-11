@@ -669,6 +669,19 @@ def _render_action_email_html(
 """
 
 
+def _format_expiry_duration(minutes: object) -> str:
+    try:
+        parsed = int(minutes)
+    except (TypeError, ValueError):
+        parsed = 60
+    if parsed > 0 and parsed % 60 == 0:
+        hours = parsed // 60
+        unit = "hour" if hours == 1 else "hours"
+        return f"{hours} {unit}"
+    unit = "minute" if parsed == 1 else "minutes"
+    return f"{parsed} {unit}"
+
+
 def _create_smtp_client(
     host: str, port: int, use_ssl: bool, timeout: int | None = None
 ):
@@ -959,8 +972,9 @@ def send_password_reset_email(
 
     # Get configurable expiry minutes
     expiry_minutes = (
-        resolve_value(db, SettingDomain.auth, "password_reset_expiry_minutes") or 60
+        resolve_value(db, SettingDomain.auth, "password_reset_expiry_minutes") or 1440
     )
+    expiry_duration = _format_expiry_duration(expiry_minutes)
 
     greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
     company_name = _get_company_name(db)
@@ -988,7 +1002,7 @@ def send_password_reset_email(
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
   <strong style="color: #c62828;">Action:</strong> <span style="color: #555;">Reset your account password</span><br>
   <strong style="color: #c62828;">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_minutes} minutes</span>
+  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
@@ -1005,7 +1019,7 @@ We received a request to reset your password for {company_name}.
 Click the link below to create a new password:
 {reset_url}
 
-This link will expire in {expiry_minutes} minutes.
+This link will expire in {expiry_duration}.
 
 If you didn't request a password reset, you can safely ignore this email.
 
@@ -1049,8 +1063,9 @@ def send_user_invite_email(
 
     # Get configurable expiry minutes
     expiry_minutes = (
-        resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
+        resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 1440
     )
+    expiry_duration = _format_expiry_duration(expiry_minutes)
 
     greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
     company_name = _get_company_name(db)
@@ -1078,7 +1093,7 @@ def send_user_invite_email(
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
   <strong style="color: #c62828;">Portal:</strong> <span style="color: #555;">{html.escape(company_name)}</span><br>
   <strong style="color: #c62828;">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_minutes} minutes</span>
+  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
@@ -1095,7 +1110,7 @@ Welcome to {company_name}.
 Use the link below to set your password:
 {reset_url}
 
-This link will expire in {expiry_minutes} minutes.
+This link will expire in {expiry_duration}.
 
 This is an automated message. Please do not reply to this email.
 """

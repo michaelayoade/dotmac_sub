@@ -15,7 +15,12 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus, TaxRate
-from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    AccessCredential,
+    ConnectionType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -48,6 +53,7 @@ from app.services.audit_helpers import (
     resolve_actor_name,
 )
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -992,6 +998,69 @@ def _build_network_access_cards(subscriptions: list) -> list[dict]:
     return cards
 
 
+def _current_pppoe_access_credential(
+    db: Session, account_ids: list[UUID]
+) -> AccessCredential | None:
+    if not account_ids:
+        return None
+    return (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id.in_(account_ids))
+        .filter(AccessCredential.is_active.is_(True))
+        .filter(
+            or_(
+                AccessCredential.connection_type == ConnectionType.pppoe,
+                AccessCredential.connection_type.is_(None),
+            )
+        )
+        .order_by(AccessCredential.updated_at.desc())
+        .first()
+    )
+
+
+def _build_pppoe_access_snapshot(
+    db: Session, account_ids: list[UUID]
+) -> dict[str, object]:
+    credential = _current_pppoe_access_credential(db, account_ids)
+    if not credential:
+        return {
+            "has_credential": False,
+            "credential_id": None,
+            "login": None,
+            "has_password": False,
+        }
+    return {
+        "has_credential": True,
+        "credential_id": str(credential.id),
+        "login": credential.username,
+        "has_password": bool(credential.secret_hash),
+    }
+
+
+def reveal_customer_pppoe_password(
+    db: Session, customer_id: str, credential_id: str | None = None
+) -> tuple[str, bool]:
+    customer = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    account_ids = [customer.id]
+    credential = _current_pppoe_access_credential(db, account_ids)
+    if not credential or not credential.secret_hash:
+        return "", False
+    if credential_id and str(credential.id) != str(credential_id):
+        return "", False
+    try:
+        password = decrypt_credential(credential.secret_hash)
+    except Exception:
+        logger.warning(
+            "Failed to decrypt PPPoE credential for customer %s",
+            customer_id,
+            exc_info=True,
+        )
+        return "", False
+    return password or "", bool(password)
+
+
 def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
@@ -1164,6 +1233,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     except Exception as exc:
         customer_user_access = {"error": str(exc)}
 
+    pppoe_access = _build_pppoe_access_snapshot(db, account_ids)
     network_access_cards = _build_network_access_cards(subscriptions)
     nin_verification = (
         db.query(SubscriberNINVerification)
@@ -1195,6 +1265,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
+        "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
         "network_access_cards": network_access_cards,
         "nin_verification": nin_verification,

@@ -6,15 +6,27 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from jose import jwt
 from starlette.requests import Request
 
 from app.api.auth_flow import router as auth_flow_router
 from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
+from app.services import auth_flow as auth_flow_service
+from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.auth_dependencies import require_user_auth
-from app.services.auth_flow import AuthFlow, hash_password
+from app.services.auth_flow import (
+    AuthFlow,
+    change_password,
+    hash_password,
+    request_password_reset,
+    reset_password,
+    verify_password,
+)
 
 
 def _make_request(user_agent: str = "pytest"):
@@ -337,8 +349,6 @@ def test_request_and_reset_password(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    from app.services.auth_flow import request_password_reset, reset_password
-
     result = request_password_reset(db_session, person.email)
     assert result
     reset_at = reset_password(db_session, result["token"], "new-secret")
@@ -348,16 +358,151 @@ def test_request_and_reset_password(db_session, person, monkeypatch):
     assert credential.failed_login_attempts == 0
 
 
-def test_request_password_reset_unknown_email(db_session):
-    from app.services.auth_flow import request_password_reset
+def test_request_password_reset_accepts_ttl_override(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="reset-ttl@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
 
+    result = request_password_reset(db_session, person.email, ttl_minutes=1440)
+
+    assert result
+    payload = jwt.decode(
+        result["token"],
+        "test-secret",
+        algorithms=["HS256"],
+        options={"verify_aud": False},
+    )
+    assert payload["exp"] - payload["iat"] == 1440 * 60
+
+
+def test_user_invite_uses_configured_invite_ttl(db_session, monkeypatch):
+    captured: dict[str, int | None] = {}
+    setting = DomainSetting(
+        domain=SettingDomain.auth,
+        key="user_invite_expiry_minutes",
+        value_type=SettingValueType.integer,
+        value_text="1440",
+        is_active=True,
+    )
+    db_session.add(setting)
+    db_session.commit()
+
+    def _fake_request_password_reset(db, email: str, *, ttl_minutes: int | None = None):
+        captured["ttl_minutes"] = ttl_minutes
+        return {
+            "token": "reset-token",
+            "email": email,
+            "subscriber_name": "Invitee",
+        }
+
+    monkeypatch.setattr(
+        auth_flow_service,
+        "request_password_reset",
+        _fake_request_password_reset,
+    )
+    monkeypatch.setattr(
+        "app.services.email.send_user_invite_email",
+        lambda *args, **kwargs: True,
+    )
+
+    note = web_system_user_mutations_service.send_user_invite(
+        db_session,
+        email="invitee@example.com",
+    )
+
+    assert "invitation sent" in note.lower()
+    assert captured["ttl_minutes"] == 1440
+
+
+def test_password_reset_requires_local_credential(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.radius,
+        username="pppoe-user",
+        password_hash=None,
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    assert request_password_reset(db_session, person.email) is None
+
+
+def test_reset_password_updates_only_local_credential(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    radius_credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.radius,
+        username="pppoe-user",
+        password_hash=None,
+        is_active=True,
+    )
+    local_credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="portal@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+        must_change_password=True,
+        failed_login_attempts=3,
+    )
+    db_session.add_all([radius_credential, local_credential])
+    db_session.commit()
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    reset_password(db_session, result["token"], "new-secret")
+
+    db_session.refresh(radius_credential)
+    db_session.refresh(local_credential)
+    assert radius_credential.password_hash is None
+    assert verify_password("new-secret", local_credential.password_hash)
+    assert local_credential.must_change_password is False
+    assert local_credential.failed_login_attempts == 0
+
+
+def test_change_password_updates_only_local_credential(db_session, person):
+    radius_credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.radius,
+        username="pppoe-user",
+        password_hash=None,
+        is_active=True,
+    )
+    local_credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="portal@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+        must_change_password=True,
+    )
+    db_session.add_all([radius_credential, local_credential])
+    db_session.commit()
+
+    change_password(db_session, str(person.id), "secret", "new-secret")
+
+    db_session.refresh(radius_credential)
+    db_session.refresh(local_credential)
+    assert radius_credential.password_hash is None
+    assert verify_password("new-secret", local_credential.password_hash)
+    assert local_credential.must_change_password is False
+
+
+def test_request_password_reset_unknown_email(db_session):
     assert request_password_reset(db_session, "missing@example.com") is None
 
 
 def test_reset_password_rejects_invalid_token(db_session, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    from app.services.auth_flow import reset_password
-
     with pytest.raises(HTTPException) as exc:
         reset_password(db_session, "not-a-token", "secret")
     assert exc.value.status_code == 401

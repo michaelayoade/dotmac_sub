@@ -217,18 +217,18 @@ def test_access_and_refresh_ttl_defaults(db_session, monkeypatch):
 def test_password_reset_ttl_invalid(db_session):
     setting = DomainSetting(
         domain=SettingDomain.auth,
-        key="password_reset_ttl_minutes",
+        key="password_reset_expiry_minutes",
         value_type=SettingValueType.string,
         value_text="bad",
         is_active=True,
     )
     db_session.add(setting)
     db_session.commit()
-    assert auth_flow_service._password_reset_ttl_minutes(db_session) == 60
+    assert auth_flow_service._password_reset_ttl_minutes(db_session) == 1440
 
 
 def test_password_reset_ttl_from_env(monkeypatch):
-    monkeypatch.setenv("PASSWORD_RESET_TTL_MINUTES", "15")
+    monkeypatch.setenv("PASSWORD_RESET_EXPIRY_MINUTES", "15")
     assert auth_flow_service._password_reset_ttl_minutes(None) == 15
 
 

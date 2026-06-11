@@ -2215,7 +2215,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="password_reset_expiry_minutes",
         env_var="PASSWORD_RESET_EXPIRY_MINUTES",
         value_type=SettingValueType.integer,
-        default=60,
+        default=1440,
         min_value=5,
     ),
     SettingSpec(
@@ -2223,7 +2223,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="user_invite_expiry_minutes",
         env_var="USER_INVITE_EXPIRY_MINUTES",
         value_type=SettingValueType.integer,
-        default=60,
+        default=1440,
         min_value=5,
     ),
     # ============== Comms Domain: External API Timeouts ==============
