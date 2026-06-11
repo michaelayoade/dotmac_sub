@@ -15,15 +15,27 @@ def _session(subscriber_id):
     )
 
 
-def test_revoke_session_commits_before_return(db_session, person):
+def test_revoke_session_commits_before_return(db_session, person, monkeypatch):
     session = _session(person.id)
     db_session.add(session)
     db_session.commit()
 
-    session_manager.revoke_session(db_session, str(session.id), person.id)
-    db_session.rollback()
-    db_session.expire_all()
+    # Under the rollback-isolation harness a "real" commit can't be observed
+    # by rolling back (the outer transaction owns everything), so assert the
+    # contract directly: revoke_session must call commit() before returning,
+    # and the revocation must be flushed state, not pending-dirty.
+    commits: list[bool] = []
+    real_commit = db_session.commit
 
+    def spying_commit():
+        commits.append(True)
+        real_commit()
+
+    monkeypatch.setattr(db_session, "commit", spying_commit)
+    session_manager.revoke_session(db_session, str(session.id), person.id)
+
+    assert commits, "revoke_session returned without committing"
+    db_session.expire_all()
     persisted = db_session.get(AuthSession, session.id)
     assert persisted.status == SessionStatus.revoked
     assert persisted.revoked_at is not None

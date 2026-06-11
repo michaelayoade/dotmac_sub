@@ -16,11 +16,13 @@ from app.models.billing import (
     InvoiceLine,
     InvoiceStatus,
     TaxApplication,
+    TaxRate,
 )
 from app.models.catalog import (
     AddOn,
     AddOnPrice,
     BillingCycle,
+    DiscountType,
     OfferPrice,
     OfferVersionPrice,
     PriceType,
@@ -32,6 +34,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import settings_spec
 from app.services.billing import _recalculate_invoice_totals
+from app.services.billing.invoices import next_invoice_number
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.common import round_money
 from app.services.events import emit_event
@@ -69,6 +72,7 @@ def _billing_run_extra(
             "invoices_created",
             "lines_created",
             "skipped",
+            "currency_skipped",
             "pending_activated",
             "invoice_reminders_sent",
             "dunning_escalations_sent",
@@ -83,6 +87,15 @@ def _billing_run_extra(
     if max_retries is not None:
         extra["max_retries"] = max_retries
     return extra
+
+
+def _setting_truthy(db: Session, key: str, *, default: bool) -> bool:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _coerce_int_setting(value: object) -> int | None:
@@ -165,38 +178,102 @@ def _period_end(start: datetime, cycle: BillingCycle) -> datetime:
 
 def _resolve_price(db: Session, subscription: Subscription):
     if subscription.offer_version_id:
-        version_price = (
+        version_prices = (
             db.query(OfferVersionPrice)
             .filter(OfferVersionPrice.offer_version_id == subscription.offer_version_id)
             .filter(OfferVersionPrice.price_type == PriceType.recurring)
             .filter(OfferVersionPrice.is_active.is_(True))
-            .first()
+            .order_by(OfferVersionPrice.created_at.desc(), OfferVersionPrice.id.desc())
+            .limit(2)
+            .all()
         )
-        if version_price:
+        if len(version_prices) > 1:
+            logger.warning(
+                "Multiple active recurring offer-version prices for subscription %s "
+                "(offer_version %s); using newest",
+                subscription.id,
+                subscription.offer_version_id,
+            )
+        if version_prices:
+            version_price = version_prices[0]
             return (
                 version_price.amount,
                 version_price.currency,
                 version_price.billing_cycle,
             )
-    offer_price = (
+    offer_prices = (
         db.query(OfferPrice)
         .filter(OfferPrice.offer_id == subscription.offer_id)
         .filter(OfferPrice.price_type == PriceType.recurring)
         .filter(OfferPrice.is_active.is_(True))
-        .first()
+        .order_by(OfferPrice.created_at.desc(), OfferPrice.id.desc())
+        .limit(2)
+        .all()
     )
-    if offer_price:
+    if len(offer_prices) > 1:
+        logger.warning(
+            "Multiple active recurring offer prices for subscription %s (offer %s); "
+            "using newest",
+            subscription.id,
+            subscription.offer_id,
+        )
+    if offer_prices:
+        offer_price = offer_prices[0]
         return offer_price.amount, offer_price.currency, offer_price.billing_cycle
     return None, None, None
 
 
+def _effective_unit_price(
+    subscription: Subscription,
+    catalog_amount: Decimal,
+    now: datetime,
+) -> Decimal:
+    """Effective per-cycle price for a subscription.
+
+    A positive subscription.unit_price (Splynx-imported or admin-set
+    negotiated price) overrides the catalog amount. Zero is treated as
+    "no override" because the Splynx importer stores 0 when the export
+    carried no per-service price. An enabled discount inside its
+    [discount_start_at, discount_end_at] window (open-ended where null,
+    bounds inclusive) is then applied: percentage is percent-off, fixed
+    is an absolute reduction. Never returns below 0.00.
+    """
+    base = catalog_amount
+    if subscription.unit_price is not None and subscription.unit_price > 0:
+        base = subscription.unit_price
+    price = Decimal(str(base))
+    if subscription.discount and subscription.discount_value is not None:
+        now_utc = _as_utc(now) or datetime.now(UTC)
+        start = _as_utc(subscription.discount_start_at)
+        end = _as_utc(subscription.discount_end_at)
+        in_window = (start is None or now_utc >= start) and (
+            end is None or now_utc <= end
+        )
+        if in_window:
+            value = Decimal(str(subscription.discount_value))
+            if subscription.discount_type in (
+                DiscountType.percentage,
+                DiscountType.percent,
+            ):
+                price -= price * value / Decimal("100")
+            elif subscription.discount_type == DiscountType.fixed:
+                price -= value
+    if price < Decimal("0.00"):
+        price = Decimal("0.00")
+    return round_money(price)
+
+
 def _resolve_tax_rate_id(db: Session, subscription: Subscription):
+    def _is_active(tax_rate_id) -> bool:
+        rate = db.get(TaxRate, tax_rate_id)
+        return rate is not None and bool(rate.is_active)
+
     if subscription.service_address_id:
         address = db.get(Address, subscription.service_address_id)
-        if address and address.tax_rate_id:
+        if address and address.tax_rate_id and _is_active(address.tax_rate_id):
             return address.tax_rate_id
     subscriber = db.get(Subscriber, subscription.subscriber_id)
-    if subscriber and subscriber.tax_rate_id:
+    if subscriber and subscriber.tax_rate_id and _is_active(subscriber.tax_rate_id):
         return subscriber.tax_rate_id
     return None
 
@@ -506,6 +583,7 @@ def _log_billing_run_audit(
         "invoices_created": summary.get("invoices_created", 0),
         "lines_created": summary.get("lines_created", 0),
         "skipped": summary.get("skipped", 0),
+        "currency_skipped": summary.get("currency_skipped", 0),
         "pending_activated": summary.get("pending_activated", 0),
         "invoice_reminders_sent": summary.get("invoice_reminders_sent", 0),
         "dunning_escalations_sent": summary.get("dunning_escalations_sent", 0),
@@ -575,6 +653,24 @@ def run_invoice_cycle(
         auto_activate_pending: If True, auto-activate pending subscriptions when billed
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
+
+    # Global kill-switch. While Splynx remains the billing system of record,
+    # local invoice generation must stay off (it duplicates Splynx). dry_run is
+    # exempt so the shadow reconciler can still compute would-be invoices for
+    # validation without writing anything.
+    if not dry_run and not _setting_truthy(db, "billing_enabled", default=True):
+        logger.info("billing_disabled_skip", extra={"run_at": run_at.isoformat()})
+        return {
+            "run_at": run_at,
+            "run_id": None,
+            "billing_disabled": True,
+            "subscriptions_scanned": 0,
+            "subscriptions_billed": 0,
+            "invoices_created": 0,
+            "lines_created": 0,
+            "skipped": 0,
+        }
+
     global_due_days = resolve_payment_due_days(db)
 
     # Read auto-activate setting if not explicitly specified
@@ -641,6 +737,7 @@ def run_invoice_cycle(
         "invoices_created": 0,
         "lines_created": 0,
         "skipped": 0,
+        "currency_skipped": 0,
         "pending_activated": 0,
         "invoice_reminders_sent": 0,
         "dunning_escalations_sent": 0,
@@ -652,6 +749,7 @@ def run_invoice_cycle(
         if amount is None:
             summary["skipped"] += 1
             continue
+        amount = _effective_unit_price(subscription, amount, run_at)
         effective_cycle = cycle or BillingCycle.monthly
         if billing_cycle and effective_cycle != billing_cycle:
             continue
@@ -668,6 +766,35 @@ def run_invoice_cycle(
         if period_start > run_at:
             continue
         period_end = _period_end(period_start, effective_cycle)
+
+        # Skip wholly-past billing periods instead of invoicing every missed
+        # month. Migrated (Splynx) subscribers carry next_billing_at/start_at at
+        # their original signup date — without this, the runner generated a
+        # backdated invoice per missed period per run, double-billing periods
+        # already settled in Splynx (the 2026-05/06 phantom-invoice incident).
+        # We fast-forward next_billing_at to the current period and bill only
+        # that. Set billing.bill_backdated_periods=true to restore arrears
+        # billing if an operator genuinely needs it.
+        if not is_pending and period_end <= run_at:
+            if not _setting_truthy(db, "bill_backdated_periods", default=False):
+                skipped_periods = 0
+                while period_end <= run_at:
+                    period_start = period_end
+                    period_end = _period_end(period_start, effective_cycle)
+                    skipped_periods += 1
+                subscription.next_billing_at = period_start
+                logger.info(
+                    "billing_fast_forward",
+                    extra={
+                        "run_id": str(run_uuid) if run_uuid else None,
+                        "subscription_id": str(subscription.id),
+                        "skipped_periods": skipped_periods,
+                        "new_period_start": period_start.isoformat(),
+                    },
+                )
+                if period_start > run_at:
+                    summary["skipped"] += 1
+                    continue
         end_at = _as_utc(subscription.end_at)
         start_at = _as_utc(subscription.start_at) or period_start
         if end_at and end_at <= period_start:
@@ -742,6 +869,7 @@ def run_invoice_cycle(
             )
             invoice = Invoice(
                 account_id=subscription.subscriber_id,
+                invoice_number=next_invoice_number(db),
                 status=InvoiceStatus.issued,
                 currency=currency or "NGN",
                 billing_period_start=period_start,
@@ -755,7 +883,18 @@ def run_invoice_cycle(
             newly_created_invoices.append(invoice)
             summary["invoices_created"] += 1
         elif currency and invoice.currency != currency:
+            logger.warning(
+                "billing_currency_mismatch_skip",
+                extra={
+                    "event": "billing_currency_mismatch_skip",
+                    "subscription_id": str(subscription.id),
+                    "subscriber_id": str(subscription.subscriber_id),
+                    "subscription_currency": currency,
+                    "invoice_currency": invoice.currency,
+                },
+            )
             summary["skipped"] += 1
+            summary["currency_skipped"] += 1
             continue
 
         # Double-check for existing line on this specific invoice (belt and suspenders)
@@ -938,6 +1077,7 @@ def generate_prorated_invoice(
             "No price found for subscription %s, skipping proration", subscription.id
         )
         return None
+    amount = _effective_unit_price(subscription, amount, activation_date)
 
     effective_cycle = cycle or BillingCycle.monthly
 
@@ -992,6 +1132,7 @@ def generate_prorated_invoice(
     # Create prorated invoice
     invoice = Invoice(
         account_id=subscription.subscriber_id,
+        invoice_number=next_invoice_number(db),
         status=InvoiceStatus.issued,
         currency=currency or "NGN",
         billing_period_start=activation_date,
@@ -1131,6 +1272,76 @@ def run_invoice_cycle_with_retry(
     raise RuntimeError("Billing run failed but no exception was captured")
 
 
+def _resolve_suspension_grace_hours(db: Session) -> int:
+    """Resolve billing.suspension_grace_hours (default 48), same as the
+    enforcement handler."""
+    grace_setting = settings_spec.resolve_value(
+        db, SettingDomain.billing, "suspension_grace_hours"
+    )
+    try:
+        return int(str(grace_setting or 48))
+    except (TypeError, ValueError):
+        return 48
+
+
+def _emit_post_grace_suspension_escalation(
+    db: Session,
+    invoice: Invoice,
+    now: datetime,
+    grace_hours: int,
+) -> bool:
+    """Re-emit ``invoice_overdue`` once the suspension grace has elapsed.
+
+    The first overdue emit (within grace) only produces a "suspension in N
+    hours" warning — actual suspension requires a second ``invoice_overdue``
+    event after the grace. Re-emitting here makes suspension land within
+    ~1 hour of grace expiry, independent of the daily billing run's
+    day-3/7/14/30 dunning cadence.
+
+    Emits at most once per invoice: the ``suspension_escalation_sent``
+    metadata flag is written at emit time (regardless of handler outcome),
+    so an hourly runner never spams. Only fires when the warning was
+    actually sent (``suspension_warning_sent_at``) — if grace was zero or
+    auto-suspend is disabled, there is nothing to escalate — and only while
+    the subscriber is still active.
+
+    Returns True when an escalation event was emitted.
+    """
+    metadata = dict(invoice.metadata_ or {})
+    if metadata.get("suspension_escalation_sent"):
+        return False
+    if not metadata.get("suspension_warning_sent_at"):
+        return False
+    if grace_hours <= 0:
+        return False
+    due_at = _as_utc(invoice.due_at)
+    if due_at is None:
+        return False
+    hours_overdue = (now - due_at).total_seconds() / 3600
+    if hours_overdue < grace_hours:
+        return False
+    subscriber = db.get(Subscriber, invoice.account_id)
+    if not subscriber or subscriber.status != SubscriberStatus.active:
+        return False
+    days_overdue = (now.date() - due_at.date()).days
+    emit_event(
+        db,
+        EventType.invoice_overdue,
+        {
+            "invoice_id": str(invoice.id),
+            "invoice_number": invoice.invoice_number or "",
+            "amount": str(invoice.balance_due or invoice.total or Decimal("0.00")),
+            "due_date": due_at.date().isoformat(),
+            "days_overdue": str(days_overdue),
+            "escalation": "post_grace_suspension",
+        },
+        invoice_id=invoice.id,
+        account_id=invoice.account_id,
+    )
+    _mark_invoice_metadata_flag(invoice, "suspension_escalation_sent")
+    return True
+
+
 def mark_overdue_invoices(db: Session) -> dict[str, int]:
     """Mark past-due invoices as overdue and emit events.
 
@@ -1139,13 +1350,23 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
     or ``partially_paid``, then transitions them to ``overdue`` and
     emits ``invoice_overdue`` events (which trigger the enforcement
     handler for suspension).
+
+    Already-overdue invoices are re-scanned for a one-time post-grace
+    suspension escalation (see ``_emit_post_grace_suspension_escalation``),
+    so suspension does not depend on the daily billing run being healthy.
     """
     now = datetime.now(UTC)
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
         .filter(
-            Invoice.status.in_([InvoiceStatus.issued, InvoiceStatus.partially_paid])
+            Invoice.status.in_(
+                [
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                ]
+            )
         )
         .filter(Invoice.due_at.is_not(None))
         .filter(Invoice.due_at <= now)
@@ -1153,16 +1374,41 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         .all()
     )
 
+    grace_hours = _resolve_suspension_grace_hours(db)
+
     marked = 0
+    escalated = 0
     errors = 0
+    skipped_on_hold = 0
     for invoice in invoices:
         # Check idempotency flag before changing status
         metadata = dict(invoice.metadata_ or {})
+        # Reconciliation hold: invoices flagged as under reconciliation (e.g. the
+        # phantom Splynx duplicate-billing cleanup) must not be marked overdue or
+        # drive suspension/dunning. Setting this flag immediately stops dunning
+        # before the invoices are voided.
+        if metadata.get("reconciliation_hold"):
+            skipped_on_hold += 1
+            continue
         if metadata.get("overdue_event_sent"):
-            # Already processed in a prior run — just ensure status is overdue
+            # Already announced in a prior run — just ensure status is overdue
             if invoice.status != InvoiceStatus.overdue:
                 invoice.status = InvoiceStatus.overdue
-            marked += 1
+                marked += 1
+            # Post-grace escalation: re-emit once so suspension happens
+            # within ~1 hour of grace expiry (idempotent, never hourly spam).
+            try:
+                if _emit_post_grace_suspension_escalation(
+                    db, invoice, now, grace_hours
+                ):
+                    escalated += 1
+            except Exception as exc:
+                logger.error(
+                    "Failed post-grace escalation for invoice %s: %s",
+                    invoice.id,
+                    exc,
+                )
+                errors += 1
             continue
 
         try:
@@ -1191,16 +1437,23 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
             logger.error("Failed to process overdue invoice %s: %s", invoice.id, exc)
             errors += 1
 
-    if marked:
+    if marked or escalated:
         db.commit()
 
     logger.info(
-        "Overdue detection: %d marked, %d errors, %d scanned",
+        "Overdue detection: %d marked, %d escalated, %d errors, %d scanned",
         marked,
+        escalated,
         errors,
         len(invoices),
     )
-    return {"marked_overdue": marked, "errors": errors, "scanned": len(invoices)}
+    return {
+        "marked_overdue": marked,
+        "escalated": escalated,
+        "errors": errors,
+        "scanned": len(invoices),
+        "skipped_on_hold": skipped_on_hold,
+    }
 
 
 def generate_cancellation_credit(

@@ -23,7 +23,10 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
+from uuid import UUID
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -31,8 +34,10 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import (
     PaymentProviderType,
+    PaymentStatus,
     PaymentWebhookDeadLetter,
     PaymentWebhookDeadLetterStatus,
+    TopupIntent,
 )
 from app.schemas.billing import PaymentProviderEventIngest
 from app.services import billing as billing_service
@@ -134,6 +139,110 @@ def _idempotency_key(provider_type: str, data: dict, ref_keys: Sequence[str]) ->
     return f"{provider_type}-{ref}"
 
 
+@dataclass
+class _Settlement:
+    """Money facts extracted from a signature-verified provider payload."""
+
+    status_hint: PaymentStatus
+    amount: Decimal | None = None
+    currency: str | None = None
+    reference: str | None = None
+    metadata: dict | None = None
+
+
+def _extract_settlement(
+    provider_type: str, event_type: str, data: dict
+) -> _Settlement | None:
+    """Pull amount/currency/metadata out of a charge event.
+
+    Returns None for events that carry no settlement outcome (we still record
+    them as provider events, we just don't move money for them). The payload
+    is already signature-verified, so its amount is as trustworthy as a verify
+    API response.
+    """
+    if provider_type == "paystack":
+        if event_type != "charge.success":
+            return None
+        from app.services.paystack import kobo_to_naira
+
+        metadata = data.get("metadata")
+        return _Settlement(
+            status_hint=PaymentStatus.succeeded,
+            amount=kobo_to_naira(data.get("amount") or 0),
+            currency=str(data.get("currency") or "NGN"),
+            reference=str(data.get("reference") or "") or None,
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
+    if provider_type == "flutterwave":
+        # Flutterwave reuses charge.completed for both outcomes; the charge
+        # status lives in data.status.
+        if event_type != "charge.completed":
+            return None
+        metadata = data.get("meta")
+        charge_status = str(data.get("status") or "").lower()
+        if charge_status == "successful":
+            return _Settlement(
+                status_hint=PaymentStatus.succeeded,
+                amount=Decimal(str(data.get("amount") or 0)),
+                currency=str(data.get("currency") or "NGN"),
+                reference=str(data.get("tx_ref") or "") or None,
+                metadata=metadata if isinstance(metadata, dict) else {},
+            )
+        if charge_status == "failed":
+            return _Settlement(
+                status_hint=PaymentStatus.failed,
+                reference=str(data.get("tx_ref") or "") or None,
+                metadata=metadata if isinstance(metadata, dict) else {},
+            )
+    return None
+
+
+def _coerce_uuid(value) -> UUID | None:
+    try:
+        return UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _resolve_settlement_topup_intent(
+    db: Session, settlement: _Settlement
+) -> TopupIntent | None:
+    """Load the top-up intent referenced by checkout metadata, if any.
+
+    The intent is only trusted when its server-issued reference matches the
+    transaction reference in the provider payload.
+    """
+    intent_id = _coerce_uuid((settlement.metadata or {}).get("topup_intent_id"))
+    if intent_id is None:
+        return None
+    intent = db.get(TopupIntent, intent_id)
+    if intent is None:
+        return None
+    if settlement.reference and intent.reference != settlement.reference:
+        logger.warning(
+            "Webhook topup intent %s reference mismatch (payload ref %s)",
+            intent.id,
+            settlement.reference,
+        )
+        return None
+    return intent
+
+
+def _finalize_webhook_topup_intent(
+    db: Session, intent: TopupIntent, payment_id, amount: Decimal | None
+) -> None:
+    """Mark a top-up intent completed after webhook-driven settlement."""
+    db.refresh(intent)
+    if intent.completed_payment_id:
+        return
+    intent.completed_payment_id = payment_id
+    intent.completed_at = _now()
+    intent.status = "completed"
+    if amount is not None:
+        intent.actual_amount = amount
+    db.commit()
+
+
 def _process_webhook(
     *,
     db: Session,
@@ -186,6 +295,37 @@ def _process_webhook(
         )
         return JSONResponse({"status": "provider not configured"}, status_code=503)
 
+    # Extract the money facts (amount/currency/invoice/top-up intent) from the
+    # signature-verified payload so ingest can actually settle the payment.
+    # Without these, a customer who paid but never returned to the verify URL
+    # would have captured funds and an invoice that never gets marked paid.
+    settlement = _extract_settlement(provider_type, event_type, data)
+    topup_intent: TopupIntent | None = None
+    ingest_payload = PaymentProviderEventIngest(
+        provider_id=provider.id,
+        event_type=event_type,
+        external_id=external_id or "",
+        idempotency_key=idempotency_key,
+        payload=payload,
+    )
+    if settlement is not None:
+        ingest_payload.status_hint = settlement.status_hint
+        metadata = settlement.metadata or {}
+        invoice_id = _coerce_uuid(metadata.get("invoice_id"))
+        account_id = _coerce_uuid(metadata.get("account_id"))
+        topup_intent = _resolve_settlement_topup_intent(db, settlement)
+        if topup_intent is not None and topup_intent.account_id is not None:
+            account_id = topup_intent.account_id
+        if (
+            settlement.status_hint == PaymentStatus.succeeded
+            and settlement.amount is not None
+            and settlement.amount > Decimal("0.00")
+        ):
+            ingest_payload.amount = settlement.amount
+            ingest_payload.currency = settlement.currency
+            ingest_payload.invoice_id = invoice_id
+            ingest_payload.account_id = account_id
+
     # 2. Process inside a SAVEPOINT so a failure rolls back only ingest's own
     #    partial writes, leaving the committed dead-letter row (and the outer
     #    transaction) intact — no full rollback that would also discard the
@@ -193,16 +333,7 @@ def _process_webhook(
     #    Honest status codes drive the provider's retry behaviour.
     nested = db.begin_nested()
     try:
-        billing_service.payment_provider_events.ingest(
-            db,
-            PaymentProviderEventIngest(
-                provider_id=provider.id,
-                event_type=event_type,
-                external_id=external_id or "",
-                idempotency_key=idempotency_key,
-                payload=payload,
-            ),
-        )
+        event = billing_service.payment_provider_events.ingest(db, ingest_payload)
     except HTTPException as exc:
         # Deterministic rejection (e.g. invoice/account mismatch). Retrying the
         # same payload won't help — surface the 4xx and park for human review.
@@ -239,7 +370,46 @@ def _process_webhook(
         )
         return JSONResponse({"status": "error"}, status_code=500)
 
-    # 3. Recorded as a PaymentProviderEvent — the insurance row is redundant.
+    # 3. Post-settlement bookkeeping (best-effort: the money is recorded; a
+    #    failure here must not make the provider retry and is recoverable via
+    #    the customer's own verify flow or the reconciliation sweep).
+    if (
+        settlement is not None
+        and settlement.status_hint == PaymentStatus.succeeded
+        and event.payment_id is not None
+    ):
+        if topup_intent is not None:
+            try:
+                _finalize_webhook_topup_intent(
+                    db, topup_intent, event.payment_id, settlement.amount
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to finalize topup intent after webhook settlement",
+                    exc_info=True,
+                )
+                db.rollback()
+        account_for_restore = ingest_payload.account_id or (
+            topup_intent.account_id if topup_intent is not None else None
+        )
+        if account_for_restore is not None:
+            # Invoice-paid restores already ran inside the payment pipeline;
+            # this additionally covers prepaid/balance-based suspensions.
+            try:
+                from app.services import collections as collections_service
+
+                collections_service.restore_account_services(
+                    db, str(account_for_restore)
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to auto-restore after webhook settlement for %s",
+                    account_for_restore,
+                    exc_info=True,
+                )
+                db.rollback()
+
+    # 4. Recorded as a PaymentProviderEvent — the insurance row is redundant.
     _delete_dead_letter(db, dead_letter)
     return JSONResponse({"status": "ok"}, status_code=200)
 

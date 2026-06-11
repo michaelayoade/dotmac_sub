@@ -637,7 +637,14 @@ class Payments(ListResponseMixin):
         return created
 
     @staticmethod
-    def create(db: Session, payload: PaymentCreate):
+    def create(db: Session, payload: PaymentCreate, *, auto_allocate: bool = True):
+        """Create a payment.
+
+        When ``auto_allocate`` is False and no explicit allocations are given,
+        the payment is NOT spread over open invoices; the full amount is
+        recorded as unallocated account credit instead. Default behavior
+        (auto-allocate to oldest unpaid invoices) is unchanged.
+        """
         if payload.amount is not None and payload.amount <= 0:
             raise HTTPException(
                 status_code=400, detail="Payment amount must be greater than 0"
@@ -715,8 +722,13 @@ class Payments(ListResponseMixin):
         allocations: list[PaymentAllocation]
         if allocation_creates:
             allocations = Payments._create_allocations(db, payment, allocation_creates)
-        else:
+        elif auto_allocate:
             allocations = Payments._auto_allocate(db, payment)
+        else:
+            allocations = []
+            _record_unallocated_payment_credit(
+                db, payment, round_money(to_decimal(payment.amount))
+            )
 
         # Tests run with autoflush disabled; make sure allocations/ledger exist in DB
         # before we query them during invoice recalculation.

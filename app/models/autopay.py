@@ -8,7 +8,7 @@ rows until the migration is applied in a given environment.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,13 @@ class AutopayMandate(Base):
         UUID(as_uuid=True), ForeignKey("payment_methods.id")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Decline tracking: consecutive failed charge runs. Reset on a successful
+    # charge, on re-enable, or when the customer picks a new default card.
+    # Mandates at/over the failure cap are skipped by the charge engine.
+    failure_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_reason: Mapped[str | None] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

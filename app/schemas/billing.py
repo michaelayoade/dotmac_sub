@@ -510,6 +510,11 @@ class PaymentProviderEventIngest(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     payload: dict | None = None
+    # Provider-aware status resolved by the webhook layer. Some providers reuse
+    # one event type for both outcomes (Flutterwave's "charge.completed" carries
+    # either a successful or a failed charge), so the raw event_type alone is
+    # not always mappable. When set, this overrides the static event-type map.
+    status_hint: PaymentStatus | None = None
 
 
 class PaymentWebhookDeadLetterRead(BaseModel):
@@ -855,6 +860,12 @@ class MyPaymentMethodRead(BaseModel):
 class AutopayStatusResponse(BaseModel):
     enabled: bool = False
     payment_method_id: UUID | None = None
+    failure_count: int = 0
+    last_failure_at: datetime | None = None
+    last_failure_reason: str | None = None
+    # Enabled but no longer charged (too many declines) until the customer
+    # re-enables autopay or picks a new default card.
+    suspended: bool = False
 
 
 class AutopayEnableRequest(BaseModel):

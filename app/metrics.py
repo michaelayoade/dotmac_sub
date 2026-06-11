@@ -1,4 +1,5 @@
 from prometheus_client import REGISTRY, Counter, Histogram
+from prometheus_client.registry import Collector
 
 REQUEST_COUNT = Counter(
     "http_requests_total",
@@ -29,7 +30,7 @@ VICTORIAMETRICS_WRITE_FAILURES = Counter(
 )
 
 
-class _SuspensionAuditCollector:
+class _SuspensionAuditCollector(Collector):
     """Exports the latest suspension-audit result at scrape time.
 
     The audit runs in a Celery worker; a Gauge set there is invisible to the

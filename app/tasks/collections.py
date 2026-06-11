@@ -15,11 +15,22 @@ def run_dunning() -> dict[str, int]:
     session = SessionLocal()
     try:
         result = collections_service.dunning_workflow.run(session, DunningRunRequest())
-        processed = result.get("processed", 0) if isinstance(result, dict) else 0
-        errors = result.get("errors", 0) if isinstance(result, dict) else 0
-        logger.info("Dunning run completed: processed=%d errors=%d", processed, errors)
+        summary = {
+            "accounts_scanned": int(result.accounts_scanned),
+            "cases_created": int(result.cases_created),
+            "actions_created": int(result.actions_created),
+            "skipped": int(result.skipped),
+        }
+        logger.info(
+            "Dunning run completed: accounts_scanned=%d cases_created=%d "
+            "actions_created=%d skipped=%d",
+            summary["accounts_scanned"],
+            summary["cases_created"],
+            summary["actions_created"],
+            summary["skipped"],
+        )
         session.commit()
-        return {"processed": processed, "errors": errors}
+        return summary
     except Exception:
         session.rollback()
         raise
@@ -35,13 +46,24 @@ def run_prepaid_enforcement() -> dict[str, int]:
         result = collections_service.prepaid_enforcement.run(
             session, PrepaidEnforcementRunRequest()
         )
-        processed = result.get("processed", 0) if isinstance(result, dict) else 0
-        errors = result.get("errors", 0) if isinstance(result, dict) else 0
+        summary = {
+            "accounts_scanned": int(result.accounts_scanned),
+            "accounts_warned": int(result.accounts_warned),
+            "accounts_suspended": int(result.accounts_suspended),
+            "accounts_deactivated": int(result.accounts_deactivated),
+            "skipped": int(result.skipped),
+        }
         logger.info(
-            "Prepaid enforcement completed: processed=%d errors=%d", processed, errors
+            "Prepaid enforcement completed: accounts_scanned=%d accounts_warned=%d "
+            "accounts_suspended=%d accounts_deactivated=%d skipped=%d",
+            summary["accounts_scanned"],
+            summary["accounts_warned"],
+            summary["accounts_suspended"],
+            summary["accounts_deactivated"],
+            summary["skipped"],
         )
         session.commit()
-        return {"processed": processed, "errors": errors}
+        return summary
     except Exception:
         session.rollback()
         raise

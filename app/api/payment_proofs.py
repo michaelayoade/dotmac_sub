@@ -1,8 +1,19 @@
 """Bank-transfer payment proofs: customer/reseller submission + admin review."""
 
 from datetime import datetime
+from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -15,6 +26,9 @@ router = APIRouter(prefix="/payment-proofs", tags=["payment-proofs"])
 class ProofReview(BaseModel):
     review_notes: str | None = Field(default=None, max_length=2000)
     auto_allocate: bool = True
+    # Reviewer-confirmed amount (from the bank statement). Defaults to the
+    # customer-claimed amount when omitted.
+    amount: Decimal | None = Field(default=None, gt=0)
 
 
 @router.post("/me")
@@ -63,6 +77,24 @@ def my_payment_proofs(
     }
 
 
+@router.get("/me/{proof_id}/file")
+def my_payment_proof_file(
+    proof_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> Response:
+    """Customer downloads their own receipt file."""
+    from app.services import payment_proofs
+
+    if principal.get("principal_type") != "subscriber":
+        raise HTTPException(status_code=403, detail="Customer account required")
+    proof = payment_proofs.get_proof(db, proof_id)
+    if proof is None or str(proof.account_id) != str(principal["subscriber_id"]):
+        raise HTTPException(status_code=404, detail="Payment proof not found")
+    path, media_type = payment_proofs.resolve_proof_file(proof)
+    return Response(path.read_bytes(), media_type=media_type)
+
+
 @router.post("/reseller/accounts/{account_id}")
 async def submit_account_payment_proof(
     account_id: str,
@@ -109,6 +141,24 @@ def list_payment_proofs(
     return {"items": payment_proofs.list_admin(db, status, limit, offset)}
 
 
+@router.get(
+    "/admin/{proof_id}/file",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
+def payment_proof_file(
+    proof_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Staff download/preview of any proof's receipt file."""
+    from app.services import payment_proofs
+
+    proof = payment_proofs.get_proof(db, proof_id)
+    if proof is None:
+        raise HTTPException(status_code=404, detail="Payment proof not found")
+    path, media_type = payment_proofs.resolve_proof_file(proof)
+    return Response(path.read_bytes(), media_type=media_type)
+
+
 @router.post(
     "/admin/{proof_id}/verify",
     dependencies=[Depends(require_permission("billing:write"))],
@@ -116,19 +166,23 @@ def list_payment_proofs(
 def verify_payment_proof(
     proof_id: str,
     payload: ProofReview,
+    request: Request,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Confirm the transfer: creates a succeeded Payment (auto-allocated to
-    the oldest open invoices unless disabled) and notifies the customer."""
+    """Confirm the transfer: creates a succeeded Payment for the reviewer-
+    confirmed amount (auto-allocated to the oldest open invoices unless
+    disabled) and notifies the customer."""
     from app.services import payment_proofs
 
     return payment_proofs.verify_proof(
         db,
         proof_id,
         verified_by=str(principal.get("principal_id")),
+        amount=payload.amount,
         auto_allocate=payload.auto_allocate,
         review_notes=payload.review_notes,
+        request=request,
     )
 
 
@@ -139,6 +193,7 @@ def verify_payment_proof(
 def reject_payment_proof(
     proof_id: str,
     payload: ProofReview,
+    request: Request,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
@@ -149,6 +204,7 @@ def reject_payment_proof(
         proof_id,
         verified_by=str(principal.get("principal_id")),
         review_notes=payload.review_notes or "",
+        request=request,
     )
 
 

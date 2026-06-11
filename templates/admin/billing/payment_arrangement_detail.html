@@ -104,7 +104,8 @@
                     {"label": "Amount"},
                     {"label": "Due Date"},
                     {"label": "Status"},
-                    {"label": "Paid At"}
+                    {"label": "Paid At"},
+                    {"label": "Actions"}
                 ]) }}
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
                     {% if installments %}
@@ -138,11 +139,28 @@
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {{ inst.paid_at.strftime('%Y-%m-%d %H:%M') if inst.paid_at else '—' }}
                         </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if next_actionable_installment_id and (inst.id | string) == next_actionable_installment_id %}
+                            <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/record-payment"
+                                  class="flex items-center gap-2">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="text" name="note" placeholder="Note (optional)" maxlength="255"
+                                       class="w-40 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 placeholder-slate-400 focus:border-emerald-500 focus:outline-none dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                                <button type="submit" onclick="return confirm('Record payment for installment #{{ inst.installment_number }} ({{ '{:,.2f}'.format(inst.amount) }})?')"
+                                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
+                                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    Record Payment
+                                </button>
+                            </form>
+                            {% else %}
+                            <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
+                            {% endif %}
+                        </td>
                     {% endcall %}
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                             No installments found.
                         </td>
                     </tr>

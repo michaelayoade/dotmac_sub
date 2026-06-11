@@ -18,7 +18,10 @@ from app.models.billing import Payment, PaymentStatus, TopupIntent
 from app.schemas.billing import PaymentCreate
 from app.services import billing as billing_service
 from app.services.common import coerce_uuid, round_money, to_decimal
-from app.services.customer_portal_flow_payments import _resolve_payment_provider
+from app.services.customer_portal_flow_payments import (
+    _provider_uuid,
+    _resolve_payment_provider,
+)
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 
 logger = logging.getLogger(__name__)
@@ -139,6 +142,7 @@ def verify_and_record_consolidated_payment(
         amount=amount,
         currency=tx.currency,
         status=PaymentStatus.succeeded,
+        provider_id=_provider_uuid(db, provider_type),
         external_id=external_id,
         memo=f"Reseller consolidated payment ref: {reference}",
         paid_at=datetime.now(UTC),

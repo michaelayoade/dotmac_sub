@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
-
-from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.models.billing import TopupIntent
 from app.services.db_session_adapter import db_session_adapter
+from app.services.payment_reconciliation import reconcile_pending_topups
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -17,29 +14,24 @@ SessionLocal = db_session_adapter.create_session
 
 @celery_app.task(name="app.tasks.payment_reconciliation.reconcile_topups")
 def reconcile_topups() -> dict[str, int]:
-    """Expire stale pending top-up intents.
-
-    Gateway verification is handled synchronously on callback/webhook paths; this
-    runner keeps abandoned intents from staying pending forever.
-    """
+    """Sweep stranded top-up intents against the gateway verify API."""
+    logger.info("Starting top-up payment reconciliation sweep")
     session = SessionLocal()
     try:
-        now = datetime.now(UTC)
-        intents = list(
-            session.scalars(
-                select(TopupIntent)
-                .where(TopupIntent.status == "pending")
-                .where(TopupIntent.expires_at.is_not(None))
-                .where(TopupIntent.expires_at < now)
-            ).all()
+        result = reconcile_pending_topups(session)
+        logger.info(
+            "Top-up reconciliation completed: checked=%d recovered=%d "
+            "linked=%d expired=%d errors=%d",
+            result.get("checked", 0),
+            result.get("recovered", 0),
+            result.get("linked", 0),
+            result.get("expired", 0),
+            result.get("errors", 0),
         )
-        for intent in intents:
-            intent.status = "expired"
-            intent.updated_at = now
-        if intents:
-            session.commit()
-        result = {"expired_topup_intents": len(intents)}
-        logger.info("top-up reconciliation complete: %s", result)
+        session.commit()
         return result
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()

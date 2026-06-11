@@ -38,6 +38,11 @@ class PaymentProof(Base):
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    # Amount the reviewer actually confirmed against the bank statement; the
+    # Payment is created for this value (defaults to the claimed amount).
+    verified_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     bank_name: Mapped[str | None] = mapped_column(String(120))
     reference: Mapped[str | None] = mapped_column(String(160))

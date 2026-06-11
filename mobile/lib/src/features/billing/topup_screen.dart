@@ -27,6 +27,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   int? _selected;
   final _custom = TextEditingController();
   bool _busy = false;
+  bool _saveCard = false;
 
   @override
   void initState() {
@@ -82,8 +83,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       );
       if (reference == null) return; // cancelled
 
-      final result =
-          await ref.read(billingRepositoryProvider).verifyTopup(reference);
+      final result = await ref
+          .read(billingRepositoryProvider)
+          .verifyTopup(reference, saveCard: _saveCard);
       // Top-up credits the wallet — refresh balance + ledger + invoices.
       ref.invalidate(invoicesProvider);
       ref.invalidate(balanceProvider);
@@ -186,6 +188,16 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                 '${Fmt.money(page.minAmount, page.currency)} – ${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
+        // Saved cards are Paystack-only — the reusable authorization captured
+        // on a successful charge is what powers saved cards and autopay.
+        if (page.providerType == 'paystack')
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Save this card'),
+            subtitle: const Text('Use it for faster payments and autopay'),
+            value: _saveCard,
+            onChanged: _busy ? null : (v) => setState(() => _saveCard = v),
+          ),
         const SizedBox(height: 24),
         FilledButton.icon(
           onPressed: _busy || _amount == null ? null : _submit,
