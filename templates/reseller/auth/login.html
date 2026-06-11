@@ -11,10 +11,19 @@
     <div class="relative">
         <div class="text-center mb-8">
             <!-- Logo/Brand -->
-            <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/30">
+            {% set card_logo_main = sidebar_stats.sidebar_logo_url if sidebar_stats is defined and sidebar_stats and sidebar_stats.sidebar_logo_url else '' %}
+            {% set card_logo_dark = sidebar_stats.sidebar_logo_dark_url if sidebar_stats is defined and sidebar_stats and sidebar_stats.sidebar_logo_dark_url else '' %}
+            <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl {% if card_logo_main or card_logo_dark %}overflow-hidden bg-white ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700 shadow-lg{% else %}bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/30{% endif %}">
+                {% if card_logo_main or card_logo_dark %}
+                {% if card_logo_main %}
+                <img src="{{ card_logo_main }}" alt="{{ portal_name or (brand.name if brand is defined and brand else 'Dotmac') }} logo" class="h-14 w-14 object-contain dark:hidden">
+                {% endif %}
+                <img src="{{ card_logo_dark or card_logo_main }}" alt="{{ portal_name or (brand.name if brand is defined and brand else 'Dotmac') }} logo" class="hidden h-14 w-14 object-contain dark:block">
+                {% else %}
                 <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
                 </svg>
+                {% endif %}
             </div>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Reseller Portal</h1>
             <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Sign in to access your reseller dashboard</p>
