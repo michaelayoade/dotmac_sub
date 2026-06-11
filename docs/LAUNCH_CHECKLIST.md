@@ -36,9 +36,17 @@ final gate.
       + MFA coverage (reset does not bypass MFA).
 - [x] Customer login copy fixed to "Username or email"; removed untrue
       "resets interrupt connectivity" warning (2026-06-11, PR #188).
-- [ ] ⚠️ Set GLITCHTIP_DSN (brand.json / env) — mobile crash reporting is
-      currently off. Needs a DSN from the GlitchTip account + a mobile rebuild
-      (build-time dart-define); only the operator can supply this.
+- [ ] ⚠️ Mobile GLITCHTIP_DSN: backend reporting is already live (DSN found
+      in prod .env, app/monitoring.py inits it, server reachable — verified
+      2026-06-11). Remaining: pick mobile DSN (reuse backend project vs a
+      separate GlitchTip mobile project) — note the DSN is plain http://, which
+      mobile release builds block by default (cleartext); HTTPS or a cleartext
+      exemption needed — then set in brand.json + rebuild.
+- [ ] ⚠️ Migration-number coordination: merged PR #196 took revision 138
+      (service extensions; not yet applied to prod DB — run `make
+      docker-migrate` on next deploy). Open PR #192's MFA-lockout migration
+      also claims 138 off 137 and MUST be renumbered to 139 before merging,
+      or main gets two alembic heads (same failure repaired 2026-06-11 AM).
 
 ## 1. Auth & account access
 
@@ -55,6 +63,9 @@ final gate.
 - [ ] Portal invite flow: admin customer page → invite email → set password →
       first login
 - [ ] MFA: enroll, login challenge, wrong-code rejection — on all three portals.
+      Status: PR #192 (login lockout, MFA wrong-code lockout, session epochs +
+      30d absolute cap, admin remember-me fix) is OPEN and CI-green; deploy
+      needs its migration (renumber to 139 first) + restart.
       Wrong-code lockout (5 codes / 15 min per method, migration 138) and the
       admin "Reset MFA" recovery button on the customer page are new in the
       auth-hardening PR — include both in the manual pass.
@@ -84,15 +95,28 @@ final gate.
 
 ## 2. Service lifecycle & network
 
-- [ ] End-to-end activation: create subscriber → provision PPPoE/RADIUS
+- [x] End-to-end activation: create subscriber → provision PPPoE/RADIUS
       credentials → device connects → live session visible in admin
-      (session observability deployed PR #142; reaper 1h/15min)
-- [ ] Suspend → customer actually loses access (enforcement) → resume restores
-- [ ] Self-service ONT reboot reaches the device (TR-069/GenieACS)
+      (2026-06-11 lifecycle/network launch review: PASS; session observability
+      PR #142, reaper 1h/15min)
+- [ ] ⚠️ Suspend → customer actually loses access (enforcement) → resume
+      restores. 2026-06-11 review found enforcement LEAKY: zero CoA
+      disconnects had ever fired (NAS records lack local shared secret) and
+      ~42 suspended users stayed online. Fixes in flight, both CI-green:
+      PR #194 (secret fallback + loud logging; review wants Disconnect-NAK
+      treated as failure before merge) and PR #197 (6-hourly leak audit;
+      review: gauge isn't exported from celery workers + audited population
+      too broad — rework). Re-test end-to-end after they land.
+- [ ] Self-service ONT reboot reaches the device (TR-069/GenieACS).
+      Notes: only ~17% of ONTs are TR-069-managed (2026-06-11 review);
+      PR #198 adds a 5-min per-device cooldown (CI-green; review: filter out
+      failed attempts so they don't arm the cooldown).
 - [ ] Self-service WiFi SSID/password change reaches the device
 - [ ] Live bandwidth on portal/mobile shows correct download/upload direction
       (rx=upload / tx=download NAS convention — regression-prone; use
-      download_bps/upload_bps naming only)
+      download_bps/upload_bps naming only). Status: portal/mobile paths
+      verified correct in review; admin chart showed zeros (schema stripped
+      the fields) — fix PR #195 is CI-green and reviewed clean, merge-ready.
 
 ## 3. Billing & money (highest risk)
 
@@ -112,6 +136,13 @@ final gate.
       webhook retry idempotency
 - [ ] Dunning experience: what a non-paying customer sees (restricted
       dashboard, captive redirect), and recovery after payment
+- [ ] ⚠️ Outage service-extensions (bulk validity compensation, PR #196,
+      MERGED 2026-06-11): post-merge review found a double-apply race (no row
+      lock on the pending check — two clicks = 2× compensation days) and an
+      unbounded synchronous bulk apply that emits per-subscriber events
+      pre-commit (timeout mid-loop → events fired but billing changes rolled
+      back). Fix both before using the feature for a real outage; migration
+      138 not yet applied to prod.
 
 ## 4. Plans, add-ons, usage
 
@@ -121,7 +152,12 @@ final gate.
 - [ ] Add-on / data-bundle purchase with payment; appears in usage
       immediately; bundle-expiry push notification fires
 - [ ] Offer visibility scoping: each reseller's customers see only their
-      offers (plan_family + reseller availability, PR #179)
+      offers (plan_family + reseller availability, PR #179). Status: PR #191
+      (MERGED 2026-06-11) hides archived/drifted offers in portal listings and
+      guards the mobile deferred change-plan path; review found the **instant**
+      (web) change-plan path still accepts archived-but-is_active offers and
+      recommended a one-line data backfill (`is_active=false WHERE status !=
+      'active'`) — fast-follow needed.
 - [ ] Usage accuracy: portal/mobile usage-summary vs RADIUS accounting on a
       known-traffic test line
 - [ ] FUP: approaching/exceeded banners at correct thresholds (portal +
