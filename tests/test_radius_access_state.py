@@ -40,10 +40,14 @@ class TestDeriveAccessStateBlocked:
             SubscriptionStatus.stopped,
         ],
     )
-    def test_blocked_statuses_map_to_suspended(self, status):
+    @pytest.mark.parametrize("captive_flag", [True, False])
+    def test_blocked_statuses_default_to_captive(self, status, captive_flag):
+        """Captive-by-default (decided 2026-06-11): payment suspension keeps
+        the pay-page path. The legacy captive_redirect_enabled flag no longer
+        demotes anyone to hard reject."""
         assert (
-            derive_access_state(status, captive_redirect_enabled=False)
-            == AccessState.suspended
+            derive_access_state(status, captive_redirect_enabled=captive_flag)
+            == AccessState.captive
         )
 
     @pytest.mark.parametrize(
@@ -54,11 +58,9 @@ class TestDeriveAccessStateBlocked:
             SubscriptionStatus.stopped,
         ],
     )
-    def test_blocked_with_captive_flag_maps_to_captive(self, status):
-        assert (
-            derive_access_state(status, captive_redirect_enabled=True)
-            == AccessState.captive
-        )
+    def test_hard_reject_tier_maps_to_suspended(self, status):
+        """Abuse/fraud tier is explicit opt-in via hard_reject."""
+        assert derive_access_state(status, hard_reject=True) == AccessState.suspended
 
 
 class TestDeriveAccessStateTerminated:

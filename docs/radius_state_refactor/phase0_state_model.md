@@ -53,8 +53,8 @@ def set_subscription_access_state(db, sub_id, state: AccessState):
 | state | meaning | radusergroup | live session action |
 |---|---|---|---|
 | `active` | normal paying customer | `dotmac-active` | none (no change needed) |
-| `suspended` | hard block (overdue, fraud, admin, FUP) | `dotmac-suspended` | CoA-Disconnect → SSH `/ppp active remove` fallback |
-| `captive` | soft block; can reach portal only | `dotmac-captive` | CoA-Update to swap IP → fallback to disconnect+reauth |
+| `suspended` | hard block (abuse/fraud only — NOT default dunning) | `dotmac-suspended` | CoA-Disconnect → SSH `/ppp active remove` fallback |
+| `captive` | soft block (DEFAULT for payment suspension); can reach portal only | `dotmac-captive` | CoA-Disconnect → re-auth picks up walled-garden attrs |
 | `terminated` | cancelled or expired; full removal | (no row) | CoA-Disconnect; user-not-found on re-auth |
 
 Status enum in app code:
@@ -72,9 +72,15 @@ Mapping from existing `SubscriptionStatus`:
 | SubscriptionStatus | AccessState |
 |---|---|
 | `active` | `active` |
-| `suspended`, `blocked`, `stopped` | `suspended` (or `captive` if `subscriber.captive_redirect_enabled`) |
+| `suspended`, `blocked`, `stopped` | `captive` by default (decided 2026-06-11; `suspended` only via the explicit `hard_reject` abuse tier) |
 | `canceled`, `expired`, `disabled` | `terminated` |
 | `pending`, `hidden`, `archived` | (no radusergroup row; treat as not-yet-provisioned) |
+
+> **2026-06-11 decision** — payment suspension defaults to `captive`: suspended-for-nonpayment
+> customers are the most recoverable revenue and the portal pay-page is the self-cure path.
+> Hard reject means "internet is broken" → support call; it also buys nothing on live-session
+> disconnect (Auth-Type Reject only stops re-auth — the audit proved sessions survive it), so it
+> doesn't win on simplicity either. `dotmac-suspended` stays for abuse/fraud.
 
 ## 4. Group definitions
 
@@ -98,20 +104,25 @@ radgroupcheck:
   Auth-Type := Reject
 ```
 
-That's it. User can't auth. No IP issued. No CoA needed because there's no live session permitted.
+User can't re-auth. NOTE (corrected 2026-06-11): a live session keeps
+running until explicitly kicked — Auth-Type Reject only stops the next
+auth, so the CoA-Disconnect step is still required for this tier.
 
 ### `dotmac-captive`
 
 ```
 radgroupreply:
-  Service-Type        := Framed-User
-  Framed-Protocol     := PPP
-  Framed-Pool         := dotmac-captive-pool
-  Mikrotik-Rate-Limit := 1M/1M
-  Mikrotik-Address-List := dotmac-captive
+  Service-Type          := Framed-User
+  Framed-Protocol       := PPP
+  Mikrotik-Rate-Limit   := 1M/1M
+  Mikrotik-Address-List := suspended
 ```
 
-Captive pool CIDR has standing `dst-nat tcp/80 → portal_ip` rule on each NAS.
+Revised 2026-06-11: the captive mechanism is the one already deployed
+fleet-wide — real IP + `Mikrotik-Address-List=suspended` + standing
+filter-jump rules that allow only the portal. The original
+`Framed-Pool dotmac-captive-pool` + per-NAS dst-nat design requires BNG
+config that doesn't exist; revisit pool-based captive at phase 9 if ever.
 
 ### (no group for terminated)
 

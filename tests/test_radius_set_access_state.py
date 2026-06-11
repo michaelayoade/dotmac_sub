@@ -96,21 +96,26 @@ _STATUS_FOR_STATE = {
 
 class TestSetAccessStateWrites:
     @pytest.mark.parametrize(
-        "state,expected_group",
+        "state,expected_aggregate,expected_group",
         [
-            (AccessState.active, "dotmac-active"),
-            (AccessState.suspended, "dotmac-suspended"),
-            (AccessState.captive, "dotmac-captive"),
+            (AccessState.active, "active", "dotmac-active"),
+            # Captive-by-default (2026-06-11): a suspended-status subscription
+            # aggregates to captive — dotmac-suspended is the explicit
+            # hard_reject abuse tier, never derived from status alone.
+            (AccessState.suspended, "captive", "dotmac-captive"),
+            (AccessState.captive, "captive", "dotmac-captive"),
         ],
     )
     def test_state_inserts_correct_group_row(
-        self, state, expected_group, db_session, tmp_path, subscriber, catalog_offer
+        self,
+        state,
+        expected_aggregate,
+        expected_group,
+        db_session,
+        tmp_path,
+        subscriber,
+        catalog_offer,
     ):
-        # For captive, also flip the subscriber's captive flag so
-        # derive_subscriber_access_state returns captive (not suspended).
-        if state == AccessState.captive:
-            subscriber.captive_redirect_enabled = True
-            db_session.commit()
         sub, _ = _seed_subscription(
             db_session,
             subscriber,
@@ -129,11 +134,11 @@ class TestSetAccessStateWrites:
             result = set_subscription_access_state(db_session, str(sub.id), state)
 
         assert result["external_rows_written"] == 1
-        assert result["aggregate_state"] == state.value
+        assert result["aggregate_state"] == expected_aggregate
         assert _read_radusergroup(radius_db, "set-state-1") == [
             ("set-state-1", expected_group, 0)
         ]
-        # App DB column is updated.
+        # App DB column reflects the per-sub state that was set.
         db_session.refresh(sub)
         assert sub.access_state == state.value
 
@@ -241,8 +246,10 @@ class TestSetAccessStateIdempotency:
                 db_session, str(sub.id), AccessState.suspended
             )
 
+        # Captive-by-default: the suspended-status aggregate lands in
+        # dotmac-captive (dotmac-suspended is the explicit abuse tier).
         assert _read_radusergroup(radius_db, "set-state-trans") == [
-            ("set-state-trans", "dotmac-suspended", 0)
+            ("set-state-trans", "dotmac-captive", 0)
         ]
 
 
