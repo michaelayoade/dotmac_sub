@@ -217,26 +217,42 @@ class EmailProvider:
         return NotificationChannel.email
 
     def is_available(self) -> bool:
-        from app.config import settings
+        # SMTP config lives in DB sender profiles (with env/legacy fallback),
+        # not app.config attributes — resolve it the way send_email does.
+        try:
+            from app.services.db_session_adapter import db_session_adapter
+            from app.services.email import _get_smtp_config
 
-        return bool(
-            getattr(settings, "SMTP_HOST", None)
-            or getattr(settings, "SENDGRID_API_KEY", None)
-        )
+            with db_session_adapter.session() as db:
+                config = _get_smtp_config(db)
+            return bool(config and config.get("host"))
+        except Exception:
+            return False
 
     def send(self, request: NotificationRequest) -> NotificationResult:
         try:
+            from app.services.db_session_adapter import db_session_adapter
             from app.services.email import send_email
 
             subject = request.subject or request.title or "Notification"
             html_body = self._render_html(request)
 
-            send_email(
-                to_email=request.recipient,
-                subject=subject,
-                html_body=html_body,
-                text_body=request.message,
-            )
+            with db_session_adapter.session() as db:
+                success = send_email(
+                    db=db,
+                    to_email=request.recipient,
+                    subject=subject,
+                    body_html=html_body,
+                    body_text=request.message,
+                )
+            if not success:
+                return NotificationResult(
+                    success=False,
+                    message="Email send failed",
+                    channel=self.channel,
+                    status=DeliveryStatus.failed,
+                    error="send_failed",
+                )
 
             return NotificationResult(
                 success=True,
@@ -270,16 +286,18 @@ class EmailProvider:
             except Exception:
                 pass
 
-        # Fallback to simple HTML
+        # Fallback: branded wrapper around the plain message
+        from html import escape
+
+        from app.services.email_template import wrap_email_html
+
         title = request.title or request.subject or "Notification"
-        return f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2>{title}</h2>
-            <p>{request.message}</p>
-        </body>
-        </html>
-        """
+        body = (
+            f'<h2 style="margin: 0 0 16px; font-size: 18px;">{escape(title)}</h2>'
+            f'<p style="margin: 0; font-size: 14px; line-height: 1.6;">'
+            f"{escape(request.message or '')}</p>"
+        )
+        return wrap_email_html(body, subject=title)
 
 
 # ---------------------------------------------------------------------------
@@ -295,16 +313,39 @@ class SmsProvider:
         return NotificationChannel.sms
 
     def is_available(self) -> bool:
-        from app.config import settings
+        # SMS config lives in domain_settings/env via the sms service, not
+        # app.config attributes. Mirror send_sms() provider requirements so
+        # health/selection does not report SMS as usable when the send path is
+        # guaranteed to fail.
+        try:
+            from app.services.db_session_adapter import db_session_adapter
+            from app.services.sms import _get_setting
 
-        return bool(
-            getattr(settings, "TWILIO_ACCOUNT_SID", None)
-            or getattr(settings, "AFRICASTALKING_API_KEY", None)
-            or getattr(settings, "SMS_GATEWAY_URL", None)
-        )
+            with db_session_adapter.session() as db:
+                enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or ""
+                if enabled.lower() in ("false", "0", "no", "disabled"):
+                    return False
+                provider = (
+                    _get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
+                    or "webhook"
+                ).lower()
+                api_key = _get_setting(db, "sms_api_key", "SMS_API_KEY")
+                api_secret = _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
+                from_number = _get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
+                webhook_url = _get_setting(db, "sms_webhook_url", "SMS_WEBHOOK_URL")
+            if provider == "twilio":
+                return bool(api_key and api_secret and from_number)
+            if provider == "africastalking":
+                return bool(api_key)
+            if provider == "webhook":
+                return bool(webhook_url)
+            return False
+        except Exception:
+            return False
 
     def send(self, request: NotificationRequest) -> NotificationResult:
         try:
+            from app.services.db_session_adapter import db_session_adapter
             from app.services.sms import send_sms
 
             # Truncate message for SMS
@@ -312,10 +353,20 @@ class SmsProvider:
                 request.message[:160] if len(request.message) > 160 else request.message
             )
 
-            send_sms(
-                to_phone=request.recipient,
-                message=message,
-            )
+            with db_session_adapter.session() as db:
+                success = send_sms(
+                    db=db,
+                    to_phone=request.recipient,
+                    body=message,
+                )
+            if not success:
+                return NotificationResult(
+                    success=False,
+                    message="SMS send failed",
+                    channel=self.channel,
+                    status=DeliveryStatus.failed,
+                    error="send_failed",
+                )
 
             return NotificationResult(
                 success=True,

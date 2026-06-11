@@ -68,3 +68,34 @@ def test_bandwidth_stats_response_model_keeps_subscriber_directions():
     assert stats.upload_bps == 100.0
     assert stats.peak_download_bps == 1800.0
     assert stats.peak_upload_bps == 200.0
+
+
+def test_bandwidth_series_point_keeps_subscriber_directions():
+    """The series response model must not strip the download/upload fields —
+    the chart JS reads d.download_bps exclusively; without these the admin
+    bandwidth chart renders a flat-zero series."""
+    from datetime import UTC, datetime
+
+    from app.api.bandwidth import BandwidthSeriesPoint
+
+    result = add_directions_to_series(
+        {"data": [{"timestamp": datetime.now(UTC), "rx_bps": 10, "tx_bps": 90}]}
+    )
+    point = BandwidthSeriesPoint(**result["data"][0])
+    assert point.download_bps == 90.0
+    assert point.upload_bps == 10.0
+
+
+def test_live_event_payload_includes_subscriber_directions():
+    """Both SSE producers (admin API + customer portal) must emit
+    download_bps/upload_bps — the chart's live handler binds to them only."""
+    from datetime import UTC, datetime
+
+    from app.services.bandwidth import live_event_payload
+
+    payload = live_event_payload({"rx_bps": 10, "tx_bps": 90}, datetime.now(UTC))
+    assert payload["download_bps"] == 90.0
+    assert payload["upload_bps"] == 10.0
+    assert payload["rx_bps"] == 10.0
+    assert payload["tx_bps"] == 90.0
+    assert "timestamp" in payload

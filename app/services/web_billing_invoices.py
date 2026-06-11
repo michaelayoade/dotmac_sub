@@ -260,20 +260,32 @@ def maybe_send_invoice_notification(
     email_addr = getattr(account, "email", None)
     if not email_addr:
         return
+    from app.services.email_template import wrap_email_html
+
     inv_num = invoice.invoice_number or str(invoice.id)
     total = getattr(invoice, "total", "0.00")
     currency = getattr(invoice, "currency", "")
-    body_html = (
-        f"<p>Dear Customer,</p>"
-        f"<p>Invoice <strong>{inv_num}</strong> has been issued"
-        f" for {currency} {total}.</p>"
-        f"<p>Please review and arrange payment at your earliest convenience.</p>"
+    subject = f"Invoice {inv_num}"
+    body_html = wrap_email_html(
+        (
+            f"<p>Dear Customer,</p>"
+            f"<p>Invoice <strong>{inv_num}</strong> has been issued"
+            f" for {currency} {total}.</p>"
+            f"<p>Please review and arrange payment at your earliest convenience.</p>"
+        ),
+        subject=subject,
+    )
+    body_text = (
+        f"Dear Customer,\n\n"
+        f"Invoice {inv_num} has been issued for {currency} {total}.\n\n"
+        "Please review and arrange payment at your earliest convenience."
     )
     email_service.send_email(
         db=db,
         to_email=email_addr,
-        subject=f"Invoice {inv_num}",
+        subject=subject,
         body_html=body_html,
+        body_text=body_text,
         activity="billing_invoice",
     )
 

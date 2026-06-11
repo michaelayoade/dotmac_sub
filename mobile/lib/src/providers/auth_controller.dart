@@ -94,6 +94,21 @@ class AuthController extends StateNotifier<AuthState> {
   /// prompt's own lifecycle transitions can't re-arm the lock under itself.
   bool _promptActive = false;
 
+  /// Exposed so the lifecycle observer can tell a pause caused by our own
+  /// biometric prompt (some Android OEMs host it in a separate activity, which
+  /// pauses us) from a real backgrounding, and skip re-arming the lock for the
+  /// former. iOS prompts only emit `inactive`, so this never fires there.
+  bool get promptActive => _promptActive;
+
+  /// In-memory mirror of the persisted biometric opt-in so [lockOnResume] can
+  /// lock synchronously on resume instead of leaving the previous screen
+  /// visible (and tappable) while secure storage is read.
+  bool _biometricArmed = false;
+
+  /// Where the router should return the user once the lock is satisfied.
+  /// Stashed by the redirect when it diverts to /lock, consumed exactly once.
+  String? _lockReturnLocation;
+
   /// Restore a previous session on cold start.
   ///
   /// Optimistic: if we hold a cached profile we render straight to the
@@ -121,11 +136,20 @@ class AuthController extends StateNotifier<AuthState> {
 
     try {
       final me = await _repo.me();
+      if (state.status == AuthStatus.unauthenticated) {
+        // The user signed out (e.g. from the lock screen) while /auth/me was
+        // in flight — don't resurrect the session from a stale response.
+        return;
+      }
       await _persistProfile(me);
       state = AuthState(
         status: AuthStatus.authenticated,
         me: me,
-        locked: locked,
+        // Preserve the *current* lock state, not the launch decision: the user
+        // may have unlocked while /auth/me was in flight, and re-applying the
+        // stale `locked` capture would re-lock them. Without a cached profile
+        // no lock screen was shown yet, so the launch decision still stands.
+        locked: cached != null ? state.locked : locked,
       );
     } on ApiException catch (e) {
       final rejected = e.statusCode == 401 || e.statusCode == 403;
@@ -166,7 +190,9 @@ class AuthController extends StateNotifier<AuthState> {
   /// usable. If biometrics were removed since opt-in we proceed unlocked rather
   /// than stranding the user.
   Future<bool> _shouldLockOnLaunch() async {
-    if (!await _storage.isBiometricEnabled()) return false;
+    // Cache the opt-in so lockOnResume can act without an async storage read.
+    _biometricArmed = await _storage.isBiometricEnabled();
+    if (!_biometricArmed) return false;
     return _biometric.isAvailable();
   }
 
@@ -191,11 +217,40 @@ class AuthController extends StateNotifier<AuthState> {
   /// available — and never while a prompt is already showing.
   Future<void> lockOnResume() async {
     if (_promptActive || state.locked || !state.isAuthenticated) return;
-    if (!await _storage.isBiometricEnabled()) return;
-    if (!await _biometric.isAvailable()) return;
-    // Re-check after the awaits in case state changed meanwhile.
-    if (_promptActive || state.locked || !state.isAuthenticated) return;
+    if (!_biometricArmed) return;
+    // Lock synchronously (the opt-in is cached in memory) so the previous
+    // screen isn't left visible and tappable while the availability check
+    // round-trips the platform channel.
     state = state.copyWith(locked: true);
+    // If biometrics were removed while backgrounded, roll back rather than
+    // stranding the user behind a lock they can't satisfy.
+    if (!await _biometric.isAvailable()) {
+      state = state.copyWith(locked: false);
+    }
+  }
+
+  /// Remember where the lock interrupted the user so [takeLockReturnLocation]
+  /// can send them back after a successful unlock. Launch/auth routes aren't
+  /// worth returning to — those fall through to the portal home instead.
+  void stashLockReturnLocation(String location) {
+    const skip = {
+      '/splash',
+      '/login',
+      '/lock',
+      '/mfa',
+      '/forgot-password',
+      '/reset-password',
+    };
+    if (skip.contains(location)) return;
+    _lockReturnLocation = location;
+  }
+
+  /// One-shot read of the stashed return location — cleared on read (and on
+  /// sign-out) so a later logout/login can't bounce to a stale screen.
+  String? takeLockReturnLocation() {
+    final location = _lockReturnLocation;
+    _lockReturnLocation = null;
+    return location;
   }
 
   Future<bool> biometricAvailable() => _biometric.isAvailable();
@@ -211,14 +266,20 @@ class AuthController extends StateNotifier<AuthState> {
     try {
       final ok = await _biometric.authenticate(
           reason: 'Confirm to enable biometric unlock');
-      if (ok) await _storage.setBiometricEnabled(true);
+      if (ok) {
+        _biometricArmed = true;
+        await _storage.setBiometricEnabled(true);
+      }
       return ok;
     } finally {
       _promptActive = false;
     }
   }
 
-  Future<void> disableBiometricLock() => _storage.setBiometricEnabled(false);
+  Future<void> disableBiometricLock() {
+    _biometricArmed = false;
+    return _storage.setBiometricEnabled(false);
+  }
 
   /// Returns the [LoginResult] so the UI can branch into the MFA flow.
   /// Breadcrumbs the attempt/outcome (provider only — never the credentials).
@@ -259,6 +320,9 @@ class AuthController extends StateNotifier<AuthState> {
   Future<void> _loadMe() async {
     final me = await _repo.me();
     await _persistProfile(me);
+    // Re-sync the cached opt-in: it survives a session-expiry token wipe, so a
+    // fresh password login must re-arm the resume lock without a cold start.
+    _biometricArmed = await _storage.isBiometricEnabled();
     state = AuthState(status: AuthStatus.authenticated, me: me);
     await Sentry.configureScope(
         (scope) => scope.setUser(SentryUser(id: me.id)));
@@ -276,6 +340,8 @@ class AuthController extends StateNotifier<AuthState> {
     await _repo.logout();
     // Explicit sign-out is a full reset: drop the biometric opt-in so the next
     // user starts from a clean password login.
+    _biometricArmed = false;
+    _lockReturnLocation = null;
     await _storage.setBiometricEnabled(false);
     // Drop cached responses so the next account never sees this one's data.
     await _ref.read(responseCacheProvider).clear();
@@ -286,6 +352,7 @@ class AuthController extends StateNotifier<AuthState> {
   void onSessionExpired() {
     // Fire-and-forget: clearing the disk cache must not block the redirect.
     _ref.read(responseCacheProvider).clear();
+    _lockReturnLocation = null;
     state = AuthState.signedOut;
   }
 }

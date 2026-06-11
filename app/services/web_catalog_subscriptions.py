@@ -891,11 +891,18 @@ def send_subscription_credentials(
         f"Your service password is: {password}\n\n"
         "Please keep these details secure."
     )
-    body_html = (
-        f"<p>Hello {subscriber.full_name},</p>"
-        f"<p>Your service login is: <strong>{credential.username}</strong><br>"
-        f"Your service password is: <strong>{password}</strong></p>"
-        "<p>Please keep these details secure.</p>"
+    from html import escape
+
+    from app.services.email_template import wrap_email_html
+
+    body_html = wrap_email_html(
+        (
+            f"<p>Hello {escape(subscriber.full_name or '')},</p>"
+            f"<p>Your service login is: <strong>{escape(credential.username or '')}</strong><br>"
+            f"Your service password is: <strong>{escape(password)}</strong></p>"
+            "<p>Please keep these details secure.</p>"
+        ),
+        subject=subject,
     )
 
     email_sent = 0
@@ -1212,12 +1219,15 @@ def send_welcome_email_for_subscription(db: Session, created: Subscription) -> N
     email_addr = subscriber.email if subscriber else None
     if not email_addr:
         return
+    from app.services.email_template import wrap_email_html
+
+    subject = "Welcome to your new subscription"
     body_text = "Welcome! Your subscription is now set up."
-    body_html = f"<p>{body_text}</p>"
+    body_html = wrap_email_html(f"<p>{body_text}</p>", subject=subject)
     email_service.send_email(
         db=db,
         to_email=email_addr,
-        subject="Welcome to your new subscription",
+        subject=subject,
         body_html=body_html,
         body_text=body_text,
         activity="subscription_welcome",

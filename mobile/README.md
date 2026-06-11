@@ -79,6 +79,41 @@ Release builds additionally need a signing config (`android/key.properties` +
 keystore — both gitignored). Running an emulator needs KVM/hardware
 virtualization.
 
+## Release builds
+
+A signed store build pulls config from the repo-root `brand.json`
+(`API_BASE_URL` now points at the production host) and is signed from a
+keystore referenced by `android/key.properties`.
+
+1. **One-time keystore** (keep it safe — losing it blocks all future updates):
+   ```
+   keytool -genkey -v -keystore ~/dotmac-release.jks \
+     -keyalg RSA -keysize 2048 -validity 10000 -alias dotmac
+   ```
+   Copy `android/key.properties.example` → `android/key.properties` and fill in.
+
+2. **Build** (the GlitchTip DSN is injected separately so it stays out of git):
+   ```
+   flutter build appbundle --release \
+     --dart-define-from-file=../brand.json \
+     --dart-define=GLITCHTIP_DSN=<your-mobile-glitchtip-dsn>
+   ```
+   With `key.properties` present the bundle is signed with the release key;
+   without it, the build falls back to the debug key (installable locally, **not
+   shippable**).
+
+3. **CI**: `.github/workflows/mobile-release.yml` produces the signed appbundle
+   on a `mobile-v*` tag or manual dispatch, using these repo secrets:
+   `ANDROID_KEYSTORE_BASE64` (`base64 -w0 dotmac-release.jks`),
+   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`,
+   `MOBILE_GLITCHTIP_DSN`. iOS release archiving still needs Apple signing
+   credentials wired in (job is stubbed).
+
+The payment return scheme (`dotmacpay`) is registered in the Android manifest
+and iOS Info.plist; for a white-label build, override `BRAND_PAYMENT_SCHEME` in
+the Dart build *and* the matching native entries (Gradle `-PpaymentScheme=`,
+iOS `CFBundleURLSchemes`).
+
 ## How auth works
 
 1. `POST /auth/login` returns either a token pair **or** an MFA challenge

@@ -1,7 +1,7 @@
 name: dotmac_portal
 description: DotMac customer self-care mobile app (Flutter).
 publish_to: "none"
-version: 0.1.0+1
+version: 1.0.0+1
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -31,6 +31,10 @@ dependencies:
 
   # In-app provider checkout (Paystack / Flutterwave inline)
   webview_flutter: ^4.8.0
+
+  # OS-level deep links: catch the payment gateway's <scheme>://success|cancel
+  # return when a 3-D Secure / bank flow leaves the in-app WebView.
+  app_links: ^6.3.2
 
   # Avatar image picking (gallery / camera)
   image_picker: ^1.1.2

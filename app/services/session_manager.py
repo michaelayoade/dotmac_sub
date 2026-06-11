@@ -22,15 +22,24 @@ from app.services import auth_cache
 logger = logging.getLogger(__name__)
 
 
+def _principal_filter(subscriber_id: UUID, principal_type: str):
+    """Sessions are keyed by subscriber_id OR system_user_id depending on who
+    is logged in; filtering on the wrong column silently returns nothing."""
+    if principal_type == "system_user":
+        return AuthSession.system_user_id == subscriber_id
+    return AuthSession.subscriber_id == subscriber_id
+
+
 def list_sessions(
     db: Session,
     subscriber_id: UUID,
     current_session_id: str | None,
+    principal_type: str = "subscriber",
 ) -> SessionListResponse:
-    """List active sessions for a subscriber."""
+    """List active sessions for a principal."""
     stmt = (
         select(AuthSession)
-        .where(AuthSession.subscriber_id == subscriber_id)
+        .where(_principal_filter(subscriber_id, principal_type))
         .where(AuthSession.status == SessionStatus.active)
         .where(AuthSession.revoked_at.is_(None))
         .order_by(AuthSession.created_at.desc())
@@ -59,12 +68,13 @@ def revoke_session(
     db: Session,
     session_id: str,
     subscriber_id: UUID,
+    principal_type: str = "subscriber",
 ) -> SessionRevokeResponse:
-    """Revoke a single session belonging to the subscriber."""
+    """Revoke a single session belonging to the principal."""
     stmt = (
         select(AuthSession)
         .where(AuthSession.id == session_id)
-        .where(AuthSession.subscriber_id == subscriber_id)
+        .where(_principal_filter(subscriber_id, principal_type))
     )
     session = db.scalars(stmt).first()
 
@@ -79,7 +89,7 @@ def revoke_session(
     principal_id = str(session.system_user_id or session.subscriber_id)
     session.status = SessionStatus.revoked
     session.revoked_at = now
-    db.flush()
+    db.commit()
     auth_cache.invalidate_session_context(
         str(session.id),
         principal_type=principal_type,
@@ -93,11 +103,12 @@ def revoke_all_other_sessions(
     db: Session,
     subscriber_id: UUID,
     current_session_id: str | None,
+    principal_type: str = "subscriber",
 ) -> SessionRevokeResponse:
     """Revoke all active sessions except the current one."""
     stmt = (
         select(AuthSession)
-        .where(AuthSession.subscriber_id == subscriber_id)
+        .where(_principal_filter(subscriber_id, principal_type))
         .where(AuthSession.status == SessionStatus.active)
         .where(AuthSession.revoked_at.is_(None))
         .where(AuthSession.id != current_session_id)
@@ -105,17 +116,20 @@ def revoke_all_other_sessions(
     sessions = db.scalars(stmt).all()
 
     now = datetime.now(UTC)
+    invalidations: list[tuple[str, str, str]] = []
     for s in sessions:
-        principal_type = "system_user" if s.system_user_id else "subscriber"
+        session_principal_type = "system_user" if s.system_user_id else "subscriber"
         principal_id = str(s.system_user_id or s.subscriber_id)
         s.status = SessionStatus.revoked
         s.revoked_at = now
+        invalidations.append((str(s.id), session_principal_type, principal_id))
+
+    db.commit()
+    for session_id, session_principal_type, principal_id in invalidations:
         auth_cache.invalidate_session_context(
-            str(s.id),
-            principal_type=principal_type,
+            session_id,
+            principal_type=session_principal_type,
             principal_id=principal_id,
         )
-
-    db.flush()
 
     return SessionRevokeResponse(revoked_at=now, revoked_count=len(sessions))

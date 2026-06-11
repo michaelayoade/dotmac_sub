@@ -139,3 +139,113 @@ def test_customer_wifi_update_rejects_password_mismatch(db_session):
 
     assert ok is False
     assert message == "WiFi passwords do not match"
+
+
+def test_customer_reboot_blocked_during_cooldown(db_session, monkeypatch):
+    """A recent reboot operation on the same ONT blocks another customer
+    reboot until the cooldown elapses (default 300s)."""
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+
+    subscriber, subscription, ont = _active_subscription_with_ont(db_session)
+    db_session.add(
+        NetworkOperation(
+            operation_type=NetworkOperationType.ont_reboot,
+            target_type=NetworkOperationTargetType.ont,
+            target_id=ont.id,
+            status=NetworkOperationStatus.succeeded,
+        )
+    )
+    db_session.commit()
+
+    calls = []
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        lambda *a, **k: (
+            calls.append(1) or SimpleNamespace(success=True, message="sent")
+        ),
+    )
+
+    ok, message = reboot_customer_subscription_ont(
+        db_session,
+        {"account_id": str(subscriber.id), "id": "customer-user-1"},
+        str(subscription.id),
+    )
+
+    assert ok is False
+    assert "wait" in message.lower()
+    assert calls == []
+
+
+def test_customer_reboot_allowed_after_cooldown(db_session, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+
+    subscriber, subscription, ont = _active_subscription_with_ont(db_session)
+    op = NetworkOperation(
+        operation_type=NetworkOperationType.ont_reboot,
+        target_type=NetworkOperationTargetType.ont,
+        target_id=ont.id,
+        status=NetworkOperationStatus.succeeded,
+    )
+    db_session.add(op)
+    db_session.commit()
+    # Age the operation past the default 300s cooldown.
+    op.created_at = datetime.now(UTC) - timedelta(seconds=301)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        lambda *a, **k: SimpleNamespace(success=True, message="sent"),
+    )
+
+    ok, _ = reboot_customer_subscription_ont(
+        db_session,
+        {"account_id": str(subscriber.id), "id": "customer-user-1"},
+        str(subscription.id),
+    )
+    assert ok is True
+
+
+def test_failed_reboot_does_not_arm_cooldown(db_session, monkeypatch):
+    """A reboot that errored never disrupted the device — it must not lock
+    the customer out with 'restarted recently'."""
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+
+    subscriber, subscription, ont = _active_subscription_with_ont(db_session)
+    db_session.add(
+        NetworkOperation(
+            operation_type=NetworkOperationType.ont_reboot,
+            target_type=NetworkOperationTargetType.ont,
+            target_id=ont.id,
+            status=NetworkOperationStatus.failed,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
+        lambda *a, **k: SimpleNamespace(success=True, message="sent"),
+    )
+
+    ok, _ = reboot_customer_subscription_ont(
+        db_session,
+        {"account_id": str(subscriber.id), "id": "customer-user-1"},
+        str(subscription.id),
+    )
+    assert ok is True

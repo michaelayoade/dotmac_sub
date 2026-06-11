@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from app.models.bandwidth import BandwidthSample
+from app.services.bandwidth import live_event_payload
 from app.services.db_session_adapter import db_session_adapter
 from app.services.metrics_store import get_metrics_store
 
@@ -65,18 +66,8 @@ async def live_bandwidth_events(
                 exc_info=True,
             )
 
-        now = datetime.now(UTC)
         yield {
             "event": "bandwidth",
-            "data": json.dumps(
-                {
-                    "timestamp": now.isoformat(),
-                    "rx_bps": float(current.get("rx_bps", 0) or 0),
-                    "tx_bps": float(current.get("tx_bps", 0) or 0),
-                    # Samples: tx = NAS egress = subscriber download, rx = upload.
-                    "download_bps": float(current.get("tx_bps", 0) or 0),
-                    "upload_bps": float(current.get("rx_bps", 0) or 0),
-                }
-            ),
+            "data": json.dumps(live_event_payload(current, datetime.now(UTC))),
         }
         await asyncio.sleep(1)

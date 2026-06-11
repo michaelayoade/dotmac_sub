@@ -74,3 +74,91 @@ def test_deliver_notification_queue_marks_failed_on_whatsapp_error(
     assert delivered == 0
     assert wa.status == NotificationStatus.failed
     assert wa.last_error == "provider down"
+
+
+def test_deliver_notification_queue_brands_plain_text_email(db_session, monkeypatch):
+    email = _queued_notification(
+        channel=NotificationChannel.email,
+        recipient="cust@example.com",
+        body="Dear Customer,\n\nYour invoice is overdue.\nPlease pay soon.",
+    )
+    db_session.add(email)
+    db_session.commit()
+
+    captured: dict = {}
+
+    def _fake_send_email(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email", _fake_send_email
+    )
+
+    delivered = _deliver_notification_queue(db_session, batch_size=10)
+
+    db_session.refresh(email)
+    assert delivered == 1
+    assert email.status == NotificationStatus.delivered
+    # Plain text is wrapped in the branded template with a text/plain part.
+    assert "<!DOCTYPE html>" in captured["body_html"]
+    assert "Your invoice is overdue.<br>Please pay soon." in captured["body_html"]
+    assert captured["body_text"] == email.body
+
+
+def test_deliver_notification_queue_processes_push_channel(db_session, monkeypatch):
+    push = _queued_notification(
+        channel=NotificationChannel.push,
+        recipient="subscriber",
+        body="Usage alert",
+    )
+    db_session.add(push)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.push_service.send_push", lambda **_: True
+    )
+
+    delivered = _deliver_notification_queue(db_session, batch_size=10)
+
+    db_session.refresh(push)
+    assert delivered == 1
+    assert push.status == NotificationStatus.delivered
+
+
+def test_deliver_notification_queue_expires_stale_notifications(
+    db_session, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.tasks.notifications import _deliver_notification_queue_stats
+
+    stale = _queued_notification(
+        channel=NotificationChannel.email,
+        recipient="stale@example.com",
+        body="Old dunning notice",
+    )
+    fresh = _queued_notification(
+        channel=NotificationChannel.email,
+        recipient="fresh@example.com",
+        body="New notice",
+    )
+    db_session.add_all([stale, fresh])
+    db_session.commit()
+    # Backdate past the default 72h cutoff.
+    stale.created_at = datetime.now(UTC) - timedelta(hours=100)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email", lambda **_: True
+    )
+
+    stats = _deliver_notification_queue_stats(db_session, batch_size=10)
+
+    db_session.refresh(stale)
+    db_session.refresh(fresh)
+    assert stats["expired"] == 1
+    assert stats["delivered"] == 1
+    assert stale.status == NotificationStatus.canceled
+    assert stale.last_error == "expired_in_queue"
+    assert fresh.status == NotificationStatus.delivered

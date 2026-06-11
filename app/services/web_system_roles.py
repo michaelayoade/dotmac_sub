@@ -7,8 +7,7 @@ import logging
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.rbac import Permission, Role
-from app.models.rbac import SubscriberRole as SubscriberRoleModel
+from app.models.rbac import Permission, Role, SystemUserRole
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +39,9 @@ def get_roles_page_data(
 
     user_counts_rows = db.execute(
         select(
-            SubscriberRoleModel.role_id,
-            func.count(func.distinct(SubscriberRoleModel.subscriber_id)),
-        ).group_by(SubscriberRoleModel.role_id)
+            SystemUserRole.role_id,
+            func.count(func.distinct(SystemUserRole.system_user_id)),
+        ).group_by(SystemUserRole.role_id)
     ).all()
     user_counts = {str(role_id): count for role_id, count in user_counts_rows}
 

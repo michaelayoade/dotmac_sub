@@ -4018,7 +4018,7 @@ CREATE TABLE public.mfa_methods (
     is_active boolean NOT NULL,
     verified_at timestamp with time zone,
     last_used_at timestamp with time zone,
-    failed_attempts integer NOT NULL,
+    failed_attempts integer DEFAULT 0 NOT NULL,
     locked_until timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
