@@ -269,6 +269,17 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
             "Your monthly data allowance on {offer_name} has been exhausted."
         ),
     ),
+    EventType.service_extended: EventNotificationSpec(
+        template_code="service_extended",
+        category="billing",
+        channels=(NotificationChannel.push, NotificationChannel.email),
+        subject="Your service has been extended",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We have added {days} day(s) to your service as compensation: "
+            "{reason}. Your service now runs until {extended_until}."
+        ),
+    ),
     EventType.addon_expiring: EventNotificationSpec(
         template_code="addon_expiring",
         category="usage",

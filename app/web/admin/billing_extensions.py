@@ -1,0 +1,184 @@
+"""Admin billing service-extension (outage compensation) routes."""
+
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.models.service_extension import ServiceExtensionScope
+from app.services import service_extensions as service_extensions_service
+from app.services import web_admin as web_admin_service
+from app.services.auth_dependencies import require_permission
+
+templates = Jinja2Templates(directory="templates")
+router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+
+def _context(request: Request, db: Session, extra: dict) -> dict:
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return {
+        "request": request,
+        **extra,
+        "active_page": "service-extensions",
+        "active_menu": "billing",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+
+
+def _form_context(db: Session, error: str | None = None) -> dict:
+    from app.models.catalog import NasDevice
+    from app.models.network_monitoring import PopSite
+
+    return {
+        "pop_sites": db.query(PopSite).order_by(PopSite.name).all(),
+        "nas_devices": db.query(NasDevice).order_by(NasDevice.name).all(),
+        "scope_types": [item.value for item in ServiceExtensionScope],
+        "max_days": service_extensions_service.MAX_EXTENSION_DAYS,
+        "error": error,
+    }
+
+
+def _parse_window(value: str, label: str) -> datetime:
+    from fastapi import HTTPException
+
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid {label} date/time"
+        ) from exc
+
+
+@router.get(
+    "/service-extensions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:extension:read"))],
+)
+def service_extensions_list(
+    request: Request,
+    limit: int = Query(50, ge=10, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    extensions = service_extensions_service.list_extensions(
+        db, limit=limit, offset=offset
+    )
+    return templates.TemplateResponse(
+        "admin/billing/service_extensions.html",
+        _context(request, db, {"extensions": extensions}),
+    )
+
+
+@router.get(
+    "/service-extensions/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:extension:create"))],
+)
+def service_extension_new(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/billing/service_extension_form.html",
+        _context(request, db, _form_context(db)),
+    )
+
+
+@router.post(
+    "/service-extensions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:extension:create"))],
+)
+def service_extension_create(
+    request: Request,
+    reason: str = Form(...),
+    window_start: str = Form(...),
+    window_end: str = Form(...),
+    days: int = Form(...),
+    scope_type: str = Form(...),
+    scope_id: str | None = Form(None),
+    subscriber_ids: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        scope = ServiceExtensionScope(scope_type)
+        ids = [
+            line.strip()
+            for line in str(subscriber_ids or "").splitlines()
+            if line.strip()
+        ]
+        extension = service_extensions_service.create_extension(
+            db,
+            reason=reason,
+            window_start=_parse_window(window_start, "outage start"),
+            window_end=_parse_window(window_end, "outage end"),
+            days=days,
+            scope_type=scope,
+            scope_id=scope_id or None,
+            subscriber_ids=ids or None,
+            created_by=web_admin_service.get_actor_id(request),
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return templates.TemplateResponse(
+            "admin/billing/service_extension_form.html",
+            _context(request, db, _form_context(db, error=str(detail))),
+            status_code=400,
+        )
+    return RedirectResponse(
+        url=f"/admin/billing/service-extensions/{extension.id}", status_code=303
+    )
+
+
+@router.get(
+    "/service-extensions/{extension_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:extension:read"))],
+)
+def service_extension_detail(
+    request: Request, extension_id: str, db: Session = Depends(get_db)
+):
+    extension = service_extensions_service.get_extension(db, extension_id)
+    preview = service_extensions_service.preview_extension(db, extension)
+    return templates.TemplateResponse(
+        "admin/billing/service_extension_detail.html",
+        _context(
+            request,
+            db,
+            {
+                "extension": extension,
+                "preview": preview,
+                "sample": preview["subscriptions"][:50],
+            },
+        ),
+    )
+
+
+@router.post(
+    "/service-extensions/{extension_id}/apply",
+    dependencies=[Depends(require_permission("billing:extension:apply"))],
+)
+def service_extension_apply(
+    request: Request, extension_id: str, db: Session = Depends(get_db)
+):
+    service_extensions_service.apply_extension(
+        db, extension_id, actor_id=web_admin_service.get_actor_id(request)
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/service-extensions/{extension_id}", status_code=303
+    )
+
+
+@router.post(
+    "/service-extensions/{extension_id}/cancel",
+    dependencies=[Depends(require_permission("billing:extension:apply"))],
+)
+def service_extension_cancel(
+    request: Request, extension_id: str, db: Session = Depends(get_db)
+):
+    service_extensions_service.cancel_extension(
+        db, extension_id, actor_id=web_admin_service.get_actor_id(request)
+    )
+    return RedirectResponse(url="/admin/billing/service-extensions", status_code=303)
