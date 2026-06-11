@@ -1527,7 +1527,13 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.disable_user_mfa(db, user_id=user_id)
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    web_system_user_mutations_service.disable_user_mfa(
+        db, user_id=user_id, actor_id=actor_id
+    )
     return Response(status_code=204)
 
 

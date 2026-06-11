@@ -2,12 +2,14 @@
 
 import html
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 
 import pyotp
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from jose import JWTError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ from app.services import auth_flow as auth_flow_service
 from app.services import customer_portal, radius_auth
 from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
+from app.services.rate_limiter_adapter import allow_operation
 from app.services.settings_spec import resolve_value
 from app.web.customer.branding import get_customer_templates
 
@@ -155,9 +158,12 @@ def _verify_customer_mfa_token(
     if not method:
         raise ValueError("MFA method not found")
 
+    auth_flow_service.ensure_mfa_not_locked(method)
     secret = auth_flow_service._decrypt_secret(db, method.secret or "")  # noqa: SLF001
     if not pyotp.TOTP(secret).verify(code.strip(), valid_window=0):
+        auth_flow_service.record_mfa_failure(db, method)
         raise ValueError("Invalid verification code")
+    auth_flow_service.record_mfa_success(method)
 
     method.last_used_at = datetime.now(UTC)
     db.commit()
@@ -242,9 +248,13 @@ def customer_login_submit(
         subscription_id = None
         authenticated_locally = False
 
+        # Case-insensitive: usernames are email addresses (the invite flow
+        # stores the subscriber email verbatim, which may be mixed-case).
         local_credential = (
             db.query(UserCredential)
-            .filter(UserCredential.username == normalized_username)
+            .filter(
+                func.lower(UserCredential.username) == normalized_username.lower()
+            )
             .filter(UserCredential.provider == AuthProvider.local)
             .first()
         )
@@ -279,11 +289,23 @@ def customer_login_submit(
             authenticated_locally = True
 
             subscriber = db.get(Subscriber, local_credential.subscriber_id)
-            if subscriber and subscriber.status != SubscriberStatus.canceled:
+            if subscriber:
                 subscriber_id = subscriber.id
                 account_id = subscriber.id
 
         if not authenticated_locally:
+            # The RADIUS/PPPoE path has no per-credential lockout columns, so
+            # throttle total attempts per username instead (in-memory,
+            # per-worker — a backstop against online brute force, not a
+            # substitute for the DB-backed local-credential lockout).
+            decision = allow_operation(
+                f"portal:radius-login:{normalized_username.lower()}",
+                limit=10,
+                window_seconds=900,
+            )
+            if not decision.allowed:
+                raise ValueError("Account locked. Please try again later.")
+
             # Try RADIUS server authentication first
             radius_authenticated = False
             try:
@@ -347,7 +369,9 @@ def customer_login_submit(
                     from app.services.credential_crypto import decrypt_credential
 
                     stored_password = decrypt_credential(credential.secret_hash)
-                    if stored_password and stored_password == password:
+                    if stored_password and secrets.compare_digest(
+                        stored_password, password
+                    ):
                         account_id = credential.subscriber_id
                         subscriber_id = credential.subscriber_id
                         logger.info(
@@ -361,6 +385,18 @@ def customer_login_submit(
 
         if not account_id or not subscriber_id:
             raise ValueError("Customer account not found. Please contact support.")
+
+        # Status gate for every auth path (local, RADIUS, access-credential
+        # fallback): canceled subscribers are gone, disabled ones are told so.
+        # Suspended/blocked/delinquent stay able to log in and pay.
+        portal_subscriber = db.get(Subscriber, subscriber_id)
+        if (
+            not portal_subscriber
+            or portal_subscriber.status == SubscriberStatus.canceled
+        ):
+            raise ValueError("Customer account not found. Please contact support.")
+        if portal_subscriber.status == SubscriberStatus.disabled:
+            raise ValueError("Account disabled. Please contact support.")
 
         if _primary_customer_totp_enabled(db, subscriber_id):
             response = RedirectResponse(url="/portal/auth/mfa", status_code=303)
@@ -505,6 +541,18 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
             else customer_portal.get_session_max_age(db),
         )
         return response
+    except HTTPException as exc:
+        error_msg = "Invalid verification code"
+        status_code = 401
+        if exc.status_code == 429 and isinstance(exc.detail, str):
+            error_msg = exc.detail
+            status_code = 429
+        return templates.TemplateResponse(
+            request,
+            "customer/auth/mfa.html",
+            {"request": request, "error": error_msg},
+            status_code=status_code,
+        )
     except Exception:
         return templates.TemplateResponse(
             request,

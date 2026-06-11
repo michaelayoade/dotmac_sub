@@ -8,7 +8,13 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.auth import ApiKey, AuthProvider, MFAMethod, UserCredential
+from app.models.auth import (
+    ApiKey,
+    AuthProvider,
+    MFAMethod,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
 from app.models.domain_settings import SettingDomain
 from app.models.rbac import (
@@ -49,21 +55,71 @@ def set_user_active(db: Session, *, user_id: str, is_active: bool) -> SystemUser
     db.query(UserCredential).filter(
         UserCredential.system_user_id == system_user.id
     ).update({"is_active": is_active})
+    if not is_active:
+        # Disabling must end existing sessions: per-request validation only
+        # checks the session row, not the principal's is_active flag.
+        db.query(AuthSession).filter(
+            AuthSession.system_user_id == system_user.id,
+            AuthSession.status == SessionStatus.active,
+            AuthSession.revoked_at.is_(None),
+        ).update(
+            {"status": SessionStatus.revoked, "revoked_at": datetime.now(UTC)},
+            synchronize_session=False,
+        )
     db.commit()
     auth_cache.invalidate_principal("system_user", str(system_user.id))
     return system_user
 
 
-def disable_user_mfa(db: Session, *, user_id: str) -> None:
+def disable_user_mfa(db: Session, *, user_id: str, actor_id: str | None = None) -> None:
     """Disable all MFA methods for a system user."""
+    from app.services.audit_adapter import record_audit_event
+
     system_user = db.get(SystemUser, coerce_uuid(user_id))
     if not system_user:
         raise ValueError("User not found")
     db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).update(
-        {"enabled": False, "is_active": False}
+        {"enabled": False, "is_active": False, "failed_attempts": 0, "locked_until": None}
+    )
+    record_audit_event(
+        db,
+        action="auth.mfa_disabled",
+        entity_type="system_user",
+        entity_id=str(system_user.id),
+        actor_id=actor_id,
+        metadata={"email": system_user.email},
     )
     db.commit()
     auth_cache.invalidate_principal("system_user", str(system_user.id))
+
+
+def disable_subscriber_mfa(
+    db: Session, *, subscriber_id: str, actor_id: str | None = None
+) -> None:
+    """Disable all MFA methods for a subscriber (customer/reseller portal user).
+
+    Admin recovery path for customers who lost their authenticator; without it
+    a locked-out subscriber has no way back in short of account deletion.
+    """
+    from app.models.subscriber import Subscriber
+    from app.services.audit_adapter import record_audit_event
+
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    if not subscriber:
+        raise ValueError("Subscriber not found")
+    db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).update(
+        {"enabled": False, "is_active": False, "failed_attempts": 0, "locked_until": None}
+    )
+    record_audit_event(
+        db,
+        action="auth.mfa_disabled",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        actor_id=actor_id,
+        metadata={"email": subscriber.email},
+    )
+    db.commit()
+    auth_cache.invalidate_principal("subscriber", str(subscriber.id))
 
 
 def reset_user_password(db: Session, *, user_id: str) -> str:
@@ -80,6 +136,9 @@ def reset_user_password(db: Session, *, user_id: str) -> str:
             "password_hash": hash_password(temp_password),
             "must_change_password": True,  # nosec
             "password_updated_at": datetime.now(UTC),
+            # An admin reset must also unlock a locked-out account.
+            "failed_login_attempts": 0,
+            "locked_until": None,
         }
     )
     db.commit()
