@@ -11,7 +11,7 @@
   "BRAND_APP_URL": "https://selfcare.dotmac.io",
   "BRAND_MOBILE_APP_NAME": "DotMac Self-Care",
   "BRAND_PAYMENT_SCHEME": "dotmacpay",
-  "API_BASE_URL": "http://10.0.2.2:8000",
+  "API_BASE_URL": "https://selfcare.dotmac.io",
   "GLITCHTIP_DSN": "",
   "GLITCHTIP_ENVIRONMENT": "production"
 }

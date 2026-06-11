@@ -1,0 +1,119 @@
+name: Mobile Release
+
+# Signed release builds. Manual (workflow_dispatch) or on a mobile version tag
+# like `mobile-v1.0.0`. Never runs on PRs — it needs signing + DSN secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: "Build artifact (appbundle for Play, apk for sideload)"
+        type: choice
+        options: [appbundle, apk]
+        default: appbundle
+  push:
+    tags:
+      - "mobile-v*"
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android-release:
+    name: Android signed release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.1
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Reconstruct the keystore + key.properties from secrets. The keystore is
+      # stored base64-encoded in ANDROID_KEYSTORE_BASE64; the gradle config reads
+      # android/key.properties (see android/app/build.gradle.kts).
+      - name: Restore signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set — cannot produce a shippable build."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release.jks
+          cat > android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=release.jks
+          EOF
+
+      # Brand/config values come from the committed brand.json; the GlitchTip DSN
+      # is injected from a secret (kept out of the repo). A later --dart-define
+      # overrides the same key from --dart-define-from-file.
+      - name: Build signed ${{ github.event.inputs.track || 'appbundle' }}
+        env:
+          GLITCHTIP_DSN: ${{ secrets.MOBILE_GLITCHTIP_DSN }}
+        run: |
+          TRACK="${{ github.event.inputs.track || 'appbundle' }}"
+          flutter build "$TRACK" --release \
+            --dart-define-from-file=../brand.json \
+            --dart-define=GLITCHTIP_DSN="$GLITCHTIP_DSN" \
+            -PpaymentScheme=dotmacpay
+
+      - name: Verify the artifact is not debug-signed
+        run: |
+          OUT=$(find build/app/outputs -name '*.aab' -o -name '*-release.apk' | head -1)
+          echo "Artifact: $OUT"
+          test -n "$OUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotmac-android-release
+          path: |
+            mobile/build/app/outputs/bundle/release/*.aab
+            mobile/build/app/outputs/flutter-apk/*-release.apk
+          if-no-files-found: warn
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f android/app/release.jks android/key.properties
+
+  # iOS release archive needs Apple signing credentials (cert + provisioning
+  # profile) that aren't wired here yet. Kept as a documented, manually-gated
+  # job so the pipeline shape is in place; it fails fast with guidance until the
+  # Apple secrets are configured.
+  ios-release:
+    name: iOS signed archive
+    runs-on: macos-latest
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate on Apple signing secrets
+        run: |
+          echo "::error::iOS release signing not configured. Add the Apple"
+          echo "distribution certificate + provisioning profile as secrets and"
+          echo "wire fastlane match / xcode signing, then enable this job."
+          exit 1

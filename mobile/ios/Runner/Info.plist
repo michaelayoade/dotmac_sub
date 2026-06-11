@@ -26,6 +26,22 @@
 		<string>????</string>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<!-- Payment gateway return scheme: the gateway redirects to
+		     dotmacpay://success|cancel after checkout, so the OS can hand the
+		     link back to the app even when a 3-D Secure / bank flow leaves the
+		     in-app WebView. For a white-label build, change the scheme to match
+		     BRAND_PAYMENT_SCHEME. -->
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleURLName</key>
+				<string>$(PRODUCT_BUNDLE_IDENTIFIER).payment</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>dotmacpay</string>
+				</array>
+			</dict>
+		</array>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
 		<key>UIApplicationSceneManifest</key>
