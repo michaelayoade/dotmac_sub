@@ -1062,6 +1062,79 @@ async def csrf_middleware(request: Request, call_next):
     return response
 
 
+# ── Login rate limiting + security response headers ──────────────────────────
+# Per-IP throttle on the login endpoints. The DB-backed per-account lockout
+# stops repeated guesses against one account; this stops credential-stuffing
+# that sprays a single attempt across many usernames from one source (the
+# per-account lockout never trips for that pattern). In-memory per-worker, so
+# the effective ceiling is roughly limit x worker-count — a brute-force brake,
+# not a hard quota. Tune via env.
+_LOGIN_RATE_LIMIT_PATHS = frozenset(
+    {
+        "/auth/login",
+        "/portal/auth/login",
+        "/reseller/auth/login",
+        "/api/v1/auth/login",
+    }
+)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
+
+
+def _request_is_https(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto", "")
+    if proto:
+        return proto.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
+
+
+@app.middleware("http")
+async def login_rate_limit_middleware(request: Request, call_next):
+    if request.method == "POST" and request.url.path in _LOGIN_RATE_LIMIT_PATHS:
+        from starlette.responses import JSONResponse as _JSONResponse
+
+        from app.services.rate_limiter_adapter import allow_operation
+
+        limit = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "20"))
+        window = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300"))
+        decision = allow_operation(
+            f"login-ip:{request.url.path}:{_client_ip(request)}",
+            limit=limit,
+            window_seconds=window,
+        )
+        if not decision.allowed:
+            retry_after = decision.retry_after_seconds or window
+            return _JSONResponse(
+                {"detail": "Too many login attempts. Please try again later."},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Emit baseline security headers from the app itself, independent of the
+    reverse proxy (the deployed proxy config can drift from the repo)."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if _request_is_https(request):
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=63072000; includeSubDomains",
+        )
+    return response
+
+
 def _load_audit_settings(db: Session):
     global _AUDIT_SETTINGS_CACHE, _AUDIT_SETTINGS_CACHE_AT
     now = monotonic()

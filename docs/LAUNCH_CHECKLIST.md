@@ -189,16 +189,39 @@ final gate.
 - [x] RBAC mount-registry guards: 290 customer-reachable staff routes closed,
       build-failing arch test (PRs #178/#181/#182/#183, deployed 2026-06-10)
 - [ ] Run /security-review on the accumulated diff since the RBAC overhaul;
-      resolve pending P1b endpoint-scoping decisions
-- [ ] Cookies `secure`/`httponly`/`samesite` verified behind the real TLS
-      domain; HSTS at the proxy
-- [ ] IDOR sweep: customer A cannot read customer B's invoices / tickets /
-      usage / arrangements by ID-swapping `/portal/*/{id}` and `/me/*` URLs
-- [ ] PPPoE password reveal endpoint (`/admin/customers/person/{id}/pppoe-password`)
-      restricted to the intended staff role (currently `customer:read` —
-      confirm that is the intended bar)
-- [ ] Rate limits on login / speedtest endpoints (forgot-password done in
-      #187: 3/email/15min, per-worker)
+      resolve pending P1b endpoint-scoping decisions. Targeted manual pass done
+      2026-06-11 (no new auth bypasses; email templates escape user input).
+      **P1b still pending product decision**: object-scoped grants (migration
+      136) are enforced at the endpoint level but not consistently at object
+      level — decide which admin endpoints must additionally enforce
+      object-scope so a staff member scoped to customers X,Y can't act on Z.
+- [x] Cookies + headers hardened (security-hardening PR): app now emits
+      HSTS (on HTTPS) + X-Frame-Options/nosniff/Referrer-Policy from a
+      middleware, independent of the proxy (the *deployed* nginx had drifted
+      from the repo conf and was missing these); `REFRESH_COOKIE_SECURE` is
+      now secure-by-default so admin cookies carry `Secure` over TLS.
+      **Ops follow-up**: re-sync `/etc/nginx/sites-available/selfcare.dotmac.io`
+      with `nginx/selfcare.dotmac.io.conf` (live config lacks the headers);
+      verify flags in devtools behind the real domain.
+- [x] IDOR sweep done 2026-06-11 — all `/portal/*/{id}` and `/me/*` routes
+      enforce ownership in the service layer (invoice/service/installation/
+      service-order/arrangement getters filter by account, incl. business
+      multi-account via `get_allowed_account_ids`); invoice-PDF verifies
+      access before serving. Spot-check one business org during the smoke.
+- [x] PPPoE password reveal — confirmed staff-only (admin router is
+      `system_user`-gated; customers/resellers cannot reach `customer:read`).
+      Now audited (`customer.pppoe_password_reveal`) + per-actor rate-limited
+      (30/hr) in the security-hardening PR. **Decision pending**: whether to
+      narrow from `customer:read` to a dedicated `customer:credential:reveal`
+      permission (needs RBAC seeding) — kept `customer:read` for now.
+- [x] Login rate limit added (security-hardening PR): per-IP middleware on
+      all login endpoints (admin/portal/reseller/`/api/v1/auth/login`), default
+      20/5min, tunable via `LOGIN_RATE_LIMIT_MAX`/`_WINDOW_SECONDS` — closes the
+      credential-stuffing-spray gap the per-account lockout misses. Note:
+      in-memory per-worker (×worker-count ceiling). forgot-password 3/email/15min
+      (#187); MFA 5/15min, account lockout 5/15min (#192). **No customer-facing
+      speedtest exists** (admin-only tool) — that part of the item is N/A.
+      Consider a Redis-backed shared limiter + proxy `limit_req` post-launch.
 
 ## 8. Performance & capacity
 
