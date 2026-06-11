@@ -1159,6 +1159,7 @@ class AddonPurchaseRequest(BaseModel):
 class AddonPurchaseResponse(BaseModel):
     success: bool
     reason: str | None = None
+    subscription_status: str | None = None
     replayed: bool = False
     subscription_add_on_id: UUID | None = None
     add_on_name: str | None = None

@@ -185,3 +185,24 @@ def test_topup_offsets_overage_in_metering(db_session, subscriber):
     grant_data_topup(db_session, sub, _buy(db_session, sub, a5), a5)
     meter_usage_into_quota(db_session)
     assert Decimal(str(bucket.overage_gb)) == Decimal("0.00")
+
+
+def test_granted_topup_visible_in_customer_quota_response(db_session, subscriber):
+    """A purchased bundle must be visible to the customer immediately via the
+    /me/quota-buckets payload (topup_gb), not after the next metering run."""
+    from app.services.usage import quota_buckets
+
+    offer = _offer(db_session, "Capped", 56)
+    sub = _sub(db_session, subscriber, offer)
+    db_session.commit()
+
+    add_on = _topup_addon(db_session, 5)
+    grant_data_topup(db_session, sub, _buy(db_session, sub, add_on), add_on)
+    db_session.commit()
+
+    response = quota_buckets.list_response_for_subscriber(
+        db_session, str(subscriber.id), limit=10, offset=0
+    )
+    items = response["items"]
+    assert len(items) == 1
+    assert Decimal(str(items[0].topup_gb)) == Decimal("5.00")
