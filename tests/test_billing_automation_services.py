@@ -723,6 +723,104 @@ class TestRunInvoiceCycle:
         )
         assert final_invoices > initial_invoices
 
+    def test_backdated_subscription_fast_forwards_without_arrears(
+        self, db_session, subscription, subscriber_account
+    ):
+        """A subscription whose next_billing_at is months in the past must NOT
+        be billed once per missed month (the phantom-invoice incident). The
+        runner fast-forwards to the current period and bills only that."""
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now_naive - timedelta(days=400)
+        subscription.next_billing_at = now_naive - timedelta(days=180)  # ~6 months
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        invoices = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .all()
+        )
+        # Exactly one invoice for the *current* period, not one per missed month.
+        assert len(invoices) == 1
+        period_start = invoices[0].billing_period_start.replace(tzinfo=None)
+        assert period_start > now_naive - timedelta(days=31)
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at.replace(tzinfo=None) > now_naive
+
+    def test_bill_backdated_periods_setting_restores_arrears(
+        self, db_session, subscription, subscriber_account
+    ):
+        """billing.bill_backdated_periods=true opts back into arrears billing
+        of the oldest unbilled period."""
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscriber import AccountStatus
+        from app.models.subscription_engine import SettingValueType
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now_naive - timedelta(days=400)
+        subscription.next_billing_at = now_naive - timedelta(days=180)
+        db_session.add_all(
+            [
+                OfferPrice(
+                    offer_id=subscription.offer_id,
+                    price_type=PriceType.recurring,
+                    amount=Decimal("100.00"),
+                    currency="USD",
+                    billing_cycle=BillingCycle.monthly,
+                    is_active=True,
+                ),
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="bill_backdated_periods",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        period_start = invoice.billing_period_start.replace(tzinfo=None)
+        assert period_start < now_naive - timedelta(days=150)
+
     def test_bills_recurring_addon_on_invoice(
         self, db_session, subscription, subscriber_account
     ):
@@ -1622,3 +1720,39 @@ class TestMarkOverdueInvoices:
         assert result["scanned"] == 0
         assert result["escalated"] == 0
         assert calls == []
+
+
+class TestMarkOverdueReconciliationHold:
+    """A reconciliation_hold flag excludes an invoice from overdue marking so
+    the phantom-invoice cleanup can stop dunning before voiding."""
+
+    def _invoice(self, db_session, account_id, *, hold):
+        from app.models.billing import Invoice, InvoiceStatus
+
+        inv = Invoice(
+            account_id=account_id,
+            status=InvoiceStatus.issued,
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            due_at=datetime.now(UTC) - timedelta(days=5),
+            is_active=True,
+            metadata_={"reconciliation_hold": True} if hold else {},
+        )
+        db_session.add(inv)
+        db_session.commit()
+        db_session.refresh(inv)
+        return inv
+
+    def test_held_invoice_not_marked_overdue(self, db_session, subscriber_account):
+        from app.models.billing import InvoiceStatus
+
+        held = self._invoice(db_session, subscriber_account.id, hold=True)
+        normal = self._invoice(db_session, subscriber_account.id, hold=False)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+
+        db_session.refresh(held)
+        db_session.refresh(normal)
+        assert held.status == InvoiceStatus.issued  # untouched
+        assert normal.status == InvoiceStatus.overdue
+        assert result["skipped_on_hold"] >= 1

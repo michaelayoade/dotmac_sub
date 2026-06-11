@@ -1181,6 +1181,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Auto-activate Pending Subscriptions on Billing",
     ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="bill_backdated_periods",
+        env_var="BILLING_BILL_BACKDATED_PERIODS",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Bill backdated (arrears) periods instead of fast-forwarding",
+    ),
     # ── Prepaid customer defaults ──
     SettingSpec(
         domain=SettingDomain.billing,
