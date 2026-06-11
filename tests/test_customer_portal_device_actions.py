@@ -165,8 +165,9 @@ def test_customer_reboot_blocked_during_cooldown(db_session, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "app.services.customer_portal_flow_services.ont_device_actions.execute_reboot",
-        lambda *a, **k: calls.append(1)
-        or SimpleNamespace(success=True, message="sent"),
+        lambda *a, **k: (
+            calls.append(1) or SimpleNamespace(success=True, message="sent")
+        ),
     )
 
     ok, message = reboot_customer_subscription_ont(
