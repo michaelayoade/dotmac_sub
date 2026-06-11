@@ -1577,6 +1577,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="customer_ont_reboot_cooldown_seconds",
+        env_var="NETWORK_CUSTOMER_ONT_REBOOT_COOLDOWN_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=0,
+        label="Customer ONT Reboot Cooldown (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="hotspot_walled_garden",
         env_var="NETWORK_HOTSPOT_WALLED_GARDEN",
         value_type=SettingValueType.string,
