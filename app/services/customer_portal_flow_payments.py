@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -22,6 +23,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
 from app.services.common import round_money, to_decimal
@@ -46,6 +48,22 @@ def _resolve_payment_provider(db: Session) -> str:
     if val and str(val) == "flutterwave":
         return "flutterwave"
     return "paystack"
+
+
+def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
+    """Resolve the PaymentProvider row id for a gateway type.
+
+    Stamping provider_id on verify-path payments is what lets the webhook
+    ingest path (and the (provider_id, external_id) unique index) recognise
+    the same gateway transaction and refuse to credit it twice.
+    """
+    try:
+        provider = billing_service.payment_providers.get_by_type(
+            db, PaymentProviderType(provider_type)
+        )
+    except ValueError:
+        return None
+    return provider.id if provider else None
 
 
 def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str, str]]:
@@ -368,29 +386,66 @@ def verify_and_record_payment(
 
     from app.schemas.billing import PaymentAllocationApply
 
+    # Serialize concurrent verifies (double-click, refresh, verify racing the
+    # webhook) for this account, then re-check under the lock.
+    lock_account(db, str(invoice.account_id))
+    existing_payment = db.scalars(
+        select(Payment).where(Payment.external_id == tx.external_id)
+    ).first()
+    if existing_payment:
+        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+        summary = _build_topup_summary(db, existing_payment)
+        return {
+            "payment": existing_payment,
+            "invoice": invoice,
+            "amount": getattr(existing_payment, "amount", amount_naira),
+            "reference": reference,
+            "already_recorded": True,
+            **summary,
+        }
+
     invoice_balance_due = round_money(
         to_decimal(getattr(invoice, "balance_due", amount_naira) or amount_naira)
     )
     if invoice_balance_due <= Decimal("0.00"):
         raise ValueError("Invoice no longer has an outstanding balance")
     allocated_amount = min(amount_naira, invoice_balance_due)
-    payment = billing_adapter.record_payment(
-        db,
-        PaymentIntent(
-            account_id=_UUID(str(invoice.account_id)),
-            amount=amount_naira,
-            currency=tx.currency,
-            status=PaymentStatus.succeeded,
-            external_id=tx.external_id,
-            memo=f"{tx.memo_prefix} payment ref: {reference}",
-            allocations=[
-                PaymentAllocationApply(
-                    invoice_id=_UUID(str(invoice_id)),
-                    amount=allocated_amount,
-                )
-            ],
-        ),
-    )
+    try:
+        payment = billing_adapter.record_payment(
+            db,
+            PaymentIntent(
+                account_id=_UUID(str(invoice.account_id)),
+                amount=amount_naira,
+                currency=tx.currency,
+                status=PaymentStatus.succeeded,
+                provider_id=_provider_uuid(db, provider_type),
+                external_id=tx.external_id,
+                memo=f"{tx.memo_prefix} payment ref: {reference}",
+                allocations=[
+                    PaymentAllocationApply(
+                        invoice_id=_UUID(str(invoice_id)),
+                        amount=allocated_amount,
+                    )
+                ],
+            ),
+        )
+    except IntegrityError:
+        db.rollback()
+        payment = db.scalars(
+            select(Payment).where(Payment.external_id == tx.external_id)
+        ).first()
+        if payment is None:
+            raise
+        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+        summary = _build_topup_summary(db, payment)
+        return {
+            "payment": payment,
+            "invoice": invoice,
+            "amount": getattr(payment, "amount", amount_naira),
+            "reference": reference,
+            "already_recorded": True,
+            **summary,
+        }
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     summary = _build_topup_summary(db, payment)
 
@@ -577,6 +632,14 @@ def create_topup_intent(
         from app.services import flutterwave
 
         callback_url = redirect_url or "/portal/billing/topup/verify"
+        if callback_url.startswith("/"):
+            # Flutterwave requires an absolute redirect_url; a relative path
+            # breaks the hosted-checkout return leg (mobile hits this branch).
+            from app.services.email import _get_app_url
+
+            base_url = _get_app_url(db) or ""
+            if base_url:
+                callback_url = f"{base_url}{callback_url}"
         separator = "&" if "?" in callback_url else "?"
         try:
             checkout = flutterwave.initialize_transaction(
@@ -634,6 +697,12 @@ def verify_and_record_topup(
         raise ValueError("Payment reference was not issued for this add-funds flow")
     if intent.account_id != account_id:
         raise ValueError("Payment reference does not belong to this account")
+
+    # Serialize concurrent verifies of the same reference (double-click,
+    # web+mobile, verify racing the webhook), then re-read the intent under
+    # the lock so a winner's completion is visible here.
+    lock_account(db, str(account_id))
+    db.refresh(intent)
 
     if intent.completed_payment_id:
         completed_payment = db.get(Payment, intent.completed_payment_id)
@@ -710,18 +779,52 @@ def verify_and_record_topup(
     # first, then remaining amount goes to account credit. This is
     # intentional: a subscriber who owes money should settle debts before
     # accumulating credit.
-    payment = billing_adapter.record_payment(
-        db,
-        PaymentIntent(
-            account_id=_UUID(str(intent.account_id)),
-            amount=amount_naira,
-            currency=tx.currency,
-            status=PaymentStatus.succeeded,
+    try:
+        payment = billing_adapter.record_payment(
+            db,
+            PaymentIntent(
+                account_id=_UUID(str(intent.account_id)),
+                amount=amount_naira,
+                currency=tx.currency,
+                status=PaymentStatus.succeeded,
+                provider_id=_provider_uuid(db, provider_type),
+                external_id=external_id,
+                memo=f"{tx.memo_prefix} prepaid top-up ref: {reference}",
+                allocations=[],  # No invoice allocation — goes to account credit
+            ),
+        )
+    except IntegrityError:
+        # The (provider_id, external_id) unique index caught a concurrent
+        # writer recording the same gateway transaction.
+        db.rollback()
+        existing = db.scalars(
+            select(Payment).where(Payment.external_id == external_id)
+        ).first()
+        if existing is None:
+            raise
+        if existing.account_id != intent.account_id:
+            raise ValueError(
+                "Payment reference is already linked to a different account"
+            )
+        _finalize_topup_intent(
+            db,
+            intent,
+            payment=existing,
             external_id=external_id,
-            memo=f"{tx.memo_prefix} prepaid top-up ref: {reference}",
-            allocations=[],  # No invoice allocation — goes to account credit
-        ),
-    )
+            actual_amount=amount_naira,
+            policy_violations=policy_violations,
+            min_amount=min_amount_value,
+            max_amount=max_amount_value,
+        )
+        _retry_topup_restore(db, intent.account_id)
+        return _build_topup_result(
+            db,
+            payment=existing,
+            intent=intent,
+            amount=round_money(to_decimal(existing.amount or amount_naira)),
+            reference=reference,
+            already_recorded=True,
+        )
     _finalize_topup_intent(
         db,
         intent,

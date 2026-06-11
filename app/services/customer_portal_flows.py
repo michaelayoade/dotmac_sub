@@ -3,6 +3,7 @@
 import logging
 
 from app.services.customer_portal_flow_billing import (
+    cancel_customer_arrangement,
     get_arrangement_error_context,
     get_billing_page,
     get_invoice_detail,
@@ -63,6 +64,7 @@ __all__ = [
     "get_new_arrangement_page",
     "submit_payment_arrangement",
     "get_arrangement_error_context",
+    "cancel_customer_arrangement",
     "get_payment_arrangement_detail",
     "get_invoice_detail",
     "_resolve_payment_provider",

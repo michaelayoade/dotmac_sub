@@ -1,0 +1,198 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, detail_header, info_row, info_grid,
+    status_badge, card, animation_styles
+%}
+
+{% block title %}Payment Proof Detail - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+
+<div class="relative space-y-8">
+
+    {# Header #}
+    {% set st = proof.status.value if proof.status else 'submitted' %}
+    {% if st == 'verified' %}
+        {% set badge_variant = "success" %}
+    {% elif st == 'rejected' %}
+        {% set badge_variant = "error" %}
+    {% else %}
+        {% set badge_variant = "pending" %}
+    {% endif %}
+
+    {{ detail_header(
+        "Bank Transfer Proof",
+        subtitle="Review the uploaded receipt before crediting the account",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+        color="emerald",
+        back_href="/admin/billing/payment-proofs",
+        back_label="Payment Proofs",
+        status=status_badge(st | title, variant=badge_variant)
+    ) }}
+
+    {# Flash messages #}
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-200">
+        {{ error }}
+    </div>
+    {% endif %}
+    {% if message %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+        {{ message }}
+    </div>
+    {% endif %}
+
+    {# Duplicate warning #}
+    {% if duplicates and st == 'submitted' %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+        <p class="font-semibold">Possible duplicate submission</p>
+        <p class="mt-1">
+            {{ duplicates | length }} other non-rejected proof{{ 's' if duplicates | length != 1 else '' }}
+            for this subscriber use{{ '' if duplicates | length != 1 else 's' }} the same reference
+            "{{ proof.reference }}":
+        </p>
+        <ul class="mt-1 list-disc pl-5">
+            {% for dup in duplicates %}
+            <li>
+                <a class="underline" href="/admin/billing/payment-proofs/{{ dup.id }}">{{ dup.id | string | truncate(8, True, '') }}</a>
+                — {{ dup.status.value | title }}, {{ dup.currency }} {{ "{:,.2f}".format(dup.amount) }},
+                submitted {{ dup.created_at.strftime('%Y-%m-%d %H:%M') if dup.created_at else 'unknown' }}
+            </li>
+            {% endfor %}
+        </ul>
+        <p class="mt-1">A reference that already backs a verified proof cannot be verified again.</p>
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+
+        {# Claimed transfer details #}
+        {% call card(title="Claimed Transfer", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
+            {% call info_grid() %}
+                {{ info_row("Subscriber", (account.first_name ~ " " ~ account.last_name) if account else "Unknown") }}
+                {{ info_row("Claimed Amount", proof.currency ~ " " ~ "{:,.2f}".format(proof.amount)) }}
+                {% if proof.verified_amount is not none %}
+                {{ info_row("Verified Amount", proof.currency ~ " " ~ "{:,.2f}".format(proof.verified_amount)) }}
+                {% endif %}
+                {{ info_row("Bank", proof.bank_name or "—") }}
+                {{ info_row("Reference", proof.reference or "—") }}
+                {{ info_row("Transfer Date", proof.paid_at.strftime('%Y-%m-%d %H:%M') if proof.paid_at else "Not stated") }}
+                {{ info_row("Submitted", proof.created_at.strftime('%Y-%m-%d %H:%M') if proof.created_at else "—") }}
+                {% if proof.payment_id %}
+                {{ info_row("Payment", proof.payment_id) }}
+                {% endif %}
+            {% endcall %}
+            {% if proof.review_notes %}
+            <div class="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-700/50">
+                <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Review Notes</p>
+                <p class="text-sm text-slate-700 dark:text-slate-300">{{ proof.review_notes }}</p>
+            </div>
+            {% endif %}
+        {% endcall %}
+
+        {# Receipt preview #}
+        {% call card(title="Receipt", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>', color="emerald") %}
+            {% if file_available %}
+                {% if file_is_image %}
+                <a href="/admin/billing/payment-proofs/{{ proof.id }}/file" target="_blank" rel="noopener">
+                    <img src="/admin/billing/payment-proofs/{{ proof.id }}/file"
+                         alt="Transfer receipt"
+                         class="max-h-96 w-auto rounded-lg border border-slate-200 dark:border-slate-700" />
+                </a>
+                {% elif file_is_pdf %}
+                <iframe src="/admin/billing/payment-proofs/{{ proof.id }}/file"
+                        title="Transfer receipt (PDF)"
+                        class="h-96 w-full rounded-lg border border-slate-200 dark:border-slate-700"></iframe>
+                {% endif %}
+                <div class="mt-3">
+                    <a href="/admin/billing/payment-proofs/{{ proof.id }}/file" target="_blank" rel="noopener"
+                       class="inline-flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-900 dark:text-emerald-400 dark:hover:text-emerald-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        Open receipt in new tab
+                    </a>
+                </div>
+            {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">Receipt file is missing from storage.</p>
+            {% endif %}
+        {% endcall %}
+
+    </div>
+
+    {# Review actions #}
+    {% if st == 'submitted' %}
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+
+        {% call card(title="Verify Transfer", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald") %}
+            <form method="post" action="/admin/billing/payment-proofs/{{ proof.id }}/verify" class="space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                        Confirmed Amount ({{ proof.currency }})
+                    </label>
+                    <input type="number" name="amount" step="0.01" min="0.01" required
+                           value="{{ '%.2f' | format(proof.amount) }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        The amount actually received per the bank statement. The payment is created for this amount.
+                    </p>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Allocation</label>
+                    <select name="auto_allocate"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="yes" selected>Apply to oldest open invoices</option>
+                        <option value="no">Keep as account credit</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Notes (optional)</label>
+                    <textarea name="review_notes" rows="2" maxlength="2000"
+                              class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                </div>
+                <button type="submit" onclick="return confirm('Verify this transfer and record the payment?')"
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Verify &amp; Record Payment
+                </button>
+            </form>
+        {% endcall %}
+
+        {% call card(title="Reject", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', color="rose") %}
+            <form method="post" action="/admin/billing/payment-proofs/{{ proof.id }}/reject" class="space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Reason (required)</label>
+                    <textarea name="review_notes" rows="3" maxlength="2000" required
+                              placeholder="e.g. Amount does not match our bank statement"
+                              class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Sent to the customer with the rejection notice.</p>
+                </div>
+                <button type="submit" onclick="return confirm('Reject this transfer proof?')"
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-medium text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20 transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    Reject Proof
+                </button>
+            </form>
+        {% endcall %}
+
+    </div>
+    {% else %}
+    {% call card(title="Review Outcome", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
+        {% call info_grid() %}
+            {{ info_row("Outcome", st | title) }}
+            {{ info_row("Reviewed By", proof.verified_by or "—") }}
+            {% if proof.verified_amount is not none %}
+            {{ info_row("Verified Amount", proof.currency ~ " " ~ "{:,.2f}".format(proof.verified_amount)) }}
+            {% endif %}
+            {% if proof.payment_id %}
+            {{ info_row("Payment ID", proof.payment_id) }}
+            {% endif %}
+        {% endcall %}
+    {% endcall %}
+    {% endif %}
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

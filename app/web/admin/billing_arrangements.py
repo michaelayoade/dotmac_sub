@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -88,11 +88,35 @@ def payment_arrangements_detail(
     dependencies=[Depends(require_permission("billing:arrangement:write"))],
 )
 def payment_arrangements_approve(
+    request: Request,
     arrangement_id: UUID,
     db: Session = Depends(get_db),
 ):
     web_billing_arrangements_service.approve_arrangement(
-        db, arrangement_id=str(arrangement_id)
+        db, request, arrangement_id=str(arrangement_id)
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/payment-arrangements/{arrangement_id}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/payment-arrangements/{arrangement_id}/record-payment",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:arrangement:write"))],
+)
+def payment_arrangements_record_payment(
+    request: Request,
+    arrangement_id: UUID,
+    note: str = Form(None),
+    db: Session = Depends(get_db),
+):
+    web_billing_arrangements_service.record_installment_payment(
+        db,
+        request,
+        arrangement_id=str(arrangement_id),
+        note=note,
     )
     return RedirectResponse(
         url=f"/admin/billing/payment-arrangements/{arrangement_id}",

@@ -249,6 +249,18 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
             "A refund of {amount} has been processed on your account."
         ),
     ),
+    EventType.arrangement_defaulted: EventNotificationSpec(
+        template_code="arrangement_defaulted",
+        category="billing",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Payment arrangement defaulted",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your payment arrangement has missed multiple installments and is "
+            "now in default. The full outstanding balance of {total_amount} is "
+            "payable immediately. Please contact our billing team."
+        ),
+    ),
     EventType.usage_warning: EventNotificationSpec(
         template_code="usage_warning",
         category="usage",

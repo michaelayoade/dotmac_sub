@@ -199,12 +199,12 @@
             </div>
             {% endif %}
 
-            {% if arrangement.status.value in ['pending', 'active'] %}
-            <!-- Cancel Option -->
+            {% if arrangement.status.value == 'pending' %}
+            <!-- Cancel Option (pending only — approved arrangements require admin) -->
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Actions</h3>
                 <form action="/portal/billing/arrangements/{{ arrangement.id }}/cancel" method="POST"
-                      onsubmit="return confirm('Are you sure you want to cancel this payment arrangement? You will be required to pay the full outstanding balance.');">
+                      onsubmit="return confirm('Are you sure you want to cancel this payment arrangement request?');">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
                             class="w-full rounded-lg border border-red-300 bg-white px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-900/20">

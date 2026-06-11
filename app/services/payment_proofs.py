@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import uuid as uuid_mod
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 _UPLOAD_DIR = Path("uploads/payment_proofs")
 _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf", ".webp"}
 _MAX_BYTES = 10 * 1024 * 1024
+_MEDIA_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+}
 
 
 async def save_proof_file(file: UploadFile) -> str:
@@ -52,6 +59,7 @@ def _serialize(p: PaymentProof) -> dict:
         "id": str(p.id),
         "account_id": str(p.account_id),
         "amount": p.amount,
+        "verified_amount": p.verified_amount,
         "currency": p.currency,
         "bank_name": p.bank_name,
         "reference": p.reference,
@@ -61,6 +69,47 @@ def _serialize(p: PaymentProof) -> dict:
         "payment_id": str(p.payment_id) if p.payment_id else None,
         "created_at": p.created_at,
     }
+
+
+def get_proof(db: Session, proof_id: str) -> PaymentProof | None:
+    try:
+        return db.get(PaymentProof, coerce_uuid(proof_id))
+    except (ValueError, TypeError):
+        return None
+
+
+def find_duplicate_proofs(db: Session, proof: PaymentProof) -> list[PaymentProof]:
+    """Other non-rejected proofs for the same subscriber with the same reference.
+
+    Used to flag likely duplicate submissions of one receipt, and to block
+    verifying a reference that already backs a verified proof's payment.
+    """
+    reference = (proof.reference or "").strip()
+    if not reference:
+        return []
+    return (
+        db.query(PaymentProof)
+        .filter(PaymentProof.account_id == proof.account_id)
+        .filter(PaymentProof.id != proof.id)
+        .filter(PaymentProof.reference == reference)
+        .filter(PaymentProof.status != PaymentProofStatus.rejected)
+        .order_by(PaymentProof.created_at.asc())
+        .all()
+    )
+
+
+def resolve_proof_file(proof: PaymentProof) -> tuple[Path, str]:
+    """Return the (path, media_type) for a proof's receipt file.
+
+    404s when the file is missing, and refuses any ``file_path`` that does not
+    resolve under the payment-proofs upload directory (path traversal guard).
+    """
+    base = _UPLOAD_DIR.resolve()
+    path = Path(proof.file_path).resolve()
+    if not path.is_relative_to(base) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Receipt file not found")
+    media_type = _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return path, media_type
 
 
 def submit_proof(
@@ -91,7 +140,11 @@ def submit_proof(
     db.add(proof)
     db.commit()
     db.refresh(proof)
-    return _serialize(proof)
+    out = _serialize(proof)
+    # Flag likely duplicate submissions of the same receipt up front so both
+    # the submitter and the reviewer see it before any money moves.
+    out["duplicate_reference"] = bool(find_duplicate_proofs(db, proof))
+    return out
 
 
 def list_for_account(
@@ -160,9 +213,18 @@ def verify_proof(
     proof_id: str,
     *,
     verified_by: str,
+    amount=None,
     auto_allocate: bool = True,
     review_notes: str | None = None,
+    request=None,
 ) -> dict:
+    """Confirm the transfer and create the real Payment.
+
+    ``amount`` is the reviewer-confirmed amount from the bank statement; it
+    defaults to the customer-claimed amount and is stored alongside it as
+    ``verified_amount``. The subscriber row is locked (Postgres) and the
+    status re-checked so two concurrent verifies cannot both create a payment.
+    """
     proof = db.get(PaymentProof, coerce_uuid(proof_id))
     if proof is None:
         raise HTTPException(status_code=404, detail="Payment proof not found")
@@ -171,9 +233,41 @@ def verify_proof(
 
     from app.schemas.billing import PaymentCreate
     from app.services import billing as billing_service
+    from app.services.billing._common import lock_account
+
+    # Serialize concurrent reviews of this account's proofs, then re-check the
+    # status: the loser of the race sees "already reviewed" instead of
+    # double-creating the payment.
+    lock_account(db, str(proof.account_id))
+    db.refresh(proof)
+    if proof.status != PaymentProofStatus.submitted:
+        raise HTTPException(status_code=400, detail="Proof already reviewed")
+
+    try:
+        value = round_money(to_decimal(amount if amount is not None else proof.amount))
+    except (InvalidOperation, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid verified amount") from exc
+    if value <= Decimal("0.00"):
+        raise HTTPException(
+            status_code=400, detail="Verified amount must be greater than 0"
+        )
+
+    duplicates = find_duplicate_proofs(db, proof)
+    verified_dup = next(
+        (d for d in duplicates if d.status == PaymentProofStatus.verified), None
+    )
+    if verified_dup is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Reference '{proof.reference}' was already verified on another "
+                f"proof ({verified_dup.id}) and paid. Reject this submission as "
+                "a duplicate instead."
+            ),
+        )
 
     allocations = (
-        _open_invoice_allocations(db, proof.account_id, Decimal(str(proof.amount)))
+        _open_invoice_allocations(db, proof.account_id, value)
         if auto_allocate
         else None
     )
@@ -181,7 +275,7 @@ def verify_proof(
         db,
         PaymentCreate(
             account_id=proof.account_id,
-            amount=Decimal(str(proof.amount)),
+            amount=value,
             currency=proof.currency,
             status=PaymentStatus.succeeded,
             paid_at=proof.paid_at or datetime.now(UTC),
@@ -189,19 +283,41 @@ def verify_proof(
             memo=f"Bank transfer (proof {proof.id})",
             allocations=allocations or None,
         ),
+        auto_allocate=auto_allocate,
     )
     proof.status = PaymentProofStatus.verified
+    proof.verified_amount = value
     proof.verified_by = str(verified_by)
     proof.review_notes = (review_notes or "").strip() or None
     proof.payment_id = payment.id
     db.commit()
     db.refresh(proof)
+    _audit(
+        db,
+        request,
+        action="verify",
+        proof=proof,
+        actor_id=verified_by,
+        metadata={
+            "claimed_amount": str(proof.amount),
+            "verified_amount": str(value),
+            "currency": proof.currency,
+            "reference": proof.reference,
+            "payment_id": str(payment.id),
+            "auto_allocate": auto_allocate,
+        },
+    )
     _notify(db, proof, approved=True)
     return _serialize(proof)
 
 
 def reject_proof(
-    db: Session, proof_id: str, *, verified_by: str, review_notes: str
+    db: Session,
+    proof_id: str,
+    *,
+    verified_by: str,
+    review_notes: str,
+    request=None,
 ) -> dict:
     proof = db.get(PaymentProof, coerce_uuid(proof_id))
     if proof is None:
@@ -215,8 +331,47 @@ def reject_proof(
     proof.review_notes = review_notes.strip()
     db.commit()
     db.refresh(proof)
+    _audit(
+        db,
+        request,
+        action="reject",
+        proof=proof,
+        actor_id=verified_by,
+        metadata={
+            "claimed_amount": str(proof.amount),
+            "currency": proof.currency,
+            "reference": proof.reference,
+            "reason": proof.review_notes,
+        },
+    )
     _notify(db, proof, approved=False)
     return _serialize(proof)
+
+
+def _audit(
+    db: Session,
+    request,
+    *,
+    action: str,
+    proof: PaymentProof,
+    actor_id: str | None,
+    metadata: dict,
+) -> None:
+    """Best-effort audit trail for proof reviews (money-moving admin action)."""
+    try:
+        from app.services.audit_helpers import log_audit_event
+
+        log_audit_event(
+            db=db,
+            request=request,
+            action=action,
+            entity_type="payment_proof",
+            entity_id=str(proof.id),
+            actor_id=str(actor_id) if actor_id else None,
+            metadata=metadata,
+        )
+    except Exception:
+        logger.warning("payment-proof audit event failed", exc_info=True)
 
 
 def _notify(db: Session, proof: PaymentProof, *, approved: bool) -> None:

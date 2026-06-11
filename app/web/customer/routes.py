@@ -14,9 +14,11 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.db import get_db
 from app.services import auth_flow as auth_flow_service
+from app.services import autopay as autopay_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
+from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
@@ -1446,6 +1448,7 @@ def customer_verify_payment(
     request: Request,
     reference: str = Query(...),
     provider: str | None = Query(None),
+    save_card: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> Response:
     """Verify online payment and record it."""
@@ -1463,6 +1466,12 @@ def customer_verify_payment(
         result = customer_portal.verify_and_record_payment(
             db, customer, reference, provider=provider
         )
+        if save_card is True:
+            # Best-effort, Paystack-only; never breaks the recorded payment.
+            # (`is True` so a direct call's Query default never triggers it.)
+            customer_cards.capture_card_after_payment(
+                db, str(customer.get("account_id") or ""), reference, provider
+            )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1499,6 +1508,8 @@ def customer_verify_payment(
 @router.get("/billing/topup", response_class=HTMLResponse)
 def customer_billing_topup(
     request: Request,
+    autopay_error: str | None = Query(None),
+    autopay_success: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Show add-funds page for a customer account."""
@@ -1518,6 +1529,11 @@ def customer_billing_topup(
             "request": request,
             "customer": customer,
             **page_data,
+            "autopay": autopay_service.get_status(
+                db, str(customer.get("account_id") or "")
+            ),
+            "autopay_error": autopay_error,
+            "autopay_success": autopay_success,
             "active_page": "billing",
         },
     )
@@ -1557,6 +1573,7 @@ def customer_verify_topup(
     request: Request,
     reference: str = Query(...),
     provider: str | None = Query(None),
+    save_card: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> Response:
     """Verify a top-up payment and show allocation results."""
@@ -1573,6 +1590,12 @@ def customer_verify_topup(
         result = customer_portal.verify_and_record_topup(
             db, customer, reference, provider=provider
         )
+        if save_card is True:
+            # Best-effort, Paystack-only; never breaks the recorded payment.
+            # (`is True` so a direct call's Query default never triggers it.)
+            customer_cards.capture_card_after_payment(
+                db, str(customer.get("account_id") or ""), reference, provider
+            )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1603,6 +1626,53 @@ def customer_verify_topup(
             {"request": request, "message": str(exc)},
             status_code=400,
         )
+
+
+@router.post("/billing/autopay/enable")
+def customer_autopay_enable(
+    request: Request,
+    payment_method_id: str = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Enable autopay against a saved card (the default card if unspecified)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    # Only a real, non-empty form value selects a card; otherwise the default
+    # saved card is used (also keeps a direct call's Form default inert).
+    method_id = (
+        payment_method_id.strip()
+        if isinstance(payment_method_id, str) and payment_method_id.strip()
+        else None
+    )
+    try:
+        autopay_service.enable(db, str(customer.get("account_id") or ""), method_id)
+    except ValueError as exc:
+        return RedirectResponse(
+            url=f"/portal/billing/topup?autopay_error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/portal/billing/topup?autopay_success="
+        + quote_plus("Autopay is on — due invoices will be charged automatically."),
+        status_code=303,
+    )
+
+
+@router.post("/billing/autopay/disable")
+def customer_autopay_disable(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Turn off autopay for the caller."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    autopay_service.disable(db, str(customer.get("account_id") or ""))
+    return RedirectResponse(
+        url="/portal/billing/topup?autopay_success=" + quote_plus("Autopay is off."),
+        status_code=303,
+    )
 
 
 # =============================================================================
@@ -2152,43 +2222,38 @@ def customer_cancel_payment_arrangement(
     arrangement_id: UUID,
     db: Session = Depends(get_db),
 ) -> Response:
-    """Cancel a payment arrangement."""
+    """Cancel a payment arrangement (customers may only cancel pending ones)."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
-    from app.services import payment_arrangements as arrangement_service
-
-    account_id = customer.get("account_id")
     try:
-        arrangement = arrangement_service.payment_arrangements.get(
-            db, str(arrangement_id)
+        customer_portal.cancel_customer_arrangement(db, customer, str(arrangement_id))
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return templates.TemplateResponse(
+                "customer/errors/404.html",
+                {"request": request, "message": "Payment arrangement not found"},
+                status_code=404,
+            )
+        detail = customer_portal.get_payment_arrangement_detail(
+            db, customer, str(arrangement_id)
         )
-    except HTTPException:
         return templates.TemplateResponse(
-            "customer/errors/404.html",
-            {"request": request, "message": "Payment arrangement not found"},
-            status_code=404,
+            "customer/billing/arrangement_detail.html",
+            {
+                "request": request,
+                "customer": customer,
+                **(detail or {}),
+                "error": str(exc.detail),
+                "active_page": "billing",
+            },
+            status_code=exc.status_code,
         )
 
-    if not account_id or str(arrangement.subscriber_id) != str(account_id):
-        return templates.TemplateResponse(
-            "customer/errors/404.html",
-            {"request": request, "message": "Payment arrangement not found"},
-            status_code=404,
-        )
-
-    try:
-        arrangement_service.payment_arrangements.cancel(
-            db, str(arrangement_id), notes="Canceled by customer via portal"
-        )
-    except HTTPException:
-        return RedirectResponse(
-            url=f"/portal/billing/arrangements/{arrangement_id}",
-            status_code=303,
-        )
-
-    return RedirectResponse(url="/portal/billing/arrangements", status_code=303)
+    return RedirectResponse(
+        url="/portal/billing/arrangements?canceled=true", status_code=303
+    )
 
 
 @router.get("/billing/arrangements/{arrangement_id}", response_class=HTMLResponse)

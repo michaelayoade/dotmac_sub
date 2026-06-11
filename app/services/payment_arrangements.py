@@ -63,6 +63,26 @@ def _calculate_next_due_date(
         return _add_month_clamped(current_date, anchor_day=anchor_day)
 
 
+def get_account_outstanding_balance(db: Session, subscriber_id: str) -> Decimal:
+    """Sum of balance_due across the account's overdue invoices.
+
+    Service-level equivalent of the portal-context helper; arrangements may
+    only cover what is actually owed and overdue.
+    """
+    from sqlalchemy import func
+
+    from app.models.billing import Invoice, InvoiceStatus
+
+    total = (
+        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
+        .filter(Invoice.account_id == coerce_uuid(subscriber_id))
+        .filter(Invoice.status == InvoiceStatus.overdue)
+        .filter(Invoice.is_active.is_(True))
+        .scalar()
+    )
+    return Decimal(str(total or 0))
+
+
 class PaymentArrangements(ListResponseMixin):
     """Service for payment arrangement CRUD operations."""
 
@@ -111,6 +131,7 @@ class PaymentArrangements(ListResponseMixin):
             )
 
         # Validate invoice if provided
+        invoice = None
         if invoice_id:
             from app.models.billing import Invoice
 
@@ -134,6 +155,47 @@ class PaymentArrangements(ListResponseMixin):
         if total_amount <= 0:
             raise HTTPException(
                 status_code=400, detail="Arrangement amount must be greater than 0"
+            )
+
+        # Reject overlapping arrangements: one pending/active at a time
+        existing = (
+            db.query(PaymentArrangement)
+            .filter(PaymentArrangement.subscriber_id == coerce_uuid(subscriber_id))
+            .filter(
+                PaymentArrangement.status.in_(
+                    [ArrangementStatus.pending, ArrangementStatus.active]
+                )
+            )
+            .filter(PaymentArrangement.is_active.is_(True))
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Account already has a {existing.status.value} payment arrangement"
+                ),
+            )
+
+        # Amount must relate to what is actually owed
+        if invoice is not None:
+            invoice_balance = Decimal(str(invoice.balance_due or 0))
+            if total_amount > invoice_balance:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Arrangement amount exceeds the invoice balance due "
+                        f"({invoice_balance})"
+                    ),
+                )
+        outstanding = get_account_outstanding_balance(db, subscriber_id)
+        if total_amount > outstanding:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Arrangement amount exceeds the account's outstanding "
+                    f"balance ({outstanding})"
+                ),
             )
 
         # Calculate installment amount
@@ -253,13 +315,15 @@ class PaymentArrangements(ListResponseMixin):
         db: Session,
         arrangement_id: str,
         approver_id: str | None = None,
+        approved_by_user_id: str | None = None,
     ) -> PaymentArrangement:
         """Approve a payment arrangement.
 
         Args:
             db: Database session
             arrangement_id: The arrangement ID
-            approver_id: Person approving the arrangement
+            approver_id: Subscriber approving the arrangement (FK to subscribers)
+            approved_by_user_id: SystemUser (admin) approving the arrangement
 
         Returns:
             The updated arrangement
@@ -279,15 +343,19 @@ class PaymentArrangements(ListResponseMixin):
         arrangement.approved_at = now
         if approver_id:
             arrangement.approved_by_subscriber_id = coerce_uuid(approver_id)
+        if approved_by_user_id:
+            arrangement.approved_by_user_id = str(approved_by_user_id)
 
-        # Mark first installment as due
+        # Mark first installment as due only once its due date has arrived.
+        # Future-dated installments stay pending; check_overdue_installments
+        # promotes them to due when the date arrives.
         first_installment = (
             db.query(PaymentArrangementInstallment)
             .filter(PaymentArrangementInstallment.arrangement_id == arrangement.id)
             .filter(PaymentArrangementInstallment.installment_number == 1)
             .first()
         )
-        if first_installment:
+        if first_installment and first_installment.due_date <= date.today():
             first_installment.status = InstallmentStatus.due
 
         db.commit()
@@ -297,10 +365,65 @@ class PaymentArrangements(ListResponseMixin):
         return arrangement
 
     @staticmethod
+    def _mark_installment_paid(
+        db: Session,
+        installment: PaymentArrangementInstallment,
+        payment_id: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        """Mark a single installment paid and advance the arrangement.
+
+        Mutates state without committing; callers commit.
+        """
+        today = date.today()
+        installment.status = InstallmentStatus.paid
+        installment.paid_at = datetime.now(UTC)
+        if payment_id:
+            installment.payment_id = coerce_uuid(payment_id)
+        if notes:
+            installment.notes = (
+                (installment.notes + "\n" + notes) if installment.notes else notes
+            )
+
+        arrangement = installment.arrangement
+        arrangement.installments_paid += 1
+
+        # Advance the next installment; it only becomes "due" once its
+        # due date has arrived (otherwise the scheduled check promotes it).
+        next_installment = (
+            db.query(PaymentArrangementInstallment)
+            .filter(PaymentArrangementInstallment.arrangement_id == arrangement.id)
+            .filter(
+                PaymentArrangementInstallment.installment_number
+                == installment.installment_number + 1
+            )
+            .first()
+        )
+        if next_installment:
+            if (
+                next_installment.status == InstallmentStatus.pending
+                and next_installment.due_date <= today
+            ):
+                next_installment.status = InstallmentStatus.due
+            arrangement.next_due_date = next_installment.due_date
+        else:
+            arrangement.next_due_date = None
+
+        # Check if all installments are paid
+        if arrangement.installments_paid >= arrangement.installments_total:
+            arrangement.status = ArrangementStatus.completed
+            logger.info(f"Payment arrangement {arrangement.id} completed")
+
+        # Sessions may run with autoflush disabled; flush so follow-up
+        # queries (e.g. the progression loop) see the new statuses.
+        db.flush()
+
+    @staticmethod
     def record_installment_payment(
         db: Session,
         installment_id: str,
         payment_id: str | None = None,
+        notes: str | None = None,
     ) -> PaymentArrangementInstallment:
         """Record payment for an installment.
 
@@ -308,6 +431,7 @@ class PaymentArrangements(ListResponseMixin):
             db: Database session
             installment_id: The installment ID
             payment_id: Optional payment record ID
+            notes: Optional note appended to the installment
 
         Returns:
             The updated installment
@@ -319,36 +443,22 @@ class PaymentArrangements(ListResponseMixin):
         if installment.status == InstallmentStatus.paid:
             raise HTTPException(status_code=400, detail="Installment already paid")
 
-        now = datetime.now(UTC)
-        installment.status = InstallmentStatus.paid
-        installment.paid_at = now
-        if payment_id:
-            installment.payment_id = coerce_uuid(payment_id)
-
-        # Update arrangement
         arrangement = installment.arrangement
-        arrangement.installments_paid += 1
-
-        # Mark next installment as due
-        next_installment = (
-            db.query(PaymentArrangementInstallment)
-            .filter(PaymentArrangementInstallment.arrangement_id == arrangement.id)
-            .filter(
-                PaymentArrangementInstallment.installment_number
-                == installment.installment_number + 1
+        if arrangement.status not in (
+            ArrangementStatus.active,
+            ArrangementStatus.defaulted,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot record payment on arrangement with status "
+                    f"{arrangement.status.value}"
+                ),
             )
-            .first()
-        )
-        if next_installment:
-            next_installment.status = InstallmentStatus.due
-            arrangement.next_due_date = next_installment.due_date
-        else:
-            arrangement.next_due_date = None
 
-        # Check if all installments are paid
-        if arrangement.installments_paid >= arrangement.installments_total:
-            arrangement.status = ArrangementStatus.completed
-            logger.info(f"Payment arrangement {arrangement.id} completed")
+        PaymentArrangements._mark_installment_paid(
+            db, installment, payment_id=payment_id, notes=notes
+        )
 
         db.commit()
         db.refresh(installment)
@@ -360,28 +470,46 @@ class PaymentArrangements(ListResponseMixin):
         return installment
 
     @staticmethod
-    def check_overdue_installments(db: Session) -> int:
-        """Check for overdue installments and update their status.
+    def check_overdue_installments(db: Session) -> dict[str, int]:
+        """Promote and expire installments on active arrangements.
+
+        Three passes over installments of active arrangements:
+        1. ``due`` installments past their due date become ``overdue``.
+        2. ``pending`` installments whose due date has arrived become ``due``
+           (this is what activates future-dated arrangements).
+        3. Arrangements with 2+ overdue installments are marked defaulted and
+           an ``arrangement.defaulted`` event is emitted.
 
         Returns:
-            Number of installments marked as overdue
+            Counts: installments_marked_overdue, installments_marked_due,
+            arrangements_defaulted
         """
         today = date.today()
 
-        # Find due installments that are past their due date
+        def _active_installments(status: InstallmentStatus):
+            return (
+                db.query(PaymentArrangementInstallment)
+                .join(PaymentArrangementInstallment.arrangement)
+                .filter(PaymentArrangementInstallment.status == status)
+                .filter(PaymentArrangementInstallment.is_active.is_(True))
+                .filter(PaymentArrangement.status == ArrangementStatus.active)
+                .filter(PaymentArrangement.is_active.is_(True))
+            )
+
+        # 1. Mark past-due "due" installments overdue
         overdue = (
-            db.query(PaymentArrangementInstallment)
-            .filter(PaymentArrangementInstallment.status == InstallmentStatus.due)
+            _active_installments(InstallmentStatus.due)
             .filter(PaymentArrangementInstallment.due_date < today)
-            .filter(PaymentArrangementInstallment.is_active.is_(True))
             .all()
         )
-
+        defaulted: list[PaymentArrangement] = []
         for installment in overdue:
             installment.status = InstallmentStatus.overdue
+            # Sessions may run with autoflush disabled; make the status
+            # change visible to the count query below.
+            db.flush()
 
-            # Check if arrangement should be marked as defaulted
-            # (e.g., if 2+ installments are overdue)
+            # Arrangement defaults once 2+ installments are overdue
             arrangement = installment.arrangement
             overdue_count = (
                 db.query(PaymentArrangementInstallment)
@@ -393,13 +521,49 @@ class PaymentArrangements(ListResponseMixin):
             )
             if overdue_count >= 2 and arrangement.status == ArrangementStatus.active:
                 arrangement.status = ArrangementStatus.defaulted
+                defaulted.append(arrangement)
                 logger.warning(f"Payment arrangement {arrangement.id} defaulted")
 
-        if overdue:
-            db.commit()
-            logger.info(f"Marked {len(overdue)} installments as overdue")
+        # 2. Promote pending installments whose due date has arrived
+        promoted = (
+            _active_installments(InstallmentStatus.pending)
+            .filter(PaymentArrangementInstallment.due_date <= today)
+            .all()
+        )
+        for installment in promoted:
+            installment.status = InstallmentStatus.due
 
-        return len(overdue)
+        if overdue or promoted:
+            db.commit()
+            logger.info(
+                "Arrangement check: %d marked overdue, %d marked due, %d defaulted",
+                len(overdue),
+                len(promoted),
+                len(defaulted),
+            )
+
+        # 3. Notify on defaults (after commit so handlers see final state)
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        for arrangement in defaulted:
+            emit_event(
+                db,
+                EventType.arrangement_defaulted,
+                {
+                    "arrangement_id": str(arrangement.id),
+                    "total_amount": str(arrangement.total_amount),
+                    "installments_paid": arrangement.installments_paid,
+                    "installments_total": arrangement.installments_total,
+                },
+                account_id=arrangement.subscriber_id,
+            )
+
+        return {
+            "installments_marked_overdue": len(overdue),
+            "installments_marked_due": len(promoted),
+            "arrangements_defaulted": len(defaulted),
+        }
 
     @staticmethod
     def cancel(
@@ -489,6 +653,102 @@ class PaymentArrangementInstallments(ListResponseMixin):
             list[PaymentArrangementInstallment],
             apply_pagination(query, limit, offset).all(),
         )
+
+
+def get_next_actionable_installment(
+    db: Session, arrangement_id: str
+) -> PaymentArrangementInstallment | None:
+    """Return the next unpaid installment a payment should apply to.
+
+    Overdue/due installments first, then pending, in installment order.
+    """
+    unpaid = (
+        db.query(PaymentArrangementInstallment)
+        .filter(
+            PaymentArrangementInstallment.arrangement_id == coerce_uuid(arrangement_id)
+        )
+        .filter(
+            PaymentArrangementInstallment.status.in_(
+                [
+                    InstallmentStatus.overdue,
+                    InstallmentStatus.due,
+                    InstallmentStatus.pending,
+                ]
+            )
+        )
+        .filter(PaymentArrangementInstallment.is_active.is_(True))
+        .order_by(PaymentArrangementInstallment.installment_number.asc())
+        .first()
+    )
+    return unpaid
+
+
+def apply_payment_to_arrangement(
+    db: Session,
+    account_id: str,
+    amount: Decimal,
+    payment_id: str | None = None,
+) -> dict | None:
+    """Apply a received billing payment to the account's active arrangement.
+
+    Pays off installments in order (overdue/due first, then pending) for as
+    long as the remaining amount covers the next installment in full. Partial
+    remainders are not applied to an installment.
+
+    Args:
+        db: Database session
+        account_id: Subscriber/account the payment belongs to
+        amount: Payment amount
+        payment_id: Optional billing Payment id to link on the installments
+
+    Returns:
+        Dict with installments_paid / arrangement_completed / arrangement_id,
+        or None when the account has no active arrangement.
+    """
+    if amount is None or amount <= 0:
+        return None
+
+    arrangement = (
+        db.query(PaymentArrangement)
+        .filter(PaymentArrangement.subscriber_id == coerce_uuid(account_id))
+        .filter(PaymentArrangement.status == ArrangementStatus.active)
+        .filter(PaymentArrangement.is_active.is_(True))
+        .order_by(PaymentArrangement.created_at.asc())
+        .first()
+    )
+    if not arrangement:
+        return None
+
+    remaining = Decimal(amount)
+    paid_count = 0
+    while remaining > 0:
+        installment = get_next_actionable_installment(db, str(arrangement.id))
+        if installment is None or remaining < installment.amount:
+            break
+        PaymentArrangements._mark_installment_paid(
+            db,
+            installment,
+            payment_id=payment_id,
+            notes="Auto-applied from billing payment",
+        )
+        remaining -= installment.amount
+        paid_count += 1
+
+    if paid_count:
+        db.commit()
+        db.refresh(arrangement)
+        logger.info(
+            "Applied payment to arrangement %s: %d installment(s) paid, status now %s",
+            arrangement.id,
+            paid_count,
+            arrangement.status.value,
+        )
+
+    return {
+        "arrangement_id": str(arrangement.id),
+        "installments_paid": paid_count,
+        "arrangement_completed": arrangement.status == ArrangementStatus.completed,
+    }
 
 
 payment_arrangements = PaymentArrangements()

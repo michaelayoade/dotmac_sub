@@ -6,7 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceStatus
@@ -125,6 +125,40 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
 def get_available_balance(db: Session, account_id: str) -> Decimal:
     """Return the available account balance visible to customer billing flows."""
     return _resolve_prepaid_available_balance(db, account_id)
+
+
+def has_overdue_balance(db: Session, account_id: str) -> bool:
+    """Return True if the account still owes money on a past-due invoice.
+
+    An invoice counts as overdue debt when it is active, retains a
+    ``balance_due > 0``, and is either already marked ``overdue`` or is an
+    ``issued``/``partially_paid`` invoice whose ``due_at`` has elapsed (the
+    hourly overdue sweep may not have flipped its status yet).
+
+    Used as the restore guard for overdue suspensions: a partial payment
+    must not lift the suspension while overdue debt remains.
+    """
+    now = datetime.now(UTC)
+    row = (
+        db.query(Invoice.id)
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.balance_due > 0)
+        .filter(
+            or_(
+                Invoice.status == InvoiceStatus.overdue,
+                and_(
+                    Invoice.status.in_(
+                        [InvoiceStatus.issued, InvoiceStatus.partially_paid]
+                    ),
+                    Invoice.due_at.is_not(None),
+                    Invoice.due_at <= now,
+                ),
+            )
+        )
+        .first()
+    )
+    return row is not None
 
 
 def _resolve_policy_set_for_account(db: Session, account_id: str):
@@ -1294,6 +1328,16 @@ class DunningWorkflow(ListResponseMixin):
             else:
                 if not payload.dry_run:
                     case.policy_set_id = policy_set_id
+            if case.status == DunningCaseStatus.paused:
+                # Paused cases are on hold by an operator — never execute
+                # escalation steps until the case is resumed.
+                logger.debug(
+                    "Skipping dunning steps for paused case %s (account %s)",
+                    case.id,
+                    account_id,
+                )
+                skipped += 1
+                continue
             oldest_invoice = min(
                 account_invoices,
                 key=lambda inv: inv.due_at or run_at,

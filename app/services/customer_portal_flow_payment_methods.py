@@ -14,6 +14,10 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+# Imported at module level so the table is registered with the metadata even
+# when this module is the only autopay-aware import in the process (e.g. a
+# standalone test run creating tables via Base.metadata.create_all).
+from app.models.autopay import AutopayMandate
 from app.models.billing import PaymentMethod, PaymentMethodType
 from app.schemas.billing import PaymentMethodCreate, PaymentMethodUpdate
 from app.services import billing as billing_service
@@ -123,9 +127,16 @@ def _owned(db: Session, account_id: str, method_id: str) -> PaymentMethod | None
 def set_default(db: Session, account_id: str, method_id: str) -> PaymentMethod | None:
     if _owned(db, account_id, method_id) is None:
         return None
-    return billing_service.payment_methods.update(
+    method = billing_service.payment_methods.update(
         db, method_id, PaymentMethodUpdate(is_default=True)
     )
+    if method is not None:
+        # Picking a new default card is customer intent to fix declined
+        # payments — give a failure-suspended autopay mandate a fresh start.
+        from app.services import autopay
+
+        autopay.reset_failures(db, account_id)
+    return method
 
 
 def remove(db: Session, account_id: str, method_id: str) -> bool:
@@ -134,8 +145,6 @@ def remove(db: Session, account_id: str, method_id: str) -> bool:
     billing_service.payment_methods.delete(db, method_id)
     # Don't leave autopay pointing at a card the customer just removed — the
     # token would still be chargeable. Deactivate any mandate on this card.
-    from app.models.autopay import AutopayMandate
-
     for mandate in db.scalars(
         select(AutopayMandate).where(
             AutopayMandate.payment_method_id == coerce_uuid(method_id)

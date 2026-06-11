@@ -6,12 +6,13 @@ adapter so a recorded payment actually reduces the invoice balance.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
 import app.services.paystack as paystack
-from app.models.billing import InvoiceStatus, Payment
+from app.models.billing import InvoiceStatus, Payment, PaymentStatus
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
 from app.services import autopay
 from app.services import billing as billing_service
@@ -31,25 +32,48 @@ def _card(db_session, account_id, *, default=True):
     )
 
 
-def _open_invoice(db_session, account_id, amount: Decimal):
+def _open_invoice(
+    db_session,
+    account_id,
+    amount: Decimal,
+    *,
+    status=InvoiceStatus.issued,
+    due_at=...,
+):
+    # Default to an already-due invoice so the (default-on) due-date gating
+    # does not hide the invoice from the charge engine.
+    if due_at is ...:
+        due_at = datetime.now(UTC) - timedelta(days=1)
     return billing_service.invoices.create(
         db_session,
         InvoiceCreate(
             account_id=account_id,
-            status=InvoiceStatus.issued,
+            status=status,
             currency="NGN",
             subtotal=amount,
             total=amount,
             balance_due=amount,
+            due_at=due_at,
         ),
     )
 
 
-def _mock_charge(monkeypatch, *, status="success"):
+def _mock_charge(monkeypatch, *, status="success", calls=None):
     def fake(db, **kwargs):
+        if calls is not None:
+            calls.append(kwargs)
         return {"status": status, "reference": kwargs.get("reference")}
 
     monkeypatch.setattr(paystack, "charge_authorization", fake)
+
+
+def _mock_no_recovery(monkeypatch):
+    """verify_transaction finds nothing recoverable (prior attempts declined)."""
+    monkeypatch.setattr(
+        paystack,
+        "verify_transaction",
+        lambda db, ref: {"status": "failed", "reference": ref},
+    )
 
 
 # --- mandate management ----------------------------------------------------
@@ -182,3 +206,286 @@ def test_recovers_capture_when_charge_errors(db_session, subscriber, monkeypatch
     assert result["charged"] == 1
     db_session.refresh(invoice)
     assert Decimal(str(invoice.balance_due)) == Decimal("0.00")
+
+
+# --- due-date gating ---------------------------------------------------------
+
+
+def test_setting_spec_registered():
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import get_spec
+
+    spec = get_spec(SettingDomain.billing, "autopay_charge_only_due")
+    assert spec is not None
+    assert spec.env_var == "BILLING_AUTOPAY_CHARGE_ONLY_DUE"
+    assert spec.default is True
+
+
+def test_gating_skips_invoice_not_yet_due(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    _open_invoice(
+        db_session,
+        subscriber.id,
+        Decimal("5000.00"),
+        due_at=datetime.now(UTC) + timedelta(days=7),
+    )
+    autopay.enable(db_session, str(subscriber.id))
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="success", calls=calls)
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 0
+    assert result["failed"] == 0
+    assert calls == []
+
+
+def test_gating_skips_issued_invoice_without_due_date(
+    db_session, subscriber, monkeypatch
+):
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"), due_at=None)
+    autopay.enable(db_session, str(subscriber.id))
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="success", calls=calls)
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 0
+    assert calls == []
+
+
+def test_gating_charges_overdue_invoice_without_due_date(
+    db_session, subscriber, monkeypatch
+):
+    _card(db_session, subscriber.id)
+    _open_invoice(
+        db_session,
+        subscriber.id,
+        Decimal("5000.00"),
+        status=InvoiceStatus.overdue,
+        due_at=None,
+    )
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_charge(monkeypatch, status="success")
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 1
+
+
+def test_gating_off_charges_at_issuance(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    _open_invoice(
+        db_session,
+        subscriber.id,
+        Decimal("5000.00"),
+        due_at=datetime.now(UTC) + timedelta(days=7),
+    )
+    autopay.enable(db_session, str(subscriber.id))
+    monkeypatch.setattr(autopay, "_charge_only_due", lambda db: False)
+    _mock_charge(monkeypatch, status="success")
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 1
+
+
+# --- decline tracking + attempt-aware references -----------------------------
+
+
+def test_decline_increments_failure_count_and_retries_with_fresh_reference(
+    db_session, subscriber, monkeypatch
+):
+    _card(db_session, subscriber.id)
+    invoice = _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="failed", calls=calls)
+
+    first = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert first["failed"] == 1
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == 1
+    assert status["last_failure_at"] is not None
+    assert status["last_failure_reason"]
+    assert status["suspended"] is False
+
+    second = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert second["failed"] == 1
+    assert autopay.get_status(db_session, str(subscriber.id))["failure_count"] == 2
+
+    # A decline burns the reference at Paystack: each retry must use a fresh,
+    # attempt-suffixed reference (attempt 0 keeps the legacy format).
+    refs = [c["reference"] for c in calls]
+    base = f"AUTOPAY-{invoice.id}-{paystack.amount_to_kobo(Decimal('5000.00'))}"
+    assert refs == [base, f"{base}-A1"]
+    assert len(set(refs)) == len(refs)
+
+
+def test_mandate_skipped_after_three_consecutive_failures(
+    db_session, subscriber, monkeypatch
+):
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="failed", calls=calls)
+
+    for _ in range(autopay.MAX_CONSECUTIVE_FAILURES):
+        autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert len(calls) == autopay.MAX_CONSECUTIVE_FAILURES
+
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == autopay.MAX_CONSECUTIVE_FAILURES
+    assert status["suspended"] is True
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result.get("skipped") == "too_many_failures"
+    assert len(calls) == autopay.MAX_CONSECUTIVE_FAILURES  # no further charges
+
+
+def test_success_resets_failure_count(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    _mock_charge(monkeypatch, status="failed")
+    autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["failure_count"] == 1
+
+    _mock_charge(monkeypatch, status="success")
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 1
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == 0
+    assert status["last_failure_at"] is None
+    assert status["last_failure_reason"] is None
+
+
+def test_reenable_resets_failure_count(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+    _mock_charge(monkeypatch, status="failed")
+
+    for _ in range(autopay.MAX_CONSECUTIVE_FAILURES):
+        autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["suspended"] is True
+
+    autopay.enable(db_session, str(subscriber.id))
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == 0
+    assert status["suspended"] is False
+
+
+def test_new_default_card_resets_failure_count(db_session, subscriber, monkeypatch):
+    from app.services import customer_portal_flow_payment_methods as cards
+
+    _card(db_session, subscriber.id)
+    other = _card(db_session, subscriber.id, default=False)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+    _mock_charge(monkeypatch, status="failed")
+    autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["failure_count"] == 1
+
+    cards.set_default(db_session, str(subscriber.id), str(other.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["failure_count"] == 0
+
+
+def test_failed_charge_notifies_customer(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    invoice = _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+    _mock_charge(monkeypatch, status="failed")
+
+    emitted: list[tuple] = []
+
+    def fake_emit(db, event_type, payload, **kwargs):
+        emitted.append((event_type, payload, kwargs))
+
+    monkeypatch.setattr(autopay, "emit_event", fake_emit)
+    autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    assert len(emitted) == 1
+    event_type, payload, kwargs = emitted[0]
+    from app.services.events.types import EventType
+
+    assert event_type == EventType.payment_failed
+    assert payload["source"] == "autopay"
+    assert payload["invoice_id"] == str(invoice.id)
+    assert kwargs["account_id"] == invoice.account_id
+
+
+# --- idempotency across attempts ---------------------------------------------
+
+
+def test_no_double_charge_when_succeeded_autopay_payment_exists(
+    db_session, subscriber, monkeypatch
+):
+    """A succeeded autopay payment for this (invoice, amount) — at any attempt —
+    blocks re-charging even if the invoice balance was never reduced."""
+    _card(db_session, subscriber.id)
+    invoice = _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+
+    kobo = paystack.amount_to_kobo(Decimal("5000.00"))
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            external_id=f"AUTOPAY-{invoice.id}-{kobo}",  # legacy attempt-0 ref
+        )
+    )
+    db_session.commit()
+
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="success", calls=calls)
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 0
+    assert result["failed"] == 0
+    assert calls == []
+
+
+def test_recovers_prior_attempt_capture_before_recharging(
+    db_session, subscriber, monkeypatch
+):
+    """If an earlier attempt actually captured at the provider (but was never
+    recorded), the next run records THAT transaction instead of charging again."""
+    _card(db_session, subscriber.id)
+    invoice = _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="failed", calls=calls)
+    autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert autopay.get_status(db_session, str(subscriber.id))["failure_count"] == 1
+
+    # The "failed" attempt 0 turns out to have captured at Paystack.
+    monkeypatch.setattr(
+        paystack,
+        "verify_transaction",
+        lambda db, ref: {"status": "success", "reference": ref},
+    )
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result["charged"] == 1
+    assert len(calls) == 1  # no second capture
+    db_session.refresh(invoice)
+    assert Decimal(str(invoice.balance_due)) == Decimal("0.00")
+
+    kobo = paystack.amount_to_kobo(Decimal("5000.00"))
+    payment = (
+        db_session.query(Payment)
+        .filter(Payment.external_id == f"AUTOPAY-{invoice.id}-{kobo}")
+        .one()
+    )
+    assert payment.status == PaymentStatus.succeeded

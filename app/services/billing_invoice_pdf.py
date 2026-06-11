@@ -40,6 +40,9 @@ from app.services.object_storage import (
 )
 
 STALE_EXPORT_SECONDS = 20
+# Naira sign (U+20A6). DejaVu Sans (used by both WeasyPrint and the PIL
+# fallback) includes the glyph; renderers without it use an "NGN " prefix.
+NAIRA_SIGN = "₦"
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
 INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 3, 18, 9, 0, tzinfo=UTC)
 logger = logging.getLogger(__name__)
@@ -193,8 +196,8 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
             "<tr>"
             f"<td>{html.escape(str(line.description or 'Line item'))}</td>"
             f"<td class='num'>{html.escape(str(line.quantity or Decimal('0')))}</td>"
-            f"<td class='num'>N{_money(line.unit_price)}</td>"
-            f"<td class='num'>N{_money(line.amount)}</td>"
+            f"<td class='num'>{NAIRA_SIGN}{_money(line.unit_price)}</td>"
+            f"<td class='num'>{NAIRA_SIGN}{_money(line.amount)}</td>"
             "</tr>"
         )
         for line in lines
@@ -344,7 +347,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <td style=\"width: 30%;\">
             <div class=\"card highlight-card\">
               <p class=\"card-title\">Balance Due</p>
-              <p class=\"highlight-value\">N{_money(invoice.balance_due)}</p>
+              <p class=\"highlight-value\">{NAIRA_SIGN}{_money(invoice.balance_due)}</p>
             </div>
           </td>
           <td style=\"width: 30%;\">
@@ -375,9 +378,9 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
       <div class=\"totals-wrap\">
         <div class=\"totals-card\">
           <table>
-            <tr><td>Subtotal</td><td class=\"num\">N{_money(invoice.subtotal)}</td></tr>
-            <tr><td>{tax_label}</td><td class=\"num\">N{_money(invoice.tax_total)}</td></tr>
-            <tr class=\"grand-total\"><td>Total</td><td class=\"num\">N{_money(invoice.total)}</td></tr>
+            <tr><td>Subtotal</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.subtotal)}</td></tr>
+            <tr><td>{tax_label}</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.tax_total)}</td></tr>
+            <tr class=\"grand-total\"><td>Total</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.total)}</td></tr>
           </table>
         </div>
       </div>
@@ -452,7 +455,15 @@ def _build_simple_pdf(lines: list[str]) -> bytes:
     return bytes(pdf)
 
 
+_TEXT_FALLBACK_MAX_ITEMS = 30
+
+
+def _truncation_marker(hidden_count: int) -> str:
+    return f"... and {hidden_count} more line items (see itemised statement)"
+
+
 def _render_invoice_text_lines(invoice: Invoice) -> list[str]:
+    # The minimal text PDF is encoded latin-1, so use "NGN" (no naira glyph).
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
     out = [
         f"Invoice {invoice.invoice_number or invoice.id}",
@@ -466,19 +477,21 @@ def _render_invoice_text_lines(invoice: Invoice) -> list[str]:
     if not lines:
         out.append("- No line items")
     else:
-        for item in lines:
+        for item in lines[:_TEXT_FALLBACK_MAX_ITEMS]:
             qty = str(item.quantity or Decimal("0"))
             unit = _money(item.unit_price)
             amount = _money(item.amount)
             desc = str(item.description or "Line item")
-            out.append(f"- {desc} | qty {qty} | unit N{unit} | amount N{amount}")
+            out.append(f"- {desc} | qty {qty} | unit NGN {unit} | amount NGN {amount}")
+        if len(lines) > _TEXT_FALLBACK_MAX_ITEMS:
+            out.append(f"- {_truncation_marker(len(lines) - _TEXT_FALLBACK_MAX_ITEMS)}")
     out.extend(
         [
             "",
-            f"Subtotal: N{_money(invoice.subtotal)}",
-            f"Tax: N{_money(invoice.tax_total)}",
-            f"Total: N{_money(invoice.total)}",
-            f"Balance Due: N{_money(invoice.balance_due)}",
+            f"Subtotal: NGN {_money(invoice.subtotal)}",
+            f"Tax: NGN {_money(invoice.tax_total)}",
+            f"Total: NGN {_money(invoice.total)}",
+            f"Balance Due: NGN {_money(invoice.balance_due)}",
             f"Memo: {(invoice.memo or '').strip() or '-'}",
         ]
     )
@@ -491,7 +504,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     except Exception:
         return _build_simple_pdf(_render_invoice_text_lines(invoice))
 
-    def _font(size: int, bold: bool = False):
+    def _font_path(bold: bool) -> str | None:
         candidates = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
             if bold
@@ -502,8 +515,17 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         ]
         for path in candidates:
             if Path(path).exists():
-                return ImageFont.truetype(path, size=size)
+                return path
+        return None
+
+    def _font(size: int, bold: bool = False):
+        path = _font_path(bold)
+        if path:
+            return ImageFont.truetype(path, size=size)
         return ImageFont.load_default()
+
+    # DejaVu Sans carries the naira glyph; the PIL bitmap default does not.
+    naira = NAIRA_SIGN if _font_path(False) else "NGN "
 
     width, height = 1240, 1754
     margin_x = 72
@@ -601,7 +623,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         ),
         (
             "Balance Due",
-            f"N{_money(invoice.balance_due)}",
+            f"{naira}{_money(invoice.balance_due)}",
             f"Currency: {invoice.currency or 'NGN'}",
             green_50,
             green_900,
@@ -691,7 +713,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         )
         draw.text(
             (columns[2], row_y),
-            f"N{_money(getattr(line, 'unit_price', None))}"
+            f"{naira}{_money(getattr(line, 'unit_price', None))}"
             if getattr(line, "unit_price", None) != ""
             else "",
             font=body_font,
@@ -699,13 +721,20 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         )
         draw.text(
             (columns[3], row_y),
-            f"N{_money(getattr(line, 'amount', None))}"
+            f"{naira}{_money(getattr(line, 'amount', None))}"
             if getattr(line, "amount", None) != ""
             else "",
             font=body_font,
             fill=slate_900,
         )
         row_y += row_height
+    if len(line_items) > 7:
+        draw.text(
+            (columns[0], row_y),
+            _truncation_marker(len(line_items) - 7),
+            font=small_font,
+            fill=slate_500,
+        )
 
     totals_left = width - 430
     totals_top = 1180
@@ -716,9 +745,9 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         outline=slate_200,
     )
     totals = [
-        ("Subtotal", f"N{_money(invoice.subtotal)}"),
-        ("Tax", f"N{_money(invoice.tax_total)}"),
-        ("Total", f"N{_money(invoice.total)}"),
+        ("Subtotal", f"{naira}{_money(invoice.subtotal)}"),
+        ("Tax", f"{naira}{_money(invoice.tax_total)}"),
+        ("Total", f"{naira}{_money(invoice.total)}"),
     ]
     for index, (label, value) in enumerate(totals):
         ty = totals_top + 22 + (index * 44)

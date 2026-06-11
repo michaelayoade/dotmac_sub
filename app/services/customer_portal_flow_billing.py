@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -262,7 +263,58 @@ def get_arrangement_error_context(
         offset=0,
     )
     outstanding_balance = sum(inv.balance_due or 0 for inv in invoices)
-    return {"invoices": invoices, "outstanding_balance": outstanding_balance}
+    # The form template needs the same eligibility fields as the GET page,
+    # otherwise the error re-render falls into the "Not Eligible" branch.
+    eligible = bool(account_id_str) and outstanding_balance and len(invoices) > 0
+    due_dates = [inv.due_at for inv in invoices if getattr(inv, "due_at", None)]
+    return {
+        "invoices": invoices,
+        "overdue_invoices": invoices,
+        "selected_invoice": None,
+        "outstanding_balance": outstanding_balance,
+        "eligible": bool(eligible),
+        "ineligible_reason": None
+        if eligible
+        else "You have no overdue balance that requires a payment arrangement.",
+        "oldest_due_date": min(due_dates) if due_dates else None,
+    }
+
+
+def cancel_customer_arrangement(
+    db: Session,
+    customer: dict,
+    arrangement_id: str,
+) -> dict:
+    """Cancel the customer's own arrangement.
+
+    Customers may only cancel arrangements that are still PENDING approval.
+    Once an arrangement has been approved (active) — or has progressed
+    further — cancellation requires an admin.
+
+    Raises:
+        HTTPException 404 when the arrangement is missing or not theirs,
+        HTTPException 400 when the arrangement is not pending.
+    """
+    from app.services import payment_arrangements as arrangement_service
+
+    account_id = customer.get("account_id")
+    arrangement = arrangement_service.payment_arrangements.get(db, arrangement_id)
+    if not account_id or str(arrangement.subscriber_id) != str(account_id):
+        raise HTTPException(status_code=404, detail="Payment arrangement not found")
+
+    if arrangement.status != ArrangementStatus.pending:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only pending arrangements can be canceled. Please contact "
+                "support to cancel an approved arrangement."
+            ),
+        )
+
+    arrangement_service.payment_arrangements.cancel(
+        db, arrangement_id, notes="Canceled by customer via portal"
+    )
+    return {"success": True}
 
 
 def get_payment_arrangement_detail(
@@ -334,6 +386,7 @@ __all__ = [
     "get_new_arrangement_page",
     "submit_payment_arrangement",
     "get_arrangement_error_context",
+    "cancel_customer_arrangement",
     "get_payment_arrangement_detail",
     "get_invoice_detail",
 ]
