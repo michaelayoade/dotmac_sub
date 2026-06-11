@@ -154,7 +154,7 @@ def _legacy_smtp_config(db: Session | None) -> dict:
         "from_email": from_email,
         "from_name": _env_value("SMTP_FROM_NAME")
         or _setting_value(db, "smtp_from_name")
-        or "Dotmac Selfcare",
+        or get_brand()["from_name"],
         "user": username,
         "from_addr": from_email,
     }
@@ -545,7 +545,7 @@ def _get_app_url(db: Session | None, *, next_login_path: str | None = None) -> s
 
 def _get_company_name(db: Session | None) -> str:
     if db is None:
-        return "Dotmac Selfcare"
+        return get_brand()["legal_name"]
     try:
         from app.services import (
             web_system_company_info as web_system_company_info_service,
@@ -559,7 +559,11 @@ def _get_company_name(db: Session | None) -> str:
             return company_name
     except Exception:
         logger.debug("Failed to load company name for email branding", exc_info=True)
-    return "Dotmac Selfcare"
+    return get_brand()["legal_name"]
+
+
+def _brand_accent_color() -> str:
+    return get_brand().get("primary_color") or "#3b82f6"
 
 
 def _absolute_asset_url(app_url: str, asset_url: str | None) -> str:
@@ -656,12 +660,12 @@ def _render_action_email_html(
     </div>
 
     <p style="font-size: 15px; color: #555; margin-bottom: 20px;">
-      Thank you for choosing <strong style="color: #c62828; font-size: 18px;">{safe_company_name}</strong>.
+      Thank you for choosing <strong style="color: {accent_color}; font-size: 18px;">{safe_company_name}</strong>.
     </p>
 
     <p style="font-size: 15px; color: {accent_color}; text-align: right; font-style: italic;">
       Best regards,<br>
-      <span style="color: #c62828; font-weight: bold;">{safe_company_name} Support Team</span>
+      <span style="color: {accent_color}; font-weight: bold;">{safe_company_name} Support Team</span>
     </p>
   </div>
 </body>
@@ -987,11 +991,12 @@ def send_password_reset_email(
 
     subject = "Password Reset Request"
 
+    accent_color = _brand_accent_color()
     body_html = _render_action_email_html(
         company_name=company_name,
         logo_url=logo_url,
         title="Password Reset Request",
-        accent_color="green",
+        accent_color=accent_color,
         greeting=greeting,
         intro_html="""
 <p style="margin: 0 0 12px;">We received a request to reset your password for your portal access.</p>
@@ -1002,9 +1007,9 @@ def send_password_reset_email(
         expiry_minutes=expiry_minutes,
         details_html=f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: #c62828;">Action:</strong> <span style="color: #555;">Reset your account password</span><br>
-  <strong style="color: #c62828;">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
+  <strong style="color: {accent_color};">Action:</strong> <span style="color: #555;">Reset your account password</span><br>
+  <strong style="color: {accent_color};">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: {accent_color};">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
@@ -1044,6 +1049,7 @@ def send_user_invite_email(
     reset_token: str,
     person_name: str | None = None,
     next_login_path: str | None = None,
+    expires_minutes: int | None = None,
 ) -> bool:
     """
     Send a new user invitation email.
@@ -1053,6 +1059,7 @@ def send_user_invite_email(
         to_email: Recipient email address
         reset_token: The JWT reset token
         person_name: Optional name to personalize the email
+        expires_minutes: Actual token TTL; falls back to the configured setting
 
     Returns:
         True if email was sent successfully, False otherwise
@@ -1063,8 +1070,8 @@ def send_user_invite_email(
         query["next_login"] = next_login_path
     reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
 
-    # Get configurable expiry minutes
-    expiry_minutes = (
+    # Prefer the actual token TTL; fall back to the configured setting
+    expiry_minutes = expires_minutes or (
         resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 1440
     )
     expiry_duration = _format_expiry_duration(expiry_minutes)
@@ -1078,11 +1085,12 @@ def send_user_invite_email(
 
     subject = f"You're invited to {company_name}"
 
+    accent_color = _brand_accent_color()
     body_html = _render_action_email_html(
         company_name=company_name,
         logo_url=logo_url,
         title=f"Welcome to {company_name}",
-        accent_color="green",
+        accent_color=accent_color,
         greeting=greeting,
         intro_html="""
 <p style="margin: 0 0 12px;">Your account has been created successfully.</p>
@@ -1093,9 +1101,9 @@ def send_user_invite_email(
         expiry_minutes=expiry_minutes,
         details_html=f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: #c62828;">Portal:</strong> <span style="color: #555;">{html.escape(company_name)}</span><br>
-  <strong style="color: #c62828;">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
+  <strong style="color: {accent_color};">Portal:</strong> <span style="color: #555;">{html.escape(company_name)}</span><br>
+  <strong style="color: {accent_color};">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: {accent_color};">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""

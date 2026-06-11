@@ -241,6 +241,7 @@ def send_user_invite(
         reset_token=reset["token"],
         person_name=reset.get("subscriber_name"),
         next_login_path=next_login_path,
+        expires_minutes=reset.get("ttl_minutes"),
     )
     if sent:
         return "Invitation sent. Password reset email delivered."

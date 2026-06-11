@@ -488,15 +488,18 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
     for n in pending:
         try:
             subscriber = session.get(Subscriber, n["subscriber_id"])
-            recipient = getattr(subscriber, "email", None)
-            if not recipient:
-                continue
+            email = getattr(subscriber, "email", None)
             subject, body = _build_fup_notification(
                 n["kind"], n.get("rule_name"), n.get("threshold_gb"), n.get("used_gb")
             )
             channels = _FUP_NOTIFICATION_CHANNELS.get(n["kind"], ("push",))
             created_any = False
             for channel in channels:
+                # A missing email only disqualifies the email channel; push
+                # is addressed by subscriber_id (recipient is informational).
+                if channel == "email" and not email:
+                    continue
+                recipient = email or str(n["subscriber_id"])
                 try:
                     notifications_svc.create(
                         session,

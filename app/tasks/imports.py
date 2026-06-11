@@ -131,18 +131,27 @@ def run_import_job(
             )
             recipient = str(fallback or "").strip()
         if recipient:
+            from app.services.email_template import wrap_email_html
+
             subject = f"Import Completed: {result.get('module_label', module)}"
-            body = (
-                f"<p>Import job <strong>{job_id}</strong> completed.</p>"
-                f"<p>Status: {result.get('status')}</p>"
-                f"<p>Imported: {result.get('imported_rows')} / {result.get('total_rows')}</p>"
+            body = wrap_email_html(
+                (
+                    f"<p>Import job <strong>{job_id}</strong> completed.</p>"
+                    f"<p>Status: {result.get('status')}</p>"
+                    f"<p>Imported: {result.get('imported_rows')} / {result.get('total_rows')}</p>"
+                ),
+                subject=subject,
             )
             email_service.send_email(
                 db=session,
                 to_email=recipient,
                 subject=subject,
                 body_html=body,
-                body_text=None,
+                body_text=(
+                    f"Import job {job_id} completed.\n"
+                    f"Status: {result.get('status')}\n"
+                    f"Imported: {result.get('imported_rows')} / {result.get('total_rows')}"
+                ),
                 track=True,
                 activity="notification_queue",
             )
@@ -165,12 +174,21 @@ def run_import_job(
             )
             recipient = (notify_email or "").strip()
             if recipient:
+                from html import escape
+
+                from app.services.email_template import wrap_email_html
+
+                fail_subject = f"Import Failed: {module}"
                 email_service.send_email(
                     db=failed_session,
                     to_email=recipient,
-                    subject=f"Import Failed: {module}",
-                    body_html=f"<p>Import job <strong>{job_id}</strong> failed.</p><p>{exc!s}</p>",
-                    body_text=None,
+                    subject=fail_subject,
+                    body_html=wrap_email_html(
+                        f"<p>Import job <strong>{job_id}</strong> failed.</p>"
+                        f"<p>{escape(str(exc))}</p>",
+                        subject=fail_subject,
+                    ),
+                    body_text=f"Import job {job_id} failed.\n{exc!s}",
                     track=True,
                     activity="notification_queue",
                 )

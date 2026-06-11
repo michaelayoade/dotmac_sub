@@ -187,3 +187,35 @@ def test_build_repeat_upsell_message():
     )
     assert "every month" in subj.lower()
     assert "upgrade" in body.lower()
+
+
+def test_emit_push_still_created_when_subscriber_has_no_email(db_session, subscriber):
+    """A missing email must only skip the email channel, not push."""
+    from app.models.notification import Notification, NotificationChannel
+    from app.tasks.usage import _emit_fup_notifications
+
+    subscriber.email = ""
+    db_session.commit()
+
+    sent = _emit_fup_notifications(
+        db_session,
+        [
+            {
+                "subscriber_id": subscriber.id,
+                "kind": "throttled",
+                "rule_name": "FUP 100GB",
+                "threshold_gb": 100,
+                "used_gb": 120,
+            }
+        ],
+    )
+
+    rows = (
+        db_session.query(Notification)
+        .filter(Notification.subscriber_id == subscriber.id)
+        .all()
+    )
+    channels = {row.channel for row in rows}
+    assert sent == 1
+    assert NotificationChannel.push in channels
+    assert NotificationChannel.email not in channels

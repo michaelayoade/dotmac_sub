@@ -7,10 +7,59 @@ outgoing emails (invoices, payment receipts, welcome, notifications).
 from __future__ import annotations
 
 import logging
+import re
+from html import escape
 
 from app.services.branding_config import get_brand
 
 logger = logging.getLogger(__name__)
+
+_HTML_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+
+
+def looks_like_html(body: str | None) -> bool:
+    return bool(_HTML_TAG_RE.search(body or ""))
+
+
+def render_email_bodies(
+    body: str,
+    *,
+    subject: str = "",
+    base_url: str = "",
+    company_name: str | None = None,
+    support_email: str | None = None,
+) -> tuple[str, str | None]:
+    """Return ``(body_html, body_text)`` for an outgoing email.
+
+    Plain-text input is escaped, converted to paragraphs (blank line =
+    paragraph break), and wrapped in the branded template; the original text
+    is kept as the text/plain part. Input that already contains HTML is
+    wrapped as-is with no text part.
+    """
+    if looks_like_html(body):
+        html = wrap_email_html(
+            body,
+            subject=subject,
+            base_url=base_url,
+            company_name=company_name,
+            support_email=support_email,
+        )
+        return html, None
+
+    paragraphs = [
+        f'<p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6;">'
+        f"{escape(para).replace(chr(10), '<br>')}</p>"
+        for para in re.split(r"\n\s*\n", body or "")
+        if para.strip()
+    ]
+    html = wrap_email_html(
+        "\n".join(paragraphs),
+        subject=subject,
+        base_url=base_url,
+        company_name=company_name,
+        support_email=support_email,
+    )
+    return html, body
 
 
 def _darken(hex_color: str, factor: float = 0.78) -> str:
