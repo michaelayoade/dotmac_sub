@@ -329,16 +329,20 @@ class SmsProvider:
                     _get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
                     or "webhook"
                 ).lower()
-                api_key = _get_setting(db, "sms_api_key", "SMS_API_KEY")
-                api_secret = _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
-                from_number = _get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
-                webhook_url = _get_setting(db, "sms_webhook_url", "SMS_WEBHOOK_URL")
-            if provider == "twilio":
-                return bool(api_key and api_secret and from_number)
-            if provider == "africastalking":
-                return bool(api_key)
-            if provider == "webhook":
-                return bool(webhook_url)
+                # Only resolve the settings the chosen provider actually needs.
+                # Reading every credential eagerly hit the DB for fields the
+                # webhook provider never uses, which failed in environments
+                # where those rows aren't configured.
+                if provider == "twilio":
+                    return bool(
+                        _get_setting(db, "sms_api_key", "SMS_API_KEY")
+                        and _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
+                        and _get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
+                    )
+                if provider == "africastalking":
+                    return bool(_get_setting(db, "sms_api_key", "SMS_API_KEY"))
+                if provider == "webhook":
+                    return bool(_get_setting(db, "sms_webhook_url", "SMS_WEBHOOK_URL"))
             return False
         except Exception:
             return False
