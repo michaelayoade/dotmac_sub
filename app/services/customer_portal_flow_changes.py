@@ -340,6 +340,16 @@ def submit_change_plan(
     subscriber_id = customer.get("subscriber_id")
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
 
+    # Fail fast on offers the customer could never change to (cross-family,
+    # hidden, archived, reseller-restricted): apply-time validation would only
+    # surface the rejection after the request sat in the approval queue.
+    available = get_available_portal_offers(db, subscription)
+    if str(offer_id) not in {str(offer.id) for offer in available}:
+        raise ValueError(
+            "This plan is not available for self-service change. "
+            "Contact support to migrate to it."
+        )
+
     eff_date = datetime.strptime(effective_date, "%Y-%m-%d").date()
     if eff_date < date.today():
         raise ValueError("Effective date must be today or later.")

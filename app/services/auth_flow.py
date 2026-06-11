@@ -37,7 +37,7 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import auth_cache
@@ -631,6 +631,41 @@ def verify_password(password: str, password_hash: str | None) -> bool:
     return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
 
 
+LOGIN_MAX_FAILED_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+
+
+def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
+    credential.failed_login_attempts += 1
+    if credential.failed_login_attempts >= LOGIN_MAX_FAILED_ATTEMPTS:
+        credential.locked_until = now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+    db.commit()
+
+
+MFA_MAX_FAILED_ATTEMPTS = 5
+MFA_LOCKOUT_MINUTES = 15
+MFA_LOCKED_DETAIL = "Too many incorrect codes. Try again later."
+
+
+def ensure_mfa_not_locked(method: MFAMethod) -> None:
+    locked_until = _as_utc(method.locked_until)
+    if locked_until and locked_until > _now():
+        raise HTTPException(status_code=429, detail=MFA_LOCKED_DETAIL)
+
+
+def record_mfa_failure(db: Session, method: MFAMethod) -> None:
+    method.failed_attempts = (method.failed_attempts or 0) + 1
+    if method.failed_attempts >= MFA_MAX_FAILED_ATTEMPTS:
+        method.locked_until = _now() + timedelta(minutes=MFA_LOCKOUT_MINUTES)
+        method.failed_attempts = 0
+    db.commit()
+
+
+def record_mfa_success(method: MFAMethod) -> None:
+    method.failed_attempts = 0
+    method.locked_until = None
+
+
 class AuthFlow(ListResponseMixin):
     @staticmethod
     def _response_with_refresh_cookie(
@@ -714,44 +749,47 @@ class AuthFlow(ListResponseMixin):
             raise HTTPException(
                 status_code=400, detail="Invalid auth provider"
             ) from exc
-        if resolved_provider == AuthProvider.radius:
-            credential = _resolve_login_credential(
-                db,
-                provider=AuthProvider.radius,
-                identifier=username,
-            )
-            if not credential:
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-            radius_auth_service.authenticate(
-                db,
-                str(credential.username or username),
-                password,
-                str(credential.radius_server_id)
-                if credential.radius_server_id
-                else None,
-            )
-        elif resolved_provider == AuthProvider.local:
-            credential = _resolve_login_credential(
-                db,
-                provider=AuthProvider.local,
-                identifier=username,
-            )
-            if not credential:
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-            if not verify_password(password, credential.password_hash):
-                now = _now()
-                credential.failed_login_attempts += 1
-                if credential.failed_login_attempts >= 5:
-                    credential.locked_until = now + timedelta(minutes=15)
-                db.commit()
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-        else:
+        if resolved_provider not in (AuthProvider.radius, AuthProvider.local):
             raise HTTPException(status_code=400, detail="Unsupported auth provider")
+        credential = _resolve_login_credential(
+            db,
+            provider=resolved_provider,
+            identifier=username,
+        )
+        if not credential:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
+        # Check the lock before verifying the password: a locked account must
+        # answer identically to right and wrong passwords (no correctness
+        # oracle), and attempts made while locked must not extend the lock.
         now = _now()
         locked_until = _as_utc(credential.locked_until)
         if locked_until and locked_until > now:
             raise HTTPException(status_code=403, detail="Account locked")
+        if locked_until:
+            # Lock expired: start a fresh window so a single wrong attempt
+            # doesn't immediately re-lock for another full period.
+            credential.failed_login_attempts = 0
+            credential.locked_until = None
+
+        if resolved_provider == AuthProvider.radius:
+            try:
+                radius_auth_service.authenticate(
+                    db,
+                    str(credential.username or username),
+                    password,
+                    str(credential.radius_server_id)
+                    if credential.radius_server_id
+                    else None,
+                )
+            except HTTPException as exc:
+                if exc.status_code in (401, 403):
+                    _record_login_failure(db, credential, now)
+                raise
+        else:
+            if not verify_password(password, credential.password_hash):
+                _record_login_failure(db, credential, now)
+                raise HTTPException(status_code=401, detail="Invalid credentials")
 
         if credential.must_change_password:
             raise HTTPException(
@@ -807,15 +845,30 @@ class AuthFlow(ListResponseMixin):
 
         secret = pyotp.random_base32()
         encrypted = _encrypt_secret(db, secret)
-        method = MFAMethod(
-            system_user_id=system_user.id,
-            method_type=MFAMethodType.totp,
-            label=label,
-            secret=encrypted,
-            enabled=False,
-            is_primary=False,
+        # Reuse a pending (never confirmed) setup row instead of inserting a
+        # new one on every visit to the setup page.
+        method = (
+            db.query(MFAMethod)
+            .filter(MFAMethod.system_user_id == system_user.id)
+            .filter(MFAMethod.method_type == MFAMethodType.totp)
+            .filter(MFAMethod.enabled.is_(False))
+            .filter(MFAMethod.verified_at.is_(None))
+            .order_by(MFAMethod.created_at.desc())
+            .first()
         )
-        db.add(method)
+        if method:
+            method.label = label
+            method.secret = encrypted
+        else:
+            method = MFAMethod(
+                system_user_id=system_user.id,
+                method_type=MFAMethodType.totp,
+                label=label,
+                secret=encrypted,
+                enabled=False,
+                is_primary=False,
+            )
+            db.add(method)
         db.commit()
         db.refresh(method)
 
@@ -835,10 +888,13 @@ class AuthFlow(ListResponseMixin):
         if method.method_type != MFAMethodType.totp:
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
+        ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
         if not totp.verify(code, valid_window=0):
+            record_mfa_failure(db, method)
             raise HTTPException(status_code=401, detail="Invalid MFA code")
+        record_mfa_success(method)
 
         db.query(MFAMethod).filter(
             MFAMethod.system_user_id == method.system_user_id,
@@ -876,15 +932,30 @@ class AuthFlow(ListResponseMixin):
 
         secret = pyotp.random_base32()
         encrypted = _encrypt_secret(db, secret)
-        method = MFAMethod(
-            subscriber_id=subscriber.id,
-            method_type=MFAMethodType.totp,
-            label=label,
-            secret=encrypted,
-            enabled=False,
-            is_primary=False,
+        # Reuse a pending (never confirmed) setup row instead of inserting a
+        # new one on every visit to the setup page.
+        method = (
+            db.query(MFAMethod)
+            .filter(MFAMethod.subscriber_id == subscriber.id)
+            .filter(MFAMethod.method_type == MFAMethodType.totp)
+            .filter(MFAMethod.enabled.is_(False))
+            .filter(MFAMethod.verified_at.is_(None))
+            .order_by(MFAMethod.created_at.desc())
+            .first()
         )
-        db.add(method)
+        if method:
+            method.label = label
+            method.secret = encrypted
+        else:
+            method = MFAMethod(
+                subscriber_id=subscriber.id,
+                method_type=MFAMethodType.totp,
+                label=label,
+                secret=encrypted,
+                enabled=False,
+                is_primary=False,
+            )
+            db.add(method)
         db.commit()
         db.refresh(method)
 
@@ -902,10 +973,13 @@ class AuthFlow(ListResponseMixin):
         if method.method_type != MFAMethodType.totp:
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
+        ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
         if not totp.verify(code, valid_window=0):
+            record_mfa_failure(db, method)
             raise HTTPException(status_code=401, detail="Invalid MFA code")
+        record_mfa_success(method)
 
         db.query(MFAMethod).filter(
             MFAMethod.subscriber_id == method.subscriber_id,
@@ -940,10 +1014,13 @@ class AuthFlow(ListResponseMixin):
         if not method:
             raise HTTPException(status_code=404, detail="MFA method not found")
 
+        ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
         if not totp.verify(code, valid_window=0):
+            record_mfa_failure(db, method)
             raise HTTPException(status_code=401, detail="Invalid MFA code")
+        record_mfa_success(method)
 
         method.last_used_at = _now()
         db.commit()
@@ -1141,10 +1218,13 @@ def change_password(
     subscriber_id: str,
     current_password: str,
     new_password: str,
+    *,
+    current_session_id: str | None = None,
 ) -> datetime:
     """
     Change a user's password after verifying the current password.
-    Returns the timestamp when the password was changed.
+    Revokes every other session for the principal and returns the timestamp
+    when the password was changed.
     """
     principal_uuid = coerce_uuid(subscriber_id)
     stmt = (
@@ -1171,9 +1251,60 @@ def change_password(
     credential.password_hash = hash_password(new_password)
     credential.password_updated_at = now
     credential.must_change_password = False
-    db.flush()
+
+    is_system_user = credential.system_user_id is not None
+    session_principal_filter = (
+        AuthSession.system_user_id == credential.system_user_id
+        if is_system_user
+        else AuthSession.subscriber_id == credential.subscriber_id
+    )
+    revoke_query = (
+        db.query(AuthSession)
+        .filter(session_principal_filter)
+        .filter(AuthSession.status == SessionStatus.active)
+        .filter(AuthSession.revoked_at.is_(None))
+    )
+    if current_session_id:
+        revoke_query = revoke_query.filter(AuthSession.id != current_session_id)
+    revoked = revoke_query.all()
+    principal_type = "system_user" if is_system_user else "subscriber"
+    for session in revoked:
+        session.status = SessionStatus.revoked
+        session.revoked_at = now
+    db.commit()
+    for session in revoked:
+        auth_cache.invalidate_session_context(
+            str(session.id),
+            principal_type=principal_type,
+            principal_id=str(principal_uuid),
+        )
+    if not is_system_user:
+        _revoke_portal_sessions_for_subscriber(db, str(credential.subscriber_id))
 
     return now
+
+
+def _revoke_portal_sessions_for_subscriber(db: Session, subscriber_id: str) -> None:
+    """Best-effort: drop Redis-backed customer/reseller web portal sessions too.
+
+    `auth_sessions` revocation does not touch the opaque-token portal sessions,
+    so a password change/reset would otherwise leave logged-in portal browsers
+    untouched until their (sliding) TTL lapsed.
+    """
+    # Local imports: reseller_portal imports this module at import time.
+    from app.services import customer_portal_session, reseller_portal
+
+    try:
+        customer_portal_session.revoke_customer_sessions_for_subscriber(
+            subscriber_id, db=db
+        )
+        reseller_portal.revoke_reseller_sessions_for_subscriber(subscriber_id, db=db)
+    except Exception:
+        logger.warning(
+            "Failed to revoke portal sessions for subscriber %s",
+            subscriber_id,
+            exc_info=True,
+        )
 
 
 def forgot_password_flow(
@@ -1345,6 +1476,8 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
         or not getattr(principal, "is_active", False)
     ):
         raise HTTPException(status_code=401, detail="Invalid reset token")
+    if getattr(principal, "status", None) == SubscriberStatus.canceled:
+        raise HTTPException(status_code=401, detail="Invalid reset token")
 
     credential = (
         credential_query.filter(UserCredential.provider == AuthProvider.local)
@@ -1365,7 +1498,14 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
 
     now = _now()
     credential.password_hash = hash_password(new_password)
-    credential.password_updated_at = now
+    # Spend the token: the single-use check above compares iat against
+    # password_updated_at at whole-second resolution, so when the reset
+    # completes within the second the token was minted, nudge the marker
+    # one second forward so a replay of this token is rejected.
+    updated_marker = now
+    if issued_at is not None and int(now.timestamp()) <= int(issued_at):
+        updated_marker = now + timedelta(seconds=1)
+    credential.password_updated_at = updated_marker
     credential.must_change_password = False
     credential.failed_login_attempts = 0
     credential.locked_until = None
@@ -1392,6 +1532,9 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
         defer_until_commit=True,
     )
     db.commit()
+    auth_cache.invalidate_principal(principal_type, str(principal_id))
+    if principal_type != "system_user":
+        _revoke_portal_sessions_for_subscriber(db, str(principal_uuid))
 
     return now
 
