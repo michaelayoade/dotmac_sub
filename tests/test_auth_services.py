@@ -65,6 +65,18 @@ def _make_request(user_agent: str = "pytest") -> Request:
     return Request(scope)
 
 
+def _make_get_request(path: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [(b"user-agent", b"pytest")],
+        "client": ("127.0.0.1", 12345),
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
 def _response_cookies(response) -> dict[str, str]:
     jar = SimpleCookie()
     for header, value in response.raw_headers:
@@ -100,6 +112,18 @@ def _make_system_user_with_login(db_session, *, email: str):
     db_session.add(credential)
     db_session.commit()
     return user
+
+
+def test_admin_login_reseller_tile_links_directly_to_reseller_login():
+    response = web_auth_service.login_page(
+        _make_get_request("/auth/login"),
+        next_url="/admin",
+    )
+
+    body = response.body.decode()
+
+    assert 'href="/reseller/auth/login?next=/reseller/dashboard"' in body
+    assert 'href="/reseller"' not in body
 
 
 def _enable_force_admin_mfa(db_session):

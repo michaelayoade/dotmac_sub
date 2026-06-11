@@ -492,10 +492,11 @@
                 {% endif %}
 
                 <!-- User Access -->
+                {% set pppoe_access = pppoe_access|default({'has_credential': false, 'credential_id': none, 'login': none, 'has_password': false}) %}
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">User Access</h3>
-                        <span class="text-xs text-slate-500 dark:text-slate-400">Customer Portal</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">Customer Portal & PPPoE</span>
                     </div>
                     <div class="p-5 space-y-4">
                         {% if customer_user_access.error %}
@@ -507,6 +508,32 @@
                             <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Login Email</p>
                                 <p class="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-white">{{ customer_user_access.email }}</p>
+                            </div>
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">PPPoE Login</p>
+                                <p class="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-white">{{ pppoe_access.login if pppoe_access.has_credential else 'Not available' }}</p>
+                            </div>
+                            <div
+                                class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30"
+                                x-data="{ shown: false, loading: false, error: false, password: '', async reveal() { if (this.shown) { this.shown = false; return; } if (!this.password) { this.loading = true; this.error = false; try { const response = await fetch('/admin/customers/person/{{ customer.id }}/pppoe-password?credential_id={{ pppoe_access.credential_id or '' }}', { headers: { 'Accept': 'application/json' } }); if (!response.ok) throw new Error('Password unavailable'); const data = await response.json(); this.password = data.password || ''; } catch (e) { this.error = true; } finally { this.loading = false; } } if (this.password) this.shown = true; } }">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">PPPoE Password</p>
+                                        <p class="mt-1 truncate font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="error ? 'Unavailable' : (shown ? password : '{{ '••••••••' if pppoe_access.has_password else 'Not available' }}')"></p>
+                                    </div>
+                                    {% if pppoe_access.has_password %}
+                                    <button
+                                        type="button"
+                                        @click="reveal()"
+                                        :disabled="loading"
+                                        class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-800 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                                        :title="shown ? 'Hide PPPoE password' : 'Show PPPoE password'"
+                                        aria-label="Show PPPoE password">
+                                        <svg x-show="!shown" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12 18 18.75 12 18.75 2.25 12 2.25 12z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                        <svg x-show="shown" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18M10.58 10.58A2 2 0 0010 12a2 2 0 003.42 1.42M9.88 4.24A9.5 9.5 0 0112 4c6 0 9.75 8 9.75 8a18.5 18.5 0 01-3.18 4.24M6.61 6.61C3.9 8.35 2.25 12 2.25 12S6 20 12 20a9.6 9.6 0 004.12-.92"/></svg>
+                                    </button>
+                                    {% endif %}
+                                </div>
                             </div>
                             <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Credential Status</p>

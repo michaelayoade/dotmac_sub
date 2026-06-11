@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import ApiKey, AuthProvider, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
+from app.models.domain_settings import SettingDomain
 from app.models.rbac import (
     SystemUserPermission as SystemUserPermissionModel,
 )
@@ -21,12 +22,22 @@ from app.services import rbac as rbac_service
 from app.services import web_system_users as web_system_users_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
 
 def _invite_login_route_for_user(_system_user: SystemUser) -> str:
     return "/auth/login?next=/admin/dashboard"
+
+
+def _user_invite_expiry_minutes(db: Session) -> int:
+    value = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 1440
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return 1440
+    return parsed if parsed > 0 else 1440
 
 
 def set_user_active(db: Session, *, user_id: str, is_active: bool) -> SystemUser:
@@ -147,7 +158,11 @@ def send_user_invite(
     from app.services import auth_flow as auth_flow_service
     from app.services import email as email_service
 
-    reset = auth_flow_service.request_password_reset(db=db, email=email)
+    reset = auth_flow_service.request_password_reset(
+        db=db,
+        email=email,
+        ttl_minutes=_user_invite_expiry_minutes(db),
+    )
     if not reset or not reset.get("token"):
         return "User created, but no reset token was generated."
 

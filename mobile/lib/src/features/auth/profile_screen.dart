@@ -66,6 +66,7 @@ class ProfileScreen extends ConsumerWidget {
                   child: ListTile(
                     leading: const Icon(Icons.password_outlined),
                     title: const Text('Change password'),
+                    subtitle: const Text('Your app & portal sign-in password'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => _showChangePassword(context, ref),
                   ),
@@ -572,6 +573,13 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
         children: [
           Text('Change password',
               style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(
+            'This updates the password you use to sign in to the app and '
+            'customer portal. Your internet (PPPoE) connection password is '
+            'not affected.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           const SizedBox(height: 16),
           if (_error != null) ...[
             Text(_error!,

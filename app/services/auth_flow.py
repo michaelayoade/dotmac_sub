@@ -375,16 +375,20 @@ def _issue_mfa_enrollment_token(
 
 
 def _password_reset_ttl_minutes(db: Session | None) -> int:
-    env_value = _env_int("PASSWORD_RESET_TTL_MINUTES")
+    env_value = _env_int("PASSWORD_RESET_EXPIRY_MINUTES")
+    if env_value is None:
+        env_value = _env_int("PASSWORD_RESET_TTL_MINUTES")
     if env_value is not None:
         return env_value
-    value = _setting_value(db, "password_reset_ttl_minutes")
+    value = _setting_value(db, "password_reset_expiry_minutes")
+    if value is None:
+        value = _setting_value(db, "password_reset_ttl_minutes")
     if value is not None:
         try:
             return int(value)
         except ValueError:
-            return 60
-    return 60
+            return 1440
+    return 1440
 
 
 def _issue_password_reset_token(
@@ -392,6 +396,8 @@ def _issue_password_reset_token(
     principal_id: str,
     principal_type_or_email: str,
     email: str | None = None,
+    *,
+    ttl_minutes: int | None = None,
 ) -> str:
     # Backward compatibility: older callers passed (db, principal_id, email)
     # and implicitly targeted subscriber principals.
@@ -403,6 +409,9 @@ def _issue_password_reset_token(
         resolved_email = email
 
     now = _now()
+    token_ttl_minutes = ttl_minutes if ttl_minutes and ttl_minutes > 0 else None
+    if token_ttl_minutes is None:
+        token_ttl_minutes = _password_reset_ttl_minutes(db)
     payload = {
         "sub": principal_id,
         "principal_id": principal_id,
@@ -410,9 +419,7 @@ def _issue_password_reset_token(
         "email": resolved_email,
         "typ": "password_reset",
         "iat": int(now.timestamp()),
-        "exp": int(
-            (now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()
-        ),
+        "exp": int((now + timedelta(minutes=token_ttl_minutes)).timestamp()),
     }
     return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
@@ -1141,6 +1148,7 @@ def change_password(
             (UserCredential.subscriber_id == principal_uuid)
             | (UserCredential.system_user_id == principal_uuid)
         )
+        .where(UserCredential.provider == AuthProvider.local)
         .where(UserCredential.is_active.is_(True))
     )
     credential = db.scalars(stmt).first()
@@ -1180,7 +1188,9 @@ def forgot_password_flow(db: Session, email: str) -> None:
         )
 
 
-def request_password_reset(db: Session, email: str) -> dict | None:
+def request_password_reset(
+    db: Session, email: str, *, ttl_minutes: int | None = None
+) -> dict | None:
     """
     Request a password reset for the given email.
     Returns dict with token and person info if successful, None if email not found.
@@ -1196,12 +1206,17 @@ def request_password_reset(db: Session, email: str) -> dict | None:
         credential = (
             db.query(UserCredential)
             .filter(UserCredential.subscriber_id == subscriber.id)
+            .filter(UserCredential.provider == AuthProvider.local)
             .filter(UserCredential.is_active.is_(True))
             .first()
         )
         if credential:
             token = _issue_password_reset_token(
-                db, str(subscriber.id), "subscriber", subscriber.email
+                db,
+                str(subscriber.id),
+                "subscriber",
+                subscriber.email,
+                ttl_minutes=ttl_minutes,
             )
             return {
                 "token": token,
@@ -1219,13 +1234,18 @@ def request_password_reset(db: Session, email: str) -> dict | None:
     credential = (
         db.query(UserCredential)
         .filter(UserCredential.system_user_id == system_user.id)
+        .filter(UserCredential.provider == AuthProvider.local)
         .filter(UserCredential.is_active.is_(True))
         .first()
     )
     if not credential:
         return None
     token = _issue_password_reset_token(
-        db, str(system_user.id), "system_user", system_user.email
+        db,
+        str(system_user.id),
+        "system_user",
+        system_user.email,
+        ttl_minutes=ttl_minutes,
     )
     return {
         "token": token,
@@ -1260,7 +1280,11 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     if not principal or principal.email != email:
         raise HTTPException(status_code=401, detail="Invalid reset token")
 
-    credential = credential_query.filter(UserCredential.is_active.is_(True)).first()
+    credential = (
+        credential_query.filter(UserCredential.provider == AuthProvider.local)
+        .filter(UserCredential.is_active.is_(True))
+        .first()
+    )
     if not credential:
         raise HTTPException(status_code=404, detail="No credentials found")
 

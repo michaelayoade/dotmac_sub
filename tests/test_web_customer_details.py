@@ -5,13 +5,16 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
 from app.models.subscription_engine import SettingValueType
+from app.services.credential_crypto import encrypt_credential
 from app.services.web_customer_details import (
     build_business_detail_snapshot,
     build_customer_detail_snapshot,
     build_person_detail_snapshot,
+    reveal_customer_pppoe_password,
 )
 from app.web.admin import customers as customer_routes
 
@@ -106,6 +109,62 @@ def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber
     )
 
 
+def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="100025929",
+        secret_hash=encrypt_credential("hYNAtwqj"),
+        connection_type=ConnectionType.pppoe,
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    context = build_person_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["pppoe_access"] == {
+        "has_credential": True,
+        "credential_id": str(credential.id),
+        "login": "100025929",
+        "has_password": True,
+    }
+
+
+def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="100025929",
+        secret_hash=encrypt_credential("hYNAtwqj"),
+        connection_type=ConnectionType.pppoe,
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    password, found = reveal_customer_pppoe_password(
+        db_session,
+        str(subscriber.id),
+        credential_id=str(credential.id),
+    )
+    missing_password, missing_found = reveal_customer_pppoe_password(
+        db_session,
+        str(subscriber.id),
+        credential_id="00000000-0000-0000-0000-000000000000",
+    )
+    response = customer_routes.person_pppoe_password(
+        customer_id=str(subscriber.id),
+        credential_id=str(credential.id),
+        db=db_session,
+    )
+
+    assert (password, found) == ("hYNAtwqj", True)
+    assert (missing_password, missing_found) == ("", False)
+    assert response.status_code == 200
+    assert json.loads(response.body)["password"] == "hYNAtwqj"
+
+
 def test_customer_detail_rejects_reseller_users(db_session):
     reseller_user = Subscriber(
         first_name="Mimi",
@@ -169,6 +228,12 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
 
     assert response.status_code == 200
     assert captured["template_name"] == "admin/customers/detail.html"
+    assert captured["context"]["pppoe_access"] == {
+        "has_credential": False,
+        "credential_id": None,
+        "login": None,
+        "has_password": False,
+    }
     assert captured["context"]["usage_period"] == "last"
 
 
