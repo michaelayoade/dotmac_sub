@@ -11,9 +11,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditEvent
-from app.models.auth import AuthProvider, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, UserCredential
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Subscriber, SubscriberCategory
+from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_adapter import record_audit_event
 from app.services.rate_limiter_adapter import allow_operation
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 INVITE_AUDIT_ACTION = "customer_user_invite"
 RESET_AUDIT_ACTION = "customer_user_reset_link"
+MFA_RESET_AUDIT_ACTION = "customer_user_mfa_reset"
 LOGIN_TOGGLE_AUDIT_ACTION = "customer_user_login_toggle"
 PRIMARY_LOGIN_AUDIT_ACTION = "customer_user_primary_login_set"
 
@@ -72,10 +73,13 @@ def _ensure_subscriber_local_credential(
         if not cred.username:
             cred.username = subscriber.email
         if not cred.password_hash:
+            # Placeholder only: forcing must_change_password on a credential
+            # the customer already uses would lock them out of a working
+            # email+password login every time an admin re-sends an invite.
             cred.password_hash = hash_password(secrets.token_urlsafe(24))
+            cred.must_change_password = True
+            cred.password_updated_at = _now()
         cred.is_active = True
-        cred.must_change_password = True
-        cred.password_updated_at = _now()
         db.flush()
         return cred
     cred = UserCredential(
@@ -104,6 +108,14 @@ def _set_subscriber_local_login_active(
             UserCredential.provider == AuthProvider.local,
         ).update({"is_active": False}, synchronize_session=False)
     db.commit()
+    if not is_active:
+        # Deactivation must also end any live portal browser sessions; the
+        # credential flag is only checked at login.
+        from app.services import customer_portal_session
+
+        customer_portal_session.revoke_customer_sessions_for_subscriber(
+            str(subscriber.id), db=db
+        )
 
 
 def _send_subscriber_reset_link(
@@ -160,6 +172,8 @@ def resolve_customer_user_target(
         subscriber = db.get(Subscriber, UUID(str(customer_id)))
         if not subscriber:
             raise ValueError("Customer not found")
+        if subscriber.status == SubscriberStatus.canceled:
+            raise ValueError("Customer account is canceled")
         email = (subscriber.email or "").strip()
         if not email:
             raise ValueError("Customer has no email address")
@@ -171,6 +185,8 @@ def resolve_customer_user_target(
         primary = _resolve_business_primary_contact(db, customer_id)
         if not primary:
             raise ValueError("Business customer has no primary contact with email")
+        if primary.status == SubscriberStatus.canceled:
+            raise ValueError("Customer account is canceled")
         email = (primary.email or "").strip()
         if not email:
             raise ValueError("Business customer primary contact has no email")
@@ -187,6 +203,8 @@ def resolve_subscriber_user_target(
     subscriber = db.get(Subscriber, UUID(str(subscriber_id)))
     if not subscriber:
         raise ValueError("Subscriber not found")
+    if subscriber.status == SubscriberStatus.canceled:
+        raise ValueError("Customer account is canceled")
 
     if subscriber.category == SubscriberCategory.business:
         primary = _resolve_business_primary_contact(db, str(subscriber.id))
@@ -300,7 +318,17 @@ def _build_user_access_state(
     )
     reset_remaining = max(0, 3 - resets_last_hour)
 
+    mfa_enabled = (
+        db.query(MFAMethod)
+        .filter(MFAMethod.subscriber_id == target.subscriber.id)
+        .filter(MFAMethod.enabled.is_(True))
+        .filter(MFAMethod.is_active.is_(True))
+        .count()
+        > 0
+    )
+
     return {
+        "mfa_enabled": mfa_enabled,
         "target_subscriber_id": str(target.subscriber.id),
         "target_subscriber_name": target.subscriber.display_name
         or f"{target.subscriber.first_name} {target.subscriber.last_name}".strip(),
@@ -508,6 +536,37 @@ def send_customer_reset_link(
         is_success=ok,
     )
     return {"ok": ok, "title": "Password reset", "message": note}
+
+
+def reset_customer_mfa(
+    db: Session,
+    *,
+    request,
+    customer_type: str,
+    customer_id: str,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Disable a customer's MFA methods (lost-authenticator recovery)."""
+    target = resolve_customer_user_target(
+        db, customer_type=customer_type, customer_id=customer_id
+    )
+    web_system_user_mutations_service.disable_subscriber_mfa(
+        db, subscriber_id=str(target.subscriber.id), actor_id=actor_id
+    )
+    record_audit_event(
+        db,
+        action=MFA_RESET_AUDIT_ACTION,
+        entity_type="subscriber",
+        entity_id=str(target.subscriber.id),
+        actor_id=actor_id,
+        metadata={"email": target.email, "customer_type": customer_type},
+    )
+    return {
+        "ok": True,
+        "title": "MFA reset",
+        "message": "Two-factor authentication has been disabled for this customer. "
+        "They can re-enroll from the portal profile page.",
+    }
 
 
 def set_customer_login_active(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import redis
@@ -96,3 +97,51 @@ def delete_session(
             logger.warning("Session delete failed in Redis: %s", exc)
     if _fallback_enabled():
         fallback_store.pop(session_token, None)
+
+
+def _epoch_key(prefix: str, principal_id: str) -> str:
+    return f"{prefix}:epoch:{principal_id}"
+
+
+def set_session_revocation_epoch(
+    prefix: str,
+    principal_id: str,
+    ttl_seconds: int,
+    fallback_epochs: dict[str, str],
+) -> None:
+    """Mark every session for the principal created before now as revoked.
+
+    Portal sessions are opaque Redis keys with no per-principal index, so
+    revoke-all works by stamping an epoch; ``get_session``-side checks compare
+    the session's ``created_at`` against it. The epoch TTL must cover the
+    longest session lifetime so a pre-revocation session can't outlive it.
+    """
+    now_iso = datetime.now(UTC).isoformat()
+    client = get_session_redis()
+    if client:
+        try:
+            client.setex(
+                _epoch_key(prefix, principal_id), max(1, int(ttl_seconds)), now_iso
+            )
+        except redis.RedisError as exc:
+            logger.warning("Session revocation epoch write failed: %s", exc)
+    if _fallback_enabled():
+        fallback_epochs[str(principal_id)] = now_iso
+
+
+def get_session_revocation_epoch(
+    prefix: str,
+    principal_id: str,
+    fallback_epochs: dict[str, str],
+) -> str | None:
+    client = get_session_redis()
+    if client:
+        try:
+            raw = client.get(_epoch_key(prefix, principal_id))
+            if raw:
+                return str(cast(str, raw))
+        except redis.RedisError as exc:
+            logger.warning("Session revocation epoch read failed: %s", exc)
+    if _fallback_enabled():
+        return fallback_epochs.get(str(principal_id))
+    return None

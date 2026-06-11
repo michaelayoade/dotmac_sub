@@ -1,0 +1,73 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, card, status_badge, empty_state,
+    action_button, icon_plus
+%}
+
+{% block title %}Service Extensions - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+    {% call(content) page_header(
+        title="Service Extensions",
+        subtitle="Outage compensation: extend service validity in bulk",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+        color="amber",
+        color2="orange",
+        breadcrumbs=[
+            {"label": "Billing", "href": "/admin/billing"},
+            {"label": "Service Extensions"}
+        ]
+    ) %}
+        {{ action_button("New Extension", href="/admin/billing/service-extensions/new", icon=icon_plus("h-4 w-4"), variant="primary", color="amber", color2="orange") }}
+    {% endcall %}
+
+    {% call card(color="amber") %}
+    {% if extensions %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead>
+                <tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    <th class="px-4 py-3">Reason</th>
+                    <th class="px-4 py-3">Outage window</th>
+                    <th class="px-4 py-3">Scope</th>
+                    <th class="px-4 py-3 text-right">Days</th>
+                    <th class="px-4 py-3 text-right">Affected</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Created</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 text-sm dark:divide-slate-700/60">
+                {% for ext in extensions %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                    <td class="px-4 py-3">
+                        <a href="/admin/billing/service-extensions/{{ ext.id }}" class="font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ ext.reason | truncate(60) }}</a>
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ ext.window_start.strftime("%Y-%m-%d %H:%M") }} → {{ ext.window_end.strftime("%Y-%m-%d %H:%M") }}</td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ ext.scope_type.value | replace("_", " ") | title }}</td>
+                    <td class="px-4 py-3 text-right tabular-nums">{{ ext.days }}</td>
+                    <td class="px-4 py-3 text-right tabular-nums">{{ ext.affected_count if ext.status.value == "applied" else "—" }}</td>
+                    <td class="px-4 py-3">
+                        {% set variant = {"pending": "warning", "applied": "active", "canceled": "inactive"} %}
+                        {{ status_badge(ext.status.value | title, variant.get(ext.status.value, "default"), size="sm") }}
+                    </td>
+                    <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ ext.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state(
+        title="No service extensions yet",
+        message="Record an outage and extend affected customers' service validity in one step.",
+        color="amber",
+        action_label="New Extension",
+        action_href="/admin/billing/service-extensions/new"
+    ) }}
+    {% endif %}
+    {% endcall %}
+</div>
+{% endblock %}

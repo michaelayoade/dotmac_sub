@@ -16,6 +16,7 @@ from app.models.catalog import (
     BillingMode,
     CatalogOffer,
     OfferPrice,
+    OfferStatus,
     PriceBasis,
     PriceType,
     ServiceType,
@@ -37,6 +38,7 @@ def _make_offer(
     service_type: ServiceType = ServiceType.residential,
     show_on_customer_portal: bool = True,
     is_active: bool = True,
+    status: OfferStatus = OfferStatus.active,
 ) -> CatalogOffer:
     offer = CatalogOffer(
         name=name,
@@ -49,6 +51,7 @@ def _make_offer(
         plan_family=plan_family,
         show_on_customer_portal=show_on_customer_portal,
         is_active=is_active,
+        status=status,
     )
     db_session.add(offer)
     db_session.flush()
@@ -830,3 +833,124 @@ def test_restricted_offer_hidden_without_subscriber_context(db_session):
     names = {o.name for o in offers}
     assert "Unlimited Partner3" not in names
     assert "Unlimited Open3" in names
+
+
+def test_archived_status_offer_hidden_even_when_is_active_drifted(
+    db_session, subscriber
+):
+    """status=archived must hide an offer from the portal even if is_active
+    drifted to True (the edit form historically set only status)."""
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    _make_offer(
+        db_session,
+        name="Unlimited Retired",
+        amount=Decimal("150.00"),
+        plan_family="unlimited",
+        status=OfferStatus.archived,
+        is_active=True,
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    offers = get_available_portal_offers(db_session, subscription)
+
+    assert {str(offer.id) for offer in offers} == {str(current_offer.id)}
+
+
+def test_submit_change_plan_rejects_cross_family_at_create(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+    from app.services import subscription_changes as change_service
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    cross_family_offer = _make_offer(
+        db_session,
+        name="Dedicated 1",
+        amount=Decimal("300.00"),
+        plan_family="dedicated",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    created = []
+    monkeypatch.setattr(
+        change_service.subscription_change_requests,
+        "create",
+        lambda **kwargs: created.append(kwargs),
+    )
+    customer = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
+
+    with pytest.raises(ValueError, match="not available for self-service"):
+        flow.submit_change_plan(
+            db_session,
+            customer,
+            str(subscription.id),
+            str(cross_family_offer.id),
+            "2099-01-01",
+        )
+    assert created == []
+
+
+def test_submit_change_plan_accepts_same_family_offer(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+    from app.services import subscription_changes as change_service
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("150.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    created = []
+    monkeypatch.setattr(
+        change_service.subscription_change_requests,
+        "create",
+        lambda **kwargs: created.append(kwargs),
+    )
+    customer = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
+
+    result = flow.submit_change_plan(
+        db_session,
+        customer,
+        str(subscription.id),
+        str(target_offer.id),
+        "2099-01-01",
+    )
+    assert result == {"success": True}
+    assert len(created) == 1
+    assert created[0]["new_offer_id"] == str(target_offer.id)

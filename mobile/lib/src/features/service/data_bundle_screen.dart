@@ -87,6 +87,11 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
           content: Text(
               'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
         ));
+      } else if (result.serviceNotActive) {
+        messenger.showSnackBar(const SnackBar(
+          content: Text(
+              'Your service is not active — purchases resume once it is restored'),
+        ));
       } else {
         messenger.showSnackBar(
           const SnackBar(content: Text('Could not buy this bundle')),
