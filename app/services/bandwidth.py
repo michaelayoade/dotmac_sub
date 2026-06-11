@@ -53,6 +53,24 @@ def add_directions_to_series(result: dict) -> dict:
     return result
 
 
+def live_event_payload(current: dict, now: datetime) -> dict:
+    """Build one SSE bandwidth event from a samples-based current dict.
+
+    Carries both NAS-perspective rx/tx and the subscriber-perspective
+    download/upload — the chart JS binds to download_bps/upload_bps only,
+    so an SSE producer that omits them renders as a flat-zero live chart."""
+    download_bps, upload_bps = to_subscriber_directions(
+        current.get("rx_bps", 0), current.get("tx_bps", 0)
+    )
+    return {
+        "timestamp": now.isoformat(),
+        "rx_bps": float(current.get("rx_bps", 0) or 0),
+        "tx_bps": float(current.get("tx_bps", 0) or 0),
+        "download_bps": download_bps,
+        "upload_bps": upload_bps,
+    }
+
+
 class BandwidthSamples(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: BandwidthSampleCreate):
