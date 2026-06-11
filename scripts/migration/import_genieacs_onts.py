@@ -18,6 +18,19 @@ Step 1 — extract (read-only, on the host) a CSV of device_id,serial,username:
                d.VirtualParameters.pppoeUsername._value)||"";
         print(d._id+","+(d._id.split("-").pop())+","+u);})' > /tmp/acs_pppoe.csv
 
+NOTE (verified 2026-06-11): only 3 of 322 devices currently have the
+Username leaf in GenieACS — the WANPPPConnection subtree was never
+refreshed for the rest. Queue a PASSIVE refresh first (no connection
+request — each device picks the task up at its next periodic inform, so
+no fleet-wide device interaction):
+
+  docker exec dotmac_sub_genieacs sh -c 'while read id; do
+    wget -qO- --post-data "{\\"name\\":\\"getParameterValues\\",\\"parameterNames\\":[\\"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username\\",\\"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username\\"]}" \\
+      --header "Content-Type: application/json" \\
+      "http://127.0.0.1:7557/devices/$id/tasks"; done' < /tmp/unknown_device_ids.txt
+
+Re-run the extraction after one inform cycle, then import.
+
 Step 2 — import (dry-run default):
 
   docker cp /tmp/acs_pppoe.csv dotmac_sub_app:/tmp/acs_pppoe.csv
@@ -76,7 +89,11 @@ def run(csv_path: str, dry_run: bool = True) -> dict[str, int]:
                 stats["rows"] += 1
                 serial = (serial or "").strip()
                 username = (username or "").strip()
-                if not serial or serial.upper() in known_serials or serial in known_serials:
+                if (
+                    not serial
+                    or serial.upper() in known_serials
+                    or serial in known_serials
+                ):
                     stats["skipped_existing_serial"] += 1
                     continue
                 if not username:
