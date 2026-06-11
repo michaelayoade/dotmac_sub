@@ -651,6 +651,30 @@ def build_beat_schedule() -> dict:
             enabled=prepaid_enabled,
             interval_seconds=prepaid_interval_seconds,
         )
+        # Suspension-enforcement audit — read-only check that fully-blocked
+        # subscribers are actually unreachable in the external RADIUS DB.
+        suspension_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.radius,
+            "suspension_audit_enabled",
+            "RADIUS_SUSPENSION_AUDIT_ENABLED",
+            True,
+        )
+        suspension_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.radius,
+            "suspension_audit_interval_seconds",
+            "RADIUS_SUSPENSION_AUDIT_INTERVAL_SECONDS",
+            21600,  # Every 6 hours
+        )
+        suspension_audit_interval_seconds = max(suspension_audit_interval_seconds, 900)
+        _sync_scheduled_task(
+            session,
+            name="radius_suspension_audit",
+            task_name="app.tasks.radius.audit_suspension_enforcement",
+            enabled=suspension_audit_enabled,
+            interval_seconds=suspension_audit_interval_seconds,
+        )
         # Subscription expiration enforcement (runs daily)
         subscription_expiration_enabled = _effective_bool(
             session,
