@@ -237,7 +237,15 @@ class Offers(CRUDManager[CatalogOffer]):
 
     @classmethod
     def update(cls, db: Session, offer_id: str, payload: CatalogOfferUpdate):
-        return super().update(db, offer_id, payload)
+        offer = super().update(db, offer_id, payload, commit=False)
+        # Status is authoritative: the edit form exposes both the status select
+        # and the is_active checkbox, and they used to drift (archived offers
+        # left is_active=True stayed visible on the customer portal).
+        if offer.status != OfferStatus.active and offer.is_active:
+            offer.is_active = False
+        db.commit()
+        db.refresh(offer)
+        return offer
 
     @staticmethod
     def delete(db: Session, offer_id: str):

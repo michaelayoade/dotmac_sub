@@ -312,3 +312,26 @@ def test_not_owner_returns_none(_setup, db_session):
     _subscriber, sub, add_on, _customer = _setup
     stranger = {"account_id": "00000000-0000-0000-0000-000000000000"}
     assert addons.list_available_addons(db_session, stranger, str(sub.id)) is None
+
+
+def test_purchase_rejected_when_subscription_not_active(_setup, db_session, subscriber):
+    _subscriber, sub, add_on, customer = _setup
+    _seed_wallet_credit(db_session, subscriber, Decimal("5000.00"))
+    sub.status = SubscriptionStatus.suspended
+    db_session.commit()
+
+    result = addons.purchase_addon(db_session, customer, str(sub.id), str(add_on.id), 1)
+
+    assert result["success"] is False
+    assert result["reason"] == "subscription_not_active"
+    assert result["subscription_status"] == "suspended"
+    # nothing written: no add-on link, no wallet debit
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == sub.id)
+        .count()
+        == 0
+    )
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
+        "5000.00"
+    )
