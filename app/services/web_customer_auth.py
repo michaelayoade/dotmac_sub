@@ -28,6 +28,7 @@ templates = get_customer_templates()
 _CUSTOMER_MFA_TOKEN_COOKIE = "customer_mfa_pending"
 _CUSTOMER_MFA_CONTEXT_COOKIE = "customer_mfa_context"
 _CUSTOMER_MFA_MAX_AGE = 300
+_CUSTOMER_RESET_LOGIN_PATH = "/portal/auth/login?next=/portal/dashboard"
 
 
 def _safe_next(next_url: str | None, fallback: str = "/portal/dashboard") -> str:
@@ -195,6 +196,31 @@ def customer_login_page(
     return templates.TemplateResponse(
         "customer/auth/login.html",
         {"request": request, "error": error, "next": next_url},
+    )
+
+
+def customer_forgot_password_page(request: Request, db: Session, success: bool = False):
+    customer = get_current_customer_from_request(request, db)
+    if customer:
+        return RedirectResponse(url=_safe_next(None), status_code=303)
+    return templates.TemplateResponse(
+        "customer/auth/forgot-password.html",
+        {"request": request, "success": success},
+    )
+
+
+def customer_forgot_password_submit(request: Request, db: Session, email: str):
+    try:
+        auth_flow_service.forgot_password_flow(
+            db, email, next_login_path=_CUSTOMER_RESET_LOGIN_PATH
+        )
+    except Exception:
+        logger.info(
+            "Customer password reset request failed for %s", email, exc_info=True
+        )
+    return templates.TemplateResponse(
+        "customer/auth/forgot-password.html",
+        {"request": request, "success": True},
     )
 
 

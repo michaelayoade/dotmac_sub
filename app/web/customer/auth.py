@@ -41,6 +41,26 @@ def customer_login_submit(
     )
 
 
+@router.get("/forgot-password", response_class=HTMLResponse)
+def customer_forgot_password_page(
+    request: Request,
+    success: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Display the customer forgot password page."""
+    return web_customer_auth_service.customer_forgot_password_page(request, db, success)
+
+
+@router.post("/forgot-password", response_class=HTMLResponse)
+def customer_forgot_password_submit(
+    request: Request,
+    email: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Process customer forgot password form submission."""
+    return web_customer_auth_service.customer_forgot_password_submit(request, db, email)
+
+
 @router.get("/mfa", response_class=HTMLResponse)
 def customer_mfa_page(
     request: Request,
