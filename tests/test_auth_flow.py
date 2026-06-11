@@ -807,3 +807,313 @@ def test_admin_login_requires_mfa_enrollment_when_forced(db_session, monkeypatch
     )
     assert result["mfa_enrollment_required"] is True
     assert result["mfa_enrollment_token"]
+
+
+def test_login_locked_account_is_not_a_password_oracle(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="oracle@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+        failed_login_attempts=5,
+        locked_until=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    request = _make_request()
+    for password in ("secret", "wrong"):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.login(db_session, "oracle@example.com", password, request, None)
+        assert exc.value.status_code == 403
+
+    db_session.refresh(credential)
+    # Attempts while locked must not extend the lock or bump the counter.
+    assert credential.failed_login_attempts == 5
+
+
+def test_login_expired_lock_starts_fresh_window(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="fresh-window@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+        failed_login_attempts=5,
+        locked_until=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    request = _make_request()
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(db_session, "fresh-window@example.com", "wrong", request, None)
+    assert exc.value.status_code == 401
+
+    db_session.refresh(credential)
+    # One wrong attempt after an expired lock must not re-lock immediately.
+    assert credential.failed_login_attempts == 1
+    assert credential.locked_until is None
+
+    tokens = AuthFlow.login(
+        db_session, "fresh-window@example.com", "secret", request, None
+    )
+    assert tokens.get("access_token")
+
+
+def test_radius_login_failures_lock_credential(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.radius,
+        username="pppoe-lockout",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    def _fail(db, username, password, server_id):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    monkeypatch.setattr(
+        "app.services.auth_flow.radius_auth_service.authenticate", _fail
+    )
+    request = _make_request()
+    for _ in range(5):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.login(db_session, "pppoe-lockout", "wrong", request, "radius")
+        assert exc.value.status_code == 401
+
+    db_session.refresh(credential)
+    assert credential.locked_until is not None
+
+    # Even a now-valid RADIUS password is rejected while locked.
+    monkeypatch.setattr(
+        "app.services.auth_flow.radius_auth_service.authenticate",
+        lambda *a, **k: None,
+    )
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(db_session, "pppoe-lockout", "right", request, "radius")
+    assert exc.value.status_code == 403
+
+
+def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="mfa-lockout@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    totp = pyotp.TOTP(setup["secret"])
+    AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    )
+
+    request = _make_request()
+    result = AuthFlow.login(
+        db_session, "mfa-lockout@example.com", "secret", request, None
+    )
+    mfa_token = result["mfa_token"]
+
+    for _ in range(5):
+        wrong = "000000" if totp.now() != "000000" else "111111"
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.mfa_verify(db_session, mfa_token, wrong, request)
+        assert exc.value.status_code == 401
+
+    # Locked: even the correct code is rejected with 429 until the lock expires.
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.mfa_verify(db_session, mfa_token, totp.now(), request)
+    assert exc.value.status_code == 429
+
+    method = db_session.get(MFAMethod, setup["method_id"])
+    assert method.locked_until is not None
+
+
+def test_mfa_setup_reuses_pending_method_row(db_session, person, monkeypatch):
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    first = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    second = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    assert str(first["method_id"]) == str(second["method_id"])
+    pending = (
+        db_session.query(MFAMethod).filter(MFAMethod.subscriber_id == person.id).count()
+    )
+    assert pending == 1
+
+
+def test_change_password_revokes_other_sessions(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="rotate@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    request = _make_request()
+    AuthFlow.login(db_session, "rotate@example.com", "secret", request, None)
+    AuthFlow.login(db_session, "rotate@example.com", "secret", request, None)
+    sessions = db_session.query(AuthSession).order_by(AuthSession.created_at).all()
+    assert len(sessions) == 2
+    current = sessions[0]
+
+    change_password(
+        db_session,
+        str(person.id),
+        "secret",
+        "new-secret",
+        current_session_id=str(current.id),
+    )
+
+    db_session.refresh(sessions[0])
+    db_session.refresh(sessions[1])
+    assert sessions[0].status == SessionStatus.active
+    assert sessions[1].status == SessionStatus.revoked
+    db_session.refresh(credential)
+    assert verify_password("new-secret", credential.password_hash)
+
+
+def test_reset_password_rejects_canceled_subscriber(db_session, person, monkeypatch):
+    from app.models.subscriber import SubscriberStatus
+
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="canceled-reset@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    person.status = SubscriberStatus.canceled
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "new-secret")
+    assert exc.value.status_code == 401
+
+
+def test_reset_token_replay_rejected_even_same_second(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="same-second@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    # Issue and consume within the same second: the consumption must still
+    # spend the token (password_updated_at is nudged past iat).
+    result = request_password_reset(db_session, person.email)
+    reset_password(db_session, result["token"], "new-secret-1")
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "new-secret-2")
+    assert exc.value.status_code == 401
+
+
+def test_session_manager_handles_system_user_principals(db_session):
+    from app.services import session_manager
+
+    system_user = SystemUser(
+        first_name="Sess",
+        last_name="Admin",
+        email="sess-admin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(system_user)
+    db_session.flush()
+    session = AuthSession(
+        system_user_id=system_user.id,
+        status=SessionStatus.active,
+        token_hash=hashlib.sha256(b"sess-admin-token").hexdigest(),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    listed = session_manager.list_sessions(
+        db_session, system_user.id, None, principal_type="system_user"
+    )
+    assert listed.total == 1
+
+    revoked = session_manager.revoke_all_other_sessions(
+        db_session, system_user.id, None, principal_type="system_user"
+    )
+    assert revoked.revoked_count == 1
+
+
+def test_admin_reset_password_clears_lockout(db_session, monkeypatch):
+    system_user = SystemUser(
+        first_name="Locked",
+        last_name="Admin",
+        email="locked-admin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(system_user)
+    db_session.flush()
+    credential = UserCredential(
+        system_user_id=system_user.id,
+        provider=AuthProvider.local,
+        username="locked-admin@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+        failed_login_attempts=5,
+        locked_until=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    web_system_user_mutations_service.reset_user_password(
+        db_session, user_id=str(system_user.id)
+    )
+    db_session.refresh(credential)
+    assert credential.failed_login_attempts == 0
+    assert credential.locked_until is None
+
+
+def test_deactivate_system_user_revokes_sessions(db_session):
+    system_user = SystemUser(
+        first_name="Gone",
+        last_name="Admin",
+        email="gone-admin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(system_user)
+    db_session.flush()
+    session = AuthSession(
+        system_user_id=system_user.id,
+        status=SessionStatus.active,
+        token_hash=hashlib.sha256(b"gone-admin-token").hexdigest(),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    web_system_user_mutations_service.set_user_active(
+        db_session, user_id=str(system_user.id), is_active=False
+    )
+    db_session.refresh(session)
+    assert session.status == SessionStatus.revoked

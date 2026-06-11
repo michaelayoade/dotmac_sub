@@ -54,6 +54,9 @@ class EventType(enum.Enum):
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"
 
+    # Billing - Outage compensation (1)
+    service_extended = "billing.service_extended"
+
     # Usage events (5)
     usage_recorded = "usage.recorded"
     usage_warning = "usage.warning"

@@ -80,6 +80,11 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
           content: Text(
               'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
         ));
+      } else if (result.serviceNotActive) {
+        messenger.showSnackBar(const SnackBar(
+          content: Text(
+              'Your service is not active — purchases resume once it is restored'),
+        ));
       } else {
         messenger.showSnackBar(
           const SnackBar(content: Text('Could not add this add-on')),

@@ -824,6 +824,21 @@ def supported_billing_cycles() -> list[str]:
     return [item.value for item in BillingCycle]
 
 
+def plan_family_values(db: Session) -> list[str]:
+    """Plan families for offer classification, settings-driven with the
+    built-in tuple as default. Stored as a comma-separated string so operators
+    can add families (e.g. "business") without a deploy."""
+    raw = settings_spec.resolve_value(db, SettingDomain.catalog, "plan_families")
+    if raw:
+        values = [
+            token.strip().lower().replace(" ", "_") for token in str(raw).split(",")
+        ]
+        deduped = list(dict.fromkeys(v for v in values if v))
+        if deduped:
+            return deduped
+    return list(PLAN_FAMILY_VALUES)
+
+
 def offer_form_context(
     db: Session,
     offer: dict[str, object],
@@ -902,7 +917,7 @@ def offer_form_context(
         "billing_cycles": supported_billing_cycles(),
         "billing_modes": [item.value for item in BillingMode],
         "contract_terms": [item.value for item in ContractTerm],
-        "plan_families": list(PLAN_FAMILY_VALUES),
+        "plan_families": plan_family_values(db),
         "offer_statuses": [item.value for item in OfferStatus],
         "price_units": [item.value for item in PriceUnit],
         "price_types": ["recurring", "one_time"],
@@ -928,6 +943,7 @@ def overview_page_data(
     status: str | None = None,
     plan_kind: str | None = None,
     plan_category: str | None = None,
+    plan_family: str | None = None,
     search: str | None = None,
     page: int = 1,
     per_page: int = 25,
@@ -950,6 +966,15 @@ def overview_page_data(
     }:
         stmt = stmt.where(
             CatalogOffer.plan_category == PlanCategory(normalized_plan_category)
+        )
+    normalized_plan_family = str(plan_family or "").strip().lower()
+    if normalized_plan_family == "unclassified":
+        stmt = stmt.where(
+            (CatalogOffer.plan_family.is_(None)) | (CatalogOffer.plan_family == "")
+        )
+    elif normalized_plan_family:
+        stmt = stmt.where(
+            func.lower(CatalogOffer.plan_family) == normalized_plan_family
         )
     normalized_plan_kind = str(plan_kind or "").strip().lower()
     if normalized_plan_kind in {PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACEMENT}:
@@ -1019,6 +1044,8 @@ def overview_page_data(
         "status": status,
         "plan_kind": normalized_plan_kind or "",
         "plan_category": normalized_plan_category or "",
+        "plan_family": normalized_plan_family or "",
+        "plan_families": plan_family_values(db),
         "plan_categories": [item.value for item in PlanCategory],
         "search": search,
         "page": page,

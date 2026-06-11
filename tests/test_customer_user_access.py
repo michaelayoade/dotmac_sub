@@ -85,3 +85,66 @@ def test_send_reset_link_succeeds_for_customer(db_session, subscriber, _no_email
         actor_id=None,
     )
     assert result["ok"] is True, result
+
+
+def test_reinvite_preserves_established_password(db_session, subscriber, _no_emails):
+    """Re-sending an invite must not lock out a customer who already set a
+    working password (must_change_password used to be force-flipped)."""
+    from app.services.auth_flow import hash_password
+
+    cred = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username=subscriber.email,
+        password_hash=hash_password("customer-chosen"),
+        must_change_password=False,
+        is_active=True,
+    )
+    db_session.add(cred)
+    db_session.commit()
+
+    svc._ensure_subscriber_local_credential(db_session, subscriber)
+    db_session.refresh(cred)
+    assert cred.must_change_password is False
+    from app.services.auth_flow import verify_password
+
+    assert verify_password("customer-chosen", cred.password_hash)
+
+
+def test_invite_rejected_for_canceled_subscriber(db_session, subscriber, _no_emails):
+    from app.models.subscriber import SubscriberStatus
+
+    subscriber.status = SubscriberStatus.canceled
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="canceled"):
+        svc.resolve_customer_user_target(
+            db_session, customer_type="person", customer_id=str(subscriber.id)
+        )
+
+
+def test_reset_customer_mfa_disables_methods(db_session, subscriber):
+    from app.models.auth import MFAMethod, MFAMethodType
+
+    method = MFAMethod(
+        subscriber_id=subscriber.id,
+        method_type=MFAMethodType.totp,
+        secret="encrypted",
+        enabled=True,
+        is_primary=True,
+        is_active=True,
+    )
+    db_session.add(method)
+    db_session.commit()
+
+    result = svc.reset_customer_mfa(
+        db_session,
+        request=None,
+        customer_type="person",
+        customer_id=str(subscriber.id),
+        actor_id=None,
+    )
+    assert result["ok"] is True
+    db_session.refresh(method)
+    assert method.enabled is False
+    assert method.is_active is False

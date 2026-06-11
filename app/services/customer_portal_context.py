@@ -12,7 +12,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice
-from app.models.catalog import CatalogOffer, PriceType, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    CatalogOffer,
+    OfferStatus,
+    PriceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.provisioning import InstallAppointment, ServiceOrder
 from app.models.subscriber import (
     AccountStatus,
@@ -741,6 +747,7 @@ def get_available_portal_offers(
                     select(CatalogOffer)
                     .options(selectinload(CatalogOffer.prices))
                     .where(CatalogOffer.is_active.is_(True))
+                    .where(CatalogOffer.status == OfferStatus.active)
                     .where(CatalogOffer.show_on_customer_portal.is_(True))
                     .order_by(CatalogOffer.name.asc())
                 ).all(),
@@ -758,6 +765,7 @@ def get_available_portal_offers(
             select(CatalogOffer)
             .options(selectinload(CatalogOffer.prices))
             .where(CatalogOffer.is_active.is_(True))
+            .where(CatalogOffer.status == OfferStatus.active)
             .where(CatalogOffer.show_on_customer_portal.is_(True))
             .where(CatalogOffer.service_type == current_offer.service_type)
             .where(CatalogOffer.billing_mode == current_offer.billing_mode)
