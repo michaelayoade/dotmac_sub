@@ -76,7 +76,11 @@ def run(csv_path: str, dry_run: bool = True) -> dict[str, int]:
                 stats["rows"] += 1
                 serial = (serial or "").strip()
                 username = (username or "").strip()
-                if not serial or serial.upper() in known_serials or serial in known_serials:
+                if (
+                    not serial
+                    or serial.upper() in known_serials
+                    or serial in known_serials
+                ):
                     stats["skipped_existing_serial"] += 1
                     continue
                 if not username:

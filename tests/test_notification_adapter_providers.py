@@ -12,7 +12,6 @@ from app.services.notification_adapter import (
     SmsProvider,
 )
 
-
 _SMS_ENV_KEYS = (
     "SMS_ENABLED",
     "SMS_PROVIDER",

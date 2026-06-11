@@ -17,8 +17,10 @@ def check_overdue_arrangements() -> dict[str, int]:
     """Mark due arrangement installments overdue and default repeated misses."""
     session = SessionLocal()
     try:
-        overdue_count = payment_arrangements.payment_arrangements.check_overdue_installments(
-            session
+        overdue_count = (
+            payment_arrangements.payment_arrangements.check_overdue_installments(
+                session
+            )
         )
         result = {"overdue_installments": overdue_count}
         logger.info("payment arrangement overdue check complete: %s", result)

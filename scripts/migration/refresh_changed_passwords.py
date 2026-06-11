@@ -32,6 +32,7 @@ from scripts.migration.db_connections import splynx_connection
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+
 # Sliding window: cover anything changed since the last run with margin.
 # Override with CHANGED_SINCE="YYYY-MM-DD HH:MM:SS" for a deep backfill.
 def _default_changed_since() -> str:
@@ -63,7 +64,9 @@ def main(execute: bool) -> None:
         by_customer[int(cid)].append(str(login).strip())
     logger.info(
         "%d services on %d customers changed since %s",
-        len(rows), len(by_customer), CHANGED_SINCE,
+        len(rows),
+        len(by_customer),
+        CHANGED_SINCE,
     )
 
     # 2. current radcheck values (md5 only, in memory)
@@ -75,8 +78,14 @@ def main(execute: bool) -> None:
         )
         radcheck_md5 = dict(cur.fetchall())
 
-    stats = {"checked": 0, "api_failed": 0, "match": 0, "stale_fixed": 0,
-             "missing_in_radcheck": 0, "no_api_password": 0}
+    stats = {
+        "checked": 0,
+        "api_failed": 0,
+        "match": 0,
+        "stale_fixed": 0,
+        "missing_in_radcheck": 0,
+        "no_api_password": 0,
+    }
     fixes: list[tuple[str, str]] = []  # (login, cleartext)
 
     for cid, logins in by_customer.items():
