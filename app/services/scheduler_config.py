@@ -667,9 +667,7 @@ def build_beat_schedule() -> dict:
             "RADIUS_SUSPENSION_AUDIT_INTERVAL_SECONDS",
             21600,  # Every 6 hours
         )
-        suspension_audit_interval_seconds = max(
-            suspension_audit_interval_seconds, 900
-        )
+        suspension_audit_interval_seconds = max(suspension_audit_interval_seconds, 900)
         _sync_scheduled_task(
             session,
             name="radius_suspension_audit",

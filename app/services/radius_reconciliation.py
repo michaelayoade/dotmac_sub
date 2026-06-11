@@ -195,9 +195,7 @@ def audit_suspension_enforcement(db: Session) -> dict[str, Any]:
                         ).scalars()
                     )
         except Exception:
-            logger.exception(
-                "Suspension audit failed against external RADIUS config."
-            )
+            logger.exception("Suspension audit failed against external RADIUS config.")
             result["errors"] += 1
 
     result["usable_password"] = sorted(usable_password)

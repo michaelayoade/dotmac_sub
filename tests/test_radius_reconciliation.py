@@ -149,9 +149,7 @@ class TestAuditSuspensionEnforcement:
         assert result["usable_password"] == ["blocked-user"]
         assert result["ok"] is False
 
-    def test_reject_row_clears_password_leak(
-        self, db_session, tmp_path, catalog_offer
-    ):
+    def test_reject_row_clears_password_leak(self, db_session, tmp_path, catalog_offer):
         db_path = tmp_path / "radius.db"
         _seed_radius_sqlite(
             db_path,
@@ -170,9 +168,7 @@ class TestAuditSuspensionEnforcement:
         assert result["counts"]["usable_password"] == 0
         assert result["ok"] is True
 
-    def test_stale_open_session_not_counted(
-        self, db_session, tmp_path, catalog_offer
-    ):
+    def test_stale_open_session_not_counted(self, db_session, tmp_path, catalog_offer):
         now = datetime.now(UTC)
         db_path = tmp_path / "radius.db"
         _seed_radius_sqlite(
