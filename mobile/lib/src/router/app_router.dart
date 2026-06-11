@@ -40,12 +40,16 @@ import '../features/support/tickets_screen.dart';
 import '../features/service/service_tab_screen.dart';
 import '../models/subscription.dart';
 import '../providers/auth_controller.dart';
+import '../providers/impersonation.dart';
 
 /// Bridges a Riverpod provider to a [Listenable] so GoRouter re-runs its
 /// redirect whenever auth state changes.
 class _AuthRefresh extends ChangeNotifier {
   _AuthRefresh(Ref ref) {
     ref.listen(authControllerProvider, (_, __) => notifyListeners());
+    // Re-run the redirect when impersonation starts/stops so a reseller is
+    // returned to their portal the moment "view as customer" ends.
+    ref.listen(impersonationProvider, (_, __) => notifyListeners());
   }
 }
 
@@ -77,10 +81,22 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       // Authenticated but held behind the biometric lock: stay on /lock.
       if (auth.locked) return loc == '/lock' ? null : '/lock';
+
+      final isReseller = auth.me?.isReseller ?? false;
       // Authenticated and unlocked: leave the splash/login/lock behind.
       if (loc == '/splash' || loc == '/login' || loc == '/lock') {
-        return (auth.me?.isReseller ?? false) ? '/reseller' : '/dashboard';
+        return isReseller ? '/reseller' : '/dashboard';
       }
+      // Keep each principal in its own portal even when /auth/me resolves
+      // *after* the first route decision. On relaunch the controller shows a
+      // cached/empty profile first, so a reseller can briefly land on
+      // /dashboard before the real profile loads; once it does, send them to
+      // /reseller. Skip while a reseller is impersonating ("view as customer"),
+      // which intentionally lives in the customer shell.
+      final onReseller = loc.startsWith('/reseller');
+      final impersonating = ref.read(impersonationProvider) != null;
+      if (isReseller && !onReseller && !impersonating) return '/reseller';
+      if (!isReseller && onReseller) return '/dashboard';
       return null;
     },
     routes: [
