@@ -89,7 +89,7 @@ def revoke_session(
     principal_id = str(session.system_user_id or session.subscriber_id)
     session.status = SessionStatus.revoked
     session.revoked_at = now
-    db.flush()
+    db.commit()
     auth_cache.invalidate_session_context(
         str(session.id),
         principal_type=principal_type,
@@ -116,17 +116,20 @@ def revoke_all_other_sessions(
     sessions = db.scalars(stmt).all()
 
     now = datetime.now(UTC)
+    invalidations: list[tuple[str, str, str]] = []
     for s in sessions:
-        principal_type = "system_user" if s.system_user_id else "subscriber"
+        session_principal_type = "system_user" if s.system_user_id else "subscriber"
         principal_id = str(s.system_user_id or s.subscriber_id)
         s.status = SessionStatus.revoked
         s.revoked_at = now
+        invalidations.append((str(s.id), session_principal_type, principal_id))
+
+    db.commit()
+    for session_id, session_principal_type, principal_id in invalidations:
         auth_cache.invalidate_session_context(
-            str(s.id),
-            principal_type=principal_type,
+            session_id,
+            principal_type=session_principal_type,
             principal_id=principal_id,
         )
-
-    db.flush()
 
     return SessionRevokeResponse(revoked_at=now, revoked_count=len(sessions))
