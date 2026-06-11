@@ -558,6 +558,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
+        key="plan_families",
+        env_var="CATALOG_PLAN_FAMILIES",
+        value_type=SettingValueType.string,
+        default="unlimited,dedicated,home_flex",
+        label="Plan Families (comma-separated; changes stay within a family)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
         key="default_billing_mode",
         env_var="CATALOG_DEFAULT_BILLING_MODE",
         value_type=SettingValueType.string,
