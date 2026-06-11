@@ -29,6 +29,18 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Payment gateway return: the gateway redirects to
+                 <scheme>://success|cancel after checkout. Registering the
+                 scheme lets the OS hand the link back to the app even when a
+                 3-D Secure / bank flow leaves the in-app WebView. The scheme
+                 default is overridable per white-label build via the
+                 `paymentScheme` Gradle property (see build.gradle.kts). -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="${paymentScheme}"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
