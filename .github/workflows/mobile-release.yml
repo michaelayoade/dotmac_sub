@@ -76,8 +76,7 @@ jobs:
           TRACK="${{ github.event.inputs.track || 'appbundle' }}"
           flutter build "$TRACK" --release \
             --dart-define-from-file=../brand.json \
-            --dart-define=GLITCHTIP_DSN="$GLITCHTIP_DSN" \
-            -PpaymentScheme=dotmacpay
+            --dart-define=GLITCHTIP_DSN="$GLITCHTIP_DSN"
 
       - name: Verify the artifact is not debug-signed
         run: |
