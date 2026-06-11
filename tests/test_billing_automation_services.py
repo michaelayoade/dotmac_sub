@@ -1756,3 +1756,98 @@ class TestMarkOverdueReconciliationHold:
         assert held.status == InvoiceStatus.issued  # untouched
         assert normal.status == InvoiceStatus.overdue
         assert result["skipped_on_hold"] >= 1
+
+
+class TestBillingKillSwitch:
+    """billing.billing_enabled=false stops the write path but not dry-run."""
+
+    def _disable(self, db_session):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="billing_enabled",
+                value_type=SettingValueType.boolean,
+                value_text="false",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+    def test_disabled_blocks_invoice_creation(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now - timedelta(days=30)
+        subscription.next_billing_at = now - timedelta(days=1)
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+        self._disable(db_session)
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=now)
+        assert summary.get("billing_disabled") is True
+        assert (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+            == 0
+        )
+
+    def test_disabled_still_allows_dry_run(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now - timedelta(days=30)
+        subscription.next_billing_at = now - timedelta(days=1)
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+        self._disable(db_session)
+
+        summary = billing_automation.run_invoice_cycle(
+            db_session, run_at=now, dry_run=True
+        )
+        # dry-run is exempt: it still computes would-be work (reported via
+        # subscriptions_billed / lines_created, not invoices_created).
+        assert not summary.get("billing_disabled")
+        assert summary["subscriptions_billed"] >= 1
