@@ -16,8 +16,11 @@ final gate.
 
 ## 0. Blockers & decisions (do these first)
 
-- [ ] ⚠️ Deactivate the 3 active e2e subscribers — they have **working portal
-      logins** (sharper issue; from the Playwright-vs-prod incident, guard PR #75).
+- [x] Deactivated all 6 synthetic e2e/QA accounts with working portal
+      credentials (2026-06-11: admin@example.com, e2e.agent, e2e.user,
+      playwright-admin, qa.testcustomer, qa.testreseller — credentials +
+      subscriber rows flag-flipped, reversible; 0 synthetic accounts with
+      active credentials remain).
 - [ ] Cleanup (downgraded from blocker 2026-06-11): 43 active test/E2E
       `catalog_offers` remain in the catalog but are **no longer
       customer-visible** (offer scoping PR #179). Purge at leisure.
@@ -51,13 +54,33 @@ final gate.
       #188): full round-trip from the portal login link
 - [ ] Portal invite flow: admin customer page → invite email → set password →
       first login
-- [ ] MFA: enroll, login challenge, wrong-code rejection — on all three portals
+- [ ] MFA: enroll, login challenge, wrong-code rejection — on all three portals.
+      Wrong-code lockout (5 codes / 15 min per method, migration 138) and the
+      admin "Reset MFA" recovery button on the customer page are new in the
+      auth-hardening PR — include both in the manual pass.
 - [ ] Account lockout after 5 failed attempts, 15 min unlock; "account
-      disabled" and canceled-subscriber rejections
+      disabled" and canceled-subscriber rejections. Hardening PR notes: lock is
+      now checked before password verify (no oracle, no indefinite re-locking);
+      the customer RADIUS/PPPoE web path gets a per-username attempt throttle
+      (10/15min, in-memory per-worker) plus canceled/disabled status checks;
+      admin "reset password" now clears an existing lockout.
 - [ ] Session expiry/refresh, remember-me duration, logout, revoke-all-sessions
-      (mobile sessions screen)
-- [ ] Mobile biometric app-lock arm/resume cycle on a **real device**
-      (only `flutter analyze`'d so far — lifecycle timing untested on hardware)
+      (mobile sessions screen). Hardening PR notes: admin remember-me now real
+      (session cookies unless ticked — verify a non-remembered admin is logged
+      out after browser restart); portal sessions capped at 30 days absolute
+      (`customer/reseller_session_absolute_ttl_seconds`); password change/reset
+      now also revokes customer/reseller web portal sessions and mobile tokens;
+      staff can see/revoke their own sessions via /auth/me/sessions.
+- [ ] Mobile biometric app-lock arm/resume cycle on a **real device**.
+      Code-reviewed + controller tests added (cold-start re-lock, prompt-loop
+      race, resume flash, unlock returns to previous screen). Device script:
+      1) slow network, force-kill, relaunch, unlock immediately — must NOT
+      re-lock seconds later; 2) arm → background → resume ×5 rapidly (Samsung/
+      Xiaomi face unlock especially) — no double prompts; 3) background mid-form
+      → unlock — should return to the same screen; 4) app-switcher snapshot
+      still shows content (known gap, FLAG_SECURE deliberately not added);
+      5) fail biometric 5× — OS passcode fallback must appear; 6) delete all
+      fingerprints in OS settings, relaunch — app must open unlocked.
 
 ## 2. Service lifecycle & network
 
