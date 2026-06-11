@@ -329,8 +329,8 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
         child: ListTile(
           leading: const Icon(Icons.fingerprint),
           title: const Text('Biometric unlock'),
-          subtitle: const Text(
-              'Not available on this device. Tap to check again.'),
+          subtitle:
+              const Text('Not available on this device. Tap to check again.'),
           onTap: _load,
         ),
       );

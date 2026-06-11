@@ -252,9 +252,7 @@ def customer_login_submit(
         # stores the subscriber email verbatim, which may be mixed-case).
         local_credential = (
             db.query(UserCredential)
-            .filter(
-                func.lower(UserCredential.username) == normalized_username.lower()
-            )
+            .filter(func.lower(UserCredential.username) == normalized_username.lower())
             .filter(UserCredential.provider == AuthProvider.local)
             .first()
         )

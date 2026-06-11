@@ -79,7 +79,12 @@ def disable_user_mfa(db: Session, *, user_id: str, actor_id: str | None = None) 
     if not system_user:
         raise ValueError("User not found")
     db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).update(
-        {"enabled": False, "is_active": False, "failed_attempts": 0, "locked_until": None}
+        {
+            "enabled": False,
+            "is_active": False,
+            "failed_attempts": 0,
+            "locked_until": None,
+        }
     )
     record_audit_event(
         db,
@@ -108,7 +113,12 @@ def disable_subscriber_mfa(
     if not subscriber:
         raise ValueError("Subscriber not found")
     db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).update(
-        {"enabled": False, "is_active": False, "failed_attempts": 0, "locked_until": None}
+        {
+            "enabled": False,
+            "is_active": False,
+            "failed_attempts": 0,
+            "locked_until": None,
+        }
     )
     record_audit_event(
         db,

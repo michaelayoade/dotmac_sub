@@ -915,7 +915,9 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
 
     setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
     totp = pyotp.TOTP(setup["secret"])
-    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), totp.now(), str(person.id))
+    AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    )
 
     request = _make_request()
     result = AuthFlow.login(
@@ -944,9 +946,7 @@ def test_mfa_setup_reuses_pending_method_row(db_session, person, monkeypatch):
     second = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
     assert str(first["method_id"]) == str(second["method_id"])
     pending = (
-        db_session.query(MFAMethod)
-        .filter(MFAMethod.subscriber_id == person.id)
-        .count()
+        db_session.query(MFAMethod).filter(MFAMethod.subscriber_id == person.id).count()
     )
     assert pending == 1
 

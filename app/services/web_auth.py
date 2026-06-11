@@ -174,7 +174,9 @@ def login_submit(
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
-            _set_refresh_cookie(response, db, refresh_token, request, persistent=remember)
+            _set_refresh_cookie(
+                response, db, refresh_token, request, persistent=remember
+            )
         _set_remember_cookie(response, db, request, remember)
         return response
     except Exception as exc:
