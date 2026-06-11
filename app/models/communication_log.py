@@ -26,6 +26,7 @@ from app.db import Base
 class CommunicationDirection(enum.Enum):
     inbound = "inbound"
     outbound = "outbound"
+    internal = "internal"
 
 
 class CommunicationChannel(enum.Enum):
@@ -33,6 +34,7 @@ class CommunicationChannel(enum.Enum):
     sms = "sms"
     in_app = "in_app"
     whatsapp = "whatsapp"
+    internal_note = "internal_note"
 
 
 class CommunicationStatus(enum.Enum):

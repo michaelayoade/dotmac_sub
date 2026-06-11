@@ -3,6 +3,8 @@ x-logging: &id001
   options:
     max-size: 10m
     max-file: '3'
+x-observability-extra-hosts: &observability_extra_hosts
+- observability.dotmac.io:75.119.128.247
 services:
   app:
     build: .
@@ -13,6 +15,7 @@ services:
     cpus: 4.0
     pids_limit: 256
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     ports:
     - 127.0.0.1:8001:8001
     environment:
@@ -80,7 +83,9 @@ services:
     cpus: 2.0
     pids_limit: 128
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
+      PYTHONPATH: /app
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
@@ -109,6 +114,7 @@ services:
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
+    - ./scripts:/app/scripts
     command:
     - celery
     - -A
@@ -131,6 +137,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -170,6 +177,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -206,6 +214,7 @@ services:
     cpus: 1.0
     pids_limit: 96
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -253,6 +262,7 @@ services:
     cpus: 1.0
     pids_limit: 96
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -300,6 +310,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -343,6 +354,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -386,6 +398,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -539,6 +552,7 @@ services:
     cpus: 1.0
     pids_limit: 96
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -580,6 +594,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     logging: *id001
+    extra_hosts: *observability_extra_hosts
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}

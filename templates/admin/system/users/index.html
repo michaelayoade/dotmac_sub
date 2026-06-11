@@ -370,7 +370,21 @@
                                class="h-4 w-4 rounded border-slate-300 text-slate-600 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-700">
                         <label for="send_invite" class="text-sm text-slate-700 dark:text-slate-300">Send invitation email</label>
                     </div>
-                    <div id="form-response"></div>
+                    <div x-data="{ visible: false }"
+                         x-show="visible"
+                         x-cloak
+                         x-on:htmx:after-swap.window="if ($event.detail.target && $event.detail.target.id === 'form-response') visible = $event.detail.target.innerHTML.trim().length > 0"
+                         class="relative">
+                        <div id="form-response" x-ref="response"></div>
+                        <button type="button"
+                                x-on:click="visible = false; $refs.response.innerHTML = ''"
+                                class="absolute right-2 top-2 rounded-md p-1 text-green-700 transition hover:bg-green-100 hover:text-green-900"
+                                aria-label="Close message">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
                 <div class="border-t border-slate-200 px-6 py-4 dark:border-slate-700 flex justify-end gap-3">
                     <button type="button" x-on:click="open = false"

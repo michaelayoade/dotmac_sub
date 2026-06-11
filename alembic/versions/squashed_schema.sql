@@ -333,7 +333,8 @@ CREATE TYPE public.communicationchannel AS ENUM (
     'email',
     'sms',
     'in_app',
-    'whatsapp'
+    'whatsapp',
+    'internal_note'
 );
 
 
@@ -343,7 +344,8 @@ CREATE TYPE public.communicationchannel AS ENUM (
 
 CREATE TYPE public.communicationdirection AS ENUM (
     'inbound',
-    'outbound'
+    'outbound',
+    'internal'
 );
 
 
@@ -4016,6 +4018,8 @@ CREATE TABLE public.mfa_methods (
     is_active boolean NOT NULL,
     verified_at timestamp with time zone,
     last_used_at timestamp with time zone,
+    failed_attempts integer NOT NULL,
+    locked_until timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_mfa_methods_exactly_one_principal CHECK (((subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)))

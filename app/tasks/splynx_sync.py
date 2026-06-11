@@ -200,3 +200,14 @@ def run_new_subscriptions_sync() -> dict[str, int]:
     result = run(dry_run=False)
     logger.info("Splynx new-subscriptions discovery complete: %s", result)
     return result
+
+
+@celery_app.task(name="app.tasks.splynx_sync.run_password_freshness_sync")
+def run_password_freshness_sync() -> None:
+    """Repair radcheck/access_credentials for Splynx services changed in the
+    last 26h (passwords don't flow through the other syncs). Dual-run only;
+    retire with the Splynx decommission."""
+    from scripts.migration.refresh_changed_passwords import main
+
+    logger.info("password freshness sync starting")
+    main(execute=True)

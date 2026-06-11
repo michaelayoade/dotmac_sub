@@ -21,6 +21,8 @@ def charge_due_invoices() -> dict:
     session = SessionLocal()
     try:
         result = autopay_service.run_all_due(session)
+        if "total" in result:
+            result["total"] = str(result["total"])
         logger.info("autopay run complete: %s", result)
         return result
     finally:

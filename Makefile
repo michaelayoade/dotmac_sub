@@ -113,7 +113,7 @@ prod-migrate: ## Run migrations explicitly in the production-style stack
 	$(PROD_COMPOSE) run --rm app alembic upgrade head
 
 prod-check: ## Run deployment reconciliation checks in the production-style stack
-	$(PROD_COMPOSE) run --rm app python scripts/deploy_reconcile.py
+	$(PROD_COMPOSE) run --rm app python scripts/setup/deploy_reconcile.py
 
 # ─── Credentials ──────────────────────────────────────────
 

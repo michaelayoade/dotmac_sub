@@ -75,6 +75,9 @@ celery_app.conf.task_routes = {
     # a buried invoice cycle is a missed billing day (the 2026-06-10 00:55
     # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).
     "app.tasks.billing.run_invoice_cycle": {"queue": "billing"},
+    "app.tasks.autopay.charge_due_invoices": {"queue": "billing"},
+    "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
+    "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
     "app.tasks.collections.run_dunning": {"queue": "billing"},
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
     "app.tasks.usage.run_usage_rating": {"queue": "billing"},

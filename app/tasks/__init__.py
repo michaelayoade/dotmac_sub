@@ -3,6 +3,8 @@ from app.tasks.app_cache import (
     refresh_dashboard_stats_cache_task,
     refresh_ont_zabbix_snapshot_cache_task,
 )
+from app.tasks.arrangements import check_overdue_arrangements
+from app.tasks.autopay import charge_due_invoices
 from app.tasks.bandwidth import (
     aggregate_to_metrics as aggregate_bandwidth_to_metrics,
 )
@@ -73,6 +75,7 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
@@ -161,6 +164,9 @@ __all__ = [
     "provision_ont",
     "queue_bulk_provisioning",
     "run_invoice_cycle",
+    "charge_due_invoices",
+    "check_overdue_arrangements",
+    "reconcile_topups",
     "expire_subscriptions",
     "run_dunning",
     "run_prepaid_enforcement",

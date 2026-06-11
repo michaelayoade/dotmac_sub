@@ -146,9 +146,9 @@ Requirements:
 ## Crash reporting (GlitchTip)
 
 Uncaught Dart/Flutter errors are reported to your self-hosted **GlitchTip**
-(Sentry-protocol — the same target the backend's `GLITCHTIP_DSN` uses). It is
-**off by default**: with no DSN, `Sentry.init` is never called and nothing is
-sent. The pure-Dart `sentry` client is used (no native plugin, no build impact).
+(Sentry-protocol). It is **off by default**: with no DSN, `Sentry.init` is never
+called and nothing is sent. The pure-Dart `sentry` client is used (no native
+plugin, no build impact).
 
 Enable it by supplying the DSN at build time — never commit it (a DSN is a
 client ingestion key embedded in the shipped app). Use a gitignored defines
@@ -160,10 +160,10 @@ flutter run --dart-define-from-file=dart_defines.json
 flutter build apk --release --dart-define-from-file=dart_defines.json
 ```
 
-Or pass it directly: `--dart-define=GLITCHTIP_DSN=http://key@host:8000/<id>`.
+Or pass it directly: `--dart-define=GLITCHTIP_DSN=https://key@host/<id>`.
 
-> Recommended: a **separate GlitchTip project** for the mobile app so device
-> crashes are isolated from backend errors (don't reuse the backend DSN).
+Use a **separate GlitchTip project** for the mobile app so device crashes are
+isolated from backend errors. Do not reuse the backend DSN in mobile builds.
 
 ## Not yet wired
 

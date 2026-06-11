@@ -21,9 +21,10 @@ class Env {
 
   static String get apiRoot => '$apiBaseUrl$apiPrefix';
 
-  /// GlitchTip DSN (Sentry-protocol) — crash reporting is OFF when empty (the
-  /// default). Matches the backend's GLITCHTIP_DSN. Supply at build time:
-  /// `--dart-define=GLITCHTIP_DSN=http://key@observability-host:8000/1`.
+  /// GlitchTip DSN (Sentry-protocol) — crash reporting is OFF when empty.
+  /// Use a dedicated mobile GlitchTip project over HTTPS, not the backend DSN.
+  /// Supply at build time:
+  /// `--dart-define=GLITCHTIP_DSN=https://key@observability-host/<project-id>`.
   static const String glitchtipDsn =
       String.fromEnvironment('GLITCHTIP_DSN', defaultValue: '');
 

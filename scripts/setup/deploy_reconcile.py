@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -273,7 +273,7 @@ def main() -> int:
             "ok": ok,
             "checks": [asdict(result) for result in results],
         }
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
         return 0 if ok else 1
 
     print("Deployment reconciliation")
@@ -284,7 +284,7 @@ def main() -> int:
             if value in (None, "", [], {}):
                 continue
             rendered = (
-                json.dumps(value, sort_keys=True)
+                json.dumps(value, sort_keys=True, default=str)
                 if isinstance(value, (dict, list))
                 else str(value)
             )

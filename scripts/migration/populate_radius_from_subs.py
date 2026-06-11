@@ -36,7 +36,10 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import (
+    decrypt_credential_with_key,
+    get_encryption_key,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -85,8 +88,11 @@ def _radreply_attrs(
     if profile and profile.idle_timeout:
         attrs.append(("Idle-Timeout", ":=", str(profile.idle_timeout)))
 
-    # Walled-garden: customer-level block OR subscription-level block
-    if subscriber_blocked or sub.status == SubscriptionStatus.blocked:
+    # Walled-garden: customer-level block OR subscription-level block/suspension
+    if subscriber_blocked or sub.status in (
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+    ):
         attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
 
     return attrs
@@ -107,10 +113,13 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         "blocked_users_written": 0,
     }
 
+    enc_key = get_encryption_key()
     db = SessionLocal()
     try:
-        # Active or blocked subs with a login — blocked subs get a walled-garden
-        # radreply so suspension actually takes effect at the BNG.
+        # Active, blocked, or suspended subs with a login — blocked/suspended
+        # subs get a walled-garden radreply so suspension actually takes
+        # effect at the BNG (hard-deleting their rows would fail-closed but
+        # lose the captive pay-page treatment).
         rows = (
             db.execute(
                 select(Subscription)
@@ -120,7 +129,11 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 )
                 .where(
                     Subscription.status.in_(
-                        [SubscriptionStatus.active, SubscriptionStatus.blocked]
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.blocked,
+                            SubscriptionStatus.suspended,
+                        ]
                     ),
                     Subscription.login.isnot(None),
                 )
@@ -161,103 +174,102 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             len(blocked_subscriber_ids),
         )
 
-        rconn = psycopg.connect(radius_dsn)
-        rconn.autocommit = False
-        try:
-            with rconn.cursor() as cur:
-                for sub in rows:
-                    cred = creds_by_username.get(sub.login)
-                    if cred is None:
-                        stats["skipped_no_credential"] += 1
-                        continue
-                    if not cred.secret_hash:
-                        stats["skipped_no_password"] += 1
-                        continue
-                    try:
-                        cleartext = decrypt_credential(cred.secret_hash)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("decrypt failed for %s: %s", sub.login, exc)
-                        stats["skipped_decrypt_failed"] += 1
-                        continue
-                    if not cleartext:
-                        stats["skipped_no_password"] += 1
-                        continue
+        # Compute the full work list in memory while the dotmac session is
+        # alive, then release it BEFORE the radius writes — holding the read
+        # transaction through the write phase trips the app's 120s
+        # idle-in-transaction timeout on large fleets.
+        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus]] = {}
+        for sub in rows:
+            cred = creds_by_username.get(sub.login)
+            if cred is None:
+                stats["skipped_no_credential"] += 1
+                continue
+            if not cred.secret_hash:
+                stats["skipped_no_password"] += 1
+                continue
+            try:
+                cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("decrypt failed for %s: %s", sub.login, exc)
+                stats["skipped_decrypt_failed"] += 1
+                continue
+            if not cleartext:
+                stats["skipped_no_password"] += 1
+                continue
 
-                    sub_blocked = sub.subscriber_id in blocked_subscriber_ids
-                    if dry_run:
-                        # Don't write, just count what we'd do
-                        stats["radcheck_upserts"] += 1
-                        stats["radreply_upserts"] += len(
-                            _radreply_attrs(
-                                sub, sub.offer, sub.radius_profile, sub_blocked
-                            )
-                        )
-                        if sub_blocked or sub.status == SubscriptionStatus.blocked:
-                            stats["blocked_users_written"] += 1
-                        continue
+            sub_blocked = sub.subscriber_id in blocked_subscriber_ids
+            attrs = _radreply_attrs(sub, sub.offer, sub.radius_profile, sub_blocked)
+            blocked_flag = sub_blocked or sub.status in (
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.suspended,
+            )
+            # Duplicate logins (Splynx-migration dups): the ACTIVE sub wins the
+            # slot — subscriber-level block still dominates via sub_blocked,
+            # so a blocked customer stays walled-gardened either way.
+            existing = by_login.get(sub.login)
+            if existing is not None and existing[4] == SubscriptionStatus.active:
+                continue
+            by_login[sub.login] = (sub.login, cleartext, attrs, blocked_flag, sub.status)
 
-                    # --- radcheck: single Cleartext-Password row ---
-                    cur.execute(
-                        "DELETE FROM radcheck WHERE username = %s", (sub.login,)
-                    )
-                    cur.execute(
-                        "INSERT INTO radcheck (username, attribute, op, value) "
-                        "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                        (sub.login, cleartext),
-                    )
-                    stats["radcheck_upserts"] += 1
-
-                    # --- radreply: full attribute set ---
-                    attrs = _radreply_attrs(
-                        sub, sub.offer, sub.radius_profile, sub_blocked
-                    )
-                    cur.execute(
-                        "DELETE FROM radreply WHERE username = %s", (sub.login,)
-                    )
-                    for attr, op, val in attrs:
-                        cur.execute(
-                            "INSERT INTO radreply (username, attribute, op, value) "
-                            "VALUES (%s, %s, %s, %s)",
-                            (sub.login, attr, op, val),
-                        )
-                    stats["radreply_upserts"] += len(attrs)
-
-                    if sub_blocked or sub.status == SubscriptionStatus.blocked:
-                        stats["blocked_users_written"] += 1
-
-                # --- orphan cleanup: drop radcheck/radreply rows whose username ---
-                # is not in the active+blocked set (e.g. subs that have since been
-                # cancelled/disabled). Keeps the radius DB lean and prevents stale
-                # auth surface from accumulating.
-                active_usernames = {sub.login for sub in rows if sub.login}
-                if active_usernames:
-                    cur.execute("SELECT DISTINCT username FROM radcheck")
-                    radcheck_users = {r[0] for r in cur.fetchall()}
-                    orphans = list(radcheck_users - active_usernames)
-                    if orphans:
-                        cur.execute(
-                            "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
-                        )
-                        stats["radcheck_orphans_deleted"] = cur.rowcount
-                        cur.execute(
-                            "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
-                        )
-                        stats["radreply_orphans_deleted"] = cur.rowcount
-                        logger.info(
-                            "orphan cleanup: %d radcheck + %d radreply rows",
-                            stats["radcheck_orphans_deleted"],
-                            stats["radreply_orphans_deleted"],
-                        )
-
-            if not dry_run:
-                rconn.commit()
-                logger.info("committed RADIUS DB writes")
-            else:
-                logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
-        finally:
-            rconn.close()
+        active_usernames = {sub.login for sub in rows if sub.login}
     finally:
         db.close()
+
+    work = list(by_login.values())
+    stats["radcheck_upserts"] = len(work)
+    stats["radreply_upserts"] = sum(len(w[2]) for w in work)
+    stats["blocked_users_written"] = sum(1 for w in work if w[3])
+
+    if dry_run:
+        logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
+        logger.info("done: %s", stats)
+        return stats
+
+    rconn = psycopg.connect(radius_dsn)
+    rconn.autocommit = False
+    try:
+        with rconn.cursor() as cur:
+            usernames = [w[0] for w in work]
+            cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
+            cur.executemany(
+                "INSERT INTO radcheck (username, attribute, op, value) "
+                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+                [(w[0], w[1]) for w in work],
+            )
+            cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
+            cur.executemany(
+                "INSERT INTO radreply (username, attribute, op, value) "
+                "VALUES (%s, %s, %s, %s)",
+                [(w[0], a, o, v) for w in work for (a, o, v) in w[2]],
+            )
+
+            # --- orphan cleanup: drop radcheck/radreply rows whose username ---
+            # is not in the active+blocked set (e.g. subs that have since been
+            # cancelled/disabled). Keeps the radius DB lean and prevents stale
+            # auth surface from accumulating.
+            if active_usernames:
+                cur.execute("SELECT DISTINCT username FROM radcheck")
+                radcheck_users = {r[0] for r in cur.fetchall()}
+                orphans = list(radcheck_users - active_usernames)
+                if orphans:
+                    cur.execute(
+                        "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
+                    )
+                    stats["radcheck_orphans_deleted"] = cur.rowcount
+                    cur.execute(
+                        "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
+                    )
+                    stats["radreply_orphans_deleted"] = cur.rowcount
+                    logger.info(
+                        "orphan cleanup: %d radcheck + %d radreply rows",
+                        stats["radcheck_orphans_deleted"],
+                        stats["radreply_orphans_deleted"],
+                    )
+
+        rconn.commit()
+        logger.info("committed RADIUS DB writes")
+    finally:
+        rconn.close()
 
     logger.info("done: %s", stats)
     return stats
