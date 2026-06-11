@@ -200,3 +200,58 @@ def test_customer_mfa_submit_creates_customer_session(
     assert customer_portal.get_customer_session(
         cookies[customer_portal.SESSION_COOKIE_NAME]
     )
+
+
+def test_customer_forgot_password_submit_uses_shared_flow(monkeypatch, db_session):
+    from unittest.mock import MagicMock
+
+    forgot_flow = MagicMock()
+    monkeypatch.setattr(
+        web_customer_auth_service.auth_flow_service,
+        "forgot_password_flow",
+        forgot_flow,
+    )
+
+    response = web_customer_auth_service.customer_forgot_password_submit(
+        _request(), db_session, "customer@example.com"
+    )
+
+    assert response.status_code == 200
+    assert "Check your email" in response.body.decode()
+    forgot_flow.assert_called_once_with(
+        db_session,
+        "customer@example.com",
+        next_login_path="/portal/auth/login?next=/portal/dashboard",
+    )
+
+
+def test_customer_forgot_password_page_renders_form(monkeypatch, db_session):
+    monkeypatch.setattr(
+        web_customer_auth_service,
+        "get_current_customer_from_request",
+        lambda request, db: None,
+    )
+
+    response = web_customer_auth_service.customer_forgot_password_page(
+        _request(), db_session
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert 'action="/portal/auth/forgot-password"' in body
+    assert "_csrf_token" in body
+
+
+def test_customer_forgot_password_page_redirects_signed_in(monkeypatch, db_session):
+    monkeypatch.setattr(
+        web_customer_auth_service,
+        "get_current_customer_from_request",
+        lambda request, db: {"subscriber_id": "x"},
+    )
+
+    response = web_customer_auth_service.customer_forgot_password_page(
+        _request(), db_session
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/portal/dashboard"
