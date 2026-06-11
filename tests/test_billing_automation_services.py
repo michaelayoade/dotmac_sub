@@ -190,6 +190,240 @@ class TestResolvePrice:
         assert currency is None
         assert cycle is None
 
+    def test_two_active_prices_picks_newest_and_warns(
+        self, db_session, subscription, caplog
+    ):
+        """Two active recurring prices: newest created_at wins, with a warning."""
+        from app.models.catalog import BillingCycle, OfferPrice, PriceType
+
+        now = datetime.now(UTC)
+        db_session.add_all(
+            [
+                OfferPrice(
+                    offer_id=subscription.offer_id,
+                    price_type=PriceType.recurring,
+                    amount=Decimal("50.00"),
+                    currency="USD",
+                    billing_cycle=BillingCycle.monthly,
+                    is_active=True,
+                    created_at=now - timedelta(days=10),
+                ),
+                OfferPrice(
+                    offer_id=subscription.offer_id,
+                    price_type=PriceType.recurring,
+                    amount=Decimal("60.00"),
+                    currency="USD",
+                    billing_cycle=BillingCycle.monthly,
+                    is_active=True,
+                    created_at=now,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        caplog.set_level("WARNING")
+        amount, currency, cycle = billing_automation._resolve_price(
+            db_session, subscription
+        )
+
+        assert amount == Decimal("60.00")
+        assert any(
+            "Multiple active recurring offer prices" in record.getMessage()
+            for record in caplog.records
+        )
+
+
+# =============================================================================
+# _effective_unit_price Tests
+# =============================================================================
+
+
+def _sub(**overrides):
+    """Bare subscription-shaped object for the pure pricing helper."""
+    from types import SimpleNamespace
+
+    defaults = {
+        "unit_price": None,
+        "discount": False,
+        "discount_value": None,
+        "discount_type": None,
+        "discount_start_at": None,
+        "discount_end_at": None,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+class TestEffectiveUnitPrice:
+    """Tests for the _effective_unit_price pure helper."""
+
+    NOW = datetime(2026, 6, 11, 12, 0, 0, tzinfo=UTC)
+
+    def test_catalog_price_when_no_override(self):
+        result = billing_automation._effective_unit_price(
+            _sub(), Decimal("100.00"), self.NOW
+        )
+        assert result == Decimal("100.00")
+
+    def test_unit_price_overrides_catalog(self):
+        result = billing_automation._effective_unit_price(
+            _sub(unit_price=Decimal("80.00")), Decimal("100.00"), self.NOW
+        )
+        assert result == Decimal("80.00")
+
+    def test_zero_unit_price_falls_back_to_catalog(self):
+        # Splynx importer stores 0 when the export had no per-service price.
+        result = billing_automation._effective_unit_price(
+            _sub(unit_price=Decimal("0.00")), Decimal("100.00"), self.NOW
+        )
+        assert result == Decimal("100.00")
+
+    def test_percentage_discount(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("10.00"),
+                discount_type=DiscountType.percentage,
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("90.00")
+
+    def test_legacy_percent_discount(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("25.00"),
+                discount_type=DiscountType.percent,
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("75.00")
+
+    def test_fixed_discount(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("15.00"),
+                discount_type=DiscountType.fixed,
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("85.00")
+
+    def test_discount_on_negotiated_unit_price(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                unit_price=Decimal("80.00"),
+                discount=True,
+                discount_value=Decimal("50.00"),
+                discount_type=DiscountType.percentage,
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("40.00")
+
+    def test_expired_discount_window_ignored(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("10.00"),
+                discount_type=DiscountType.percentage,
+                discount_end_at=self.NOW - timedelta(days=1),
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("100.00")
+
+    def test_future_discount_window_ignored(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("10.00"),
+                discount_type=DiscountType.percentage,
+                discount_start_at=self.NOW + timedelta(days=1),
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("100.00")
+
+    def test_open_ended_window_applies(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("10.00"),
+                discount_type=DiscountType.percentage,
+                discount_start_at=self.NOW - timedelta(days=30),
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("90.00")
+
+    def test_disabled_discount_flag_ignored(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=False,
+                discount_value=Decimal("10.00"),
+                discount_type=DiscountType.percentage,
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("100.00")
+
+    def test_never_negative(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("150.00"),
+                discount_type=DiscountType.fixed,
+            ),
+            Decimal("100.00"),
+            self.NOW,
+        )
+        assert result == Decimal("0.00")
+
+    def test_naive_now_handled(self):
+        from app.models.catalog import DiscountType
+
+        result = billing_automation._effective_unit_price(
+            _sub(
+                discount=True,
+                discount_value=Decimal("10.00"),
+                discount_type=DiscountType.percentage,
+                discount_start_at=datetime(2026, 1, 1),
+                discount_end_at=datetime(2027, 1, 1),
+            ),
+            Decimal("100.00"),
+            datetime(2026, 6, 11, 12, 0, 0),
+        )
+        assert result == Decimal("90.00")
+
 
 # =============================================================================
 # _resolve_tax_rate_id Tests
@@ -251,6 +485,53 @@ class TestResolveTaxRateId:
         """Test when no tax rate is configured."""
         result = billing_automation._resolve_tax_rate_id(db_session, subscription)
         assert result is None
+
+    def test_inactive_tax_rate_is_skipped(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Soft-deleted (inactive) tax rates must not be applied to new lines."""
+        from app.models.billing import TaxRate
+
+        tax_rate = TaxRate(
+            name="Retired Tax",
+            rate=Decimal("0.075"),
+            is_active=False,
+        )
+        db_session.add(tax_rate)
+        db_session.commit()
+
+        subscriber_account.tax_rate_id = tax_rate.id
+        db_session.commit()
+
+        result = billing_automation._resolve_tax_rate_id(db_session, subscription)
+        assert result is None
+
+    def test_inactive_address_rate_falls_back_to_account_rate(
+        self, db_session, subscription, subscriber
+    ):
+        """Inactive address rate falls through to an active account rate."""
+        from app.models.billing import TaxRate
+        from app.models.subscriber import Address
+
+        inactive = TaxRate(name="Old Tax", rate=Decimal("0.08"), is_active=False)
+        active = TaxRate(name="Current Tax", rate=Decimal("0.05"), is_active=True)
+        db_session.add_all([inactive, active])
+        db_session.commit()
+
+        address = Address(
+            subscriber_id=subscriber.id,
+            address_line1="123 Main St",
+            tax_rate_id=inactive.id,
+        )
+        db_session.add(address)
+        db_session.commit()
+
+        subscription.service_address_id = address.id
+        subscriber.tax_rate_id = active.id
+        db_session.commit()
+
+        result = billing_automation._resolve_tax_rate_id(db_session, subscription)
+        assert result == active.id
 
 
 # =============================================================================
@@ -910,6 +1191,200 @@ class TestRunInvoiceCycle:
 
 
 # =============================================================================
+# Money correctness in the runner
+# =============================================================================
+
+
+class TestRunInvoiceCycleMoneyCorrectness:
+    def _activate(self, db_session, subscription, subscriber_account, now_naive):
+        from app.models.catalog import SubscriptionStatus
+        from app.models.subscriber import AccountStatus
+
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now_naive - timedelta(days=30)
+        subscription.next_billing_at = now_naive - timedelta(days=1)
+        db_session.commit()
+
+    def _add_offer_price(self, db_session, subscription, amount, currency="USD"):
+        from app.models.catalog import BillingCycle, OfferPrice, PriceType
+
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=amount,
+                currency=currency,
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+    def _line_for(self, db_session, subscription):
+        from app.models.billing import InvoiceLine
+
+        return (
+            db_session.query(InvoiceLine)
+            .filter(InvoiceLine.subscription_id == subscription.id)
+            .one()
+        )
+
+    def test_percentage_discount_applied_to_invoice_line(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.catalog import DiscountType
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._activate(db_session, subscription, subscriber_account, now_naive)
+        self._add_offer_price(db_session, subscription, Decimal("100.00"))
+        subscription.discount = True
+        subscription.discount_value = Decimal("10.00")
+        subscription.discount_type = DiscountType.percentage
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._line_for(db_session, subscription)
+        assert Decimal(str(line.amount)) == Decimal("90.00")
+
+    def test_negotiated_unit_price_overrides_catalog(
+        self, db_session, subscription, subscriber_account
+    ):
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._activate(db_session, subscription, subscriber_account, now_naive)
+        self._add_offer_price(db_session, subscription, Decimal("100.00"))
+        subscription.unit_price = Decimal("75.00")
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._line_for(db_session, subscription)
+        assert Decimal(str(line.amount)) == Decimal("75.00")
+
+    def test_expired_discount_bills_full_price(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.catalog import DiscountType
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._activate(db_session, subscription, subscriber_account, now_naive)
+        self._add_offer_price(db_session, subscription, Decimal("100.00"))
+        subscription.discount = True
+        subscription.discount_value = Decimal("50.00")
+        subscription.discount_type = DiscountType.percentage
+        subscription.discount_end_at = now_naive - timedelta(days=5)
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._line_for(db_session, subscription)
+        assert Decimal(str(line.amount)) == Decimal("100.00")
+
+    def test_runner_invoice_gets_invoice_number(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import Invoice
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._activate(db_session, subscription, subscriber_account, now_naive)
+        self._add_offer_price(db_session, subscription, Decimal("100.00"))
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        assert invoice.invoice_number
+
+    def test_prorated_invoice_gets_number_and_discounted_amount(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.catalog import DiscountType
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._activate(db_session, subscription, subscriber_account, now_naive)
+        self._add_offer_price(db_session, subscription, Decimal("100.00"))
+        subscription.discount = True
+        subscription.discount_value = Decimal("20.00")
+        subscription.discount_type = DiscountType.percentage
+        db_session.commit()
+
+        # Mid-month activation so proration actually happens
+        activation = now_naive.replace(day=15, hour=12)
+        invoice = billing_automation.generate_prorated_invoice(
+            db_session, subscription, activation_date=activation
+        )
+
+        assert invoice is not None
+        assert invoice.invoice_number
+        # Prorated from the discounted price, so strictly below 80.00
+        line = self._line_for(db_session, subscription)
+        assert Decimal(str(line.amount)) <= Decimal("80.00")
+        assert Decimal(str(line.amount)) > Decimal("0.00")
+
+    def test_currency_mismatch_is_counted_and_logged(
+        self, db_session, subscription, subscriber_account, caplog
+    ):
+        from app.models.catalog import (
+            BillingCycle,
+            OfferVersion,
+            OfferVersionPrice,
+            PriceType,
+            Subscription,
+            SubscriptionStatus,
+        )
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._activate(db_session, subscription, subscriber_account, now_naive)
+        self._add_offer_price(db_session, subscription, Decimal("100.00"), "USD")
+
+        # Second subscription on the same account priced in another currency
+        version = (
+            db_session.query(OfferVersion)
+            .filter(OfferVersion.offer_id == subscription.offer_id)
+            .first()
+        )
+        db_session.add(
+            OfferVersionPrice(
+                offer_version_id=version.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("50.00"),
+                currency="EUR",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        other = Subscription(
+            subscriber_id=subscriber_account.id,
+            offer_id=subscription.offer_id,
+            offer_version_id=version.id,
+            status=SubscriptionStatus.active,
+            start_at=now_naive - timedelta(days=30),
+            next_billing_at=now_naive - timedelta(days=1),
+        )
+        db_session.add(other)
+        db_session.commit()
+
+        caplog.set_level("WARNING")
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        assert summary["currency_skipped"] == 1
+        mismatch_records = [
+            record
+            for record in caplog.records
+            if record.getMessage() == "billing_currency_mismatch_skip"
+        ]
+        assert mismatch_records
+        logged_ids = {
+            getattr(record, "subscription_id", None) for record in mismatch_records
+        }
+        assert logged_ids & {str(subscription.id), str(other.id)}
+
+
+# =============================================================================
 # Billing run resilience
 # =============================================================================
 
@@ -961,3 +1436,189 @@ class TestBillingRunResilience:
         assert stale.status == BillingRunStatus.failed
         assert "abandoned" in (stale.error or "")
         assert fresh.status == BillingRunStatus.running
+
+
+# =============================================================================
+# mark_overdue_invoices — overdue checker & post-grace escalation
+# =============================================================================
+
+
+class TestMarkOverdueInvoices:
+    """Hourly overdue checker: first emit, then a one-time post-grace re-emit."""
+
+    def _make_invoice(self, db_session, subscriber, **kwargs):
+        import uuid as _uuid
+
+        from app.models.billing import Invoice, InvoiceStatus
+
+        defaults = {
+            "account_id": subscriber.id,
+            "invoice_number": f"INV-{_uuid.uuid4().hex[:8]}",
+            "status": InvoiceStatus.issued,
+            "total": Decimal("100.00"),
+            "balance_due": Decimal("100.00"),
+            "due_at": datetime.now(UTC) - timedelta(hours=1),
+            "metadata_": {},
+        }
+        defaults.update(kwargs)
+        invoice = Invoice(**defaults)
+        db_session.add(invoice)
+        db_session.commit()
+        return invoice
+
+    def _capture_emits(self, monkeypatch):
+        calls = []
+
+        def _capture(db, event_type, payload, **kwargs):
+            calls.append((event_type, dict(payload)))
+
+        monkeypatch.setattr(billing_automation, "emit_event", _capture)
+        return calls
+
+    def test_first_run_marks_and_emits_once(self, db_session, subscriber, monkeypatch):
+        from app.models.billing import InvoiceStatus
+
+        invoice = self._make_invoice(db_session, subscriber)
+        calls = self._capture_emits(monkeypatch)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+        db_session.refresh(invoice)
+
+        assert result["marked_overdue"] == 1
+        assert result["escalated"] == 0
+        assert invoice.status == InvoiceStatus.overdue
+        assert (invoice.metadata_ or {}).get("overdue_event_sent")
+        assert [c[0] for c in calls] == [EventType.invoice_overdue]
+
+        # Second run within grace: no re-emit, no hourly spam.
+        result2 = billing_automation.mark_overdue_invoices(db_session)
+        assert result2["marked_overdue"] == 0
+        assert result2["escalated"] == 0
+        assert [c[0] for c in calls] == [EventType.invoice_overdue]
+
+    def test_post_grace_escalation_reemits_exactly_once(
+        self, db_session, subscriber, monkeypatch
+    ):
+        """Warning sent + grace elapsed + subscriber active -> one re-emit."""
+        from app.models.billing import InvoiceStatus
+
+        invoice = self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.overdue,
+            due_at=datetime.now(UTC) - timedelta(hours=72),
+            metadata_={
+                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
+                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        calls = self._capture_emits(monkeypatch)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+        db_session.refresh(invoice)
+
+        assert result["escalated"] == 1
+        assert result["marked_overdue"] == 0
+        assert [c[0] for c in calls] == [EventType.invoice_overdue]
+        assert calls[0][1]["escalation"] == "post_grace_suspension"
+        assert calls[0][1]["invoice_id"] == str(invoice.id)
+        assert (invoice.metadata_ or {}).get("suspension_escalation_sent")
+
+        # Hourly runs after the escalation never re-emit again.
+        for _ in range(3):
+            result_n = billing_automation.mark_overdue_invoices(db_session)
+            assert result_n["escalated"] == 0
+        assert len(calls) == 1
+
+    def test_no_escalation_within_grace(self, db_session, subscriber, monkeypatch):
+        from app.models.billing import InvoiceStatus
+
+        invoice = self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.overdue,
+            due_at=datetime.now(UTC) - timedelta(hours=6),
+            metadata_={
+                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
+                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        calls = self._capture_emits(monkeypatch)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+        db_session.refresh(invoice)
+
+        assert result["escalated"] == 0
+        assert calls == []
+        assert not (invoice.metadata_ or {}).get("suspension_escalation_sent")
+
+    def test_no_escalation_without_warning_sent(
+        self, db_session, subscriber, monkeypatch
+    ):
+        """If no warning was ever sent (grace=0 path or auto-suspend disabled),
+        there is nothing to escalate."""
+        from app.models.billing import InvoiceStatus
+
+        self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.overdue,
+            due_at=datetime.now(UTC) - timedelta(hours=72),
+            metadata_={"overdue_event_sent": "2026-01-01T00:00:00+00:00"},
+        )
+        calls = self._capture_emits(monkeypatch)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+
+        assert result["escalated"] == 0
+        assert calls == []
+
+    def test_no_escalation_when_subscriber_not_active(
+        self, db_session, subscriber, monkeypatch
+    ):
+        from app.models.billing import InvoiceStatus
+        from app.models.subscriber import SubscriberStatus
+
+        subscriber.status = SubscriberStatus.blocked
+        db_session.commit()
+        self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.overdue,
+            due_at=datetime.now(UTC) - timedelta(hours=72),
+            metadata_={
+                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
+                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        calls = self._capture_emits(monkeypatch)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+
+        assert result["escalated"] == 0
+        assert calls == []
+
+    def test_paid_invoice_not_scanned_for_escalation(
+        self, db_session, subscriber, monkeypatch
+    ):
+        """Once the balance is cleared the invoice drops out of the sweep."""
+        from app.models.billing import InvoiceStatus
+
+        self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.paid,
+            balance_due=Decimal("0.00"),
+            due_at=datetime.now(UTC) - timedelta(hours=72),
+            metadata_={
+                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
+                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        calls = self._capture_emits(monkeypatch)
+
+        result = billing_automation.mark_overdue_invoices(db_session)
+
+        assert result["scanned"] == 0
+        assert result["escalated"] == 0
+        assert calls == []

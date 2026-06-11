@@ -2,8 +2,10 @@
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -18,6 +20,8 @@ from app.models.billing import (
 )
 from app.models.domain_settings import SettingDomain
 from app.schemas.billing import (
+    PaymentAllocationApply,
+    PaymentCreate,
     PaymentProviderCreate,
     PaymentProviderEventIngest,
     PaymentProviderUpdate,
@@ -34,6 +38,8 @@ from app.services.common import (
     apply_ordering,
     apply_pagination,
     get_by_id,
+    round_money,
+    to_decimal,
     validate_enum,
 )
 from app.services.response import ListResponseMixin
@@ -142,6 +148,8 @@ class PaymentProviderEvents(ListResponseMixin):
     _event_status_map = {
         "payment.succeeded": PaymentStatus.succeeded,
         "charge.succeeded": PaymentStatus.succeeded,
+        # Paystack's actual success event type.
+        "charge.success": PaymentStatus.succeeded,
         "payment.failed": PaymentStatus.failed,
         "charge.failed": PaymentStatus.failed,
         "payment.refunded": PaymentStatus.refunded,
@@ -218,70 +226,122 @@ class PaymentProviderEvents(ListResponseMixin):
                 status_code=400, detail="Invoice does not belong to account"
             )
         account_id = payload.account_id or (invoice.account_id if invoice else None)
+        new_status = payload.status_hint or PaymentProviderEvents._event_status_map.get(
+            payload.event_type
+        )
         payment = None
+        created_settled = False
         if payload.payment_id:
             payment = get_by_id(db, Payment, payload.payment_id)
             if not payment:
                 raise HTTPException(status_code=404, detail="Payment not found")
         elif payload.external_id:
+            # Also match payments recorded by the synchronous verify path:
+            # historical rows were written with provider_id=NULL, and matching
+            # them here is what prevents a webhook from double-crediting a
+            # transaction the customer already verified.
             payment = (
                 db.query(Payment)
                 .filter(Payment.external_id == payload.external_id)
-                .filter(Payment.provider_id == provider.id)
+                .filter(
+                    or_(
+                        Payment.provider_id == provider.id,
+                        Payment.provider_id.is_(None),
+                    )
+                )
+                .order_by((Payment.provider_id == provider.id).desc())
                 .first()
             )
         if not payment and payload.amount and account_id:
             _validate_account(db, str(account_id))
-            if invoice:
-                _validate_invoice_currency(
-                    invoice, payload.currency or invoice.currency
-                )
-            channel = _resolve_payment_channel(
-                db,
-                None,
-                None,
-                str(provider.id),
-            )
             currency = payload.currency or (invoice.currency if invoice else "NGN")
-            collection_account = _resolve_collection_account(
-                db, channel, currency, None
-            )
-            payment = Payment(
-                account_id=account_id,
-                amount=payload.amount,
-                currency=currency,
-                provider_id=provider.id,
-                external_id=payload.external_id,
-                status=PaymentStatus.pending,
-                payment_channel_id=channel.id if channel else None,
-                collection_account_id=collection_account.id
-                if collection_account
-                else None,
-            )
-            db.add(payment)
-            db.flush()
-            if payload.invoice_id and invoice:
+            if invoice:
+                _validate_invoice_currency(invoice, currency)
+            if new_status == PaymentStatus.succeeded:
+                # Funds confirmed by the provider: settle through the full
+                # payment pipeline so webhook-driven settlement is identical to
+                # the synchronous verify path — capped allocation, ledger
+                # entry, invoice recalculation, service restore, and
+                # payment.received events. This is the backstop for customers
+                # who paid but never returned to the redirect/verify URL.
+                allocations: list[PaymentAllocationApply] | None = None
+                if invoice is not None:
+                    balance_due = round_money(to_decimal(invoice.balance_due or 0))
+                    if balance_due > Decimal("0.00"):
+                        allocations = [
+                            PaymentAllocationApply(
+                                invoice_id=invoice.id,
+                                amount=min(
+                                    round_money(to_decimal(payload.amount)),
+                                    balance_due,
+                                ),
+                            )
+                        ]
+                payment = Payments.create(
+                    db,
+                    PaymentCreate(
+                        account_id=account_id,
+                        provider_id=provider.id,
+                        amount=payload.amount,
+                        currency=currency,
+                        status=PaymentStatus.succeeded,
+                        external_id=payload.external_id,
+                        memo=f"{provider.name} webhook event: {payload.event_type}",
+                        allocations=allocations,
+                    ),
+                )
+                created_settled = True
+            else:
+                channel = _resolve_payment_channel(
+                    db,
+                    None,
+                    None,
+                    str(provider.id),
+                )
+                collection_account = _resolve_collection_account(
+                    db, channel, currency, None
+                )
+                payment = Payment(
+                    account_id=account_id,
+                    amount=payload.amount,
+                    currency=currency,
+                    provider_id=provider.id,
+                    external_id=payload.external_id,
+                    status=PaymentStatus.pending,
+                    payment_channel_id=channel.id if channel else None,
+                    collection_account_id=collection_account.id
+                    if collection_account
+                    else None,
+                )
+                db.add(payment)
+                db.flush()
+                if payload.invoice_id and invoice:
+                    allocation = PaymentAllocation(
+                        payment_id=payment.id,
+                        invoice_id=payload.invoice_id,
+                        amount=payment.amount,
+                    )
+                    db.add(allocation)
+                    db.flush()
+                    from app.services.billing.payments import (
+                        _create_payment_ledger_entry,
+                    )
+
+                    _create_payment_ledger_entry(db, payment, invoice, payment.amount)
+        elif payment and payload.invoice_id and invoice and not payment.allocations:
+            balance_due = round_money(to_decimal(invoice.balance_due or 0))
+            alloc_amount = min(round_money(to_decimal(payment.amount)), balance_due)
+            if alloc_amount > Decimal("0.00"):
                 allocation = PaymentAllocation(
                     payment_id=payment.id,
                     invoice_id=payload.invoice_id,
-                    amount=payment.amount,
+                    amount=alloc_amount,
                 )
                 db.add(allocation)
                 db.flush()
                 from app.services.billing.payments import _create_payment_ledger_entry
 
-                _create_payment_ledger_entry(db, payment, invoice, payment.amount)
-        elif payment and payload.invoice_id and invoice and not payment.allocations:
-            allocation = PaymentAllocation(
-                payment_id=payment.id,
-                invoice_id=payload.invoice_id,
-                amount=payment.amount,
-            )
-            db.add(allocation)
-            db.flush()
-            from app.services.billing.payments import _create_payment_ledger_entry
-
-            _create_payment_ledger_entry(db, payment, invoice, payment.amount)
+                _create_payment_ledger_entry(db, payment, invoice, alloc_amount)
         allocation_invoice_id = payload.invoice_id or (
             str(payment.allocations[0].invoice_id)
             if payment and payment.allocations
@@ -298,8 +358,12 @@ class PaymentProviderEvents(ListResponseMixin):
         )
         db.add(event)
         db.flush()
-        new_status = PaymentProviderEvents._event_status_map.get(payload.event_type)
-        if new_status and payment:
+        if created_settled:
+            # Payments.create already ran the full success pipeline; calling
+            # mark_status again would just re-stamp paid_at and re-run recalc.
+            event.status = PaymentProviderEventStatus.processed
+            event.processed_at = datetime.now(UTC)
+        elif new_status and payment:
             Payments.mark_status(db, str(payment.id), new_status)
             event.status = PaymentProviderEventStatus.processed
             event.processed_at = datetime.now(UTC)

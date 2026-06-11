@@ -651,6 +651,79 @@ def build_beat_schedule() -> dict:
             enabled=prepaid_enabled,
             interval_seconds=prepaid_interval_seconds,
         )
+        # Autopay charging (idempotent; due-date gating lives in the service)
+        autopay_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "autopay_enabled",
+            "BILLING_AUTOPAY_ENABLED",
+            True,
+        )
+        autopay_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "autopay_interval_seconds",
+            "BILLING_AUTOPAY_INTERVAL_SECONDS",
+            3600,
+        )
+        autopay_interval_seconds = max(autopay_interval_seconds, 300)
+        _sync_scheduled_task(
+            session,
+            name="autopay_runner",
+            task_name="app.tasks.autopay.charge_due_invoices",
+            enabled=autopay_enabled,
+            interval_seconds=autopay_interval_seconds,
+        )
+        # Payment arrangement installment due/overdue/default checks (daily)
+        arrangement_check_enabled = _effective_bool(
+            session,
+            SettingDomain.collections,
+            "arrangement_check_enabled",
+            "ARRANGEMENT_CHECK_ENABLED",
+            True,
+        )
+        arrangement_check_interval_seconds = _effective_int(
+            session,
+            SettingDomain.collections,
+            "arrangement_check_interval_seconds",
+            "ARRANGEMENT_CHECK_INTERVAL_SECONDS",
+            86400,
+        )
+        arrangement_check_interval_seconds = max(
+            arrangement_check_interval_seconds, 3600
+        )
+        _sync_scheduled_task(
+            session,
+            name="arrangement_overdue_checker",
+            task_name="app.tasks.arrangements.check_overdue_arrangements",
+            enabled=arrangement_check_enabled,
+            interval_seconds=arrangement_check_interval_seconds,
+        )
+        # Sweep stranded top-up intents against the gateway verify API
+        topup_reconciliation_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "topup_reconciliation_enabled",
+            "BILLING_TOPUP_RECONCILIATION_ENABLED",
+            True,
+        )
+        topup_reconciliation_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "topup_reconciliation_interval_seconds",
+            "BILLING_TOPUP_RECONCILIATION_INTERVAL_SECONDS",
+            1800,
+        )
+        topup_reconciliation_interval_seconds = max(
+            topup_reconciliation_interval_seconds, 300
+        )
+        _sync_scheduled_task(
+            session,
+            name="topup_reconciliation_runner",
+            task_name="app.tasks.payment_reconciliation.reconcile_topups",
+            enabled=topup_reconciliation_enabled,
+            interval_seconds=topup_reconciliation_interval_seconds,
+        )
         # Suspension-enforcement audit — read-only check that fully-blocked
         # subscribers are actually unreachable in the external RADIUS DB.
         suspension_audit_enabled = _effective_bool(

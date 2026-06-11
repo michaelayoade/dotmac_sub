@@ -261,6 +261,77 @@ def test_render_invoice_html_includes_branding_and_company_info(
     assert "--red-700" in html
 
 
+def _add_lines(db_session, invoice, count):
+    from app.models.billing import InvoiceLine
+
+    for index in range(count):
+        db_session.add(
+            InvoiceLine(
+                invoice_id=invoice.id,
+                description=f"Item {index + 1}",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("10.00"),
+                amount=Decimal("10.00"),
+            )
+        )
+    db_session.commit()
+    db_session.refresh(invoice)
+
+
+def test_render_invoice_html_uses_naira_sign(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    _add_lines(db_session, invoice, 1)
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+
+    assert "₦" in html
+    assert f"{pdf_service.NAIRA_SIGN}10.00" in html
+    # The bare-letter naira ("N0.00" etc.) must be gone
+    assert ">N0.00<" not in html and "'num'>N1" not in html
+
+
+def test_text_fallback_uses_ngn_and_truncates_with_marker(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account)
+    _add_lines(db_session, invoice, pdf_service._TEXT_FALLBACK_MAX_ITEMS + 2)
+
+    lines = pdf_service._render_invoice_text_lines(invoice)
+
+    assert any("unit NGN 10.00" in line for line in lines)
+    assert "- ... and 2 more line items (see itemised statement)" in lines
+    # latin-1 encodable for the minimal text PDF
+    for line in lines:
+        line.encode("latin-1")
+    pdf_bytes = pdf_service._build_simple_pdf(lines)
+    assert pdf_bytes.startswith(b"%PDF-")
+
+
+def test_pil_fallback_renders_naira_and_truncation_marker(
+    db_session, subscriber_account, monkeypatch
+):
+    from PIL import ImageDraw
+
+    invoice = _invoice(db_session, subscriber_account)
+    _add_lines(db_session, invoice, 9)
+
+    rendered: list[str] = []
+    original_text = ImageDraw.ImageDraw.text
+
+    def _spy(self, xy, text, *args, **kwargs):
+        rendered.append(str(text))
+        return original_text(self, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", _spy)
+
+    pdf_bytes = pdf_service._build_branded_fallback_pdf(db_session, invoice)
+
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert "... and 2 more line items (see itemised statement)" in rendered
+    # DejaVu is available in this environment, so the naira sign is used
+    assert any(pdf_service.NAIRA_SIGN in text for text in rendered)
+
+
 def test_completed_export_before_template_refresh_is_stale(
     db_session, subscriber_account
 ):

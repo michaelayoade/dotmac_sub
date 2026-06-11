@@ -1020,6 +1020,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=0,
         label="Payment Due Days",
     ),
+    # Autopay: only charge invoices that are actually due (due_at <= now, or
+    # overdue with no due date). Disable to revert to charge-at-issuance.
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="autopay_charge_only_due",
+        env_var="BILLING_AUTOPAY_CHARGE_ONLY_DUE",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Autopay Charges Only Due Invoices",
+    ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
         domain=SettingDomain.billing,

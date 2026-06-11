@@ -172,9 +172,12 @@ class BillingRepository {
   }
 
   /// POST /me/topup/verify — confirm + credit the account.
-  Future<TopupResult> verifyTopup(String reference) async {
-    final data = await guard(
-        () => dio.post('/me/topup/verify', data: {'reference': reference}));
+  Future<TopupResult> verifyTopup(String reference,
+      {bool saveCard = false}) async {
+    final data = await guard(() => dio.post('/me/topup/verify', data: {
+          'reference': reference,
+          if (saveCard) 'save_card': true,
+        }));
     return TopupResult.fromJson(data as Map<String, dynamic>);
   }
 }

@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 
 from app.celery_app import celery_app
-from app.services import payment_arrangements
 from app.services.db_session_adapter import db_session_adapter
+from app.services.payment_arrangements import payment_arrangements
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -14,16 +14,36 @@ SessionLocal = db_session_adapter.create_session
 
 @celery_app.task(name="app.tasks.arrangements.check_overdue_arrangements")
 def check_overdue_arrangements() -> dict[str, int]:
-    """Mark due arrangement installments overdue and default repeated misses."""
+    """Advance due installments and default arrangements with repeated misses."""
+    logger.info("Starting payment arrangement overdue check")
     session = SessionLocal()
     try:
-        overdue_count = (
-            payment_arrangements.payment_arrangements.check_overdue_installments(
-                session
-            )
+        result = payment_arrangements.check_overdue_installments(session)
+        marked_overdue = (
+            result.get("installments_marked_overdue", 0)
+            if isinstance(result, dict)
+            else 0
         )
-        result = {"overdue_installments": overdue_count}
-        logger.info("payment arrangement overdue check complete: %s", result)
-        return result
+        marked_due = (
+            result.get("installments_marked_due", 0) if isinstance(result, dict) else 0
+        )
+        defaulted = (
+            result.get("arrangements_defaulted", 0) if isinstance(result, dict) else 0
+        )
+        logger.info(
+            "Arrangement overdue check completed: overdue=%d due=%d defaulted=%d",
+            marked_overdue,
+            marked_due,
+            defaulted,
+        )
+        session.commit()
+        return {
+            "installments_marked_overdue": marked_overdue,
+            "installments_marked_due": marked_due,
+            "arrangements_defaulted": defaulted,
+        }
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()

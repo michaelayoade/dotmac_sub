@@ -58,6 +58,16 @@
                 {% endif %}
             </p>
 
+            {% if provider_type != "flutterwave" %}
+            <label class="mt-5 inline-flex cursor-pointer items-center gap-2 text-sm text-stone-600 dark:text-stone-300">
+                <input
+                    type="checkbox"
+                    x-model="saveCard"
+                    class="h-4 w-4 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500">
+                <span>Save this card for future payments</span>
+            </label>
+            {% endif %}
+
             <button
                 @click="startPayment()"
                 :disabled="processing"
@@ -124,6 +134,7 @@ function paymentPage() {
 function paymentPage() {
     return {
         processing: false,
+        saveCard: false,
         startPayment() {
             this.processing = true;
             const self = this;
@@ -138,7 +149,7 @@ function paymentPage() {
                     invoice_number: '{{ invoice.invoice_number or "" }}'
                 },
                 callback: function(response) {
-                    window.location.href = '/portal/billing/pay/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack';
+                    window.location.href = '/portal/billing/pay/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack' + (self.saveCard ? '&save_card=true' : '');
                 },
                 onClose: function() {
                     self.processing = false;

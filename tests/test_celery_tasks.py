@@ -139,21 +139,38 @@ class TestCollectionsTask:
     """Tests for collections.run_dunning task."""
 
     def test_run_dunning_success(self):
-        """Test successful dunning run."""
+        """Test successful dunning run returns the real run metrics."""
+        from datetime import UTC, datetime
+
+        from app.schemas.collections import DunningRunResponse
+
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.collections.collections_service.dunning_workflow.run"
             ) as mock_run:
+                mock_run.return_value = DunningRunResponse(
+                    run_at=datetime.now(UTC),
+                    accounts_scanned=7,
+                    cases_created=3,
+                    actions_created=2,
+                    skipped=1,
+                )
                 from app.tasks.collections import run_dunning
 
-                run_dunning()
+                result = run_dunning()
 
                 mock_run.assert_called_once()
                 args = mock_run.call_args
                 assert args[0][0] == mock_session
                 mock_session.close.assert_called_once()
+                assert result == {
+                    "accounts_scanned": 7,
+                    "cases_created": 3,
+                    "actions_created": 2,
+                    "skipped": 1,
+                }
 
     def test_run_dunning_exception_closes_session(self):
         """Test exception still closes session."""
@@ -172,21 +189,40 @@ class TestCollectionsTask:
                 mock_session.close.assert_called_once()
 
     def test_run_prepaid_enforcement_success(self):
-        """Test successful prepaid enforcement run."""
+        """Test successful prepaid enforcement run returns the real metrics."""
+        from datetime import UTC, datetime
+
+        from app.schemas.collections import PrepaidEnforcementRunResponse
+
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.collections.collections_service.prepaid_enforcement.run"
             ) as mock_run:
+                mock_run.return_value = PrepaidEnforcementRunResponse(
+                    run_at=datetime.now(UTC),
+                    accounts_scanned=9,
+                    accounts_warned=4,
+                    accounts_suspended=2,
+                    accounts_deactivated=1,
+                    skipped=2,
+                )
                 from app.tasks.collections import run_prepaid_enforcement
 
-                run_prepaid_enforcement()
+                result = run_prepaid_enforcement()
 
                 mock_run.assert_called_once()
                 args = mock_run.call_args
                 assert args[0][0] == mock_session
                 mock_session.close.assert_called_once()
+                assert result == {
+                    "accounts_scanned": 9,
+                    "accounts_warned": 4,
+                    "accounts_suspended": 2,
+                    "accounts_deactivated": 1,
+                    "skipped": 2,
+                }
 
     def test_run_prepaid_enforcement_exception_closes_session(self):
         """Test prepaid enforcement exception still closes session."""

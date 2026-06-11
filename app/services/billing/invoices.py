@@ -47,6 +47,19 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
+def next_invoice_number(db: Session) -> str | None:
+    """Generate the next sequential invoice number (None when disabled)."""
+    return numbering.generate_number(
+        db,
+        SettingDomain.billing,
+        "invoice_number",
+        "invoice_number_enabled",
+        "invoice_number_prefix",
+        "invoice_number_padding",
+        "invoice_number_start",
+    )
+
+
 class Invoices(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: InvoiceCreate):
@@ -66,15 +79,7 @@ class Invoices(ListResponseMixin):
             if default_status:
                 data["status"] = validate_enum(default_status, InvoiceStatus, "status")
         if not data.get("invoice_number"):
-            generated = numbering.generate_number(
-                db,
-                SettingDomain.billing,
-                "invoice_number",
-                "invoice_number_enabled",
-                "invoice_number_prefix",
-                "invoice_number_padding",
-                "invoice_number_start",
-            )
+            generated = next_invoice_number(db)
             if generated:
                 data["invoice_number"] = generated
         _validate_invoice_totals(data)

@@ -21,6 +21,7 @@ from app.services.collections._core import (
     dunning_cases,
     dunning_workflow,
     get_available_balance,
+    has_overdue_balance,
     prepaid_enforcement,
     # Public functions
     restore_account_services,
@@ -39,5 +40,6 @@ __all__ = [
     "prepaid_enforcement",
     # Public functions
     "get_available_balance",
+    "has_overdue_balance",
     "restore_account_services",
 ]

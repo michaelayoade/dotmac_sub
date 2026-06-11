@@ -1193,6 +1193,360 @@ class TestNotificationHandler:
 
 
 # ---------------------------------------------------------------------------
+# Payment-received restore guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestPaymentReceivedRestoreGuard:
+    """A partial payment must not lift an overdue suspension."""
+
+    def _payment_event(self, account_id, invoice_id=None):
+        payload = {"amount": "100.00", "status": "succeeded"}
+        if invoice_id:
+            payload["invoice_id"] = str(invoice_id)
+        return Event(
+            event_type=EventType.payment_received,
+            payload=payload,
+            account_id=account_id,
+        )
+
+    def _make_invoice(self, db_session, subscriber, **kwargs):
+        defaults = {
+            "account_id": subscriber.id,
+            "invoice_number": f"INV-{uuid.uuid4().hex[:8]}",
+            "status": InvoiceStatus.overdue,
+            "total": 50000,
+            "balance_due": 49900,
+            "due_at": datetime.now(UTC) - timedelta(days=3),
+            "metadata_": {},
+        }
+        defaults.update(kwargs)
+        invoice = Invoice(**defaults)
+        db_session.add(invoice)
+        db_session.commit()
+        return invoice
+
+    @patch("app.services.collections.restore_account_services")
+    def test_partial_payment_does_not_restore(
+        self, mock_restore, db_session, subscriber
+    ):
+        """Overdue balance remains -> no auto-restore."""
+        invoice = self._make_invoice(
+            db_session, subscriber, total=50000, balance_due=49900
+        )
+
+        handler = EnforcementHandler()
+        handler.handle(db_session, self._payment_event(subscriber.id, invoice.id))
+
+        mock_restore.assert_not_called()
+
+    @patch("app.services.collections.restore_account_services")
+    def test_partial_payment_on_past_due_issued_invoice_does_not_restore(
+        self, mock_restore, db_session, subscriber
+    ):
+        """Past-due invoice not yet flipped to overdue status still blocks."""
+        invoice = self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.partially_paid,
+            total=50000,
+            balance_due=10000,
+        )
+
+        handler = EnforcementHandler()
+        handler.handle(db_session, self._payment_event(subscriber.id, invoice.id))
+
+        mock_restore.assert_not_called()
+
+    @patch("app.services.collections.restore_account_services")
+    def test_full_clearance_restores(self, mock_restore, db_session, subscriber):
+        """No overdue balance left -> restore proceeds."""
+        mock_restore.return_value = 1
+        invoice = self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.paid,
+            total=50000,
+            balance_due=0,
+        )
+
+        handler = EnforcementHandler()
+        handler.handle(db_session, self._payment_event(subscriber.id, invoice.id))
+
+        mock_restore.assert_called_once_with(
+            db_session, str(subscriber.id), invoice_id=str(invoice.id)
+        )
+
+    @patch("app.services.collections.restore_account_services")
+    def test_prepaid_topup_restore_still_works(
+        self, mock_restore, db_session, subscriber
+    ):
+        """Prepaid suspension scenario (no overdue invoice debt) still restores.
+
+        A prepaid account suspended for balance depletion has no overdue
+        invoice with an unpaid balance — only (at most) invoices that are
+        not yet due — so a top-up payment.received must keep restoring.
+        """
+        mock_restore.return_value = 1
+        # An open invoice that is NOT yet due must not block the restore.
+        self._make_invoice(
+            db_session,
+            subscriber,
+            status=InvoiceStatus.issued,
+            total=5000,
+            balance_due=5000,
+            due_at=datetime.now(UTC) + timedelta(days=14),
+        )
+
+        handler = EnforcementHandler()
+        handler.handle(db_session, self._payment_event(subscriber.id))
+
+        mock_restore.assert_called_once_with(
+            db_session, str(subscriber.id), invoice_id=None
+        )
+
+    @patch("app.services.collections.restore_account_services")
+    def test_payment_event_without_account_is_ignored(self, mock_restore, db_session):
+        handler = EnforcementHandler()
+        handler.handle(
+            db_session,
+            Event(event_type=EventType.payment_received, payload={}),
+        )
+        mock_restore.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Invoice-overdue suspension shield tests
+# ---------------------------------------------------------------------------
+
+
+class TestInvoiceOverdueSuspensionShields:
+    """Active arrangements / pending payment proofs block auto-suspension."""
+
+    def _setup_overdue_account(self, db_session, subscriber, subscription):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        subscriber.status = AccountStatus.active
+        subscription.status = SubscriptionStatus.active
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number=f"INV-{uuid.uuid4().hex[:8]}",
+            status=InvoiceStatus.overdue,
+            total=10000,
+            balance_due=10000,
+            due_at=datetime.now(UTC) - timedelta(hours=72),
+            metadata_={"suspension_warning_sent_at": "2026-01-01T00:00:00+00:00"},
+        )
+        db_session.add(invoice)
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="auto_suspend_on_overdue",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    value_json=True,
+                    is_active=True,
+                ),
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="suspension_grace_hours",
+                    value_type=SettingValueType.integer,
+                    value_text="48",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+        return invoice
+
+    def _overdue_event(self, subscriber, invoice):
+        return Event(
+            event_type=EventType.invoice_overdue,
+            payload={"invoice_id": str(invoice.id)},
+            invoice_id=invoice.id,
+            account_id=subscriber.id,
+        )
+
+    def _make_arrangement(self, db_session, subscriber, status):
+        from datetime import date
+
+        from app.models.payment_arrangement import PaymentArrangement
+
+        arrangement = PaymentArrangement(
+            subscriber_id=subscriber.id,
+            total_amount=10000,
+            installment_amount=2500,
+            installments_total=4,
+            start_date=date.today(),
+            status=status,
+        )
+        db_session.add(arrangement)
+        db_session.commit()
+        return arrangement
+
+    def _make_proof(self, db_session, subscriber, status):
+        from app.models.payment_proof import PaymentProof
+
+        proof = PaymentProof(
+            account_id=subscriber.id,
+            amount=10000,
+            file_path="/uploads/proofs/test.pdf",
+            status=status,
+        )
+        db_session.add(proof)
+        db_session.commit()
+        return proof
+
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_active_arrangement_shields_from_suspension(
+        self,
+        mock_reject_ip,
+        mock_disconnect,
+        mock_block,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        from app.models.payment_arrangement import ArrangementStatus
+
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        self._make_arrangement(db_session, subscriber, ArrangementStatus.active)
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.active
+        mock_disconnect.assert_not_called()
+        mock_block.assert_not_called()
+
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_defaulted_arrangement_does_not_shield(
+        self,
+        mock_reject_ip,
+        mock_disconnect,
+        mock_block,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        from app.models.payment_arrangement import ArrangementStatus
+
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        self._make_arrangement(db_session, subscriber, ArrangementStatus.defaulted)
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.suspended
+
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_pending_payment_proof_shields_from_suspension(
+        self,
+        mock_reject_ip,
+        mock_disconnect,
+        mock_block,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        from app.models.payment_proof import PaymentProofStatus
+
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        self._make_proof(db_session, subscriber, PaymentProofStatus.submitted)
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.active
+        mock_disconnect.assert_not_called()
+        mock_block.assert_not_called()
+
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_rejected_proof_does_not_shield(
+        self,
+        mock_reject_ip,
+        mock_disconnect,
+        mock_block,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        from app.models.payment_proof import PaymentProofStatus
+
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        self._make_proof(db_session, subscriber, PaymentProofStatus.rejected)
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.suspended
+
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_no_shield_suspends_past_grace(
+        self,
+        mock_reject_ip,
+        mock_disconnect,
+        mock_block,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.suspended
+
+
+# ---------------------------------------------------------------------------
 # WebhookHandler tests
 # ---------------------------------------------------------------------------
 
