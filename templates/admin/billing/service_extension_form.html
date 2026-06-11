@@ -1,0 +1,108 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card %}
+
+{% block title %}New Service Extension - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8" x-data="{ scope: '{{ scope_types[0] }}' }">
+    {% call(content) page_header(
+        title="New Service Extension",
+        subtitle="Compensate an outage by extending service validity",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3"/></svg>',
+        color="amber",
+        color2="orange",
+        breadcrumbs=[
+            {"label": "Billing", "href": "/admin/billing"},
+            {"label": "Service Extensions", "href": "/admin/billing/service-extensions"},
+            {"label": "New"}
+        ]
+    ) %}{% endcall %}
+
+    {% if error %}
+    <div class="rounded-xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
+    {% endif %}
+
+    {% call card(color="amber") %}
+    <form method="post" action="/admin/billing/service-extensions" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Reason</label>
+            <input type="text" name="reason" required maxlength="500"
+                   placeholder="e.g. Fibre cut on the Lekki backbone, 10 Jun 2026"
+                   class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Outage start</label>
+                <input type="datetime-local" name="window_start" required
+                       class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Outage end</label>
+                <input type="datetime-local" name="window_end" required
+                       class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+            </div>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Days to extend</label>
+            <input type="number" name="days" required min="1" max="{{ max_days }}" value="1"
+                   class="block w-32 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Pushes each affected subscription's next billing date forward. Capped plans keep their monthly data — this extends validity only.</p>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Scope</label>
+            <select name="scope_type" x-model="scope"
+                    class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for st in scope_types %}
+                <option value="{{ st }}">{{ st | replace("_", " ") | title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div x-show="scope === 'pop_site'" x-cloak>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">POP site</label>
+            <select name="scope_id" x-bind:name="scope === 'pop_site' ? 'scope_id' : ''"
+                    class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select a POP site…</option>
+                {% for site in pop_sites %}
+                <option value="{{ site.id }}">{{ site.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div x-show="scope === 'nas_device'" x-cloak>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">NAS device</label>
+            <select x-bind:name="scope === 'nas_device' ? 'scope_id' : ''"
+                    class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select a NAS device…</option>
+                {% for nas in nas_devices %}
+                <option value="{{ nas.id }}">{{ nas.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div x-show="scope === 'subscribers'" x-cloak>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Subscriber IDs</label>
+            <textarea x-bind:name="scope === 'subscribers' ? 'subscriber_ids' : ''" rows="5"
+                      placeholder="One subscriber ID per line"
+                      class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+        </div>
+
+        <div x-show="scope === 'network'" x-cloak class="rounded-xl bg-amber-50 p-4 text-sm text-amber-800 ring-1 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300">
+            This will affect <strong>every active subscription</strong>. You'll see the exact count to confirm on the next screen before anything is applied.
+        </div>
+
+        <div class="flex gap-3">
+            <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">Continue to preview</button>
+            <a href="/admin/billing/service-extensions" class="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+        </div>
+    </form>
+    {% endcall %}
+</div>
+{% endblock %}

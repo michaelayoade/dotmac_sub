@@ -4,7 +4,7 @@ import logging
 import re
 from urllib.parse import urlencode
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -223,6 +223,17 @@ def reseller_mfa_submit(
                 "error": "Session service unavailable. Please try again.",
             },
             status_code=503,
+        )
+    except HTTPException as exc:
+        error_msg = "Invalid verification code"
+        status_code = 401
+        if exc.status_code == 429 and isinstance(exc.detail, str):
+            error_msg = exc.detail
+            status_code = 429
+        return templates.TemplateResponse(
+            "reseller/auth/mfa.html",
+            {"request": request, "error": error_msg},
+            status_code=status_code,
         )
     except Exception:
         return templates.TemplateResponse(

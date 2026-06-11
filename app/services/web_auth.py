@@ -18,6 +18,9 @@ templates = Jinja2Templates(
     directory="templates", context_processors=[auth_branding_context]
 )
 MFA_ENROLLMENT_COOKIE = "mfa_enrollment_pending"
+# Marker so refresh/MFA hops know whether the login asked to be remembered;
+# without it every rotated refresh cookie silently became persistent.
+REMEMBER_COOKIE = "admin_remember"
 
 
 def _session_cookie_settings(db: Session) -> dict:
@@ -37,13 +40,42 @@ def _is_https_request(request: Request) -> bool:
 
 
 def _safe_next(next_url: str | None, fallback: str = "/admin/dashboard") -> str:
-    if next_url and next_url.startswith("/"):
+    if (
+        next_url
+        and next_url.startswith("/")
+        and not next_url.startswith("//")
+        and not next_url.startswith("/\\")
+    ):
         return next_url
     return fallback
 
 
+def _wants_persistent_session(request: Request) -> bool:
+    return request.cookies.get(REMEMBER_COOKIE) == "1"
+
+
+def _set_remember_cookie(response, db: Session, request: Request, remember: bool):
+    settings = AuthFlow.refresh_cookie_settings(db)
+    secure_cookie = bool(settings["secure"]) and _is_https_request(request)
+    if remember:
+        response.set_cookie(
+            key=REMEMBER_COOKIE,
+            value="1",
+            httponly=True,
+            secure=secure_cookie,
+            samesite=settings["samesite"],
+            max_age=settings["max_age"],
+        )
+    else:
+        response.delete_cookie(REMEMBER_COOKIE)
+
+
 def _set_refresh_cookie(
-    response, db: Session, refresh_token: str, request: Request | None = None
+    response,
+    db: Session,
+    refresh_token: str,
+    request: Request | None = None,
+    persistent: bool = True,
 ):
     settings = AuthFlow.refresh_cookie_settings(db)
     secure_cookie = settings["secure"]
@@ -57,7 +89,8 @@ def _set_refresh_cookie(
         samesite=settings["samesite"],
         domain=settings["domain"],
         path=settings["path"],
-        max_age=settings["max_age"],
+        # Session-scoped unless the user asked to be remembered.
+        max_age=settings["max_age"] if persistent else None,
     )
 
 
@@ -106,6 +139,7 @@ def login_submit(
                 samesite="lax",
                 max_age=300,
             )
+            _set_remember_cookie(response, db, request, remember)
             return response
         if result.get("mfa_enrollment_required"):
             enroll_url = f"/auth/mfa/enroll?next={quote(redirect_url)}"
@@ -118,27 +152,32 @@ def login_submit(
                 samesite="lax",
                 max_age=300,
             )
+            _set_remember_cookie(response, db, request, remember)
             return response
 
         response = RedirectResponse(url=redirect_url, status_code=303)
-        max_age = 30 * 24 * 60 * 60 if remember else None
         cookie_cfg = _session_cookie_settings(db)
         secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
         session_token = auth_flow_service.issue_web_session_token(
             db,
             str(result.get("access_token", "")),
         )
+        # The session cookie is always session-scoped: persistence across
+        # browser restarts comes from the refresh cookie (require_web_auth
+        # bounces through /auth/refresh when this cookie is gone).
         response.set_cookie(
             key="session_token",
             value=session_token,
             httponly=True,
             secure=secure_cookie,
             samesite=cookie_cfg["samesite"],
-            max_age=max_age,
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
-            _set_refresh_cookie(response, db, refresh_token, request)
+            _set_refresh_cookie(
+                response, db, refresh_token, request, persistent=remember
+            )
+        _set_remember_cookie(response, db, request, remember)
         return response
     except Exception as exc:
         error_msg = "Invalid credentials"
@@ -229,8 +268,28 @@ def mfa_submit(
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
-            _set_refresh_cookie(response, db, refresh_token, request)
+            _set_refresh_cookie(
+                response,
+                db,
+                refresh_token,
+                request,
+                persistent=_wants_persistent_session(request),
+            )
         return response
+    except HTTPException as exc:
+        error_msg = "Invalid verification code"
+        if exc.status_code == 429 and isinstance(exc.detail, str):
+            error_msg = exc.detail
+        return templates.TemplateResponse(
+            "auth/mfa.html",
+            {
+                "request": request,
+                "error": error_msg,
+                "next": next_url,
+                "csrf_token": _get_csrf_token(request),
+            },
+            status_code=exc.status_code if exc.status_code == 429 else 401,
+        )
     except Exception:
         return templates.TemplateResponse(
             "auth/mfa.html",
@@ -325,7 +384,13 @@ def mfa_enroll_confirm(
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
-            _set_refresh_cookie(response, db, refresh_token, request)
+            _set_refresh_cookie(
+                response,
+                db,
+                refresh_token,
+                request,
+                persistent=_wants_persistent_session(request),
+            )
         return response
     except Exception:
         return templates.TemplateResponse(
@@ -469,7 +534,13 @@ def refresh(request: Request, db: Session, next_url: str | None = None):
     )
     refresh_token = result.get("refresh_token")
     if refresh_token:
-        _set_refresh_cookie(response, db, refresh_token, request)
+        _set_refresh_cookie(
+            response,
+            db,
+            refresh_token,
+            request,
+            persistent=_wants_persistent_session(request),
+        )
     return response
 
 
@@ -484,6 +555,7 @@ def logout(request: Request, db: Session):
     response.delete_cookie("session_token")
     response.delete_cookie("mfa_pending")
     response.delete_cookie(MFA_ENROLLMENT_COOKIE)
+    response.delete_cookie(REMEMBER_COOKIE)
     settings = AuthFlow.refresh_cookie_settings(db)
     response.delete_cookie(
         key=settings["key"],

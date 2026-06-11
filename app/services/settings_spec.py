@@ -558,6 +558,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
+        key="plan_families",
+        env_var="CATALOG_PLAN_FAMILIES",
+        value_type=SettingValueType.string,
+        default="unlimited,dedicated,home_flex",
+        label="Plan Families (comma-separated; changes stay within a family)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
         key="default_billing_mode",
         env_var="CATALOG_DEFAULT_BILLING_MODE",
         value_type=SettingValueType.string,
@@ -2181,6 +2189,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.auth,
+        key="customer_session_absolute_ttl_seconds",
+        env_var="CUSTOMER_SESSION_ABSOLUTE_TTL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=2592000,
+        min_value=3600,
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
         key="customer_login_max_attempts",
         env_var="CUSTOMER_LOGIN_MAX_ATTEMPTS",
         value_type=SettingValueType.integer,
@@ -2210,6 +2226,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=2592000,
         min_value=86400,
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="reseller_session_absolute_ttl_seconds",
+        env_var="RESELLER_SESSION_ABSOLUTE_TTL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=2592000,
+        min_value=3600,
     ),
     SettingSpec(
         domain=SettingDomain.auth,

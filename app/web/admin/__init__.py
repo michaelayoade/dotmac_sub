@@ -16,6 +16,7 @@ from app.web.admin.billing_collection_accounts import (
 from app.web.admin.billing_consolidated import router as billing_consolidated_router
 from app.web.admin.billing_credits import router as billing_credits_router
 from app.web.admin.billing_dunning import router as billing_dunning_router
+from app.web.admin.billing_extensions import router as billing_extensions_router
 from app.web.admin.billing_invoice_actions import (
     router as billing_invoice_actions_router,
 )
@@ -185,6 +186,10 @@ router.include_router(
 )
 router.include_router(
     billing_credits_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
+    billing_extensions_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
