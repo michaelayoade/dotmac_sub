@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
-from pyrad.packet import CoARequest, DisconnectRequest
+from pyrad.packet import CoAACK, CoARequest, DisconnectACK, DisconnectRequest
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -30,6 +30,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
 from app.services.radius import sync_credential_to_radius
+from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -117,14 +118,19 @@ def _mark_coa_supported(nas_id: Any) -> None:
 
 
 def reset_coa_cache(nas_id: Any = None) -> None:
-    """Clear the CoA negative cache. Pass a nas_id to clear one entry,
-    or call with no args to wipe everything (e.g., after a NAS config
-    change re-enables CoA)."""
+    """Clear the CoA negative cache (and cached fallback secrets). Pass a
+    nas_id to clear one entry, or call with no args to wipe everything
+    (e.g., after a NAS config change re-enables CoA)."""
     with _COA_CACHE_LOCK:
         if nas_id is None:
             _COA_NEG_CACHE.clear()
         else:
             _COA_NEG_CACHE.pop(nas_id, None)
+    with _COA_SECRET_CACHE_LOCK:
+        if nas_id is None:
+            _COA_SECRET_CACHE.clear()
+        else:
+            _COA_SECRET_CACHE.pop(str(nas_id), None)
 
 
 def _mikrotik_kill_enabled(db: Session) -> bool:
@@ -199,6 +205,94 @@ def _resolve_nas_device(
     return None
 
 
+# Per-process cache of CoA secrets resolved from the external FreeRADIUS
+# ``nas`` table, keyed by NAS device id. Secrets effectively never change
+# without a NAS re-sync (which restarts workers on deploy), so no TTL.
+_COA_SECRET_CACHE: dict[str, str] = {}
+_COA_SECRET_CACHE_LOCK = threading.Lock()
+
+
+def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
+    """Resolve the RADIUS shared secret to use for CoA against a NAS.
+
+    Prefers the secret stored on the NAS device record. Falls back to the
+    external FreeRADIUS ``nas`` table (matched by the device's RADIUS client
+    IP) — that secret is authoritative by construction: FreeRADIUS is
+    actively authenticating the NAS with it. Several migrated NAS records
+    have no local shared_secret, which used to make CoA structurally
+    impossible for their subscribers.
+    """
+    if nas_device.shared_secret:
+        try:
+            decrypted = decrypt_credential(nas_device.shared_secret)
+            if decrypted:
+                resolved = resolve_secret(decrypted)
+                if resolved:
+                    return resolved
+        except Exception as exc:
+            # An undecryptable/unresolvable local secret must not abort the
+            # enforcement loop — fall through to the external lookup.
+            logger.warning(
+                "Local CoA secret unusable for NAS %s (%s): %s — trying "
+                "external nas table.",
+                nas_device.name,
+                nas_device.id,
+                exc,
+            )
+
+    cache_key = str(nas_device.id)
+    with _COA_SECRET_CACHE_LOCK:
+        cached = _COA_SECRET_CACHE.get(cache_key)
+    if cached:
+        return cached
+
+    from sqlalchemy import Column, String
+    from sqlalchemy import select as sa_select
+
+    from app.services.radius import (
+        _active_external_sync_configs,
+        _external_radius_table,
+        _get_external_engine,
+        _radius_client_ip_for_nas,
+    )
+
+    client_ip = _radius_client_ip_for_nas(nas_device)
+    if not client_ip:
+        return None
+    for config in _active_external_sync_configs(db):
+        try:
+            engine = _get_external_engine(config["db_url"])
+            nas_table = _external_radius_table(
+                config.get("nas_table", "nas"),
+                Column("nasname", String),
+                Column("secret", String),
+            )
+            with engine.connect() as conn:
+                secret = conn.execute(
+                    sa_select(nas_table.c.secret).where(
+                        nas_table.c.nasname == client_ip
+                    )
+                ).scalar()
+            if secret:
+                with _COA_SECRET_CACHE_LOCK:
+                    _COA_SECRET_CACHE[cache_key] = secret
+                logger.info(
+                    "CoA secret for NAS %s (%s) resolved from external "
+                    "RADIUS nas table (no local shared_secret).",
+                    nas_device.name,
+                    nas_device.id,
+                )
+                return secret
+        except Exception as exc:
+            logger.warning(
+                "External CoA secret lookup failed for NAS %s (%s): %s",
+                nas_device.name,
+                nas_device.id,
+                exc,
+            )
+    return None
+
+
 def _send_coa_disconnect(
     db: Session,
     nas_device: NasDevice,
@@ -207,18 +301,23 @@ def _send_coa_disconnect(
     session_id: str | None,
 ) -> bool:
     if not _coa_enabled(db):
+        logger.info("CoA disabled by radius.coa_enabled — skipping disconnect.")
         return False
     if _coa_disabled_for_nas(nas_device.id):
-        logger.debug(
-            "Skipping CoA disconnect for NAS %s (negative-cached).", nas_device.id
+        logger.info(
+            "Skipping CoA disconnect for NAS %s (%s): negative-cached after "
+            "a recent timeout.",
+            nas_device.name,
+            nas_device.id,
         )
-        return False
-    if not nas_device.shared_secret:
-        logger.warning("Missing NAS shared secret for CoA disconnect.")
         return False
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
-        logger.warning("Missing NAS host for CoA disconnect.")
+        logger.warning(
+            "Missing NAS host for CoA disconnect (NAS %s / %s).",
+            nas_device.name,
+            nas_device.id,
+        )
         return False
     dict_path = _radius_dictionary_path(db)
     if not dict_path:
@@ -229,10 +328,14 @@ def _send_coa_disconnect(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
-    # Decrypt the shared secret before use
-    decrypted_secret = decrypt_credential(nas_device.shared_secret)
+    decrypted_secret = _resolve_coa_secret(db, nas_device)
     if decrypted_secret is None:
-        logger.warning("Missing NAS shared secret for CoA disconnect.")
+        logger.warning(
+            "No usable shared secret for CoA disconnect (NAS %s / %s) — "
+            "not on the device record nor in the external RADIUS nas table.",
+            nas_device.name,
+            nas_device.id,
+        )
         return False
     client = Client(
         server=host,
@@ -250,9 +353,24 @@ def _send_coa_disconnect(
     if session_id:
         req["Acct-Session-Id"] = session_id
     try:
-        client.SendPacket(req)
+        reply = client.SendPacket(req)
+        # Any reply means the NAS speaks CoA — keep the negative cache clear.
         _mark_coa_supported(nas_device.id)
-        return True
+        # Only an ACK actually killed the session. A Disconnect-NAK (e.g. the
+        # AND-matched Framed-IP-Address is stale) must fall through to the
+        # SSH kick instead of counting as a kill.
+        reply_code = getattr(reply, "code", None)
+        if reply_code == DisconnectACK:
+            return True
+        logger.warning(
+            "CoA disconnect NAKed/unexpected reply (code=%s) for user=%s on "
+            "NAS %s (%s) — falling back to SSH kick.",
+            reply_code,
+            username,
+            nas_device.name,
+            nas_device.id,
+        )
+        return False
     except Timeout:
         _mark_coa_unsupported(nas_device.id)
         logger.warning(
@@ -306,14 +424,20 @@ def _send_coa_update(
     if not _coa_enabled(db):
         return False
     if _coa_disabled_for_nas(nas_device.id):
-        logger.debug("Skipping CoA update for NAS %s (negative-cached).", nas_device.id)
-        return False
-    if not nas_device.shared_secret:
-        logger.warning("Missing NAS shared secret for CoA update.")
+        logger.info(
+            "Skipping CoA update for NAS %s (%s): negative-cached after a "
+            "recent timeout.",
+            nas_device.name,
+            nas_device.id,
+        )
         return False
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
-        logger.warning("Missing NAS host for CoA update.")
+        logger.warning(
+            "Missing NAS host for CoA update (NAS %s / %s).",
+            nas_device.name,
+            nas_device.id,
+        )
         return False
     dict_path = _radius_dictionary_path(db)
     if not dict_path:
@@ -324,9 +448,14 @@ def _send_coa_update(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
-    decrypted_secret = decrypt_credential(nas_device.shared_secret)
+    decrypted_secret = _resolve_coa_secret(db, nas_device)
     if decrypted_secret is None:
-        logger.warning("Missing NAS shared secret for CoA update.")
+        logger.warning(
+            "No usable shared secret for CoA update (NAS %s / %s) — not on "
+            "the device record nor in the external RADIUS nas table.",
+            nas_device.name,
+            nas_device.id,
+        )
         return False
     client = Client(
         server=host,
@@ -356,10 +485,21 @@ def _send_coa_update(
         except KeyError:
             pass
     try:
-        client.SendPacket(req)
+        reply = client.SendPacket(req)
         _mark_coa_supported(nas_device.id)
+        reply_code = getattr(reply, "code", None)
+        if reply_code != CoAACK:
+            logger.warning(
+                "CoA update NAKed/unexpected reply (code=%s) for user=%s on "
+                "NAS %s (%s).",
+                reply_code,
+                username,
+                nas_device.name,
+                nas_device.id,
+            )
+            return False
         logger.info(
-            "CoA update sent for user=%s on NAS %s (profile=%s).",
+            "CoA update acknowledged for user=%s on NAS %s (profile=%s).",
             username,
             nas_device.id,
             profile.name,
@@ -559,6 +699,14 @@ def disconnect_subscription_sessions(
     for session in sessions:
         nas_device = _resolve_nas_device(db, session)
         if not nas_device:
+            logger.warning(
+                "Cannot kick session %s for subscription %s: no NAS device "
+                "resolvable (nas_device_id=%s, radius_client_id=%s).",
+                session.session_id,
+                subscription_id,
+                session.nas_device_id,
+                session.radius_client_id,
+            )
             continue
         credential = db.get(AccessCredential, session.access_credential_id)
         username = credential.username if credential else None
@@ -603,8 +751,21 @@ def disconnect_subscription_sessions(
 
     if count:
         logger.info(
-            "Disconnected %s active sessions for subscription %s (%s).",
+            "Disconnected %s of %s active sessions for subscription %s (%s).",
             count,
+            len(sessions),
+            subscription_id,
+            reason or "no_reason",
+        )
+    else:
+        # An enforcement action found live sessions and killed none of them —
+        # the subscriber stays online until their session drops naturally.
+        # This must never be silent.
+        logger.warning(
+            "Failed to disconnect any of %s active sessions for "
+            "subscription %s (%s) — subscriber remains online until "
+            "natural session end.",
+            len(sessions),
             subscription_id,
             reason or "no_reason",
         )
