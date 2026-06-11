@@ -372,3 +372,144 @@ class TestCoaNegativeCache:
 
         reset_coa_cache()
         assert _coa_disabled_for_nas(b) is False
+
+
+# ---------------------------------------------------------------------------
+# _resolve_coa_secret — external nas-table fallback
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCoaSecret:
+    def setup_method(self) -> None:
+        from app.services import enforcement
+
+        enforcement.reset_coa_cache()
+
+    teardown_method = setup_method
+
+    def _device(self, nas_id, shared_secret=None):
+        device = MagicMock(spec=NasDevice)
+        device.id = nas_id
+        device.name = "Test NAS"
+        device.shared_secret = shared_secret
+        device.nas_ip = "10.1.1.1"
+        device.management_ip = "10.1.1.1"
+        device.ip_address = "10.1.1.1"
+        device.coa_port = 3799
+        return device
+
+    @patch("app.services.enforcement.decrypt_credential", return_value="local-secret")
+    def test_prefers_local_shared_secret(self, mock_decrypt):
+        from app.services.enforcement import _resolve_coa_secret
+
+        device = self._device(uuid4(), shared_secret="enc:x")
+        assert _resolve_coa_secret(MagicMock(), device) == "local-secret"
+        mock_decrypt.assert_called_once_with("enc:x")
+
+    def test_falls_back_to_external_nas_table(self):
+        from app.services.enforcement import _resolve_coa_secret
+
+        device = self._device(uuid4(), shared_secret=None)
+        conn = MagicMock()
+        conn.execute.return_value.scalar.return_value = "radius-secret"
+        engine = MagicMock()
+        engine.connect.return_value.__enter__ = MagicMock(return_value=conn)
+        engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch(
+                "app.services.radius._active_external_sync_configs",
+                return_value=[{"db_url": "postgresql://x", "nas_table": "nas"}],
+            ),
+            patch("app.services.radius._get_external_engine", return_value=engine),
+            patch(
+                "app.services.radius._radius_client_ip_for_nas",
+                return_value="10.1.1.1",
+            ),
+        ):
+            assert _resolve_coa_secret(MagicMock(), device) == "radius-secret"
+
+        # Second call must hit the per-process cache, not the engine again.
+        engine.connect.reset_mock()
+        with patch(
+            "app.services.radius._active_external_sync_configs",
+            return_value=[],
+        ):
+            assert _resolve_coa_secret(MagicMock(), device) == "radius-secret"
+        engine.connect.assert_not_called()
+
+    def test_returns_none_when_no_secret_anywhere(self):
+        from app.services.enforcement import _resolve_coa_secret
+
+        device = self._device(uuid4(), shared_secret=None)
+        with (
+            patch(
+                "app.services.radius._active_external_sync_configs",
+                return_value=[],
+            ),
+            patch(
+                "app.services.radius._radius_client_ip_for_nas",
+                return_value="10.1.1.1",
+            ),
+        ):
+            assert _resolve_coa_secret(MagicMock(), device) is None
+
+    @patch("app.services.enforcement._radius_dictionary_path", return_value="/dict")
+    @patch("app.services.enforcement.Dictionary")
+    @patch("app.services.enforcement.Client")
+    def test_coa_disconnect_uses_fallback_secret(
+        self, mock_client_cls, mock_dict, mock_path
+    ):
+        from app.services.enforcement import _send_coa_disconnect
+
+        device = self._device(uuid4(), shared_secret=None)
+        mock_client = MagicMock()
+        mock_client.SendPacket.return_value = None
+        mock_client_cls.return_value = mock_client
+
+        with (
+            patch("app.services.enforcement._coa_enabled", return_value=True),
+            patch("app.services.enforcement._coa_retries", return_value=0),
+            patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
+            patch(
+                "app.services.enforcement._resolve_coa_secret",
+                return_value="radius-secret",
+            ),
+        ):
+            assert _send_coa_disconnect(MagicMock(), device, "u", None, "sid") is True
+        assert mock_client_cls.call_args.kwargs["secret"] == b"radius-secret"
+
+
+# ---------------------------------------------------------------------------
+# disconnect_subscription_sessions — zero-kill must be loud
+# ---------------------------------------------------------------------------
+
+
+class TestDisconnectZeroKillLogging:
+    def test_warns_when_sessions_found_but_none_disconnected(self, caplog):
+        import logging as _logging
+
+        from app.services.enforcement import disconnect_subscription_sessions
+
+        db = MagicMock()
+        subscription = MagicMock(spec=Subscription)
+        subscription.id = uuid4()
+        subscription.ipv4_address = None
+        db.get.return_value = subscription
+
+        session = MagicMock()
+        session.session_id = "sid-1"
+        session.nas_device_id = None
+        session.radius_client_id = None
+        session.access_credential_id = None
+        db.query.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = [
+            session
+        ]
+
+        with caplog.at_level(_logging.WARNING, logger="app.services.enforcement"):
+            count = disconnect_subscription_sessions(db, str(subscription.id))
+
+        assert count == 0
+        messages = " ".join(r.message for r in caplog.records)
+        assert "no NAS device" in messages
+        assert "Failed to disconnect any" in messages
