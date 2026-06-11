@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,8 +9,26 @@ import 'package:sentry/sentry.dart';
 
 import 'src/app.dart';
 import 'src/config/env.dart';
+import 'src/core/push_service.dart';
 
-void main() {
+/// Register the FCM background-message handler before the app starts. Guarded:
+/// without the platform config (google-services.json / GoogleService-Info.plist)
+/// Firebase init fails and push is simply disabled — the app runs normally.
+Future<void> _initPushBackground() async {
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp();
+    }
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } catch (_) {
+    // Push disabled for this build (no Firebase config); in-app inbox still works.
+  }
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await _initPushBackground();
+
   const app = ProviderScope(child: DotMacApp());
 
   // Crash reporting is opt-in and goes to your self-hosted GlitchTip

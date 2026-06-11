@@ -39,6 +39,15 @@ dependencies:
   # Avatar image picking (gallery / camera)
   image_picker: ^1.1.2
 
+  # Push notifications (FCM). Inert until the platform config files exist
+  # (android/app/google-services.json, ios/Runner/GoogleService-Info.plist):
+  # PushService.init() guards Firebase.initializeApp so a build without config
+  # simply runs with push disabled (in-app inbox still works).
+  firebase_core: ^3.6.0
+  firebase_messaging: ^15.1.3
+  # Renders FCM data/notification messages while the app is in the foreground.
+  flutter_local_notifications: ^17.2.3
+
   # Crash reporting to your self-hosted GlitchTip (Sentry-protocol compatible).
   # Pure-Dart client (no native plugin); inert unless a GLITCHTIP_DSN is set.
   sentry: ^8.9.0

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,10 +9,12 @@ import '../core/api_client.dart';
 import '../core/api_exception.dart';
 import '../core/biometric_service.dart';
 import '../core/observability.dart';
+import '../core/push_service.dart';
 import '../core/response_cache.dart';
 import '../core/token_storage.dart';
 import '../models/auth.dart';
 import '../repositories/auth_repository.dart';
+import '../repositories/push_repository.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
@@ -44,6 +47,13 @@ final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 
 final biometricServiceProvider =
     Provider<BiometricService>((ref) => BiometricService());
+
+/// Single FCM client instance (initialised lazily on first authenticated load).
+final pushServiceProvider = Provider<PushService>((ref) => PushService());
+
+final pushRepositoryProvider = Provider<PushRepository>((ref) {
+  return PushRepository(ref.watch(apiClientProvider).dio);
+});
 
 /// On-disk stale-while-revalidate cache for GET responses. Single instance so
 /// the auth controller can clear it on logout / session expiry.
@@ -89,6 +99,8 @@ class AuthController extends StateNotifier<AuthState> {
   AuthRepository get _repo => _ref.read(authRepositoryProvider);
   TokenStorage get _storage => _ref.read(tokenStorageProvider);
   BiometricService get _biometric => _ref.read(biometricServiceProvider);
+  PushService get _push => _ref.read(pushServiceProvider);
+  PushRepository get _pushRepo => _ref.read(pushRepositoryProvider);
 
   /// True while a biometric prompt is on screen. Resume-lock checks this so the
   /// prompt's own lifecycle transitions can't re-arm the lock under itself.
@@ -326,6 +338,45 @@ class AuthController extends StateNotifier<AuthState> {
     state = AuthState(status: AuthStatus.authenticated, me: me);
     await Sentry.configureScope(
         (scope) => scope.setUser(SentryUser(id: me.id)));
+    // Register this device for push, best-effort and non-blocking. No-op when
+    // FCM isn't configured for the build.
+    unawaited(_syncPushRegistration());
+  }
+
+  /// Initialise FCM, request permission, and register the device token with
+  /// the backend. Entirely best-effort — a missing platform config or a denied
+  /// permission just leaves push disabled; never affects the auth flow.
+  Future<void> _syncPushRegistration() async {
+    try {
+      if (!await _push.init()) return;
+      await _push.requestPermission();
+      final token = await _push.currentToken();
+      if (token == null || token.isEmpty) return;
+      final platform = PushService.platformTag();
+      await _pushRepo.registerToken(token: token, platform: platform);
+      _push.wireForegroundHandlers(
+        (t) => _pushRepo.registerToken(token: t, platform: platform),
+      );
+      Log.breadcrumb('push: device registered', category: 'push');
+    } catch (e) {
+      Log.breadcrumb('push: registration skipped',
+          category: 'push', level: SentryLevel.warning, data: {'error': '$e'});
+    }
+  }
+
+  /// De-register the device token while the session is still valid (the
+  /// DELETE needs auth), then drop the local FCM token.
+  Future<void> _unregisterPush() async {
+    try {
+      final token = await _push.currentToken();
+      if (token != null && token.isNotEmpty) {
+        await _pushRepo.unregisterToken(token);
+      }
+      await _push.deleteToken();
+    } catch (e) {
+      Log.breadcrumb('push: unregister skipped',
+          category: 'push', data: {'error': '$e'});
+    }
   }
 
   void setMe(Me me) {
@@ -337,6 +388,8 @@ class AuthController extends StateNotifier<AuthState> {
 
   Future<void> logout() async {
     Log.breadcrumb('logout', category: 'auth');
+    // De-register the device for push before the session is torn down.
+    await _unregisterPush();
     await _repo.logout();
     // Explicit sign-out is a full reset: drop the biometric opt-in so the next
     // user starts from a clean password login.
