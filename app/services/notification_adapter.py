@@ -314,14 +314,32 @@ class SmsProvider:
 
     def is_available(self) -> bool:
         # SMS config lives in domain_settings/env via the sms service, not
-        # app.config attributes.
+        # app.config attributes. Mirror send_sms() provider requirements so
+        # health/selection does not report SMS as usable when the send path is
+        # guaranteed to fail.
         try:
             from app.services.db_session_adapter import db_session_adapter
             from app.services.sms import _get_setting
 
             with db_session_adapter.session() as db:
                 enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or ""
-            return enabled.lower() not in ("false", "0", "no", "disabled")
+                if enabled.lower() in ("false", "0", "no", "disabled"):
+                    return False
+                provider = (
+                    _get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
+                    or "webhook"
+                ).lower()
+                api_key = _get_setting(db, "sms_api_key", "SMS_API_KEY")
+                api_secret = _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
+                from_number = _get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
+                webhook_url = _get_setting(db, "sms_webhook_url", "SMS_WEBHOOK_URL")
+            if provider == "twilio":
+                return bool(api_key and api_secret and from_number)
+            if provider == "africastalking":
+                return bool(api_key)
+            if provider == "webhook":
+                return bool(webhook_url)
+            return False
         except Exception:
             return False
 

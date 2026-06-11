@@ -13,6 +13,16 @@ from app.services.notification_adapter import (
 )
 
 
+_SMS_ENV_KEYS = (
+    "SMS_ENABLED",
+    "SMS_PROVIDER",
+    "SMS_API_KEY",
+    "SMS_API_SECRET",
+    "SMS_FROM_NUMBER",
+    "SMS_WEBHOOK_URL",
+)
+
+
 def test_email_provider_send_invokes_send_email_correctly(monkeypatch):
     captured: dict = {}
 
@@ -76,3 +86,19 @@ def test_sms_provider_send_invokes_send_sms_correctly(monkeypatch):
     assert captured["to_phone"] == "+2348000000001"
     assert isinstance(captured["db"], Session)
     assert captured["body"] == "x" * 160
+
+
+def test_sms_provider_unavailable_without_provider_config(monkeypatch):
+    for key in _SMS_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    assert SmsProvider().is_available() is False
+
+
+def test_sms_provider_available_with_webhook_config(monkeypatch):
+    for key in _SMS_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SMS_PROVIDER", "webhook")
+    monkeypatch.setenv("SMS_WEBHOOK_URL", "https://sms.example.test/send")
+
+    assert SmsProvider().is_available() is True
