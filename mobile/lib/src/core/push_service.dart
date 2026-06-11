@@ -26,7 +26,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 /// a no-op until FCM server credentials are configured, so the two halves can
 /// be enabled independently.
 class PushService {
-  PushService({FirebaseMessaging? messaging, FlutterLocalNotificationsPlugin? local})
+  PushService(
+      {FirebaseMessaging? messaging, FlutterLocalNotificationsPlugin? local})
       : _messaging = messaging,
         _local = local ?? FlutterLocalNotificationsPlugin();
 
@@ -66,8 +67,7 @@ class PushService {
 
     _messaging ??= FirebaseMessaging.instance;
     try {
-      const androidInit =
-          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
       const iosInit = DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
