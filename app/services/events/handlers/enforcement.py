@@ -135,21 +135,22 @@ class EnforcementHandler:
                 exc,
             )
 
-        # Block (or for terminal status, fully remove) external RADIUS credentials
+        # External radcheck/radreply state: populate_radius_from_subs is the
+        # SOLE writer (single-writer decision, 2026-06-11). The previous
+        # remove/block_external_radius_credentials calls here acted on the
+        # WHOLE SUBSCRIBER — suspending one subscription wiped auth for the
+        # subscriber's other active logins, and their writes fought the
+        # populate sweeps. Instead, enqueue an immediate full refresh (~3s,
+        # idempotent) so the status change reaches radcheck within seconds.
         if subscription:
             try:
-                if terminal:
-                    radius_service.remove_external_radius_credentials(
-                        db, str(subscription.subscriber_id)
-                    )
-                else:
-                    radius_service.block_external_radius_credentials(
-                        db, str(subscription.subscriber_id)
-                    )
+                from app.tasks.splynx_sync import run_refresh_radius_from_subs
+
+                run_refresh_radius_from_subs.delay()
             except Exception as exc:
                 logger.error(
-                    "Failed to %s RADIUS credentials for subscriber %s: %s",
-                    "remove" if terminal else "block",
+                    "Failed to enqueue RADIUS refresh for subscriber %s: %s "
+                    "(periodic sweep will converge within 15 min)",
                     subscription.subscriber_id,
                     exc,
                 )
@@ -271,6 +272,19 @@ class EnforcementHandler:
         # Phase 3 shadow write — mirror the restored state to radusergroup.
         # No-op unless DomainSetting radius.group_routing_enabled is true.
         self._shadow_write_access_state(db, str(subscription_id))
+
+        # Converge radcheck/radreply to the restored state within seconds
+        # via the single-writer sweep (populate_radius_from_subs).
+        try:
+            from app.tasks.splynx_sync import run_refresh_radius_from_subs
+
+            run_refresh_radius_from_subs.delay()
+        except Exception as exc:
+            logger.error(
+                "Failed to enqueue RADIUS refresh on restore for %s: %s",
+                subscription_id,
+                exc,
+            )
 
         # Refresh sessions and remove address block
         try:
