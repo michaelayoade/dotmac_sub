@@ -209,7 +209,13 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             existing = by_login.get(sub.login)
             if existing is not None and existing[4] == SubscriptionStatus.active:
                 continue
-            by_login[sub.login] = (sub.login, cleartext, attrs, blocked_flag, sub.status)
+            by_login[sub.login] = (
+                sub.login,
+                cleartext,
+                attrs,
+                blocked_flag,
+                sub.status,
+            )
 
         active_usernames = {sub.login for sub in rows if sub.login}
     finally:
