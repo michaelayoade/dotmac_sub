@@ -504,5 +504,306 @@ def test_request_password_reset_unknown_email(db_session):
 def test_reset_password_rejects_invalid_token(db_session, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     with pytest.raises(HTTPException) as exc:
-        reset_password(db_session, "not-a-token", "secret")
+        reset_password(db_session, "not-a-token", "long-enough-secret")
     assert exc.value.status_code == 401
+
+
+def _system_user_with_credential(db_session, email: str):
+    system_user = SystemUser(
+        first_name="Admin",
+        last_name="Reset",
+        email=email,
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(system_user)
+    db_session.flush()
+    credential = UserCredential(
+        system_user_id=system_user.id,
+        provider=AuthProvider.local,
+        username=email,
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    return system_user, credential
+
+
+def test_reset_password_rejects_short_password(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="short-pw@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "short")
+    assert exc.value.status_code == 400
+
+
+def test_reset_token_is_single_use(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="single-use@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    # Mint the token in the past so the first reset moves
+    # password_updated_at strictly past the token's iat.
+    past = datetime.now(UTC) - timedelta(minutes=2)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(auth_flow_service, "_now", lambda: past)
+        result = request_password_reset(db_session, person.email)
+    assert result
+
+    reset_password(db_session, result["token"], "new-secret-one")
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "new-secret-two")
+    assert exc.value.status_code == 401
+
+
+def test_reset_password_rejects_inactive_principal(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="inactive-reset@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    person.is_active = False
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "new-secret-one")
+    assert exc.value.status_code == 401
+
+
+def test_reset_password_revokes_active_sessions(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    system_user, credential = _system_user_with_credential(
+        db_session, "admin-sessions@example.com"
+    )
+
+    request = _make_request()
+    tokens = AuthFlow.login(db_session, system_user.email, "secret", request, None)
+    assert tokens["refresh_token"]
+    session = (
+        db_session.query(AuthSession)
+        .filter(AuthSession.system_user_id == system_user.id)
+        .one()
+    )
+    assert session.status == SessionStatus.active
+
+    result = request_password_reset(db_session, system_user.email)
+    assert result
+    reset_password(db_session, result["token"], "brand-new-secret")
+
+    db_session.refresh(session)
+    assert session.status == SessionStatus.revoked
+    assert session.revoked_at is not None
+
+
+def test_system_user_reset_token_ttl_capped_at_one_hour(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    system_user, credential = _system_user_with_credential(
+        db_session, "admin-ttl@example.com"
+    )
+
+    result = request_password_reset(db_session, system_user.email)
+    assert result
+    assert result["ttl_minutes"] == 60
+    payload = jwt.decode(
+        result["token"],
+        "test-secret",
+        algorithms=["HS256"],
+        options={"verify_aud": False},
+    )
+    assert payload["exp"] - payload["iat"] == 3600
+
+
+def test_system_user_reset_ttl_explicit_override_wins(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    system_user, credential = _system_user_with_credential(
+        db_session, "admin-ttl-override@example.com"
+    )
+
+    result = request_password_reset(db_session, system_user.email, ttl_minutes=1440)
+    assert result
+    assert result["ttl_minutes"] == 1440
+
+
+def test_forgot_password_flow_rate_limited(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    person.email = "rate-limit-forgot@example.com"
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username=person.email,
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    sent = []
+    monkeypatch.setattr(
+        "app.services.email.send_password_reset_email",
+        lambda **kwargs: sent.append(kwargs) or True,
+    )
+
+    for _ in range(5):
+        auth_flow_service.forgot_password_flow(db_session, person.email)
+
+    assert len(sent) == 3
+
+
+def test_web_forgot_password_submit_sends_email(db_session, person, monkeypatch):
+    from app.services import web_auth as web_auth_service
+
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    person.email = "web-forgot@example.com"
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username=person.email,
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    sent = []
+    monkeypatch.setattr(
+        "app.services.email.send_password_reset_email",
+        lambda **kwargs: sent.append(kwargs) or True,
+    )
+
+    response = web_auth_service.forgot_password_submit(
+        _make_request(), db_session, person.email
+    )
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert sent[0]["to_email"] == person.email
+
+
+def test_password_reset_does_not_bypass_mfa(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    person.email = "mfa-after-reset@example.com"
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username=person.email,
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    AuthFlow.mfa_confirm(
+        db_session,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        str(person.id),
+    )
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    reset_password(db_session, result["token"], "brand-new-secret")
+
+    login_result = AuthFlow.login(
+        db_session, person.email, "brand-new-secret", _make_request(), None
+    )
+    assert login_result["mfa_required"] is True
+    assert "access_token" not in login_result
+
+
+def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    system_user, credential = _system_user_with_credential(
+        db_session, "admin-mfa-verify@example.com"
+    )
+
+    setup = AuthFlow.admin_mfa_setup(db_session, str(system_user.id), label="device")
+    AuthFlow.admin_mfa_confirm(
+        db_session,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        str(system_user.id),
+    )
+
+    request = _make_request()
+    result = AuthFlow.login(db_session, system_user.email, "secret", request, None)
+    assert result["mfa_required"] is True
+
+    verified = AuthFlow.mfa_verify(
+        db_session,
+        result["mfa_token"],
+        pyotp.TOTP(setup["secret"]).now(),
+        request,
+    )
+    assert verified["access_token"]
+
+
+def test_admin_mfa_verify_rejects_wrong_code(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    system_user, credential = _system_user_with_credential(
+        db_session, "admin-mfa-wrong@example.com"
+    )
+
+    setup = AuthFlow.admin_mfa_setup(db_session, str(system_user.id), label="device")
+    code = pyotp.TOTP(setup["secret"]).now()
+    AuthFlow.admin_mfa_confirm(
+        db_session, str(setup["method_id"]), code, str(system_user.id)
+    )
+
+    request = _make_request()
+    result = AuthFlow.login(db_session, system_user.email, "secret", request, None)
+    wrong_code = "000000" if code != "000000" else "111111"
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.mfa_verify(db_session, result["mfa_token"], wrong_code, request)
+    assert exc.value.status_code == 401
+
+
+def test_admin_login_requires_mfa_enrollment_when_forced(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    setting = DomainSetting(
+        domain=SettingDomain.auth,
+        key="force_2fa",
+        value_type=SettingValueType.boolean,
+        value_text="true",
+        is_active=True,
+    )
+    db_session.add(setting)
+    system_user, credential = _system_user_with_credential(
+        db_session, "admin-force-enroll@example.com"
+    )
+
+    result = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+    assert result["mfa_enrollment_required"] is True
+    assert result["mfa_enrollment_token"]

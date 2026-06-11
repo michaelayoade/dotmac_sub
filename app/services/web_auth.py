@@ -3,7 +3,7 @@
 import logging
 from urllib.parse import quote
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -148,13 +148,24 @@ def login_submit(
                 isinstance(detail, dict)
                 and detail.get("code") == "PASSWORD_RESET_REQUIRED"
             ):
-                reset = auth_flow_service.request_password_reset(db=db, email=username)
+                # Short TTL: this token lands in a redirect URL (browser
+                # history, access logs), so keep its replay window small.
+                reset = auth_flow_service.request_password_reset(
+                    db=db, email=username, ttl_minutes=15
+                )
                 if reset and reset.get("token"):
                     return RedirectResponse(
                         url=f"/auth/reset-password?token={reset['token']}",
                         status_code=303,
                     )
-            error_msg = detail if isinstance(detail, str) else str(detail)
+                error_msg = (
+                    "Password reset required. Use the forgot password "
+                    "page to set a new password."
+                )
+            elif isinstance(detail, dict):
+                error_msg = str(detail.get("message") or error_msg)
+            else:
+                error_msg = detail if isinstance(detail, str) else str(detail)
         elif str(exc):
             error_msg = str(exc)
         return templates.TemplateResponse(
@@ -346,7 +357,7 @@ def forgot_password_page(request: Request, success: bool = False):
 
 def forgot_password_submit(request: Request, db: Session, email: str):
     try:
-        auth_flow_service.request_password_reset(db=db, email=email)
+        auth_flow_service.forgot_password_flow(db, email)
     except Exception:
         logger.info("Password reset request failed for %s", email, exc_info=True)
     return templates.TemplateResponse(
@@ -405,13 +416,20 @@ def reset_password_submit(
         return RedirectResponse(
             url=f"{safe_next_login}{separator}reset=success", status_code=303
         )
-    except Exception:
+    except Exception as exc:
+        error_msg = "Invalid or expired reset link"
+        if (
+            isinstance(exc, HTTPException)
+            and exc.status_code == 400
+            and isinstance(exc.detail, str)
+        ):
+            error_msg = exc.detail
         return templates.TemplateResponse(
             "auth/reset-password.html",
             {
                 "request": request,
                 "token": token,
-                "error": "Invalid or expired reset link",
+                "error": error_msg,
                 "next_login": safe_next_login,
                 "csrf_token": _get_csrf_token(request),
             },

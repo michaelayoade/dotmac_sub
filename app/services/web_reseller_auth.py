@@ -14,7 +14,6 @@ from app.models.subscriber import Subscriber
 from app.services import auth_flow as auth_flow_service
 from app.services import reseller_portal
 from app.services.db_session_adapter import db_session_adapter
-from app.services.email import send_password_reset_email
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -130,8 +129,10 @@ def reseller_login_submit(
                 and detail.get("code") == "PASSWORD_RESET_REQUIRED"
             ):
                 reset_email = _password_reset_email_for_identifier(db, username)
+                # Short TTL: this token lands in a redirect URL (browser
+                # history, access logs), so keep its replay window small.
                 reset = auth_flow_service.request_password_reset(
-                    db=db, email=reset_email
+                    db=db, email=reset_email, ttl_minutes=15
                 )
                 if reset and reset.get("token"):
                     query = urlencode(
@@ -161,15 +162,9 @@ def reseller_forgot_password_page(request: Request, success: bool = False):
 
 def reseller_forgot_password_submit(request: Request, db: Session, email: str):
     try:
-        result = auth_flow_service.request_password_reset(db=db, email=email)
-        if result:
-            send_password_reset_email(
-                db=db,
-                to_email=result["email"],
-                reset_token=result["token"],
-                person_name=result.get("subscriber_name"),
-                next_login_path=_RESELLER_RESET_LOGIN_PATH,
-            )
+        auth_flow_service.forgot_password_flow(
+            db, email, next_login_path=_RESELLER_RESET_LOGIN_PATH
+        )
     except Exception:
         logger.info(
             "Reseller password reset request failed for %s", email, exc_info=True

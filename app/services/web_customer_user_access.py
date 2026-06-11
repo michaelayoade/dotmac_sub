@@ -124,6 +124,7 @@ def _send_subscriber_reset_link(
         reset_token=reset["token"],
         person_name=reset.get("subscriber_name"),
         next_login_path=CUSTOMER_LOGIN_NEXT,
+        expires_minutes=reset.get("ttl_minutes"),
     )
     return (
         "Password reset link sent successfully."
