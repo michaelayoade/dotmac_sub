@@ -72,11 +72,22 @@ def main() -> None:
         default=25,
         help="How many mismatch examples to print.",
     )
+    parser.add_argument(
+        "--csv",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Write every mismatch to a CSV worklist (subscription, account, "
+            "local price, Splynx median, drift) for the billing team to "
+            "reconcile against each customer's current Splynx service price."
+        ),
+    )
     args = parser.parse_args()
 
     db = SessionLocal()
     stats: Counter = Counter()
     mismatches: list[str] = []
+    worklist: list[tuple] = []
     try:
         splynx_med = _splynx_median_charge(db)
 
@@ -113,6 +124,9 @@ def main() -> None:
                 stats["within_tol"] += 1
             else:
                 stats["mismatch"] += 1
+                worklist.append(
+                    (str(sub.id), str(sub.subscriber_id), local, ref, drift)
+                )
                 if len(mismatches) < args.sample:
                     mismatches.append(
                         f"  sub={sub.id} acct={sub.subscriber_id} "
@@ -121,6 +135,24 @@ def main() -> None:
                     )
     finally:
         db.close()
+
+    if args.csv and worklist:
+        import csv
+
+        with open(args.csv, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(
+                [
+                    "subscription_id",
+                    "account_id",
+                    "local_price",
+                    "splynx_median",
+                    "drift",
+                ]
+            )
+            for sid, acct, local, ref, drift in worklist:
+                w.writerow([sid, acct, local, ref, f"{drift:.4f}"])
+        print(f"\n  wrote {len(worklist)} mismatches to {args.csv}")
 
     comparable = stats["exact"] + stats["within_tol"] + stats["mismatch"]
     print("\n=== shadow_reconcile_billing (READ ONLY) ===")
