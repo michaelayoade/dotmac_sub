@@ -345,9 +345,6 @@ def _send_coa_update(
     if _coa_disabled_for_nas(nas_device.id):
         logger.debug("Skipping CoA update for NAS %s (negative-cached).", nas_device.id)
         return False
-    if not nas_device.shared_secret:
-        logger.warning("Missing NAS shared secret for CoA update.")
-        return False
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
         logger.warning("Missing NAS host for CoA update.")
@@ -361,9 +358,17 @@ def _send_coa_update(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
-    decrypted_secret = decrypt_credential(nas_device.shared_secret)
+    # Same secret resolution as the disconnect path: device record first,
+    # external radius nas table second (decrypt-drift devices have no
+    # usable local secret — bare decrypt_credential left profile-change
+    # CoA broken on those NAS).
+    decrypted_secret = _resolve_coa_secret(db, nas_device)
     if decrypted_secret is None:
-        logger.warning("Missing NAS shared secret for CoA update.")
+        logger.warning(
+            "No usable shared secret for CoA update (NAS %s / %s).",
+            nas_device.name,
+            nas_device.id,
+        )
         return False
     client = Client(
         server=host,
