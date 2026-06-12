@@ -40,6 +40,13 @@ needed to "light it up".
    created before push was enabled will fail signing with an entitlement
    mismatch), and set `aps-environment` to `production` in `Runner.entitlements`
    (the committed default is `development`, for debug builds).
+   **Xcode Cloud / CI**: instead of the manual Xcode steps above, supply the
+   plist as a base64 secret. `base64 -i mobile/ios/Runner/GoogleService-Info.plist`
+   → add it as the Xcode Cloud environment variable `GOOGLE_SERVICE_INFO_PLIST_B64`
+   (mark **Secret**). `ci_post_clone.sh` then materializes the plist, sets
+   `aps-environment=production`, and runs `ci_scripts/wire_firebase.rb` to add the
+   plist to the Runner target + point `CODE_SIGN_ENTITLEMENTS` at
+   `Runner.entitlements`. Without the secret, CI builds with push disabled.
 3. **Backend** (server send): set in the prod `.env` and rebuild/redeploy app +
    celery workers:
    - `FCM_PROJECT_ID=<your-firebase-project-id>`
