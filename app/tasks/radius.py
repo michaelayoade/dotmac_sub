@@ -154,7 +154,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 with splynx_connection() as sconn, sconn.cursor() as scur:
                     placeholders = ",".join(["%s"] * len(kick_logins))
                     scur.execute(
-                        "SELECT login FROM services_internet "  # noqa: S608 — placeholders are %s binds, values passed as params
+                        "SELECT login FROM services_internet "  # nosec B608  # noqa: S608 — %s binds; values passed as params
                         f"WHERE login IN ({placeholders}) "
                         "AND deleted='0' AND status='active'",
                         kick_logins,
