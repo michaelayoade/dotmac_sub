@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import Mock
 from uuid import uuid4
@@ -954,3 +954,49 @@ def test_submit_change_plan_accepts_same_family_offer(
     assert result == {"success": True}
     assert len(created) == 1
     assert created[0]["new_offer_id"] == str(target_offer.id)
+
+
+def test_apply_instant_plan_change_rejects_archived_offer(
+    db_session, subscriber, monkeypatch
+):
+    """The instant web path must reject an archived-but-is_active offer — it
+    now gates through get_available_portal_offers (status==active), like the
+    deferred path, instead of only checking is_active."""
+    _stub_plan_change_side_effects(monkeypatch)
+    now = datetime(2026, 3, 15, tzinfo=UTC)
+    _freeze_subscription_now(monkeypatch, now)
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    # Archived target: still is_active=True, same family/service/billing, but
+    # status=archived → must be refused.
+    archived = _make_offer(
+        db_session,
+        name="Unlimited Legacy",
+        amount=Decimal("50.00"),
+        plan_family="unlimited",
+        is_active=True,
+        status=OfferStatus.archived,
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=now + timedelta(days=20),
+        start_at=now - timedelta(days=10),
+    )
+
+    with pytest.raises(ValueError, match="not available for self-service change"):
+        apply_instant_plan_change(
+            db_session,
+            {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+            str(subscription.id),
+            str(archived.id),
+        )
+
+    db_session.refresh(subscription)
+    assert subscription.offer_id == current_offer.id  # unchanged

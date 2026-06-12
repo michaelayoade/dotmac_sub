@@ -147,46 +147,48 @@ class TestCollectionsTask:
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.tasks.collections.collections_service.dunning_workflow.run"
-            ) as mock_run:
-                mock_run.return_value = DunningRunResponse(
-                    run_at=datetime.now(UTC),
-                    accounts_scanned=7,
-                    cases_created=3,
-                    actions_created=2,
-                    skipped=1,
-                )
-                from app.tasks.collections import run_dunning
+            with patch("app.tasks.collections.billing_enabled", return_value=True):
+                with patch(
+                    "app.tasks.collections.collections_service.dunning_workflow.run"
+                ) as mock_run:
+                    mock_run.return_value = DunningRunResponse(
+                        run_at=datetime.now(UTC),
+                        accounts_scanned=7,
+                        cases_created=3,
+                        actions_created=2,
+                        skipped=1,
+                    )
+                    from app.tasks.collections import run_dunning
 
-                result = run_dunning()
+                    result = run_dunning()
 
-                mock_run.assert_called_once()
-                args = mock_run.call_args
-                assert args[0][0] == mock_session
-                mock_session.close.assert_called_once()
-                assert result == {
-                    "accounts_scanned": 7,
-                    "cases_created": 3,
-                    "actions_created": 2,
-                    "skipped": 1,
-                }
+                    mock_run.assert_called_once()
+                    args = mock_run.call_args
+                    assert args[0][0] == mock_session
+                    mock_session.close.assert_called_once()
+                    assert result == {
+                        "accounts_scanned": 7,
+                        "cases_created": 3,
+                        "actions_created": 2,
+                        "skipped": 1,
+                    }
 
     def test_run_dunning_exception_closes_session(self):
         """Test exception still closes session."""
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.tasks.collections.collections_service.dunning_workflow.run",
-                side_effect=Exception("Dunning error"),
-            ):
-                from app.tasks.collections import run_dunning
+            with patch("app.tasks.collections.billing_enabled", return_value=True):
+                with patch(
+                    "app.tasks.collections.collections_service.dunning_workflow.run",
+                    side_effect=Exception("Dunning error"),
+                ):
+                    from app.tasks.collections import run_dunning
 
-                with pytest.raises(Exception, match="Dunning error"):
-                    run_dunning()
+                    with pytest.raises(Exception, match="Dunning error"):
+                        run_dunning()
 
-                mock_session.close.assert_called_once()
+                    mock_session.close.assert_called_once()
 
     def test_run_prepaid_enforcement_success(self):
         """Test successful prepaid enforcement run returns the real metrics."""
@@ -197,48 +199,114 @@ class TestCollectionsTask:
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.tasks.collections.collections_service.prepaid_enforcement.run"
-            ) as mock_run:
-                mock_run.return_value = PrepaidEnforcementRunResponse(
-                    run_at=datetime.now(UTC),
-                    accounts_scanned=9,
-                    accounts_warned=4,
-                    accounts_suspended=2,
-                    accounts_deactivated=1,
-                    skipped=2,
-                )
-                from app.tasks.collections import run_prepaid_enforcement
+            with patch("app.tasks.collections.billing_enabled", return_value=True):
+                with patch(
+                    "app.tasks.collections.collections_service.prepaid_enforcement.run"
+                ) as mock_run:
+                    mock_run.return_value = PrepaidEnforcementRunResponse(
+                        run_at=datetime.now(UTC),
+                        accounts_scanned=9,
+                        accounts_warned=4,
+                        accounts_suspended=2,
+                        accounts_deactivated=1,
+                        skipped=2,
+                    )
+                    from app.tasks.collections import run_prepaid_enforcement
 
-                result = run_prepaid_enforcement()
+                    result = run_prepaid_enforcement()
 
-                mock_run.assert_called_once()
-                args = mock_run.call_args
-                assert args[0][0] == mock_session
-                mock_session.close.assert_called_once()
-                assert result == {
-                    "accounts_scanned": 9,
-                    "accounts_warned": 4,
-                    "accounts_suspended": 2,
-                    "accounts_deactivated": 1,
-                    "skipped": 2,
-                }
+                    mock_run.assert_called_once()
+                    args = mock_run.call_args
+                    assert args[0][0] == mock_session
+                    mock_session.close.assert_called_once()
+                    assert result == {
+                        "accounts_scanned": 9,
+                        "accounts_warned": 4,
+                        "accounts_suspended": 2,
+                        "accounts_deactivated": 1,
+                        "skipped": 2,
+                    }
 
     def test_run_prepaid_enforcement_exception_closes_session(self):
         """Test prepaid enforcement exception still closes session."""
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.tasks.collections.collections_service.prepaid_enforcement.run",
-                side_effect=Exception("Prepaid error"),
-            ):
-                from app.tasks.collections import run_prepaid_enforcement
+            with patch("app.tasks.collections.billing_enabled", return_value=True):
+                with patch(
+                    "app.tasks.collections.collections_service.prepaid_enforcement.run",
+                    side_effect=Exception("Prepaid error"),
+                ):
+                    from app.tasks.collections import run_prepaid_enforcement
 
-                with pytest.raises(Exception, match="Prepaid error"):
-                    run_prepaid_enforcement()
+                    with pytest.raises(Exception, match="Prepaid error"):
+                        run_prepaid_enforcement()
 
-                mock_session.close.assert_called_once()
+                    mock_session.close.assert_called_once()
+
+
+class TestBillingMasterSwitchGates:
+    """Customer-impacting billing tasks must no-op while billing_enabled is off.
+
+    The upstream biller (Splynx) stays authoritative until cutover; these tasks
+    must never charge, dun, suspend, or expire an account before billing_enabled
+    is flipped on, even though the queue consumes them and they are scheduled.
+    """
+
+    def test_dunning_skipped_when_billing_disabled(self):
+        mock_session = MagicMock()
+        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.collections.billing_enabled", return_value=False):
+                with patch(
+                    "app.tasks.collections.collections_service.dunning_workflow.run"
+                ) as mock_run:
+                    from app.tasks.collections import run_dunning
+
+                    result = run_dunning()
+
+                    mock_run.assert_not_called()
+                    assert result == {"skipped": "billing_disabled"}
+
+    def test_prepaid_enforcement_skipped_when_billing_disabled(self):
+        mock_session = MagicMock()
+        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.collections.billing_enabled", return_value=False):
+                with patch(
+                    "app.tasks.collections.collections_service.prepaid_enforcement.run"
+                ) as mock_run:
+                    from app.tasks.collections import run_prepaid_enforcement
+
+                    result = run_prepaid_enforcement()
+
+                    mock_run.assert_not_called()
+                    assert result == {"skipped": "billing_disabled"}
+
+    def test_autopay_skipped_when_billing_disabled(self):
+        mock_session = MagicMock()
+        with patch("app.tasks.autopay.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.autopay.billing_enabled", return_value=False):
+                with patch("app.tasks.autopay.autopay_service.run_all_due") as mock_run:
+                    from app.tasks.autopay import charge_due_invoices
+
+                    result = charge_due_invoices()
+
+                    mock_run.assert_not_called()
+                    assert result == {"skipped": "billing_disabled"}
+
+    def test_arrangement_check_skipped_when_billing_disabled(self):
+        mock_session = MagicMock()
+        with patch("app.tasks.arrangements.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.arrangements.billing_enabled", return_value=False):
+                with patch(
+                    "app.tasks.arrangements.payment_arrangements"
+                    ".check_overdue_installments"
+                ) as mock_run:
+                    from app.tasks.arrangements import check_overdue_arrangements
+
+                    result = check_overdue_arrangements()
+
+                    mock_run.assert_not_called()
+                    assert result["arrangements_defaulted"] == 0
 
 
 # =============================================================================

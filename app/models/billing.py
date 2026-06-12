@@ -202,6 +202,14 @@ class Invoice(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_invoice_id IS NOT NULL"),
         ),
+        # Backs the per-account billing list (active invoices, newest first)
+        # and FK joins on account_id.
+        Index(
+            "ix_invoices_account_id_is_active_issued_at",
+            "account_id",
+            "is_active",
+            "issued_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -410,6 +418,7 @@ class CreditNoteApplication(Base):
 
 class InvoiceLine(Base):
     __tablename__ = "invoice_lines"
+    __table_args__ = (Index("ix_invoice_lines_invoice_id", "invoice_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -646,6 +655,9 @@ class PaymentAllocation(Base):
         UniqueConstraint(
             "payment_id", "invoice_id", name="uq_payment_allocations_payment_invoice"
         ),
+        # The unique constraint's index is payment_id-leading; this backs
+        # invoice_id-leading lookups (allocations for an invoice).
+        Index("ix_payment_allocations_invoice_id", "invoice_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

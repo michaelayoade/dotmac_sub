@@ -96,5 +96,10 @@
 		</array>
 		<key>UIStatusBarHidden</key>
 		<false/>
+		<!-- FCM: process notification payloads in the background. -->
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>remote-notification</string>
+		</array>
 	</dict>
 </plist>

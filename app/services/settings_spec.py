@@ -912,6 +912,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="default_tax_rate_id",
+        env_var="BILLING_DEFAULT_TAX_RATE_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default VAT rate (TaxRate id) when no address/subscriber rate set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="default_payment_method_type",
         env_var="BILLING_DEFAULT_PAYMENT_METHOD_TYPE",
         value_type=SettingValueType.string,
