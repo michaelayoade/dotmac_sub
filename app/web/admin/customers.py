@@ -174,65 +174,6 @@ def _toast_response(
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
-def _contacts_base_context(
-    request: Request, db: Session, active_page: str = "contacts"
-):
-    """Base context for contacts pages."""
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    return {
-        "request": request,
-        "active_page": active_page,
-        "active_menu": "",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-    }
-
-
-@contacts_router.get(
-    "",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
-)
-def contacts_list(
-    request: Request,
-    search: str | None = None,
-    status: str | None = None,  # 'lead', 'contact', 'customer', or None for all
-    entity_type: str | None = None,  # 'person' or 'business'
-    page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
-    db: Session = Depends(get_db),
-):
-    """Unified contacts view for people and business customers."""
-    context = _contacts_base_context(request, db, "contacts")
-    context.update(
-        web_customer_lists_service.build_contacts_index_context(
-            db=db,
-            search=search,
-            status=status,
-            entity_type=entity_type,
-            page=page,
-            per_page=per_page,
-        )
-    )
-    # HTMX requests should return only the table+pagination partial.
-    template_name = (
-        "admin/contacts/_table.html"
-        if request.headers.get("HX-Request") == "true"
-        else "admin/contacts/index.html"
-    )
-    return templates.TemplateResponse(template_name, context)
-
-
-@contacts_router.get(
-    "/new",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
-)
-def contacts_new_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/admin/crm/contacts/new", status_code=302)
-
-
 @contacts_router.post(
     "/{person_id}/convert",
     response_class=HTMLResponse,
