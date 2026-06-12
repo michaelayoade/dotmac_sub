@@ -303,3 +303,27 @@ class VasRateCard(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class VasTopupIntent(Base):
+    """Binds a gateway checkout reference to the wallet that initiated it.
+
+    Without this, any authenticated user who learns someone else's checkout
+    reference could verify it into their OWN wallet (reference theft). The
+    intent row is written at initiate; verify requires it and the wallet to
+    match.
+    """
+
+    __tablename__ = "vas_topup_intents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    reference: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    wallet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vas_wallets.id"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )

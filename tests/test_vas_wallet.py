@@ -38,6 +38,17 @@ def _subscriber(db_session):
     return subscriber
 
 
+def _bind_intent(db_session, subscriber, reference, amount="2500.00"):
+    from app.models.vas import VasTopupIntent
+
+    wallet = vas_wallet.get_or_create_wallet(db_session, str(subscriber.id))
+    db_session.add(
+        VasTopupIntent(reference=reference, wallet_id=wallet.id, amount=Decimal(amount))
+    )
+    db_session.commit()
+    return wallet
+
+
 class TestFeatureFlag:
     def test_disabled_by_default(self, db_session):
         assert vas_wallet.is_enabled(db_session) is False
@@ -132,6 +143,7 @@ class TestTopup:
         tx = SimpleNamespace(
             amount=Decimal("2500"), provider_type="paystack", external_id="x1"
         )
+        _bind_intent(db_session, subscriber, "ref-9")
         with patch.object(
             vas_wallet.payment_gateway_adapter, "verify", return_value=tx
         ) as mock_verify:
@@ -150,6 +162,7 @@ class TestTopup:
         tx = SimpleNamespace(
             amount=Decimal("1000"), provider_type="paystack", external_id="x2"
         )
+        _bind_intent(db_session, owner, "ref-owned", amount="1000.00")
         with patch.object(
             vas_wallet.payment_gateway_adapter, "verify", return_value=tx
         ):
@@ -236,3 +249,58 @@ class TestAutoDeduct:
         result = vas_wallet.run_auto_deduct_sweep(db_session)
         assert result["paid"] == 0
         assert result["errors"] == 0
+
+
+class TestReviewFixes:
+    def test_verify_rejects_unbound_reference(self, db_session):
+        """Reference theft: verifying a reference you didn't initiate fails."""
+        _enable_vas(db_session)
+        attacker = _subscriber(db_session)
+        with pytest.raises(HTTPException) as exc_info:
+            vas_wallet.verify_topup(db_session, str(attacker.id), "stolen-ref")
+        assert exc_info.value.status_code == 400
+        assert "Unknown payment reference" in exc_info.value.detail
+
+    def test_verify_rejects_other_wallets_intent(self, db_session):
+        _enable_vas(db_session)
+        owner = _subscriber(db_session)
+        attacker = _subscriber(db_session)
+        _bind_intent(db_session, owner, "owners-ref")
+        with pytest.raises(HTTPException) as exc_info:
+            vas_wallet.verify_topup(db_session, str(attacker.id), "owners-ref")
+        assert exc_info.value.status_code == 400
+
+    def test_initiate_binds_intent(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        result = vas_wallet.initiate_topup(
+            db_session, str(subscriber.id), Decimal("1000")
+        )
+        from app.models.vas import VasTopupIntent
+
+        intent = (
+            db_session.query(VasTopupIntent)
+            .filter(VasTopupIntent.reference == result["reference"])
+            .one()
+        )
+        wallet = vas_wallet.get_or_create_wallet(db_session, str(subscriber.id))
+        assert intent.wallet_id == wallet.id
+
+    def test_pay_bill_double_submit_guard(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        wallet = vas_wallet.get_or_create_wallet(db_session, str(subscriber.id))
+        vas_wallet.credit_wallet(
+            db_session,
+            wallet,
+            amount=Decimal("10000.00"),
+            category=VasEntryCategory.topup,
+            reference="dsg-fund",
+        )
+        vas_wallet.pay_bill(db_session, str(subscriber.id), Decimal("2000"))
+        with pytest.raises(HTTPException) as exc_info:
+            vas_wallet.pay_bill(db_session, str(subscriber.id), Decimal("2000"))
+        assert exc_info.value.status_code == 409
+        # A different amount goes through.
+        result = vas_wallet.pay_bill(db_session, str(subscriber.id), Decimal("1000"))
+        assert result["balance"] == Decimal("7000.00")

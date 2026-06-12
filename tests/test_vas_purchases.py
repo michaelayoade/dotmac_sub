@@ -517,3 +517,39 @@ class TestHardening:
                 amount=Decimal("500"),
             )
         assert txn.reseller_id is None
+
+
+class TestReviewFixes:
+    def test_failed_debit_marks_txn_failed_and_allows_retry(self, db_session):
+        """An insufficient-funds attempt must not 409-block the retry."""
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        with _ok_float(), pytest.raises(HTTPException) as exc_info:
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08039999999",
+                amount=Decimal("500"),
+            )
+        assert "Insufficient" in exc_info.value.detail
+        from app.models.vas import VasTransaction
+
+        orphan = db_session.query(VasTransaction).one()
+        assert orphan.status == VasTransactionStatus.failed
+
+        # Fund and retry — must NOT trip the duplicate guard.
+        _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08039999999",
+                amount=Decimal("500"),
+            )
+        assert txn.status == VasTransactionStatus.delivered

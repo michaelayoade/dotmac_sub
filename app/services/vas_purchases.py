@@ -359,6 +359,15 @@ def _settle_commission(db: Session, txn: VasTransaction) -> None:
     payout = _kobo_floor(amount * reseller_rate / Decimal("100"))
     txn.reseller_rate_pct = reseller_rate
     txn.owner_net = gross - payout
+    if txn.owner_net < 0:
+        logger.warning(
+            "vas commission: NEGATIVE spread on %s (%s: owner %s%% < reseller "
+            "%s%%) — check the rate cards",
+            txn.id,
+            category,
+            owner_rate,
+            reseller_rate,
+        )
     db.commit()
     if payout <= 0:
         return
@@ -374,9 +383,12 @@ def _settle_commission(db: Session, txn: VasTransaction) -> None:
             reference=f"vas-comm-{txn.request_id}",
             memo=f"Commission: {txn.service.name if txn.service else category}",
         )
-    except HTTPException as exc:
-        # Unique reference -> already credited (idempotent re-delivery path).
-        logger.info("vas commission credit skipped for %s: %s", txn.id, exc.detail)
+    except Exception as exc:  # noqa: BLE001
+        # Unique-reference violation -> already credited (idempotent
+        # re-delivery); anything else must not poison the session for the
+        # rest of the sweep.
+        db.rollback()
+        logger.info("vas commission credit skipped for %s: %s", txn.id, exc)
 
 
 def _extract_token(body: dict) -> str | None:
@@ -547,15 +559,23 @@ def _purchase_from_wallet(
     db.commit()
     db.refresh(txn)
 
-    # Debit (immediate; refund-on-failure) — insufficient funds aborts cleanly.
-    wallet_service.debit_wallet(
-        db,
-        wallet,
-        amount=value,
-        category=VasEntryCategory.purchase,
-        reference=f"vas-{txn.request_id}",
-        memo=f"{service.name}",
-    )
+    # Debit (immediate; refund-on-failure). A failed debit must mark the
+    # transaction failed — otherwise the orphaned `pending` row trips the
+    # duplicate-intent guard and blocks the retry after the wallet is funded.
+    try:
+        wallet_service.debit_wallet(
+            db,
+            wallet,
+            amount=value,
+            category=VasEntryCategory.purchase,
+            reference=f"vas-{txn.request_id}",
+            memo=f"{service.name}",
+        )
+    except HTTPException:
+        txn.status = VasTransactionStatus.failed
+        txn.error = "Wallet debit failed"
+        db.commit()
+        raise
     txn.status = VasTransactionStatus.debited
     db.commit()
 

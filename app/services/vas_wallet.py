@@ -19,7 +19,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.models.vas import VasEntryCategory, VasEntryType, VasWallet, VasWalletEntry
+from app.models.vas import (
+    VasEntryCategory,
+    VasEntryType,
+    VasTopupIntent,
+    VasWallet,
+    VasWalletEntry,
+)
 from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.common import coerce_uuid
@@ -240,6 +246,12 @@ def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) 
             status_code=400, detail="Daily wallet funding limit reached"
         )
     context = payment_gateway_adapter.build_context(db, provider_type=_provider(db))
+    # Bind the reference to THIS wallet — verify refuses unknown references,
+    # so a leaked/stolen reference can never credit a different wallet.
+    db.add(
+        VasTopupIntent(reference=context.reference, wallet_id=wallet.id, amount=amount)
+    )
+    db.commit()
     return {
         "provider_type": context.provider_type,
         "provider_public_key": context.public_key,
@@ -276,6 +288,11 @@ def verify_reseller_topup(
 def _verify_topup_for_wallet(
     db: Session, wallet: VasWallet, reference: str, *, provider: str | None = None
 ) -> dict:
+    intent = db.scalars(
+        select(VasTopupIntent).where(VasTopupIntent.reference == reference)
+    ).first()
+    if not intent or intent.wallet_id != wallet.id:
+        raise HTTPException(status_code=400, detail="Unknown payment reference")
 
     existing = db.scalars(
         select(VasWalletEntry).where(VasWalletEntry.reference == reference)
@@ -333,6 +350,28 @@ def pay_bill(db: Session, subscriber_id: str, amount: Decimal) -> dict:
 
     wallet = get_or_create_wallet(db, subscriber_id)
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+
+    # Double-submit guard: an identical bill payment within the last minute
+    # is almost certainly a double-click, not intent.
+    from datetime import timedelta
+
+    recent = (
+        db.query(VasWalletEntry)
+        .filter(
+            VasWalletEntry.wallet_id == wallet.id,
+            VasWalletEntry.entry_type == VasEntryType.debit,
+            VasWalletEntry.category == VasEntryCategory.bill_payment,
+            VasWalletEntry.amount == amount,
+            VasWalletEntry.created_at >= datetime.now(UTC) - timedelta(seconds=60),
+        )
+        .first()
+    )
+    if recent:
+        raise HTTPException(
+            status_code=409,
+            detail="An identical bill payment was made moments ago — wait a "
+            "minute if you really mean to pay again.",
+        )
 
     entry = debit_wallet(
         db,

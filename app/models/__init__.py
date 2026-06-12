@@ -524,6 +524,7 @@ from app.models.vas import (  # noqa: F401
     VasRateCard,
     VasService,
     VasServiceVariation,
+    VasTopupIntent,
     VasTransaction,
     VasTransactionStatus,
     VasWallet,
