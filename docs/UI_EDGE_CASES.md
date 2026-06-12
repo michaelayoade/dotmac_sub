@@ -117,7 +117,10 @@ running finding numbers from the 2026-06-12 driving session.
 
 ## 11. Reseller portal
 - [x] Login, dashboard, scoped accounts list (2026-06-12)
-- [ ] Revenue / tickets pages; view-as (read-only + audited)
+- [x] Revenue page renders at /reseller/reports/revenue (2026-06-12)
+- [!] `#15` (self-inflicted, FIXED pre-merge) routing /reseller errors to reseller/errors/404.html 500'd because it extended layouts/reseller.html (needs current_user, absent in error context); rewrote it to extend base.html (standalone) + added regression tests. Caught by driving the reseller portal
+- [!] `#16` (low pri) layouts/reseller.html doesn't guard `current_user` like layouts/customer.html does — latent fragility if ever rendered without auth context
+- [ ] view-as (read-only + audited)
 - [ ] Reseller with 0 accounts (empty states); profile + MFA; bank-transfer proof
 - [ ] Service-requests; only-own-reseller data everywhere
 
