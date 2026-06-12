@@ -38,6 +38,36 @@ def reseller_dashboard(
     return web_reseller_routes_service.reseller_dashboard(request, db, page, per_page)
 
 
+@router.get("/service-requests", response_class=HTMLResponse)
+def reseller_service_requests(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_service_requests_page(request, db)
+
+
+@router.post("/service-requests", response_class=HTMLResponse)
+def reseller_service_request_create(
+    request: Request,
+    contact_name: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_email: str = Form(""),
+    address: str = Form(""),
+    latitude: str = Form(""),
+    longitude: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_service_request_create(
+        request,
+        db,
+        contact_name=contact_name,
+        contact_phone=contact_phone,
+        contact_email=contact_email,
+        address=address,
+        latitude=latitude,
+        longitude=longitude,
+        notes=notes,
+    )
+
+
 @router.get("/accounts", response_class=HTMLResponse)
 def reseller_accounts(
     request: Request,

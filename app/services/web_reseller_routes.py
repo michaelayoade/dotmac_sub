@@ -511,3 +511,80 @@ def reseller_fiber_map(request: Request, db: Session):
             "read_only": True,
         },
     )
+
+
+def reseller_service_requests_page(request: Request, db: Session):
+    """New-service / installation requests: list + submission form."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    from app.services import reseller_service_requests
+
+    items = reseller_service_requests.list_for_reseller(
+        db, str(context["reseller"].id), limit=100, offset=0
+    )
+    return templates.TemplateResponse(
+        "reseller/service-requests/index.html",
+        {
+            "request": request,
+            "active_page": "service-requests",
+            "reseller": context["reseller"],
+            "service_requests": items,
+            "form_error": request.query_params.get("error"),
+            "submitted": request.query_params.get("submitted") == "1",
+        },
+    )
+
+
+def reseller_service_request_create(
+    request: Request,
+    db: Session,
+    *,
+    contact_name: str,
+    contact_phone: str,
+    contact_email: str,
+    address: str,
+    latitude: str,
+    longitude: str,
+    notes: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    from urllib.parse import quote_plus
+
+    from app.services import reseller_service_requests
+
+    def _coord(raw: str, low: float, high: float) -> float | None:
+        try:
+            value = float(raw.strip())
+        except (TypeError, ValueError):
+            return None
+        return value if low <= value <= high else None
+
+    lat = _coord(latitude, -90.0, 90.0)
+    lon = _coord(longitude, -180.0, 180.0)
+    if (lat is None) != (lon is None):
+        lat = lon = None
+
+    try:
+        reseller_service_requests.create_request(
+            db,
+            str(context["reseller"].id),
+            subscriber_id=None,
+            contact_name=contact_name,
+            contact_phone=contact_phone,
+            contact_email=contact_email,
+            address=address,
+            latitude=lat,
+            longitude=lon,
+            notes=notes,
+        )
+    except HTTPException as exc:
+        return RedirectResponse(
+            url=f"/reseller/service-requests?error={quote_plus(str(exc.detail))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/reseller/service-requests?submitted=1", status_code=303
+    )

@@ -74,6 +74,58 @@ services:
     - -c
     - uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
       --workers ${WEB_CONCURRENCY:-1}
+  redis-local:
+    image: redis:7-alpine
+    container_name: dotmac_redis_local
+    restart: unless-stopped
+    mem_limit: 1g
+    command: ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass $$REDIS_LOCAL_PASSWORD"]
+    environment:
+      REDIS_LOCAL_PASSWORD: ${REDIS_LOCAL_PASSWORD}
+    volumes:
+    - /var/lib/dotmac-redis-local:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-local:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: dotmac_pg_local
+    restart: unless-stopped
+    mem_limit: 6g
+    shm_size: 1g
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_LOCAL_BOOTSTRAP_PASSWORD}
+      POSTGRES_DB: postgres
+    command:
+    - postgres
+    - -c
+    - shared_buffers=2GB
+    - -c
+    - effective_cache_size=6GB
+    - -c
+    - work_mem=32MB
+    - -c
+    - maintenance_work_mem=512MB
+    - -c
+    - wal_level=replica
+    - -c
+    - max_wal_senders=5
+    - -c
+    - max_replication_slots=5
+    volumes:
+    - /var/lib/dotmac-pg-local:/var/lib/postgresql/data
+    ports:
+    - 9001:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   celery-worker:
     build: .
     container_name: dotmac_sub_celery_worker
