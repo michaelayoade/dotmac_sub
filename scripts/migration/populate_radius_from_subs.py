@@ -62,12 +62,18 @@ def _radreply_attrs(
     offer: CatalogOffer,
     profile: RadiusProfile | None,
     subscriber_blocked: bool = False,
+    captive_redirect_enabled: bool = False,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
     `subscriber_blocked`: customer-level block (Splynx subscribers.status=blocked).
     Customer-level block dominates: even if subscription is active, the customer
-    gets walled-garden RADIUS treatment.
+    gets blocked RADIUS treatment.
+
+    `captive_redirect_enabled`: per-customer opt-in for the soft walled-garden
+    captive redirect. Only opted-in blocked subscribers get the
+    Mikrotik-Address-List=suspended attribute; non-opted blocked subscribers are
+    hard-rejected in radcheck (see populate()), so they get no captive radreply.
     """
     attrs: list[tuple[str, str, str]] = [
         ("Service-Type", ":=", "Framed-User"),
@@ -88,11 +94,14 @@ def _radreply_attrs(
     if profile and profile.idle_timeout:
         attrs.append(("Idle-Timeout", ":=", str(profile.idle_timeout)))
 
-    # Walled-garden: customer-level block OR subscription-level block/suspension
-    if subscriber_blocked or sub.status in (
+    # Soft captive walled-garden — only for blocked subscribers who OPTED IN
+    # (per-customer captive_redirect_enabled). Non-opted blocked subscribers get
+    # a hard reject in radcheck instead, so they never reach this radreply.
+    is_blocked = subscriber_blocked or sub.status in (
         SubscriptionStatus.blocked,
         SubscriptionStatus.suspended,
-    ):
+    )
+    if is_blocked and captive_redirect_enabled:
         attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
 
     return attrs
@@ -170,15 +179,30 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             ).all()
         }
         logger.info(
-            "%d subscribers in blocked state (walled-garden treatment)",
+            "%d subscribers in blocked state",
             len(blocked_subscriber_ids),
+        )
+
+        # Per-customer opt-in for the soft captive redirect. Blocked subscribers
+        # NOT in this set are hard-rejected (Auth-Type := Reject) instead of
+        # walled-gardened — the captive redirect is opt-in, not every account.
+        captive_optin_ids: set = {
+            sid
+            for (sid,) in db.execute(
+                select(Subscriber.id).where(
+                    Subscriber.captive_redirect_enabled.is_(True)
+                )
+            ).all()
+        }
+        logger.info(
+            "%d subscribers opted into captive redirect", len(captive_optin_ids)
         )
 
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
         # idle-in-transaction timeout on large fleets.
-        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus]] = {}
+        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus, str]] = {}
         for sub in rows:
             cred = creds_by_username.get(sub.login)
             if cred is None:
@@ -198,14 +222,31 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 continue
 
             sub_blocked = sub.subscriber_id in blocked_subscriber_ids
-            attrs = _radreply_attrs(sub, sub.offer, sub.radius_profile, sub_blocked)
+            captive = sub.subscriber_id in captive_optin_ids
+            attrs = _radreply_attrs(
+                sub,
+                sub.offer,
+                sub.radius_profile,
+                sub_blocked,
+                captive_redirect_enabled=captive,
+            )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,
                 SubscriptionStatus.suspended,
             )
+            # Enforcement mode for the radcheck write: active subs and opted-in
+            # blocked subs keep a usable password (captive subs are walled via
+            # the radreply Address-List); non-opted blocked subs are hard
+            # rejected (Auth-Type := Reject, offline).
+            if blocked_flag and not captive:
+                mode = "reject"
+            elif blocked_flag:
+                mode = "captive"
+            else:
+                mode = "active"
             # Duplicate logins (Splynx-migration dups): the ACTIVE sub wins the
             # slot — subscriber-level block still dominates via sub_blocked,
-            # so a blocked customer stays walled-gardened either way.
+            # so a blocked customer stays enforced either way.
             existing = by_login.get(sub.login)
             if existing is not None and existing[4] == SubscriptionStatus.active:
                 continue
@@ -215,6 +256,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 attrs,
                 blocked_flag,
                 sub.status,
+                mode,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -225,6 +267,8 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     stats["radcheck_upserts"] = len(work)
     stats["radreply_upserts"] = sum(len(w[2]) for w in work)
     stats["blocked_users_written"] = sum(1 for w in work if w[3])
+    stats["captive_users_written"] = sum(1 for w in work if w[5] == "captive")
+    stats["rejected_users_written"] = sum(1 for w in work if w[5] == "reject")
 
     if dry_run:
         logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
@@ -237,16 +281,35 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         with rconn.cursor() as cur:
             usernames = [w[0] for w in work]
             cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
-            cur.executemany(
-                "INSERT INTO radcheck (username, attribute, op, value) "
-                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                [(w[0], w[1]) for w in work],
-            )
+            # Non-rejected users authenticate with their Cleartext-Password
+            # (active normally, opted-in-blocked into the captive walled-garden
+            # via radreply). Hard-rejected users get a single Auth-Type := Reject
+            # row so FreeRADIUS refuses them — no password, fully offline.
+            password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
+            reject_rows = [(w[0],) for w in work if w[5] == "reject"]
+            if password_rows:
+                cur.executemany(
+                    "INSERT INTO radcheck (username, attribute, op, value) "
+                    "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+                    password_rows,
+                )
+            if reject_rows:
+                cur.executemany(
+                    "INSERT INTO radcheck (username, attribute, op, value) "
+                    "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
+                    reject_rows,
+                )
             cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
+            # Hard-rejected users get no radreply (they never authenticate).
             cur.executemany(
                 "INSERT INTO radreply (username, attribute, op, value) "
                 "VALUES (%s, %s, %s, %s)",
-                [(w[0], a, o, v) for w in work for (a, o, v) in w[2]],
+                [
+                    (w[0], a, o, v)
+                    for w in work
+                    if w[5] != "reject"
+                    for (a, o, v) in w[2]
+                ],
             )
 
             # --- orphan cleanup: drop radcheck/radreply rows whose username ---

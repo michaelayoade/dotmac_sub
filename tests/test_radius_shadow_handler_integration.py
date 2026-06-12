@@ -80,9 +80,9 @@ class TestShadowWriteFeatureFlagGate:
         ):
             handler._shadow_write_access_state(db, str(sub.id))
 
-        # Captive-by-default (2026-06-11): payment suspension derives to
-        # captive even with the legacy captive flag off.
-        mock_set.assert_called_once_with(db, str(sub.id), AccessState.captive)
+        # Captive redirect is opt-in: with the flag off, a suspended sub
+        # derives to suspended (hard reject), not captive.
+        mock_set.assert_called_once_with(db, str(sub.id), AccessState.suspended)
 
     def test_flag_on_captive_subscriber_routes_to_captive(self):
         handler = EnforcementHandler()

@@ -370,27 +370,38 @@ class EnforcementHandler:
         cap_resets_at_raw = event.payload.get("cap_resets_at")
 
         if action == "block":
-            try:
-                disconnect_subscription_sessions(
-                    db, str(subscription_id), reason="fup_block"
-                )
-                apply_subscription_address_list_block(db, str(subscription_id))
-                self._persist_fup_state(
-                    db,
-                    str(subscription_id),
-                    offer_id,
-                    rule_id,
-                    action_status="blocked",
-                    cap_resets_at=cap_resets_at_raw,
-                    notes="FUP block applied",
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to apply FUP block for subscription %s: %s",
-                    subscription_id,
-                    exc,
-                )
-            return
+            # The soft captive walled-garden is opt-in per customer. A blocked
+            # customer who hasn't opted in gets a hard block (offline), not a
+            # captive redirect — fall through to the suspend path, which routes
+            # to Auth-Type := Reject via derive_access_state/populate.
+            from app.models.subscriber import Subscriber
+
+            subscriber = db.get(Subscriber, account_id)
+            captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
+            if not captive:
+                action = "suspend"
+            else:
+                try:
+                    disconnect_subscription_sessions(
+                        db, str(subscription_id), reason="fup_block"
+                    )
+                    apply_subscription_address_list_block(db, str(subscription_id))
+                    self._persist_fup_state(
+                        db,
+                        str(subscription_id),
+                        offer_id,
+                        rule_id,
+                        action_status="blocked",
+                        cap_resets_at=cap_resets_at_raw,
+                        notes="FUP captive redirect applied",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to apply FUP captive redirect for subscription %s: %s",
+                        subscription_id,
+                        exc,
+                    )
+                return
         if action == "suspend":
             from app.models.enforcement_lock import EnforcementReason
             from app.services.account_lifecycle import suspend_subscription
