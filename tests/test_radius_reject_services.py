@@ -114,9 +114,13 @@ def test_block_chain_rejects_tcp_udp_then_drops_rest():
     assert udp_idx < drop_idx
 
 
-def test_enforce_subscription_reject_ip_treats_blocked_subscription_as_captive_redirect(
+def test_enforce_subscription_reject_ip_does_not_swap_blocked_subscription_ip(
     db_session, subscription, subscriber
 ):
+    """Dual-run decision (2026-06-11): blocked subscriptions are NOT moved onto
+    a reject-pool IP — those pools have no NAT/redirect on the BNGs, so a
+    swapped customer is black-holed off the payment portal. Enforcement is the
+    walled-garden (address-list) path; this call is a no-op for blocked subs."""
     subscriber.captive_redirect_enabled = True
     subscription.status = SubscriptionStatus.blocked
     db_session.add_all(
@@ -144,7 +148,6 @@ def test_enforce_subscription_reject_ip_treats_blocked_subscription_as_captive_r
     )
 
     assert result["ok"] is True
-    assert result["mode"] == "block"
-    assigned_ip = ipaddress.ip_address(result["ip"])
-    assert assigned_ip in ipaddress.ip_network("10.12.0.0/16")
-    assert assigned_ip not in ipaddress.ip_network("10.11.0.0/16")
+    assert result["changed"] is False
+    assert result["mode"] == "noop_block_swap_disabled"
+    assert "ip" not in result
