@@ -4,8 +4,8 @@ The model and service layer arrived in the original backup-module copy but
 were never wired or migrated; this creates the table for the now-exposed
 customer Service Location page (pin-correction requests with admin review).
 
-Revision ID: 142_customer_location_change_requests
-Revises: 141_billing_money_hardening
+Revision ID: 143_customer_location_change_requests
+Revises: 142_perf_hot_page_indexes
 Create Date: 2026-06-12
 """
 
@@ -17,8 +17,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "142_customer_location_change_requests"
-down_revision = "141_billing_money_hardening"
+revision = "143_customer_location_change_requests"
+down_revision = "142_perf_hot_page_indexes"
 branch_labels = None
 depends_on = None
 
