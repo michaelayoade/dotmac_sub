@@ -261,11 +261,6 @@ SETTINGS_CATEGORIES: list[dict] = [
         "description": "Audit trails, delivery logs, and system events",
         "links": [
             {
-                "name": "Log Center",
-                "url": "/admin/system/logs",
-                "description": "All log viewers in one place",
-            },
-            {
                 "name": "Audit Log",
                 "url": "/admin/system/audit",
                 "description": "Admin operations audit trail",
