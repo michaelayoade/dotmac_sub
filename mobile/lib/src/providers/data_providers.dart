@@ -16,7 +16,9 @@ import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../models/reseller.dart';
+import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
+import '../repositories/wallet_repository.dart';
 import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
@@ -35,6 +37,9 @@ final catalogRepositoryProvider = Provider<CatalogRepository>(
 
 final supportRepositoryProvider = Provider<SupportRepository>(
     (ref) => SupportRepository(ref.watch(apiClientProvider).dio));
+
+final walletRepositoryProvider = Provider<WalletRepository>(
+    (ref) => WalletRepository(ref.watch(apiClientProvider).dio));
 
 final notificationRepositoryProvider = Provider<NotificationRepository>(
     (ref) => NotificationRepository(ref.watch(apiClientProvider).dio));
@@ -321,6 +326,12 @@ final notificationsProvider =
     FutureProvider.autoDispose<Page<AppNotification>>((ref) async {
   cacheFor(ref);
   return ref.watch(notificationRepositoryProvider).list();
+});
+
+/// Null when the wallet feature is disabled server-side (404) — UI hides.
+final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
+  cacheFor(ref);
+  return ref.watch(walletRepositoryProvider).overviewOrNull();
 });
 
 final ticketsProvider = FutureProvider.autoDispose<Page<Ticket>>((ref) async {

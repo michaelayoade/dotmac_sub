@@ -692,6 +692,53 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
     ),
     SettingSpec(
+        domain=SettingDomain.vas,
+        key="enabled",
+        env_var="VAS_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="topup_min",
+        env_var="VAS_TOPUP_MIN",
+        value_type=SettingValueType.integer,
+        default=100,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="topup_max_per_txn",
+        env_var="VAS_TOPUP_MAX_PER_TXN",
+        value_type=SettingValueType.integer,
+        default=50000,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="topup_daily_limit",
+        env_var="VAS_TOPUP_DAILY_LIMIT",
+        value_type=SettingValueType.integer,
+        default=100000,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="purchase_txn_limit",
+        env_var="VAS_PURCHASE_TXN_LIMIT",
+        value_type=SettingValueType.integer,
+        default=50000,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="auth_threshold",
+        env_var="VAS_AUTH_THRESHOLD",
+        value_type=SettingValueType.integer,
+        default=5000,
+        min_value=0,
+    ),
+    SettingSpec(
         domain=SettingDomain.scheduler,
         key="broker_url",
         env_var="CELERY_BROKER_URL",
@@ -2603,6 +2650,7 @@ DOMAIN_SETTINGS_SERVICE = {
     SettingDomain.subscription_engine: settings_service.subscription_engine_settings,
     SettingDomain.gis: settings_service.gis_settings,
     SettingDomain.scheduler: settings_service.scheduler_settings,
+    SettingDomain.vas: settings_service.vas_settings,
 }
 
 

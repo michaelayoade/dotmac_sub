@@ -7,6 +7,7 @@ from app.web.customer.auth import router as auth_router
 from app.web.customer.contracts import router as contracts_router
 from app.web.customer.location import router as location_router
 from app.web.customer.routes import router as portal_router
+from app.web.customer.wallet import router as wallet_router
 
 router = APIRouter()
 
@@ -27,6 +28,7 @@ def customer_legacy_redirect(request: Request, path: str):
 router.include_router(auth_router)
 router.include_router(portal_router)
 router.include_router(contracts_router)
+router.include_router(wallet_router)
 router.include_router(location_router)
 
 __all__ = ["router"]
