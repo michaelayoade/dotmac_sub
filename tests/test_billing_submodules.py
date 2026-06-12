@@ -1932,6 +1932,6 @@ class TestOverpaymentAllocation:
         assert alloc_total == Decimal("10000.00")
         assert invoice.balance_due == Decimal("0.00")
         # The NGN 4,000 surplus is credited to the account, not lost.
-        assert _customer_credit_balance(
-            db_session, str(subscriber.id)
-        ) == Decimal("4000.00")
+        assert _customer_credit_balance(db_session, str(subscriber.id)) == Decimal(
+            "4000.00"
+        )

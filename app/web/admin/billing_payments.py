@@ -387,9 +387,7 @@ def payment_create(
             if errs:
                 first = errs[0]
                 field = (
-                    str((first.get("loc") or ("value",))[-1])
-                    .replace("_", " ")
-                    .strip()
+                    str((first.get("loc") or ("value",))[-1]).replace("_", " ").strip()
                 )
                 msg = first.get("msg", "is invalid")
                 error_message = (

@@ -634,7 +634,9 @@ class Payments(ListResponseMixin):
             )
             if invoice_balance < 0:
                 invoice_balance = Decimal("0.00")
-            alloc_amount = min(round_money(to_decimal(allocation.amount)), invoice_balance)
+            alloc_amount = min(
+                round_money(to_decimal(allocation.amount)), invoice_balance
+            )
             if alloc_amount <= 0:
                 # Invoice already settled; leave the amount in ``remaining`` so
                 # it is credited as account/wallet balance below.
