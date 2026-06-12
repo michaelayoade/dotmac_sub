@@ -26,6 +26,11 @@
 		<string>????</string>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<!-- Export compliance: the app uses only standard HTTPS/TLS (exempt
+		     encryption), so declare it here to skip the per-build "Missing
+		     Compliance" prompt in TestFlight/App Store Connect. -->
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
 		<!-- Payment gateway return scheme: the gateway redirects to
 		     dotmacpay://success|cancel after checkout, so the OS can hand the
 		     link back to the app even when a 3-D Secure / bank flow leaves the
