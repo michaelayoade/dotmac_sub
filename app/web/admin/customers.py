@@ -701,14 +701,62 @@ def person_detail_stats(
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def person_pppoe_password(
+    request: Request,
     customer_id: str,
     credential_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
+    """Reveal a customer's reusable PPPoE service password.
+
+    Staff-only (admin router is system_user-gated). Every reveal is audited
+    and per-actor rate-limited — this exposes a reusable credential whose leak
+    equals takeover of the customer's connection.
+    """
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import record_audit_event
+    from app.services.rate_limiter_adapter import allow_operation
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+
+    decision = allow_operation(
+        f"pppoe-reveal:{actor_id or 'unknown'}",
+        limit=30,
+        window_seconds=3600,
+    )
+    if not decision.allowed:
+        record_audit_event(
+            db,
+            action="customer.pppoe_password_reveal",
+            entity_type="subscriber",
+            entity_id=str(customer_id),
+            actor_type=AuditActorType.user,
+            actor_id=actor_id,
+            metadata={"credential_id": credential_id, "reason": "rate_limited"},
+            status_code=429,
+            is_success=False,
+        )
+        return JSONResponse(
+            {"password": "", "detail": "Reveal rate limit reached. Try again later."},
+            status_code=429,
+        )
+
     password, found = web_customer_details_service.reveal_customer_pppoe_password(
         db,
         customer_id,
         credential_id=credential_id,
+    )
+    record_audit_event(
+        db,
+        action="customer.pppoe_password_reveal",
+        entity_type="subscriber",
+        entity_id=str(customer_id),
+        actor_type=AuditActorType.user,
+        actor_id=actor_id,
+        metadata={"credential_id": credential_id, "found": bool(found)},
+        status_code=200 if found else 404,
+        is_success=bool(found),
     )
     if not found:
         return JSONResponse({"password": ""}, status_code=404)
