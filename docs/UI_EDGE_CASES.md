@@ -50,7 +50,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [ ] Expire (past end_at) cuts access; vacation-hold auto-resume
 - [ ] Cancel mid-cycle; reactivate cancelled/expired
 - [ ] PPPoE reveal (staff-only); rotate service password → RADIUS resync
-- [!] Plan-change leaves `unit_price` stale — `#10` (follow-up, not yet fixed)
+- [x] `#10` Plan-change now refreshes `unit_price` to the new offer's recurring price — fixed PR #224 (Subscriptions.update), unit-tested (2026-06-12)
 
 ## 5. Change-plan & proration
 - [x] Upgrade quote + shortfall enforcement (2026-06-12)
@@ -71,7 +71,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] `#11` Overpayment now caps allocation at the invoice balance and credits the surplus to the account wallet — fixed PR #224 (decision: cap + credit wallet), unit-tested (2026-06-12)
 - [x] Partial payment → status `partially_paid` + correct remaining balance (2026-06-12)
 - [x] Zero/negative amount rejected (Pydantic gt=0) (2026-06-12)
-- [!] `#12` Validation errors render as raw Pydantic strings to admin (leaks internals + pydantic.dev URL) — minor UX, FOLLOW-UP (cross-cutting: needs a shared admin form-error formatter)
+- [x] `#12` Payment form now formats validation errors cleanly (no raw Pydantic dump / pydantic.dev URL) — fixed PR #224 (payment_create handler). Broader admin forms still use str(exc); a shared formatter remains a wider follow-up
 - [ ] Non-numeric amount; wrong currency vs invoice currency
 - [ ] Customer-portal pay of an already-paid invoice (blocked/hidden)
 - [ ] Void / refund invoice with a payment; refund > paid
@@ -147,7 +147,7 @@ running finding numbers from the 2026-06-12 driving session.
 ## 16. Empty / loading / error states & a11y
 - [x] Several list empty states (customers/offers/invoices/tickets) (2026-06-12)
 - [x] Unknown URL → branded 404 (no stack trace), shows Reference ID (2026-06-12)
-- [!] `#14` Generic error templates (errors/404,400,403,409,500) hardcode "Go to dashboard" → /admin/dashboard; wrong for portal/reseller context (customer→staff login). FOLLOW-UP (cross-cutting: context-aware link or route unknown /portal & /reseller 404s to their own templates)
+- [x] `#14` Error handler now routes /portal & /reseller errors to their branded templates (correct dashboard link), not just /admin — fixed PR #224 (_template_response). Note: customer/reseller lack some status-code templates (403/409/500) and still fall back to the generic admin-linked one — a minor residual
 - [x] Backend dep down (VictoriaMetrics) → graceful (logged errors, page renders) (2026-06-12, observed)
 - [!] Console errors on change-plan page — `#4` fixed PR #224
 - [ ] Keyboard nav / focus / aria on forms; dark-mode; responsive breakpoints

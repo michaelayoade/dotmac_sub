@@ -377,6 +377,30 @@ def payment_create(
         balance_value = result["balance_value"]
         balance_display = result["balance_display"]
     except Exception as exc:
+        # Surface a clean message instead of the raw Pydantic ValidationError
+        # dump (which leaks internal type names and a pydantic.dev URL to staff).
+        from fastapi import HTTPException as _HTTPException
+        from pydantic import ValidationError as _ValidationError
+
+        if isinstance(exc, _ValidationError):
+            errs = exc.errors()
+            if errs:
+                first = errs[0]
+                field = (
+                    str((first.get("loc") or ("value",))[-1])
+                    .replace("_", " ")
+                    .strip()
+                )
+                msg = first.get("msg", "is invalid")
+                error_message = (
+                    f"{field[:1].upper()}{field[1:]}: {msg}" if field else msg
+                )
+            else:
+                error_message = "Invalid input"
+        elif isinstance(exc, _HTTPException):
+            error_message = str(exc.detail)
+        else:
+            error_message = str(exc)
         deps = cast(
             dict[str, object],
             web_billing_payment_forms_service.load_create_error_dependencies(
@@ -386,7 +410,7 @@ def payment_create(
             ),
         )
         error_state = web_billing_payment_forms_service.build_create_error_context(
-            error=str(exc),
+            error=error_message,
             deps=deps,
             resolved_invoice=resolved_invoice,
             invoice_id=invoice_id,
