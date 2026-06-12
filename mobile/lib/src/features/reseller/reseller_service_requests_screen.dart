@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -136,6 +137,8 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
   final _address = TextEditingController();
   final _notes = TextEditingController();
   LatLng? _pin;
+  final _mapController = MapController();
+  bool _locating = false;
   bool _busy = false;
   String? _error;
 
@@ -145,6 +148,41 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _useMyLocation() async {
+    setState(() => _locating = true);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        throw const LocationServiceDisabledException();
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        throw const PermissionDeniedException('denied');
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      if (!mounted) return;
+      final point = LatLng(position.latitude, position.longitude);
+      setState(() => _pin = point);
+      _mapController.move(point, 17);
+    } on LocationServiceDisabledException {
+      setState(
+          () => _error = 'Turn on location services to use your GPS position.');
+    } catch (_) {
+      setState(() =>
+          _error = 'Location permission is needed to use your GPS position.');
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
   }
 
   Future<void> _submit() async {
@@ -226,30 +264,48 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
               height: 180,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: FlutterMap(
-                  options: MapOptions(
-                    initialCenter: _pin ?? const LatLng(6.5244, 3.3792),
-                    initialZoom: 11,
-                    onTap: (_, point) => setState(() => _pin = point),
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'io.dotmac.selfcare',
+                child: Stack(children: [
+                  FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: _pin ?? const LatLng(6.5244, 3.3792),
+                      initialZoom: 11,
+                      onTap: (_, point) => setState(() => _pin = point),
                     ),
-                    if (_pin != null)
-                      MarkerLayer(markers: [
-                        Marker(
-                          point: _pin!,
-                          width: 36,
-                          height: 36,
-                          child: const Icon(Icons.location_on,
-                              color: Colors.red, size: 32),
-                        ),
-                      ]),
-                  ],
-                ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'io.dotmac.selfcare',
+                      ),
+                      if (_pin != null)
+                        MarkerLayer(markers: [
+                          Marker(
+                            point: _pin!,
+                            width: 36,
+                            height: 36,
+                            child: const Icon(Icons.location_on,
+                                color: Colors.red, size: 32),
+                          ),
+                        ]),
+                    ],
+                  ),
+                  Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: FloatingActionButton.small(
+                      heroTag: 'sr-gps',
+                      onPressed: _locating ? null : _useMyLocation,
+                      tooltip: 'Use my current location',
+                      child: _locating
+                          ? const SizedBox(
+                              height: 16,
+                              width: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.my_location, size: 18),
+                    ),
+                  ),
+                ]),
               ),
             ),
             const SizedBox(height: 8),
