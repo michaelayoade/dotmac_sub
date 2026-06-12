@@ -4,7 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Biometric app-lock (local_auth). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
-    <!-- Opt-in "attach my location" on fault reports (geolocator).
+    <!-- Android 13+ runtime permission for FCM/local notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Service-location pin validation + reseller install pins (geolocator).
          Foreground-only; no background location. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
@@ -46,6 +48,11 @@
                 <data android:scheme="${paymentScheme}"/>
             </intent-filter>
         </activity>
+        <!-- FCM: route backgrounded notification messages to the high-importance
+             channel created in PushService (default_high_importance). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="default_high_importance"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

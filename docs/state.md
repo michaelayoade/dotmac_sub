@@ -2,6 +2,12 @@
 
 *Last updated: 2026-03-15*
 
+> **Superseded 2026-06-12** — the sections below describe 2026-03 work (support
+> module untracked, pending migrations `a8b9c0d1e2f3`…, "rate limiting not yet
+> done", etc.) that has since shipped. For current launch status see
+> `docs/LAUNCH_CHECKLIST.md`. Retained below for history only; do not treat as
+> live state.
+
 This file tracks in-progress work, current priorities, and known issues to provide continuity across development sessions.
 
 ---

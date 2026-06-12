@@ -1044,6 +1044,12 @@ def seed_geocoding_settings(db: Session) -> None:
     )
     geocoding_settings.ensure_by_key(
         db,
+        key="country_codes",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_COUNTRY_CODES", "ng"),
+    )
+    geocoding_settings.ensure_by_key(
+        db,
         key="user_agent",
         value_type=SettingValueType.string,
         value_text=os.getenv("GEOCODING_USER_AGENT", "dotmac_sm"),
