@@ -69,6 +69,33 @@ def get_or_create_wallet(db: Session, subscriber_id: str) -> VasWallet:
     return wallet
 
 
+def get_or_create_reseller_wallet(db: Session, reseller_id: str) -> VasWallet:
+    """The reseller float wallet (commissions credit here; sells debit it)."""
+    rid = coerce_uuid(reseller_id)
+    wallet = db.scalars(select(VasWallet).where(VasWallet.reseller_id == rid)).first()
+    if wallet:
+        return wallet
+    wallet = VasWallet(reseller_id=rid)
+    db.add(wallet)
+    db.commit()
+    db.refresh(wallet)
+    return wallet
+
+
+def _lock_wallet_owner(db: Session, wallet: VasWallet) -> None:
+    """Serialize read-modify-write per wallet owner (cf. lock_account)."""
+    if wallet.subscriber_id is not None:
+        lock_account(db, str(wallet.subscriber_id))
+        return
+    from app.models.subscriber import Reseller
+
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        db.query(Reseller).filter(Reseller.id == wallet.reseller_id).with_for_update(
+            of=Reseller
+        ).first()
+
+
 def wallet_balance(db: Session, wallet_id) -> Decimal:
     credit = db.query(
         func.coalesce(func.sum(VasWalletEntry.amount), Decimal("0.00"))
@@ -145,10 +172,8 @@ def debit_wallet(
     payment_id=None,
     memo: str | None = None,
 ) -> VasWalletEntry:
-    """Debit under lock_account — insufficient funds is a 400, never negative."""
-    if wallet.subscriber_id is None:
-        raise HTTPException(status_code=400, detail="Unsupported wallet owner")
-    lock_account(db, str(wallet.subscriber_id))
+    """Debit under an owner lock — insufficient funds is a 400, never negative."""
+    _lock_wallet_owner(db, wallet)
     balance = wallet_balance(db, wallet.id)
     if amount > balance:
         raise HTTPException(status_code=400, detail="Insufficient wallet balance")
@@ -188,6 +213,16 @@ def initiate_topup(db: Session, subscriber_id: str, amount: Decimal) -> dict:
     """
     require_enabled(db)
     wallet = get_or_create_wallet(db, subscriber_id)
+    return _initiate_topup_for_wallet(db, wallet, amount)
+
+
+def initiate_reseller_topup(db: Session, reseller_id: str, amount: Decimal) -> dict:
+    require_enabled(db)
+    wallet = get_or_create_reseller_wallet(db, reseller_id)
+    return _initiate_topup_for_wallet(db, wallet, amount)
+
+
+def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) -> dict:
     amount = Decimal(str(amount))
     min_amount = Decimal(_setting_int(db, "topup_min", 100))
     max_amount = Decimal(_setting_int(db, "topup_max_per_txn", 50000))
@@ -227,6 +262,20 @@ def verify_topup(
     """Verify a gateway top-up and credit the wallet (idempotent on reference)."""
     require_enabled(db)
     wallet = get_or_create_wallet(db, subscriber_id)
+    return _verify_topup_for_wallet(db, wallet, reference, provider=provider)
+
+
+def verify_reseller_topup(
+    db: Session, reseller_id: str, reference: str, *, provider: str | None = None
+) -> dict:
+    require_enabled(db)
+    wallet = get_or_create_reseller_wallet(db, reseller_id)
+    return _verify_topup_for_wallet(db, wallet, reference, provider=provider)
+
+
+def _verify_topup_for_wallet(
+    db: Session, wallet: VasWallet, reference: str, *, provider: str | None = None
+) -> dict:
 
     existing = db.scalars(
         select(VasWalletEntry).where(VasWalletEntry.reference == reference)

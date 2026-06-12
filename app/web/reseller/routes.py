@@ -1,6 +1,6 @@
 """Reseller portal routes."""
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Body, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,48 @@ def reseller_dashboard(
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_dashboard(request, db, page, per_page)
+
+
+@router.get("/vas", response_class=HTMLResponse)
+def reseller_vas(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_vas_page(request, db)
+
+
+@router.post("/vas/topup/intent")
+def reseller_vas_topup_intent(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_vas_topup_intent(
+        request, db, payload.get("amount")
+    )
+
+
+@router.get("/vas/topup/verify", response_class=HTMLResponse)
+def reseller_vas_topup_verify(
+    request: Request, reference: str, db: Session = Depends(get_db)
+):
+    return web_reseller_routes_service.reseller_vas_topup_verify(request, db, reference)
+
+
+@router.post("/vas/sell")
+def reseller_vas_sell(
+    request: Request,
+    service_id: str = Form(...),
+    identifier: str = Form(...),
+    variation_code: str = Form(""),
+    amount: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_vas_sell(
+        request,
+        db,
+        service_id=service_id,
+        identifier=identifier,
+        variation_code=variation_code,
+        amount=amount,
+    )
 
 
 @router.get("/service-requests", response_class=HTMLResponse)

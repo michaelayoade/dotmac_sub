@@ -237,3 +237,29 @@ def verify_webhook_signature(
 def get_public_key(db: Session | None = None) -> str:
     """Return the Paystack public key for frontend use."""
     return _get_public_key(db)
+
+
+def refund_transaction(
+    db: Session, reference: str, amount: Decimal | None = None
+) -> dict[str, Any]:
+    """Refund a settled transaction back to its source card.
+
+    Refund-to-source is the only customer-initiated money-out path for the
+    VAS wallet (docs/designs/VTU_BILL_PAYMENTS.md) — never an arbitrary
+    bank account. Partial refunds pass an amount; omit for full refund.
+    """
+    secret_key = _get_secret_key(db)
+    payload: dict[str, Any] = {"transaction": reference}
+    if amount is not None:
+        payload["amount"] = amount_to_kobo(amount)
+    response = httpx.post(
+        f"{PAYSTACK_API_BASE}/refund",
+        json=payload,
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not body.get("status"):
+        raise ValueError(body.get("message") or "Refund failed")
+    return body.get("data") or {}

@@ -267,3 +267,39 @@ class VasTransaction(Base):
 
     wallet = relationship("VasWallet")
     service = relationship("VasService")
+
+
+class VasPartyType(enum.Enum):
+    owner = "owner"
+    reseller = "reseller"
+
+
+class VasRateCard(Base):
+    """Effective-dated commission rates per category and party.
+
+    The owner row tracks our VTPass rate as volume tiers us up; reseller rows
+    are the fixed rates locked per agreement (deferred-override model: the
+    spread owner_rate - reseller_rate is the platform margin and is NEVER
+    exposed to resellers). Rates answer "what's the rate now"; each
+    transaction snapshots what IT was priced at.
+    """
+
+    __tablename__ = "vas_rate_cards"
+    __table_args__ = (
+        Index("ix_vas_rate_cards_lookup", "category", "party_type", "effective_from"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    category: Mapped[str] = mapped_column(String(60), nullable=False)
+    party_type: Mapped[VasPartyType] = mapped_column(Enum(VasPartyType), nullable=False)
+    rate_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    memo: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )

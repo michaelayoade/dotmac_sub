@@ -137,3 +137,36 @@ class VasTransactionRead(BaseModel):
     @classmethod
     def _status_value(cls, value):
         return getattr(value, "value", value)
+
+
+class VasResellerTransactionRead(BaseModel):
+    """Reseller-facing purchase read.
+
+    DELIBERATELY excludes owner-side economics (vtpass_rate_pct, owner_net):
+    resellers see only their fixed rate and payout — the override margin is
+    internal by design (enforced by test_vas_phase3 invariants).
+    """
+
+    id: UUID
+    status: str
+    service_name: str | None = None
+    identifier: str
+    variation_code: str | None = None
+    amount: Decimal
+    commission_rate_pct: Decimal | None = None
+    commission_amount: Decimal | None = None
+    token: str | None = None
+    error: str | None = None
+    created_at: datetime
+    delivered_at: datetime | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_value(cls, value):
+        return getattr(value, "value", value)
+
+
+class VasCommissionStatementResponse(BaseModel):
+    total_earned: Decimal
+    currency: str = "NGN"
+    entries: list[VasWalletEntryRead] = []
