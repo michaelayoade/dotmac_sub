@@ -1,0 +1,367 @@
+"""Tests for the VAS purchase engine (Phase 2 state machine)."""
+
+import uuid
+from decimal import Decimal
+from unittest.mock import patch
+
+import pytest
+from fastapi import HTTPException
+
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscriber import Subscriber
+from app.models.vas import (
+    VasEntryCategory,
+    VasService,
+    VasServiceVariation,
+    VasTransactionStatus,
+)
+from app.services import vas_purchases, vas_wallet
+
+
+def _enable_vas(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.vas, key="enabled", value_text="true", is_active=True
+        )
+    )
+    db_session.commit()
+
+
+def _subscriber(db_session):
+    subscriber = Subscriber(
+        first_name="Buyer",
+        last_name="One",
+        email=f"buyer-{uuid.uuid4().hex}@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+    db_session.refresh(subscriber)
+    return subscriber
+
+
+def _airtime_service(db_session, *, enabled=True, category="airtime"):
+    service = VasService(
+        category=category,
+        service_id=f"mtn-{uuid.uuid4().hex[:6]}",
+        name="MTN Airtime",
+        is_enabled=enabled,
+        min_amount=Decimal("50"),
+        max_amount=Decimal("50000"),
+    )
+    db_session.add(service)
+    db_session.commit()
+    db_session.refresh(service)
+    return service
+
+
+def _funded_wallet(db_session, subscriber, amount="10000.00"):
+    wallet = vas_wallet.get_or_create_wallet(db_session, str(subscriber.id))
+    vas_wallet.credit_wallet(
+        db_session,
+        wallet,
+        amount=Decimal(amount),
+        category=VasEntryCategory.topup,
+        reference=f"fund-{uuid.uuid4().hex[:8]}",
+    )
+    return wallet
+
+
+def _ok_float():
+    return patch.object(
+        vas_purchases.vtpass, "get_balance", return_value=Decimal("1000000")
+    )
+
+
+DELIVERED_BODY = {
+    "code": "000",
+    "content": {"transactions": {"status": "delivered"}},
+    "purchased_code": "Token: 1234-5678-9012",
+}
+PROCESSING_BODY = {"code": "099", "response_description": "TRANSACTION PROCESSING"}
+FAILED_BODY = {"code": "016", "response_description": "TRANSACTION FAILED"}
+
+
+class TestCatalog:
+    def test_customer_catalog_filters_disabled(self, db_session):
+        _enable_vas(db_session)
+        _airtime_service(db_session, enabled=True)
+        _airtime_service(db_session, enabled=False)
+        _airtime_service(db_session, enabled=True, category="electricity-bill")
+        catalog = vas_purchases.customer_catalog(db_session)
+        assert len(catalog) == 1  # electricity not in enabled_categories default
+        assert catalog[0]["category"] == "airtime"
+        assert len(catalog[0]["services"]) == 1
+
+
+class TestPurchaseStateMachine:
+    def test_delivered_immediately(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("1000"),
+            )
+        assert txn.status == VasTransactionStatus.delivered
+        assert txn.delivered_at is not None
+        assert vas_purchases.transaction_token(txn) == "Token: 1234-5678-9012"
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9000.00")
+
+    def test_processing_stays_submitted(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=PROCESSING_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert txn.status == VasTransactionStatus.submitted
+        # Money stays debited while ambiguous — no refund yet.
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9500.00")
+
+    def test_failed_refunds_instantly(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=FAILED_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert txn.status == VasTransactionStatus.refunded
+        assert txn.refunded_at is not None
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("10000.00")
+
+    def test_transport_error_keeps_debit_for_requery(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(
+                vas_purchases.vtpass,
+                "pay",
+                side_effect=HTTPException(status_code=502, detail="down"),
+            ),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        # Ambiguous: may have reached the provider — requery decides, no refund.
+        assert txn.status == VasTransactionStatus.submitted
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9500.00")
+
+    def test_insufficient_wallet_blocks_before_provider(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay") as mock_pay,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert exc_info.value.status_code == 400
+        mock_pay.assert_not_called()
+
+    def test_float_gate_blocks_before_debit(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            patch.object(
+                vas_purchases.vtpass, "get_balance", return_value=Decimal("5000")
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert exc_info.value.status_code == 503
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("10000.00")
+
+    def test_disabled_service_404(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session, enabled=False)
+        with pytest.raises(HTTPException) as exc_info:
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert exc_info.value.status_code == 404
+
+    def test_variation_fixed_price_wins(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session, category="data")
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.vas,
+                key="enabled_categories",
+                value_text="airtime,data",
+                is_active=True,
+            )
+        )
+        variation = VasServiceVariation(
+            service_pk=service.id,
+            code="mtn-1gb",
+            name="1GB - 30 days",
+            amount=Decimal("350.00"),
+        )
+        db_session.add(variation)
+        db_session.commit()
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(
+                vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY
+            ) as mock_pay,
+        ):
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                variation_code="mtn-1gb",
+                amount=Decimal("9999"),  # ignored — variation price wins
+            )
+        assert mock_pay.call_args.kwargs["amount"] == Decimal("350.00")
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9650.00")
+
+
+class TestRequerySweep:
+    def _submitted_txn(self, db_session, subscriber, service):
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=PROCESSING_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        return wallet, txn
+
+    def test_requery_delivers(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet, txn = self._submitted_txn(db_session, subscriber, service)
+        with patch.object(vas_purchases.vtpass, "requery", return_value=DELIVERED_BODY):
+            stats = vas_purchases.run_requery_sweep(db_session)
+        db_session.refresh(txn)
+        assert stats["delivered"] == 1
+        assert txn.status == VasTransactionStatus.delivered
+        assert vas_purchases.transaction_token(txn) is not None
+
+    def test_requery_failure_refunds(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet, txn = self._submitted_txn(db_session, subscriber, service)
+        with patch.object(vas_purchases.vtpass, "requery", return_value=FAILED_BODY):
+            stats = vas_purchases.run_requery_sweep(db_session)
+        db_session.refresh(txn)
+        assert stats["refunded"] == 1
+        assert txn.status == VasTransactionStatus.refunded
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("10000.00")
+
+    def test_requery_exhaustion_goes_to_review_not_refund(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet, txn = self._submitted_txn(db_session, subscriber, service)
+        txn.requery_attempts = vas_purchases.REQUERY_MAX_ATTEMPTS - 1
+        db_session.commit()
+        with patch.object(
+            vas_purchases.vtpass, "requery", return_value=PROCESSING_BODY
+        ):
+            stats = vas_purchases.run_requery_sweep(db_session)
+        db_session.refresh(txn)
+        assert stats["review"] == 1
+        assert txn.status == VasTransactionStatus.review
+        # Crucially: NOT refunded — money stays held for manual resolution.
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9500.00")
+
+    def test_provider_unreachable_leaves_submitted(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet, txn = self._submitted_txn(db_session, subscriber, service)
+        with patch.object(
+            vas_purchases.vtpass,
+            "requery",
+            side_effect=HTTPException(status_code=502, detail="down"),
+        ):
+            vas_purchases.run_requery_sweep(db_session)
+        db_session.refresh(txn)
+        assert txn.status == VasTransactionStatus.submitted
+
+
+class TestOwnership:
+    def test_get_transaction_is_owner_scoped(self, db_session):
+        _enable_vas(db_session)
+        owner = _subscriber(db_session)
+        attacker = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        _funded_wallet(db_session, owner)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(owner.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        with pytest.raises(HTTPException) as exc_info:
+            vas_purchases.get_transaction(db_session, str(attacker.id), str(txn.id))
+        assert exc_info.value.status_code == 404

@@ -195,6 +195,12 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                       ),
                     ),
                   ]),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => context.push('/bills'),
+                    icon: const Icon(Icons.bolt_outlined, size: 18),
+                    label: const Text('Airtime, data & bills'),
+                  ),
                 ],
               ),
             ),

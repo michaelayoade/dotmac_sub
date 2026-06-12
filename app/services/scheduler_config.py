@@ -423,6 +423,14 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.vas.run_wallet_auto_deduct",
                 "schedule": timedelta(hours=24),
             }
+            schedule["vas_requery"] = {
+                "task": "app.tasks.vas.run_vas_requery",
+                "schedule": timedelta(minutes=5),
+            }
+            schedule["vas_catalog_sync"] = {
+                "task": "app.tasks.vas.sync_vas_catalog",
+                "schedule": timedelta(hours=12),
+            }
         usage_enabled = _effective_bool(
             session,
             SettingDomain.usage,
