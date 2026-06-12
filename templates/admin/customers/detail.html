@@ -233,8 +233,8 @@
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-4 4v-4z"/></svg>
                 Support
-                {% if relationship_summary.open_tickets or relationship_summary.recent_communications %}
-                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ relationship_summary.open_tickets | default(0) }}/{{ relationship_summary.recent_communications | default(0) }}</span>
+                {% if relationship_summary.open_tickets %}
+                <span class="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" title="Open tickets">{{ relationship_summary.open_tickets }}</span>
                 {% endif %}
             </button>
             <button @click="activeTab = 'network'"

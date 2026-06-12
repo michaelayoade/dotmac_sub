@@ -62,6 +62,16 @@ from app.schemas.usage import (
     RadiusAccountingSessionRead,
     UsageSummaryResponse,
 )
+from app.schemas.vas import (
+    VasAutoDeductUpdate,
+    VasPayBillRequest,
+    VasPayBillResponse,
+    VasTopupInitiateRequest,
+    VasTopupInitiateResponse,
+    VasTopupVerifyRequest,
+    VasTopupVerifyResponse,
+    VasWalletOverviewResponse,
+)
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
@@ -74,6 +84,7 @@ from app.services import push as push_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
+from app.services import vas_wallet as vas_wallet_service
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -738,3 +749,72 @@ def my_add_ticket_comment(
     if getattr(comment, "id", None):
         enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
     return comment
+
+
+# --- VAS wallet (feature-flagged: 404 when vas.enabled is off) -------------------
+
+
+@router.get("/wallet", response_model=VasWalletOverviewResponse)
+def my_wallet(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Wallet balance, settings, and recent activity."""
+    subscriber_id = _subscriber_id(principal)
+    overview = vas_wallet_service.wallet_overview(db, subscriber_id)
+    return VasWalletOverviewResponse(**overview)
+
+
+@router.post("/wallet/topup/initiate", response_model=VasTopupInitiateResponse)
+def my_wallet_topup_initiate(
+    payload: VasTopupInitiateRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    subscriber_id = _subscriber_id(principal)
+    result = vas_wallet_service.initiate_topup(db, subscriber_id, payload.amount)
+    customer = _customer(db, principal)
+    return VasTopupInitiateResponse(
+        **result, customer_email=customer.get("username") or None
+    )
+
+
+@router.post("/wallet/topup/verify", response_model=VasTopupVerifyResponse)
+def my_wallet_topup_verify(
+    payload: VasTopupVerifyRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    subscriber_id = _subscriber_id(principal)
+    try:
+        result = vas_wallet_service.verify_topup(
+            db, subscriber_id, payload.reference, provider=payload.provider
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return VasTopupVerifyResponse(**result)
+
+
+@router.post("/wallet/pay-bill", response_model=VasPayBillResponse)
+def my_wallet_pay_bill(
+    payload: VasPayBillRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Pay the caller's DotMac bill from their wallet (the only wallet→billing
+    bridge; allocation matches an ordinary gateway payment)."""
+    subscriber_id = _subscriber_id(principal)
+    result = vas_wallet_service.pay_bill(db, subscriber_id, payload.amount)
+    return VasPayBillResponse(**result)
+
+
+@router.patch("/wallet/auto-deduct", response_model=VasWalletOverviewResponse)
+def my_wallet_auto_deduct(
+    payload: VasAutoDeductUpdate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    subscriber_id = _subscriber_id(principal)
+    vas_wallet_service.set_auto_deduct(db, subscriber_id, payload.enabled)
+    overview = vas_wallet_service.wallet_overview(db, subscriber_id)
+    return VasWalletOverviewResponse(**overview)
