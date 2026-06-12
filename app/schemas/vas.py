@@ -73,3 +73,65 @@ class VasPayBillResponse(BaseModel):
 
 class VasAutoDeductUpdate(BaseModel):
     enabled: bool
+
+
+class VasVariationRead(BaseModel):
+    code: str
+    name: str
+    amount: Decimal | None = None
+
+
+class VasServiceRead(BaseModel):
+    service_id: str
+    name: str
+    image_url: str | None = None
+    identifier_label: str = "Phone number"
+    requires_verify: bool = False
+    min_amount: Decimal | None = None
+    max_amount: Decimal | None = None
+    variations: list[VasVariationRead] = []
+
+
+class VasCategoryRead(BaseModel):
+    category: str
+    services: list[VasServiceRead] = []
+
+
+class VasVerifyRequest(BaseModel):
+    service_id: str = Field(min_length=1, max_length=120)
+    identifier: str = Field(min_length=2, max_length=120)
+    variation_type: str | None = Field(default=None, max_length=60)
+
+
+class VasVerifyResponse(BaseModel):
+    customer_name: str | None = None
+    address: str | None = None
+
+
+class VasPurchaseRequest(BaseModel):
+    service_id: str = Field(min_length=1, max_length=120)
+    identifier: str = Field(min_length=2, max_length=120)
+    variation_code: str | None = Field(default=None, max_length=120)
+    amount: Decimal | None = Field(default=None, gt=0)
+    phone: str | None = Field(default=None, max_length=40)
+
+
+class VasTransactionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status: str
+    service_name: str | None = None
+    identifier: str
+    variation_code: str | None = None
+    amount: Decimal
+    token: str | None = None
+    error: str | None = None
+    created_at: datetime
+    delivered_at: datetime | None = None
+    refunded_at: datetime | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_value(cls, value):
+        return getattr(value, "value", value)

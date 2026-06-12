@@ -64,12 +64,17 @@ from app.schemas.usage import (
 )
 from app.schemas.vas import (
     VasAutoDeductUpdate,
+    VasCategoryRead,
     VasPayBillRequest,
     VasPayBillResponse,
+    VasPurchaseRequest,
     VasTopupInitiateRequest,
     VasTopupInitiateResponse,
     VasTopupVerifyRequest,
     VasTopupVerifyResponse,
+    VasTransactionRead,
+    VasVerifyRequest,
+    VasVerifyResponse,
     VasWalletOverviewResponse,
 )
 from app.services import autopay as autopay_service
@@ -84,6 +89,7 @@ from app.services import push as push_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
+from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
 from app.services.auth_dependencies import require_user_auth
 
@@ -818,3 +824,98 @@ def my_wallet_auto_deduct(
     vas_wallet_service.set_auto_deduct(db, subscriber_id, payload.enabled)
     overview = vas_wallet_service.wallet_overview(db, subscriber_id)
     return VasWalletOverviewResponse(**overview)
+
+
+# --- VAS bill payments (Phase 2, same vas.enabled flag) --------------------------
+
+
+def _txn_read(txn) -> VasTransactionRead:
+    return VasTransactionRead(
+        id=txn.id,
+        status=txn.status,
+        service_name=txn.service.name if txn.service else None,
+        identifier=txn.identifier,
+        variation_code=txn.variation_code,
+        amount=txn.amount,
+        token=vas_purchases_service.transaction_token(txn),
+        error=txn.error,
+        created_at=txn.created_at,
+        delivered_at=txn.delivered_at,
+        refunded_at=txn.refunded_at,
+    )
+
+
+@router.get("/vas/catalog", response_model=list[VasCategoryRead])
+def my_vas_catalog(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Enabled bill-payment categories/services/plans."""
+    _subscriber_id(principal)
+    return vas_purchases_service.customer_catalog(db)
+
+
+@router.post("/vas/verify", response_model=VasVerifyResponse)
+def my_vas_verify(
+    payload: VasVerifyRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Resolve a meter/smartcard/account number to the customer name before
+    any money moves."""
+    _subscriber_id(principal)
+    result = vas_purchases_service.verify_identifier(
+        db,
+        service_id=payload.service_id,
+        identifier=payload.identifier,
+        variation_type=payload.variation_type,
+    )
+    return VasVerifyResponse(
+        customer_name=result.get("customer_name"), address=result.get("address")
+    )
+
+
+@router.post("/vas/purchases", response_model=VasTransactionRead, status_code=201)
+def my_vas_purchase(
+    payload: VasPurchaseRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Buy airtime/data/bills from the wallet (immediate debit, requery-backed
+    delivery, auto-refund to wallet on definitive failure)."""
+    subscriber_id = _subscriber_id(principal)
+    txn = vas_purchases_service.purchase(
+        db,
+        subscriber_id=subscriber_id,
+        service_id=payload.service_id,
+        identifier=payload.identifier,
+        variation_code=payload.variation_code,
+        amount=payload.amount,
+        phone=payload.phone,
+    )
+    return _txn_read(txn)
+
+
+@router.get("/vas/purchases", response_model=list[VasTransactionRead])
+def my_vas_purchases(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    subscriber_id = _subscriber_id(principal)
+    return [
+        _txn_read(txn)
+        for txn in vas_purchases_service.list_transactions(
+            db, subscriber_id, limit=limit
+        )
+    ]
+
+
+@router.get("/vas/purchases/{txn_id}", response_model=VasTransactionRead)
+def my_vas_purchase_detail(
+    txn_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    subscriber_id = _subscriber_id(principal)
+    return _txn_read(vas_purchases_service.get_transaction(db, subscriber_id, txn_id))

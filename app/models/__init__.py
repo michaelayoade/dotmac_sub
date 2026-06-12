@@ -520,6 +520,10 @@ from app.models.usage import (  # noqa: F401
 from app.models.vas import (  # noqa: F401
     VasEntryCategory,
     VasEntryType,
+    VasService,
+    VasServiceVariation,
+    VasTransaction,
+    VasTransactionStatus,
     VasWallet,
     VasWalletEntry,
 )
