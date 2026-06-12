@@ -154,7 +154,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 with splynx_connection() as sconn, sconn.cursor() as scur:
                     placeholders = ",".join(["%s"] * len(kick_logins))
                     scur.execute(
-                        "SELECT login FROM services_internet "
+                        "SELECT login FROM services_internet "  # noqa: S608 — placeholders are %s binds, values passed as params
                         f"WHERE login IN ({placeholders}) "
                         "AND deleted='0' AND status='active'",
                         kick_logins,
@@ -179,9 +179,14 @@ def run_enforcement_reconciler() -> dict[str, int]:
             )
 
         ghost_rows: list[tuple[int, str]] = []
-        for username, session_id, nas_ip, framed_ip, radacctid, stale in (
-            to_kick.values()
-        ):
+        for (
+            username,
+            session_id,
+            nas_ip,
+            framed_ip,
+            radacctid,
+            stale,
+        ) in to_kick.values():
             if username in splynx_active:
                 continue
             if stats["kicked"] >= max_kicks:
@@ -287,8 +292,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
         expected_wg = {
             login
             for login, info in per_login.items()
-            if (info["has_active"] and info["active_blocked"])
-            or not info["has_active"]
+            if (info["has_active"] and info["active_blocked"]) or not info["has_active"]
         }
     finally:
         db.close()
