@@ -448,7 +448,7 @@
                     <a href="/legal/privacy" class="text-sm text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors">Privacy Policy</a>
                     <a href="/legal/terms" class="text-sm text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors">Terms of Service</a>
                 </div>
-                <p class="text-sm text-stone-400 dark:text-stone-500">&copy; 2025 {{ portal_name or (brand.legal_name if brand is defined and brand else 'Dotmac') }}. All rights reserved.</p>
+                <p class="text-sm text-stone-400 dark:text-stone-500">&copy; {{ current_year() if current_year is defined else 2026 }} {{ portal_name or (brand.legal_name if brand is defined and brand else 'Dotmac') }}. All rights reserved.</p>
             </div>
         </div>
     </footer>
