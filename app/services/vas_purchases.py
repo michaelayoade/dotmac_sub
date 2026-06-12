@@ -802,3 +802,62 @@ def get_reseller_transaction(
     if not txn or txn.wallet_id != wallet.id:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return txn
+
+
+# --- Admin ops data -------------------------------------------------------------
+
+
+def admin_services(db: Session) -> list[VasService]:
+    return db.query(VasService).order_by(VasService.category, VasService.name).all()
+
+
+def admin_review_queue(db: Session, *, limit: int = 100) -> list[VasTransaction]:
+    return (
+        db.query(VasTransaction)
+        .filter(VasTransaction.status == VasTransactionStatus.review)
+        .order_by(VasTransaction.created_at)
+        .limit(limit)
+        .all()
+    )
+
+
+def admin_rate_cards(db: Session, *, limit: int = 200) -> list[VasRateCard]:
+    return (
+        db.query(VasRateCard)
+        .order_by(
+            VasRateCard.category,
+            VasRateCard.party_type,
+            VasRateCard.effective_from.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+
+def get_service(db: Session, service_pk: str) -> VasService | None:
+    return db.get(VasService, service_pk)
+
+
+def get_transaction_by_id(db: Session, txn_id: str) -> VasTransaction | None:
+    return db.get(VasTransaction, txn_id)
+
+
+def add_rate_card(
+    db: Session,
+    *,
+    category: str,
+    party: VasPartyType,
+    rate_pct: Decimal,
+    effective_from: datetime,
+    memo: str | None,
+) -> VasRateCard:
+    card = VasRateCard(
+        category=category,
+        party_type=party,
+        rate_pct=rate_pct,
+        effective_from=effective_from,
+        memo=memo,
+    )
+    db.add(card)
+    db.commit()
+    return card

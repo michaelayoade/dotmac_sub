@@ -339,15 +339,7 @@ def my_reseller_vas_wallet(
 
     vas_wallet.require_enabled(db)
     _, wallet = _vas_reseller_wallet(db, principal)
-    from app.models.vas import VasWalletEntry
-
-    entries = (
-        db.query(VasWalletEntry)
-        .filter(VasWalletEntry.wallet_id == wallet.id)
-        .order_by(VasWalletEntry.created_at.desc())
-        .limit(20)
-        .all()
-    )
+    entries = vas_wallet.wallet_entries(db, wallet.id, limit=20)
     return {
         "balance": wallet_balance(db, wallet.id),
         "currency": "NGN",
@@ -479,36 +471,17 @@ def my_reseller_vas_commission_statement(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    from decimal import Decimal as _Decimal
-
-    from sqlalchemy import func as _func
-
-    from app.models.vas import VasEntryCategory, VasEntryType, VasWalletEntry
     from app.schemas.vas import VasCommissionStatementResponse, VasWalletEntryRead
     from app.services import vas_wallet
 
     vas_wallet.require_enabled(db)
     _, wallet = _vas_reseller_wallet(db, principal)
-    total = db.query(
-        _func.coalesce(_func.sum(VasWalletEntry.amount), _Decimal("0.00"))
-    ).filter(
-        VasWalletEntry.wallet_id == wallet.id,
-        VasWalletEntry.entry_type == VasEntryType.credit,
-        VasWalletEntry.category == VasEntryCategory.commission,
-    ).scalar() or _Decimal("0.00")
-    entries = (
-        db.query(VasWalletEntry)
-        .filter(
-            VasWalletEntry.wallet_id == wallet.id,
-            VasWalletEntry.category == VasEntryCategory.commission,
-        )
-        .order_by(VasWalletEntry.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    summary = vas_wallet.commission_summary(db, wallet.id)
     return VasCommissionStatementResponse(
-        total_earned=_Decimal(str(total)),
-        entries=[VasWalletEntryRead.model_validate(entry) for entry in entries],
+        total_earned=summary["total"],
+        entries=[
+            VasWalletEntryRead.model_validate(entry) for entry in summary["entries"]
+        ],
     )
 
 

@@ -15,12 +15,7 @@ from app.models.vas import (
     VasEntryCategory,
     VasEntryType,
     VasPartyType,
-    VasRateCard,
-    VasService,
-    VasTransaction,
     VasTransactionStatus,
-    VasWallet,
-    VasWalletEntry,
 )
 from app.services import vas_purchases, vas_wallet, vtpass
 from app.services.auth_dependencies import require_permission
@@ -57,24 +52,9 @@ def vas_admin_page(request: Request, db: Session = Depends(get_db)):
     except HTTPException as exc:
         float_error = str(exc.detail)
 
-    services = db.query(VasService).order_by(VasService.category, VasService.name).all()
-    review_queue = (
-        db.query(VasTransaction)
-        .filter(VasTransaction.status == VasTransactionStatus.review)
-        .order_by(VasTransaction.created_at)
-        .limit(100)
-        .all()
-    )
-    rate_cards = (
-        db.query(VasRateCard)
-        .order_by(
-            VasRateCard.category,
-            VasRateCard.party_type,
-            VasRateCard.effective_from.desc(),
-        )
-        .limit(200)
-        .all()
-    )
+    services = vas_purchases.admin_services(db)
+    review_queue = vas_purchases.admin_review_queue(db)
+    rate_cards = vas_purchases.admin_rate_cards(db)
     from app.models.domain_settings import SettingDomain
     from app.services import settings_spec
 
@@ -108,7 +88,7 @@ def vas_admin_page(request: Request, db: Session = Depends(get_db)):
 def vas_toggle_service(
     service_pk: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    service = db.get(VasService, service_pk)
+    service = vas_purchases.get_service(db, service_pk)
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     service.is_enabled = not service.is_enabled
@@ -165,16 +145,14 @@ def vas_add_rate_card(
             return RedirectResponse(
                 url="/admin/vas?error=Invalid effective date", status_code=303
             )
-    db.add(
-        VasRateCard(
-            category=category.strip().lower(),
-            party_type=party,
-            rate_pct=rate,
-            effective_from=effective,
-            memo=memo.strip() or None,
-        )
+    vas_purchases.add_rate_card(
+        db,
+        category=category.strip().lower(),
+        party=party,
+        rate_pct=rate,
+        effective_from=effective,
+        memo=memo.strip() or None,
     )
-    db.commit()
     return RedirectResponse(url="/admin/vas?ok=1", status_code=303)
 
 
@@ -184,7 +162,7 @@ def vas_add_rate_card(
 )
 def vas_review_refund(txn_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     """Manually resolve a parked transaction as failed → wallet refund."""
-    txn = db.get(VasTransaction, txn_id)
+    txn = vas_purchases.get_transaction_by_id(db, txn_id)
     if not txn or txn.status != VasTransactionStatus.review:
         raise HTTPException(status_code=404, detail="Reviewable transaction not found")
     vas_purchases._mark_failed_and_refund(db, txn, "Manually resolved: refunded")
@@ -200,7 +178,7 @@ def vas_review_delivered(
     txn_id: str, token: str = Form(""), db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Manually resolve a parked transaction as delivered (token optional)."""
-    txn = db.get(VasTransaction, txn_id)
+    txn = vas_purchases.get_transaction_by_id(db, txn_id)
     if not txn or txn.status != VasTransactionStatus.review:
         raise HTTPException(status_code=404, detail="Reviewable transaction not found")
     body: dict = {"manually_resolved": True}
@@ -226,7 +204,7 @@ def vas_refund_to_source(
     transaction — never an arbitrary destination. Requires the wallet to
     still hold at least the top-up amount (spent money can't leave twice).
     """
-    entry = db.get(VasWalletEntry, entry_id)
+    entry = vas_wallet.topup_entry(db, entry_id)
     if (
         not entry
         or entry.category != VasEntryCategory.topup
@@ -236,7 +214,7 @@ def vas_refund_to_source(
         return RedirectResponse(
             url="/admin/vas?error=Entry is not a refundable top-up", status_code=303
         )
-    wallet = db.get(VasWallet, entry.wallet_id)
+    wallet = vas_wallet.wallet_by_id(db, entry.wallet_id)
     if wallet is None:
         return RedirectResponse(
             url="/admin/vas?error=Wallet not found", status_code=303
@@ -248,12 +226,7 @@ def vas_refund_to_source(
             url="/admin/vas?error=Wallet balance is below the top-up amount",
             status_code=303,
         )
-    already = (
-        db.query(VasWalletEntry)
-        .filter(VasWalletEntry.reference == f"rts-{entry.id}")
-        .first()
-    )
-    if already:
+    if vas_wallet.refund_reference_exists(db, str(entry.id)):
         return RedirectResponse(
             url="/admin/vas?error=This top-up was already refunded", status_code=303
         )

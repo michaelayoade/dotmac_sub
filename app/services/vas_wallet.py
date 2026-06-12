@@ -503,3 +503,52 @@ def run_auto_deduct_sweep(db: Session) -> dict:
         "errors": errors,
         "swept_total": str(swept_total),
     }
+
+
+def wallet_entries(db: Session, wallet_id, *, limit: int = 20) -> list[VasWalletEntry]:
+    return (
+        db.query(VasWalletEntry)
+        .filter(VasWalletEntry.wallet_id == wallet_id)
+        .order_by(VasWalletEntry.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def commission_summary(db: Session, wallet_id) -> dict:
+    """Total + recent commission entries for a (reseller) wallet."""
+    total = db.query(
+        func.coalesce(func.sum(VasWalletEntry.amount), Decimal("0.00"))
+    ).filter(
+        VasWalletEntry.wallet_id == wallet_id,
+        VasWalletEntry.entry_type == VasEntryType.credit,
+        VasWalletEntry.category == VasEntryCategory.commission,
+    ).scalar() or Decimal("0.00")
+    entries = (
+        db.query(VasWalletEntry)
+        .filter(
+            VasWalletEntry.wallet_id == wallet_id,
+            VasWalletEntry.category == VasEntryCategory.commission,
+        )
+        .order_by(VasWalletEntry.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return {"total": Decimal(str(total)), "entries": entries}
+
+
+def topup_entry(db: Session, entry_id: str) -> VasWalletEntry | None:
+    return db.get(VasWalletEntry, entry_id)
+
+
+def wallet_by_id(db: Session, wallet_id) -> VasWallet | None:
+    return db.get(VasWallet, wallet_id)
+
+
+def refund_reference_exists(db: Session, entry_id: str) -> bool:
+    return (
+        db.query(VasWalletEntry)
+        .filter(VasWalletEntry.reference == f"rts-{entry_id}")
+        .first()
+        is not None
+    )
