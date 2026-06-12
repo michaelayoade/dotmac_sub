@@ -120,7 +120,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] Revenue page renders at /reseller/reports/revenue (2026-06-12)
 - [!] `#15` (self-inflicted, FIXED pre-merge) routing /reseller errors to reseller/errors/404.html 500'd because it extended layouts/reseller.html (needs current_user, absent in error context); rewrote it to extend base.html (standalone) + added regression tests. Caught by driving the reseller portal
 - [!] `#16` (low pri) layouts/reseller.html doesn't guard `current_user` like layouts/customer.html does — latent fragility if ever rendered without auth context
-- [ ] view-as (read-only + audited)
+- [!] `#17` (SECURITY) reseller web "View as customer" is NOT read-only despite the documented intent: created a support ticket as the customer through it. `create_customer_impersonation_session` makes a normal session with `is_impersonation=True` (audited via `reseller_impersonated`) but NO read-only flag/write-block; only the API bearer token (reseller_portal.py:1126) is read-only. A reseller can perform customer writes (tickets, plan changes if funded, profile/password). Needs a policy decision + a write-guard. NOT fixed
 - [ ] Reseller with 0 accounts (empty states); profile + MFA; bank-transfer proof
 - [ ] Service-requests; only-own-reseller data everywhere
 
