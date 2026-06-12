@@ -1000,3 +1000,69 @@ def test_apply_instant_plan_change_rejects_archived_offer(
 
     db_session.refresh(subscription)
     assert subscription.offer_id == current_offer.id  # unchanged
+
+
+def test_get_available_portal_offers_excludes_empty_family(db_session, subscriber):
+    """Offers with no plan_family are not instant-change eligible.
+
+    Regression: the change-plan page listed empty-family offers as "instant
+    changes in your current plan family", but _validate_plan_change rejects any
+    change where either family is empty, so applying 400'd. The instant list
+    must require a non-empty, matching family on both sides.
+    """
+    current_offer = _make_offer(
+        db_session, name="Unclassified A", amount=Decimal("100.00"), plan_family=None
+    )
+    _make_offer(
+        db_session, name="Unclassified B", amount=Decimal("150.00"), plan_family=None
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    offers = get_available_portal_offers(db_session, subscription)
+
+    assert offers == []
+
+
+def test_plan_change_refreshes_unit_price(db_session, subscriber, monkeypatch):
+    """Changing the offer refreshes subscription.unit_price to the new offer's
+    recurring price (#10), so billing summaries don't keep showing the old
+    plan's price after a change."""
+    from app.schemas.catalog import SubscriptionUpdate
+    from app.services import catalog as catalog_service
+
+    _stub_plan_change_side_effects(monkeypatch)
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited 100",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Unlimited 200",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    catalog_service.subscriptions.update(
+        db_session,
+        str(subscription.id),
+        SubscriptionUpdate(offer_id=target_offer.id),
+        skip_proration_artifacts=True,
+    )
+    db_session.refresh(subscription)
+    assert subscription.unit_price == Decimal("200.00")

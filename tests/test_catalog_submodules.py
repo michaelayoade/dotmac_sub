@@ -2062,3 +2062,51 @@ class TestSubscriptionHelpers:
         result = _add_months(dt, 1)
         assert result.month == 2
         assert result.day == 28
+
+
+class TestSubscriptionUnitPriceDefault:
+    """create() snapshots the offer's recurring price into unit_price.
+
+    Regression: subscriptions created without an explicit unit_price left the
+    field null, so the admin/customer billing summaries showed "Price not set"
+    and a ₦0 monthly recurring total even though invoices billed the real
+    offer price.
+    """
+
+    def test_defaults_unit_price_from_offer_recurring_price(
+        self, db_session, subscriber, catalog_offer
+    ):
+        catalog_service.offer_prices.create(
+            db_session,
+            OfferPriceCreate(
+                offer_id=catalog_offer.id,
+                amount=Decimal("15000"),
+                price_type=PriceType.recurring,
+            ),
+        )
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(account_id=subscriber.id, offer_id=catalog_offer.id),
+        )
+        assert sub.unit_price == Decimal("15000")
+
+    def test_explicit_unit_price_is_preserved(
+        self, db_session, subscriber, catalog_offer
+    ):
+        catalog_service.offer_prices.create(
+            db_session,
+            OfferPriceCreate(
+                offer_id=catalog_offer.id,
+                amount=Decimal("15000"),
+                price_type=PriceType.recurring,
+            ),
+        )
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                account_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                unit_price=Decimal("9999"),
+            ),
+        )
+        assert sub.unit_price == Decimal("9999")

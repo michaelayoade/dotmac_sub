@@ -176,10 +176,11 @@
         </div>
         {% endif %}
 
-        <div x-show="selectedOfferId && selectedChangeMode === 'instant' && changeQuote" x-cloak class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <template x-if="selectedOfferId && selectedChangeMode === 'instant' && changeQuote">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
-                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Upgrade Summary</h2>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white" x-text="changeQuote.is_upgrade ? 'Upgrade Summary' : (changeQuote.is_downgrade ? 'Downgrade Summary' : 'Plan Change Summary')">Plan Change Summary</h2>
                     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
                         Review the remaining value on your current plan and the prorated amount required for the selected plan.
                     </p>
@@ -207,7 +208,7 @@
                 </div>
             </div>
             <p class="mt-4 text-sm text-slate-600 dark:text-slate-300" x-show="changeQuote">
-                Your current plan has <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span> remaining value.
+                <span x-show="changeQuote.current_remaining_value > 0">Your current plan has <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span> remaining value.</span>
                 <span x-show="changeQuote.required_amount > 0">
                     To upgrade today, an additional <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span> is required.
                 </span>
@@ -221,6 +222,7 @@
                 </a>
             </div>
         </div>
+        </template>
 
         <!-- Notes -->
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -262,12 +264,14 @@
                     This plan is in a different family, so a support ticket will be created for review.
                 </p>
                 <p class="mt-4 text-sm text-slate-500 dark:text-slate-400" x-show="quoteLoading">Calculating prorated charges…</p>
-                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40" x-show="selectedChangeMode === 'instant' && changeQuote">
+                <template x-if="selectedChangeMode === 'instant' && changeQuote">
+                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40">
                     <p class="text-sm text-slate-700 dark:text-slate-200">Remaining value: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Required today: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Wallet balance: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_balance)"></span></p>
                     <p class="mt-1 text-sm text-amber-700 dark:text-amber-300" x-show="changeQuote.shortfall > 0">Shortfall: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.shortfall)"></span></p>
                 </div>
+                </template>
                 <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">{{ billing_message }}</p>
                 <template x-if="priceDifference > 0">
                     <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">

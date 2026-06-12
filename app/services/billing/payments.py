@@ -621,11 +621,32 @@ class Payments(ListResponseMixin):
                 )
             _validate_invoice_currency(invoice, payment.currency)
 
+            # Cap the allocation at the invoice's outstanding balance so an
+            # overpayment cannot over-allocate (allocations summing above the
+            # invoice total). The uncapped surplus stays in ``remaining`` and is
+            # credited to the account/wallet by _record_unallocated_payment_credit.
+            invoice_balance = round_money(
+                to_decimal(
+                    invoice.balance_due
+                    if invoice.balance_due is not None
+                    else invoice.total
+                )
+            )
+            if invoice_balance < 0:
+                invoice_balance = Decimal("0.00")
+            alloc_amount = min(
+                round_money(to_decimal(allocation.amount)), invoice_balance
+            )
+            if alloc_amount <= 0:
+                # Invoice already settled; leave the amount in ``remaining`` so
+                # it is credited as account/wallet balance below.
+                continue
+
             entry, applied_amount = _apply_payment_allocation(
                 db,
                 payment,
                 invoice,
-                allocation.amount,
+                alloc_amount,
                 memo=allocation.memo,
             )
             created.append(entry)

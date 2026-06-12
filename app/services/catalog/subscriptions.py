@@ -1108,6 +1108,16 @@ class Subscriptions(ListResponseMixin):
             if end_at:
                 data["end_at"] = end_at
 
+        # Snapshot the offer's recurring price when no explicit unit_price is
+        # given, so the subscription carries its effective monthly amount (the
+        # invoice already resolves the offer price, but the customer/admin
+        # billing summaries read subscription.unit_price and otherwise show
+        # "Price not set" / a ₦0 monthly recurring total).
+        if "unit_price" not in fields_set or data.get("unit_price") is None:
+            data["unit_price"] = _offer_recurring_price_amount(
+                db, str(payload.offer_id)
+            )
+
         # Auto-select NAS device from subscriber's POP site if not provided
         if "provisioning_nas_device_id" not in fields_set or not data.get(
             "provisioning_nas_device_id"
@@ -1293,6 +1303,20 @@ class Subscriptions(ListResponseMixin):
                 proration_result,
                 old_price=_offer_recurring_price_amount(db, subscription.offer_id),
                 new_price=_offer_recurring_price_amount(db, str(data["offer_id"])),
+            )
+
+        # When the offer changes, refresh the snapshotted recurring price to the
+        # new offer (unless an explicit unit_price was supplied) so the customer
+        # and admin billing summaries reflect the new plan instead of the old
+        # price. Mirrors the create-path default; covers change-plan apply and
+        # admin plan edits for any status.
+        if (
+            "offer_id" in data
+            and str(data["offer_id"]) != str(previous_offer_id)
+            and "unit_price" not in data
+        ):
+            data["unit_price"] = _offer_recurring_price_amount(
+                db, str(data["offer_id"])
             )
 
         status = data.get("status", subscription.status)

@@ -1225,6 +1225,10 @@ def create_customer_impersonation_session(
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        # Reseller "view as customer" is strictly read-only: viewing/diagnosis
+        # only. Reseller actions on behalf of a customer go through the reseller
+        # portal's own (reseller-attributed, audited) routes.
+        read_only=True,
         return_to=return_to,
     )
     _emit_reseller_event(

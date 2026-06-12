@@ -52,7 +52,11 @@ def resolve_invoice(db, invoice_id: str | None):
 def invoice_balance_info(invoice) -> tuple[str | None, str | None]:
     if not invoice:
         return None, None
-    balance = invoice.balance_due if invoice.balance_due else invoice.total
+    # Use balance_due even when it is 0 (a fully-paid invoice); only fall back to
+    # the total when balance_due was never computed (legacy/None). Otherwise a
+    # paid invoice shows its full total as "balance due" and the staff member
+    # records a duplicate payment, overpaying the account.
+    balance = invoice.balance_due if invoice.balance_due is not None else invoice.total
     if balance is None:
         return None, None
     value = f"{balance:.2f}"
@@ -84,7 +88,7 @@ def build_new_form_state(
             prefill["invoice_number"] = invoice_obj.invoice_number
             invoice_label = invoice_obj.invoice_number or "Invoice"
             balance_value, balance_display = invoice_balance_info(invoice_obj)
-            if invoice_obj.balance_due:
+            if invoice_obj.balance_due is not None:
                 prefill["amount"] = float(invoice_obj.balance_due)
             elif invoice_obj.total:
                 prefill["amount"] = float(invoice_obj.total)

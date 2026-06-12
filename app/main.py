@@ -1113,6 +1113,48 @@ def _request_is_https(request: Request) -> bool:
     return request.url.scheme == "https"
 
 
+_READONLY_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Paths under /portal that must keep working in a read-only (view-as) session,
+# above all exiting the impersonation back to the reseller portal.
+_READONLY_EXEMPT_PREFIXES = ("/portal/auth/",)
+
+
+@app.middleware("http")
+async def view_as_readonly_middleware(request: Request, call_next):
+    """Block state-changing requests in a read-only customer session.
+
+    Reseller "view as customer" sessions are view-only (see what the customer
+    sees, for support/diagnosis). Reseller actions on behalf of a customer go
+    through the reseller portal's own attributed, audited routes — never by
+    writing as the customer. Admin "Login as Customer" is not read-only.
+    """
+    if request.method.upper() in _READONLY_WRITE_METHODS:
+        path = request.url.path
+        if path.startswith("/portal/") and not any(
+            path.startswith(p) for p in _READONLY_EXEMPT_PREFIXES
+        ):
+            from starlette.responses import JSONResponse as _JSONResponse
+
+            from app.services import customer_portal
+
+            token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+            session = customer_portal.get_customer_session(token) if token else None
+            if session and session.get("read_only"):
+                logger.info(
+                    "Blocked read-only (view-as) write: %s %s", request.method, path
+                )
+                return _JSONResponse(
+                    {
+                        "detail": (
+                            "This is a view-only session. Switch to your reseller "
+                            "tools to act on this account."
+                        )
+                    },
+                    status_code=403,
+                )
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def login_rate_limit_middleware(request: Request, call_next):
     if request.method == "POST" and request.url.path in _LOGIN_RATE_LIMIT_PATHS:
