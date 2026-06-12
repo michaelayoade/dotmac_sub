@@ -431,6 +431,10 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.vas.sync_vas_catalog",
                 "schedule": timedelta(hours=12),
             }
+            schedule["vas_review_requery"] = {
+                "task": "app.tasks.vas.run_vas_review_requery",
+                "schedule": timedelta(hours=24),
+            }
         usage_enabled = _effective_bool(
             session,
             SettingDomain.usage,

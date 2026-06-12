@@ -19,7 +19,7 @@ Rules enforced here:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -240,6 +240,40 @@ def _float_gate(db: Session, amount: Decimal) -> None:
         )
 
 
+def _refresh_variation_price(
+    db: Session, service: VasService, variation: VasServiceVariation
+) -> None:
+    """Pull the live variation price before charging — the cached catalog is
+    up to 12h stale and a drifted price must never set the debit amount.
+    Falls back to the cache only if the live lookup fails (the float gate
+    immediately after will fail closed if the provider is truly down)."""
+    try:
+        content = vtpass.get_variations(db, service.service_id)
+    except HTTPException:
+        return
+    for var in content.get("varations") or content.get("variations") or []:
+        if str(var.get("variation_code") or "").strip() != variation.code:
+            continue
+        raw = var.get("variation_amount")
+        if raw in (None, ""):
+            return
+        try:
+            live = Decimal(str(raw)).quantize(Decimal("0.01"))
+        except Exception:  # noqa: BLE001
+            return
+        if variation.amount != live:
+            logger.info(
+                "vas variation price drift %s/%s: cached=%s live=%s",
+                service.service_id,
+                variation.code,
+                variation.amount,
+                live,
+            )
+            variation.amount = live
+            db.commit()
+        return
+
+
 def _resolve_amount(
     service: VasService, variation: VasServiceVariation | None, amount: Decimal | None
 ) -> Decimal:
@@ -305,6 +339,7 @@ def purchase(
     variation_code: str | None = None,
     amount: Decimal | None = None,
     phone: str | None = None,
+    confirm_duplicate: bool = False,
 ) -> VasTransaction:
     wallet_service.require_enabled(db)
     service = _get_enabled_service(db, service_id)
@@ -319,6 +354,7 @@ def purchase(
         ).first()
         if not variation:
             raise HTTPException(status_code=400, detail="Unknown plan selected")
+        _refresh_variation_price(db, service, variation)
 
     value = _resolve_amount(service, variation, amount)
     if value > _txn_limit(db):
@@ -332,10 +368,40 @@ def purchase(
     _float_gate(db, value)
 
     wallet = wallet_service.get_or_create_wallet(db, subscriber_id)
+
+    # Duplicate-intent guard: a re-tap mints a NEW request_id, so provider
+    # dedup can't catch it — block a same-looking purchase made moments ago
+    # unless the caller explicitly confirms.
+    if not confirm_duplicate:
+        recent_cutoff = datetime.now(UTC) - timedelta(minutes=5)
+        duplicate = (
+            db.query(VasTransaction)
+            .filter(
+                VasTransaction.wallet_id == wallet.id,
+                VasTransaction.service_pk == service.id,
+                VasTransaction.identifier == identifier,
+                VasTransaction.amount == value,
+                VasTransaction.created_at >= recent_cutoff,
+                VasTransaction.status.notin_(
+                    [VasTransactionStatus.failed, VasTransactionStatus.refunded]
+                ),
+            )
+            .first()
+        )
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "You made this exact purchase moments ago — confirm to "
+                    "buy it again."
+                ),
+            )
+
     request_id = vtpass.generate_request_id()
     txn = VasTransaction(
         wallet_id=wallet.id,
         subscriber_id=wallet.subscriber_id,
+        reseller_id=wallet.reseller_id,
         service_pk=service.id,
         variation_code=variation.code if variation else None,
         identifier=identifier,
@@ -497,4 +563,56 @@ def run_requery_sweep(db: Session) -> dict:
         "refunded": refunded,
         "review": review,
         "checked": checked,
+    }
+
+
+def run_review_requery(db: Session) -> dict:
+    """Daily closing loop for parked transactions.
+
+    The 5-min sweep gives up after REQUERY_MAX_ATTEMPTS; without this,
+    `review` quietly becomes "manual forever" with the customer debited.
+    Re-asks the provider once a day (same request_id — provider-side dedup
+    keys on it, so this can never double-purchase) and resolves definitive
+    outcomes; whatever remains is the true manual queue, with its size
+    logged loudly.
+    """
+    if not wallet_service.is_enabled(db):
+        return {"status": "disabled"}
+    delivered = refunded = remaining = 0
+    parked = (
+        db.query(VasTransaction)
+        .filter(VasTransaction.status == VasTransactionStatus.review)
+        .order_by(VasTransaction.created_at)
+        .limit(500)
+        .all()
+    )
+    for txn in parked:
+        try:
+            body = vtpass.requery(db, txn.request_id)
+        except HTTPException:
+            remaining += 1
+            continue
+        txn.provider_response = body
+        outcome, detail = _provider_outcome(body)
+        txn.provider_status = detail
+        if outcome == "delivered":
+            _mark_delivered(db, txn, body)
+            delivered += 1
+        elif outcome == "failed":
+            _mark_failed_and_refund(db, txn, detail)
+            refunded += 1
+        else:
+            remaining += 1
+        db.commit()
+    if remaining:
+        logger.error(
+            "vas review queue: %s transactions still unresolved after daily "
+            "reconcile — manual action needed",
+            remaining,
+        )
+    return {
+        "status": "ok",
+        "delivered": delivered,
+        "refunded": refunded,
+        "remaining": remaining,
     }

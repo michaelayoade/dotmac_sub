@@ -365,3 +365,155 @@ class TestOwnership:
         with pytest.raises(HTTPException) as exc_info:
             vas_purchases.get_transaction(db_session, str(attacker.id), str(txn.id))
         assert exc_info.value.status_code == 404
+
+
+class TestHardening:
+    def test_duplicate_intent_blocked_then_confirmable(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY),
+        ):
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                vas_purchases.purchase(
+                    db_session,
+                    subscriber_id=str(subscriber.id),
+                    service_id=service.service_id,
+                    identifier="08031234567",
+                    amount=Decimal("500"),
+                )
+            assert exc_info.value.status_code == 409
+            # Explicit confirmation goes through.
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+                confirm_duplicate=True,
+            )
+            assert txn.status == VasTransactionStatus.delivered
+
+    def test_refunded_duplicate_not_blocked(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        _funded_wallet(db_session, subscriber)
+        with _ok_float():
+            with patch.object(vas_purchases.vtpass, "pay", return_value=FAILED_BODY):
+                vas_purchases.purchase(
+                    db_session,
+                    subscriber_id=str(subscriber.id),
+                    service_id=service.service_id,
+                    identifier="08031234567",
+                    amount=Decimal("500"),
+                )
+            # Failed/refunded — an immediate retry is legitimate, no guard.
+            with patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY):
+                txn = vas_purchases.purchase(
+                    db_session,
+                    subscriber_id=str(subscriber.id),
+                    service_id=service.service_id,
+                    identifier="08031234567",
+                    amount=Decimal("500"),
+                )
+        assert txn.status == VasTransactionStatus.delivered
+
+    def test_live_price_overrides_stale_cache(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session, category="data")
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.vas,
+                key="enabled_categories",
+                value_text="airtime,data",
+                is_active=True,
+            )
+        )
+        variation = VasServiceVariation(
+            service_pk=service.id,
+            code="mtn-1gb",
+            name="1GB - 30 days",
+            amount=Decimal("350.00"),  # stale cached price
+        )
+        db_session.add(variation)
+        db_session.commit()
+        wallet = _funded_wallet(db_session, subscriber)
+        live_variations = {
+            "variations": [{"variation_code": "mtn-1gb", "variation_amount": "400.00"}]
+        }
+        with (
+            _ok_float(),
+            patch.object(
+                vas_purchases.vtpass, "get_variations", return_value=live_variations
+            ),
+            patch.object(
+                vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY
+            ) as mock_pay,
+        ):
+            vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                variation_code="mtn-1gb",
+            )
+        # Debited and paid at the LIVE price, cache updated.
+        assert mock_pay.call_args.kwargs["amount"] == Decimal("400.00")
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9600.00")
+        db_session.refresh(variation)
+        assert variation.amount == Decimal("400.00")
+
+    def test_review_requery_closes_parked(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        wallet = _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=PROCESSING_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        txn.status = vas_purchases.VasTransactionStatus.review
+        db_session.commit()
+        with patch.object(vas_purchases.vtpass, "requery", return_value=FAILED_BODY):
+            stats = vas_purchases.run_review_requery(db_session)
+        db_session.refresh(txn)
+        assert stats["refunded"] == 1
+        assert txn.status == vas_purchases.VasTransactionStatus.refunded
+        assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("10000.00")
+
+    def test_reseller_id_stamped_null_for_customer(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY),
+        ):
+            txn = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert txn.reseller_id is None

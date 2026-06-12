@@ -892,6 +892,7 @@ def my_vas_purchase(
         variation_code=payload.variation_code,
         amount=payload.amount,
         phone=payload.phone,
+        confirm_duplicate=payload.confirm_duplicate,
     )
     return _txn_read(txn)
 
