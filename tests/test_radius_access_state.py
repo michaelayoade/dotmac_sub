@@ -40,14 +40,28 @@ class TestDeriveAccessStateBlocked:
             SubscriptionStatus.stopped,
         ],
     )
-    @pytest.mark.parametrize("captive_flag", [True, False])
-    def test_blocked_statuses_default_to_captive(self, status, captive_flag):
-        """Captive-by-default (decided 2026-06-11): payment suspension keeps
-        the pay-page path. The legacy captive_redirect_enabled flag no longer
-        demotes anyone to hard reject."""
+    def test_blocked_opt_in_maps_to_captive(self, status):
+        """Captive redirect is per-customer opt-in: only an opted-in blocked
+        subscriber gets the soft walled-garden."""
         assert (
-            derive_access_state(status, captive_redirect_enabled=captive_flag)
+            derive_access_state(status, captive_redirect_enabled=True)
             == AccessState.captive
+        )
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.blocked,
+            SubscriptionStatus.stopped,
+        ],
+    )
+    def test_blocked_default_maps_to_suspended_hard_block(self, status):
+        """Default (not opted in) → hard block (Auth-Type := Reject), NOT
+        captive. The redirect is not applied to every account."""
+        assert (
+            derive_access_state(status, captive_redirect_enabled=False)
+            == AccessState.suspended
         )
 
     @pytest.mark.parametrize(
