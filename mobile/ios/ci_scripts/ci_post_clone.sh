@@ -13,8 +13,14 @@
 
 set -e
 
-echo "=== Installing Flutter (stable) ==="
-git clone https://github.com/flutter/flutter.git --depth 1 -b stable "$HOME/flutter"
+# Pin the Flutter version to the one that generated the committed SwiftPM
+# Package.resolved. Xcode Cloud disables automatic package resolution, so the
+# regenerated plugin package graph must match the lockfile exactly — a floating
+# "stable" can pull newer plugin versions and break resolution ("dependencies
+# were added: 'flutterfire'"). Bump this tag in lockstep with Package.resolved.
+FLUTTER_VERSION="3.44.1"
+echo "=== Installing Flutter ($FLUTTER_VERSION) ==="
+git clone https://github.com/flutter/flutter.git --depth 1 -b "$FLUTTER_VERSION" "$HOME/flutter"
 export PATH="$HOME/flutter/bin:$PATH"
 flutter --version
 
