@@ -6,6 +6,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.services import settings_spec
+
+
+def billing_enabled(db: Session, *, default: bool = True) -> bool:
+    """Master switch for local billing automation.
+
+    While the upstream biller (Splynx) remains authoritative, this is set to
+    ``false`` in prod so the local runners stay inert. It gates every task that
+    *acts on customers* off local billing state — invoicing, autopay charges,
+    dunning, prepaid enforcement, payment-arrangement checks, and subscription
+    expiry — so they all activate together at cutover and none can charge,
+    suspend, or expire an account before then. Resolved via ``settings_spec``
+    (env fallback included) to match the invoice-cycle kill-switch.
+    """
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "billing_enabled")
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _coerce_int(value: object, default: int) -> int:

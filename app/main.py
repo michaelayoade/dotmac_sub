@@ -543,6 +543,22 @@ async def lifespan(app: FastAPI):
     global _DEFERRED_ROUTER_TASK, _DEFERRED_STARTUP_TASK
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
+    # Cap the threadpool that runs sync request handlers so a worker never holds
+    # more concurrent DB-touching threads than the connection pool can serve.
+    try:
+        from anyio import to_thread
+
+        from app.config import settings as _settings
+
+        limit = _settings.web_threadpool_limit
+        if limit > 0:
+            to_thread.current_default_thread_limiter().total_tokens = limit
+            logger.info(
+                "threadpool_limit_set",
+                extra={"event": "threadpool_limit_set", "total_tokens": limit},
+            )
+    except Exception:
+        logger.warning("Failed to set threadpool limit", exc_info=True)
     _startup_preflight()
     from app.websocket.manager import get_connection_manager
 
