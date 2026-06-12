@@ -69,7 +69,6 @@ from app.services import web_system_form_views as web_system_form_views_service
 from app.services import web_system_geocode_tool as web_system_geocode_tool_service
 from app.services import web_system_health as web_system_health_service
 from app.services import web_system_import_wizard as web_system_import_wizard_service
-from app.services import web_system_logs as web_system_logs_service
 from app.services import web_system_overview as web_system_overview_service
 from app.services import (
     web_system_permission_forms as web_system_permission_forms_service,
@@ -3603,110 +3602,6 @@ def system_about_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "admin/system/about.html",
         _config_context(request, db, {"active_page": "system-about", "info": info}),
-    )
-
-
-# ===================================================================
-# Log Center Routes
-# ===================================================================
-
-
-@router.get("/logs", response_class=HTMLResponse)
-def logs_index(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_logs_index_context(db)
-    return templates.TemplateResponse(
-        "admin/system/logs/index.html",
-        _config_context(request, db, {"active_page": "logs", **data}),
-    )
-
-
-@router.get("/logs/api", response_class=HTMLResponse)
-def logs_api(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_api_logs_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-api", **data}),
-    )
-
-
-@router.get("/logs/operations", response_class=HTMLResponse)
-def logs_operations(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_operations_log_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-operations", **data}),
-    )
-
-
-@router.get("/logs/internal", response_class=HTMLResponse)
-def logs_internal(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_internal_log_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-internal", **data}),
-    )
-
-
-@router.get("/logs/portal", response_class=HTMLResponse)
-def logs_portal(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_portal_activity_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-portal", **data}),
-    )
-
-
-@router.get("/logs/email", response_class=HTMLResponse)
-def logs_email(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_email_log_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-email", **data}),
-    )
-
-
-@router.get("/logs/sms", response_class=HTMLResponse)
-def logs_sms(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_sms_log_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-sms", **data}),
-    )
-
-
-@router.get("/logs/status-changes", response_class=HTMLResponse)
-def logs_status_changes(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_status_changes_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-status-changes", **data}),
-    )
-
-
-@router.get("/logs/service-changes", response_class=HTMLResponse)
-def logs_service_changes(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_service_changes_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-service-changes", **data}),
-    )
-
-
-@router.get("/logs/accounting", response_class=HTMLResponse)
-def logs_accounting(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_accounting_sync_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-accounting", **data}),
-    )
-
-
-@router.get("/logs/payment-gateway", response_class=HTMLResponse)
-def logs_payment_gateway(request: Request, db: Session = Depends(get_db)):
-    data = web_system_logs_service.build_payment_gateway_log_context(request, db)
-    return templates.TemplateResponse(
-        "admin/system/logs/log_page.html",
-        _config_context(request, db, {"active_page": "logs-payment-gateway", **data}),
     )
 
 
