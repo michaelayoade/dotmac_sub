@@ -84,6 +84,10 @@ data/olt_samples/
 /static/avatars/*
 !/static/avatars/.gitkeep
 
+# Runtime-uploaded branding files (admin logo/favicon uploads, named <slug>_<12-hex>.<ext>;
+# stock branding assets stay tracked)
+/static/branding/**/*_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
+
 # Stray local screenshot capture at repo root
 /login.png
 
