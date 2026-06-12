@@ -1851,3 +1851,80 @@ class TestBillingKillSwitch:
         # subscriptions_billed / lines_created, not invoices_created).
         assert not summary.get("billing_disabled")
         assert summary["subscriptions_billed"] >= 1
+
+
+# =============================================================================
+# Default-VAT mechanism (configurable fallback rate + application mode)
+# =============================================================================
+
+
+class TestDefaultTaxRate:
+    """billing.default_tax_rate_id / default_tax_application — a configurable
+    fallback applied only when neither the service address nor the subscriber
+    carries a tax_rate_id. Defaults preserve the prior no-tax behaviour."""
+
+    def _add_setting(self, db_session, key, value):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key=key,
+                value_type=SettingValueType.string,
+                value_text=value,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+    def _tax_rate(self, db_session, *, active=True):
+        from app.models.billing import TaxRate
+
+        rate = TaxRate(name="VAT", code="VAT", rate=Decimal("7.5000"), is_active=active)
+        db_session.add(rate)
+        db_session.commit()
+        return rate
+
+    def test_resolve_returns_none_without_default(self, db_session, subscription):
+        # No address/subscriber rate and no default setting → no tax (unchanged).
+        assert billing_automation._resolve_tax_rate_id(db_session, subscription) is None
+
+    def test_resolve_returns_configured_default(self, db_session, subscription):
+        rate = self._tax_rate(db_session)
+        self._add_setting(db_session, "default_tax_rate_id", str(rate.id))
+        assert (
+            billing_automation._resolve_tax_rate_id(db_session, subscription) == rate.id
+        )
+
+    def test_inactive_default_is_ignored(self, db_session, subscription):
+        rate = self._tax_rate(db_session, active=False)
+        self._add_setting(db_session, "default_tax_rate_id", str(rate.id))
+        assert billing_automation._resolve_tax_rate_id(db_session, subscription) is None
+
+    def test_bad_default_id_is_ignored(self, db_session, subscription):
+        self._add_setting(db_session, "default_tax_rate_id", "not-a-uuid")
+        assert billing_automation._resolve_tax_rate_id(db_session, subscription) is None
+
+    def test_default_tax_application_modes(self, db_session):
+        from app.models.billing import TaxApplication
+
+        # Unset → exclusive (prior behaviour).
+        assert (
+            billing_automation._default_tax_application(db_session)
+            == TaxApplication.exclusive
+        )
+        self._add_setting(db_session, "default_tax_application", "inclusive")
+        assert (
+            billing_automation._default_tax_application(db_session)
+            == TaxApplication.inclusive
+        )
+
+    def test_default_tax_application_exempt(self, db_session):
+        from app.models.billing import TaxApplication
+
+        self._add_setting(db_session, "default_tax_application", "exempt")
+        assert (
+            billing_automation._default_tax_application(db_session)
+            == TaxApplication.exempt
+        )
