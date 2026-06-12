@@ -383,3 +383,19 @@ def test_build_pdf_bytes_with_weasyprint_pydyf_compat(db_session, subscriber_acc
 
     assert pdf_bytes.startswith(b"%PDF-")
     assert len(pdf_bytes) > 1500
+
+
+def test_render_invoice_html_falls_back_to_brand_legal_name(
+    db_session, subscriber_account
+):
+    """With no company-info company_name set, the PDF uses the configured brand
+    legal name (brand.json) instead of a generic placeholder."""
+    from app.services.branding_config import get_brand
+
+    invoice = _invoice(db_session, subscriber_account)
+    _add_lines(db_session, invoice, 1)
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+
+    assert get_brand()["legal_name"] in html
+    assert "Your Company" not in html

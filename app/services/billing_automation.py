@@ -36,7 +36,7 @@ from app.services import settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing_settings import resolve_payment_due_days
-from app.services.common import round_money
+from app.services.common import coerce_uuid, round_money
 from app.services.events import emit_event
 from app.services.events.types import EventType
 
@@ -275,7 +275,40 @@ def _resolve_tax_rate_id(db: Session, subscription: Subscription):
     subscriber = db.get(Subscriber, subscription.subscriber_id)
     if subscriber and subscriber.tax_rate_id and _is_active(subscriber.tax_rate_id):
         return subscriber.tax_rate_id
+    return _default_tax_rate_id(db)
+
+
+def _default_tax_rate_id(db: Session):
+    """Configurable fallback VAT rate, applied when neither the service address
+    nor the subscriber carries a tax_rate_id. Unset by default → returns None →
+    no tax (current behaviour); set the ``billing.default_tax_rate_id`` setting
+    to a TaxRate id to bill a default VAT."""
+    raw = settings_spec.resolve_value(db, SettingDomain.billing, "default_tax_rate_id")
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        rate = db.get(TaxRate, coerce_uuid(value))
+    except (ValueError, TypeError):
+        return None
+    if rate is not None and bool(rate.is_active):
+        return rate.id
     return None
+
+
+def _default_tax_application(db: Session) -> TaxApplication:
+    """Whether default-VAT billing treats catalog prices as tax-exclusive (tax
+    added on top — the default) or tax-inclusive (tax extracted from the price).
+    Controlled by ``billing.default_tax_application`` (exclusive|inclusive)."""
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.billing, "default_tax_application"
+    )
+    value = str(raw or "").strip().lower()
+    if value == "inclusive":
+        return TaxApplication.inclusive
+    if value == "exempt":
+        return TaxApplication.exempt
+    return TaxApplication.exclusive
 
 
 def _prorated_amount(
@@ -333,6 +366,7 @@ def _bill_recurring_addons(
         .all()
     )
     added = 0
+    tax_application = _default_tax_application(db)
     for sub_addon, add_on in rows:
         priced = _addon_recurring_price(db, add_on.id)
         if priced is None:
@@ -355,7 +389,7 @@ def _bill_recurring_addons(
                 unit_price=unit,
                 amount=amount,
                 tax_rate_id=tax_rate_id,
-                tax_application=TaxApplication.exclusive,
+                tax_application=tax_application,
             )
         )
         added += 1
@@ -924,7 +958,7 @@ def run_invoice_cycle(
             unit_price=round_money(line_amount),
             amount=round_money(line_amount),
             tax_rate_id=tax_rate_id,
-            tax_application=TaxApplication.exclusive,
+            tax_application=_default_tax_application(db),
         )
         db.add(line)
         summary["subscriptions_billed"] += 1
@@ -1161,7 +1195,7 @@ def generate_prorated_invoice(
         unit_price=round_money(line_amount),
         amount=round_money(line_amount),
         tax_rate_id=tax_rate_id,
-        tax_application=TaxApplication.exclusive,
+        tax_application=_default_tax_application(db),
     )
     db.add(line)
 
