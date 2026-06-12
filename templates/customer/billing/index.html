@@ -26,12 +26,14 @@
             <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Manage invoices and payment history</p>
         </div>
         <div class="flex flex-col gap-3 sm:flex-row">
+            {% if not (customer and customer.read_only) %}
             <a href="/portal/billing/topup" class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:-translate-y-0.5">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                 </svg>
                 Add Funds
             </a>
+            {% endif %}
         </div>
     </div>
 
