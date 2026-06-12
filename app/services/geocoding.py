@@ -67,11 +67,17 @@ def _nominatim_search(db: Session, query: str, limit: int) -> list[dict]:
     user_agent = _setting_value(db, "user_agent") or "dotmac_sm"
     timeout_sec = _setting_int(db, "timeout_sec", 5)
     email = _setting_value(db, "email")
+    country_codes = _setting_value(db, "country_codes")
     params: dict[str, Any] = {
         "q": query,
         "format": "json",
         "limit": max(limit, 1),
+        "addressdetails": 1,
     }
+    if country_codes:
+        params["countrycodes"] = ",".join(
+            part.strip().lower() for part in country_codes.split(",") if part.strip()
+        )
     if email:
         params["email"] = email
     try:
