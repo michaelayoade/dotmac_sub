@@ -170,6 +170,7 @@
             this.backButton.addEventListener('click', () => this.back());
             this.nextButton.addEventListener('click', () => this.next());
             this.finishButton.addEventListener('click', () => this.finish(true));
+            this.overlay.addEventListener('click', () => this.skip());
         }
 
         findAvailableIndex(startIndex, direction) {
@@ -389,7 +390,12 @@
             const tour = new GuidedTour(options);
             if (tour.shouldAutoStart()) {
                 window.setTimeout(() => {
-                    tour.start();
+                    // Mark seen as soon as the tour auto-shows: navigating away
+                    // mid-tour must not relaunch it on every subsequent page.
+                    // The help button can always reopen it (start({force:true})).
+                    if (tour.start()) {
+                        tour.markCompleted();
+                    }
                 }, tour.startDelay);
             }
             return tour;

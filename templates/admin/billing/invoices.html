@@ -243,10 +243,10 @@
                             <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">
                             ₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">
                             ₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
@@ -271,13 +271,14 @@
                     {% endfor %}
                     <tr class="bg-slate-50 dark:bg-slate-800/70">
                         <td colspan="10" class="px-6 py-3">
-                            <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                                <span>Draft: {{ status_totals.draft.count }} (₦{{ "{:,.2f}".format(status_totals.draft.amount) }})</span>
-                                <span>Issued: {{ status_totals.issued.count }} (₦{{ "{:,.2f}".format(status_totals.issued.amount) }})</span>
-                                <span>Partially Paid: {{ status_totals.partially_paid.count }} (₦{{ "{:,.2f}".format(status_totals.partially_paid.amount) }})</span>
-                                <span>Paid: {{ status_totals.paid.count }} (₦{{ "{:,.2f}".format(status_totals.paid.amount) }})</span>
-                                <span>Overdue: {{ status_totals.overdue.count }} (₦{{ "{:,.2f}".format(status_totals.overdue.amount) }})</span>
-                                <span>Total: {{ status_totals.all.count }} (₦{{ "{:,.2f}".format(status_totals.all.amount) }})</span>
+                            <div class="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-600 dark:text-slate-300">
+                                {% for key, label in [('draft', 'Draft'), ('issued', 'Issued'), ('partially_paid', 'Partially paid'), ('paid', 'Paid'), ('overdue', 'Overdue')] %}
+                                {% set bucket = status_totals[key] %}
+                                {% if bucket.count %}
+                                <span><span class="font-medium">{{ label }}</span> {{ bucket.count }} · ₦{{ "{:,.2f}".format(bucket.amount) }}</span>
+                                {% endif %}
+                                {% endfor %}
+                                <span class="font-semibold">Total {{ status_totals.all.count }} · ₦{{ "{:,.2f}".format(status_totals.all.amount) }}</span>
                             </div>
                         </td>
                     </tr>
