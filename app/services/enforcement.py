@@ -225,6 +225,94 @@ def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
         return None
 
 
+# Per-process cache of CoA secrets resolved from the external FreeRADIUS
+# ``nas`` table, keyed by NAS device id. Secrets effectively never change
+# without a NAS re-sync (which restarts workers on deploy), so no TTL.
+_COA_SECRET_CACHE: dict[str, str] = {}
+_COA_SECRET_CACHE_LOCK = threading.Lock()
+
+
+def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
+    """Resolve the RADIUS shared secret to use for CoA against a NAS.
+
+    Prefers the secret stored on the NAS device record. Falls back to the
+    external FreeRADIUS ``nas`` table (matched by the device's RADIUS client
+    IP) — that secret is authoritative by construction: FreeRADIUS is
+    actively authenticating the NAS with it. Several migrated NAS records
+    have no local shared_secret, which used to make CoA structurally
+    impossible for their subscribers.
+    """
+    if nas_device.shared_secret:
+        try:
+            decrypted = decrypt_credential(nas_device.shared_secret)
+            if decrypted:
+                resolved = resolve_secret(decrypted)
+                if resolved:
+                    return resolved
+        except Exception as exc:
+            # An undecryptable/unresolvable local secret must not abort the
+            # enforcement loop — fall through to the external lookup.
+            logger.warning(
+                "Local CoA secret unusable for NAS %s (%s): %s — trying "
+                "external nas table.",
+                nas_device.name,
+                nas_device.id,
+                exc,
+            )
+
+    cache_key = str(nas_device.id)
+    with _COA_SECRET_CACHE_LOCK:
+        cached = _COA_SECRET_CACHE.get(cache_key)
+    if cached:
+        return cached
+
+    from sqlalchemy import Column, String
+    from sqlalchemy import select as sa_select
+
+    from app.services.radius import (
+        _active_external_sync_configs,
+        _external_radius_table,
+        _get_external_engine,
+        _radius_client_ip_for_nas,
+    )
+
+    client_ip = _radius_client_ip_for_nas(nas_device)
+    if not client_ip:
+        return None
+    for config in _active_external_sync_configs(db):
+        try:
+            engine = _get_external_engine(config["db_url"])
+            nas_table = _external_radius_table(
+                config.get("nas_table", "nas"),
+                Column("nasname", String),
+                Column("secret", String),
+            )
+            with engine.connect() as conn:
+                secret = conn.execute(
+                    sa_select(nas_table.c.secret).where(
+                        nas_table.c.nasname == client_ip
+                    )
+                ).scalar()
+            if secret:
+                with _COA_SECRET_CACHE_LOCK:
+                    _COA_SECRET_CACHE[cache_key] = secret
+                logger.info(
+                    "CoA secret for NAS %s (%s) resolved from external "
+                    "RADIUS nas table (no local shared_secret).",
+                    nas_device.name,
+                    nas_device.id,
+                )
+                return secret
+        except Exception as exc:
+            logger.warning(
+                "External CoA secret lookup failed for NAS %s (%s): %s",
+                nas_device.name,
+                nas_device.id,
+                exc,
+            )
+    return None
+
+
 def _send_coa_disconnect(
     db: Session,
     nas_device: NasDevice,
