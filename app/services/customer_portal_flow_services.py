@@ -67,61 +67,75 @@ def _get_fup_status(
         if not policy or not policy.is_active:
             return None
 
-        # Compute current usage for this billing period
-        now = datetime.now(UTC)
-        subscription = db.get(Subscription, coerce_uuid(subscription_id))
-        period_start = now - timedelta(days=30)
-        if subscription and subscription.next_billing_at:
-            nba = _as_utc(subscription.next_billing_at) or now
-            cycle_days = 30
-            period_start = nba - timedelta(days=cycle_days)
-
-        usage_gb = _usage_total_gb(
-            db,
-            subscription_id=subscription_id,
-            start_at=period_start,
-            end_at=now,
+        # Authoritative cycle usage = the same QuotaBucket the mobile app and
+        # FUP enforcement key off, so the web portal can't disagree with them.
+        # (Was a divergent UsageRecord 30-day rolling sum.)
+        from app.services.fup import _threshold_gb
+        from app.services.usage_summary import (
+            _current_bucket_used_gb,
+            _fup_warn_ratio,
+            _nearest_enforcement_rule,
         )
 
-        # Fallback to estimated traffic volume if accounting records are unavailable.
-        if usage_gb <= 0:
-            rows = (
-                db.query(
-                    func.avg(BandwidthSample.rx_bps).label("rx"),
-                    func.avg(BandwidthSample.tx_bps).label("tx"),
-                )
-                .filter(
-                    BandwidthSample.subscription_id == coerce_uuid(subscription_id),
-                    BandwidthSample.sample_at >= period_start,
-                    BandwidthSample.sample_at <= now,
-                )
-                .first()
+        now = datetime.now(UTC)
+        usage_gb = _current_bucket_used_gb(db, coerce_uuid(subscription_id))
+        if usage_gb is None:
+            # No rated bucket on file — fall back to the rolling-window estimate
+            # (accounting records, then a bandwidth-sample volume estimate).
+            subscription = db.get(Subscription, coerce_uuid(subscription_id))
+            period_start = now - timedelta(days=30)
+            if subscription and subscription.next_billing_at:
+                nba = _as_utc(subscription.next_billing_at) or now
+                period_start = nba - timedelta(days=30)
+            usage_gb = _usage_total_gb(
+                db,
+                subscription_id=subscription_id,
+                start_at=period_start,
+                end_at=now,
             )
-            if rows and (rows.rx or rows.tx):
-                span_seconds = max(0, (now - period_start).total_seconds())
-                total_bytes = (
-                    (float(rows.rx or 0) + float(rows.tx or 0)) / 8.0
-                ) * span_seconds
-                usage_gb = total_bytes / (1024**3)
+            if usage_gb <= 0:
+                rows = (
+                    db.query(
+                        func.avg(BandwidthSample.rx_bps).label("rx"),
+                        func.avg(BandwidthSample.tx_bps).label("tx"),
+                    )
+                    .filter(
+                        BandwidthSample.subscription_id == coerce_uuid(subscription_id),
+                        BandwidthSample.sample_at >= period_start,
+                        BandwidthSample.sample_at <= now,
+                    )
+                    .first()
+                )
+                if rows and (rows.rx or rows.tx):
+                    span_seconds = max(0, (now - period_start).total_seconds())
+                    total_bytes = (
+                        (float(rows.rx or 0) + float(rows.tx or 0)) / 8.0
+                    ) * span_seconds
+                    usage_gb = total_bytes / (1024**3)
 
-        # Get the data cap from the first active rule
-        allowance_gb = None
+        # Allowance = the nearest (lowest-threshold) enforcement rule — the one
+        # the customer hits first, matching fup_summary + enforcement. (Was
+        # max() across rules, which over-reported headroom.)
         active_rules = [r for r in (policy.rules or []) if r.is_active]
-        active_rules.sort(key=lambda r: r.sort_order or 0)
-        if active_rules:
-            from app.services.fup import _threshold_gb
-
-            allowance_gb = max(_threshold_gb(rule) for rule in active_rules)
+        nearest = _nearest_enforcement_rule(db, offer_id)
+        if nearest is not None:
+            allowance_gb = _threshold_gb(nearest)
+        elif active_rules:
+            allowance_gb = min(_threshold_gb(rule) for rule in active_rules)
+        else:
+            allowance_gb = None
 
         usage_pct = 0.0
         if allowance_gb and allowance_gb > 0:
             usage_pct = min(100.0, (usage_gb / allowance_gb) * 100)
 
-        # Determine status level
+        # Warning threshold from the usage_warning_thresholds setting (the same
+        # knob the 80%-notification and the mobile banner use), not a hardcode.
+        warn_pct = _fup_warn_ratio(db) * 100
         status_level = "normal"
         if usage_pct >= 100:
             status_level = "exceeded"
-        elif usage_pct >= 80:
+        elif usage_pct >= warn_pct:
             status_level = "warning"
 
         # Policy doesn't have a name field; use offer or generic label

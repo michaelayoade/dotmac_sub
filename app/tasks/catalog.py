@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
+from app.services.billing_settings import billing_enabled
 from app.services.catalog import subscriptions as subscriptions_service
 from app.services.db_session_adapter import db_session_adapter
 
@@ -15,6 +16,11 @@ def expire_subscriptions() -> dict:
     """Expire subscriptions that have passed their end_at date."""
     logger.info("Starting expire_subscriptions")
     with db_session_adapter.session() as session:
+        if not billing_enabled(session):
+            logger.info(
+                "expire_subscriptions skipped: local billing disabled (billing_enabled)"
+            )
+            return {"skipped": "billing_disabled"}
         result = subscriptions_service.Subscriptions.expire_subscriptions(session)
         logger.info("Completed expire_subscriptions: %s", result)
         return result

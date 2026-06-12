@@ -14,6 +14,7 @@ from app.web.admin import network_device_groups as admin_network_device_groups
 from app.web.admin import network_olts_profiles as admin_network_olts_profiles
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
+from app.web.admin import support_automation as admin_support_automation
 from app.web.admin import usage as admin_usage
 
 
@@ -251,6 +252,33 @@ def test_device_group_api_routes_require_network_permissions():
         "/network/device-groups/{group_id}/actions",
         "POST",
         "network:write",
+    )
+
+
+def test_support_automation_routes_require_automation_permissions():
+    assert _route_has_permission(
+        admin_support_automation.router,
+        "/support/automation",
+        "GET",
+        "support:automation:read",
+    )
+    assert _route_has_permission(
+        admin_support_automation.router,
+        "/support/automation",
+        "POST",
+        "support:automation:write",
+    )
+    assert _route_has_permission(
+        admin_support_automation.router,
+        "/support/automation/{rule_id}/edit",
+        "GET",
+        "support:automation:write",
+    )
+    assert _route_has_permission(
+        admin_support_automation.router,
+        "/support/automation/{rule_id}/toggle",
+        "POST",
+        "support:automation:write",
     )
 
 
