@@ -664,6 +664,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.geocoding,
+        key="country_codes",
+        env_var="GEOCODING_COUNTRY_CODES",
+        value_type=SettingValueType.string,
+        default="ng",
+    ),
+    SettingSpec(
+        domain=SettingDomain.geocoding,
         key="user_agent",
         env_var="GEOCODING_USER_AGENT",
         value_type=SettingValueType.string,
