@@ -664,6 +664,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.geocoding,
+        key="country_codes",
+        env_var="GEOCODING_COUNTRY_CODES",
+        value_type=SettingValueType.string,
+        default="ng",
+    ),
+    SettingSpec(
+        domain=SettingDomain.geocoding,
         key="user_agent",
         env_var="GEOCODING_USER_AGENT",
         value_type=SettingValueType.string,
@@ -902,6 +909,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="exclusive",
         allowed={"exclusive", "inclusive", "exempt"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="default_tax_rate_id",
+        env_var="BILLING_DEFAULT_TAX_RATE_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default VAT rate (TaxRate id) when no address/subscriber rate set",
     ),
     SettingSpec(
         domain=SettingDomain.billing,

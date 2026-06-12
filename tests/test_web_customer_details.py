@@ -4,6 +4,26 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
+
+
+def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Request:
+    """Minimal request with empty state (no authenticated user) for unit calls."""
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 5555),
+            "server": ("testserver", 80),
+        }
+    )
+
 
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -153,7 +173,9 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
         str(subscriber.id),
         credential_id="00000000-0000-0000-0000-000000000000",
     )
+    request = _bare_request()
     response = customer_routes.person_pppoe_password(
+        request=request,
         customer_id=str(subscriber.id),
         credential_id=str(credential.id),
         db=db_session,
@@ -163,6 +185,18 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
     assert (missing_password, missing_found) == ("", False)
     assert response.status_code == 200
     assert json.loads(response.body)["password"] == "hYNAtwqj"
+
+    # The reveal must be audited (who revealed which customer's credential).
+    from app.models.audit import AuditEvent
+
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "customer.pppoe_password_reveal")
+        .filter(AuditEvent.entity_id == str(subscriber.id))
+        .first()
+    )
+    assert audit is not None
+    assert audit.is_success is True
 
 
 def test_customer_detail_rejects_reseller_users(db_session):

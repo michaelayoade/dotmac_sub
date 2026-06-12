@@ -1,0 +1,7 @@
+{% if error %}
+{% set message = error if error is string else None %}
+{% set details = none if error is string else error %}
+{% set status = 'error' %}
+{% set alert_classes = form_error_classes | default('mb-4 rounded-lg border px-4 py-3 text-sm') %}
+{% include "components/feedback/alert.html" %}
+{% endif %}

@@ -36,3 +36,8 @@ dart_defines.json
 # Misc
 *.log
 .DS_Store
+
+# Firebase / FCM platform config — operator drops these in per deployment
+# (they identify the Firebase project; kept out of the repo). See PUSH_SETUP.md.
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist

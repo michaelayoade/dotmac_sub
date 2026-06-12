@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
-from pyrad.packet import CoARequest, DisconnectRequest
+from pyrad.packet import CoARequest, DisconnectNAK, DisconnectRequest
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -30,6 +30,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
 from app.services.radius import sync_credential_to_radius
+from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -213,15 +214,11 @@ def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
         import psycopg
 
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT secret FROM nas WHERE nasname = %s LIMIT 1", (nas_ip,)
-            )
+            cur.execute("SELECT secret FROM nas WHERE nasname = %s LIMIT 1", (nas_ip,))
             row = cur.fetchone()
         return row[0] if row and row[0] else None
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "radius nas-table secret lookup failed for %s: %s", nas_ip, exc
-        )
+        logger.warning("radius nas-table secret lookup failed for %s: %s", nas_ip, exc)
         return None
 
 
@@ -340,17 +337,11 @@ def _send_coa_disconnect(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
-    # Resolve the shared secret: nas_devices first, then the radius `nas`
-    # table — the value FreeRADIUS actually authenticates this NAS with.
-    # Many nas_devices rows carry Fernet ciphertext from a rotated key
-    # (decrypt drift), which blocked ALL CoA until 2026-06-11.
-    decrypted_secret = None
-    if nas_device.shared_secret:
-        try:
-            decrypted_secret = decrypt_credential(nas_device.shared_secret)
-        except Exception:  # noqa: BLE001
-            decrypted_secret = None
+    decrypted_secret = _resolve_coa_secret(db, nas_device)
     if not decrypted_secret:
+        # Last resort: direct radius `nas` table lookup by NAS host IP via
+        # RADIUS_DB_DSN (the 2026-06-11 decrypt-drift hotfix path) — covers
+        # devices whose radius_client link is missing.
         decrypted_secret = _nas_secret_from_radius_db(str(host))
     if not decrypted_secret:
         logger.warning(
@@ -375,8 +366,19 @@ def _send_coa_disconnect(
     if session_id:
         req["Acct-Session-Id"] = session_id
     try:
-        client.SendPacket(req)
+        response = client.SendPacket(req)
         _mark_coa_supported(nas_device.id)
+        if getattr(response, "code", None) == DisconnectNAK:
+            # The NAS speaks CoA but refused the disconnect (e.g. stale
+            # Framed-IP-Address AND-match) — not a kill, so the SSH
+            # fallback must still run. Do NOT negative-cache the NAS.
+            logger.warning(
+                "Disconnect-NAK from NAS %s for session %s — session not "
+                "killed, falling back to SSH kick.",
+                nas_device.id,
+                session_id,
+            )
+            return False
         return True
     except Timeout:
         _mark_coa_unsupported(nas_device.id)
@@ -696,9 +698,7 @@ def _open_radacct_sessions_for_username(username: str) -> list[dict]:
             for r in rows
         ]
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "radacct open-session lookup failed for %s: %s", username, exc
-        )
+        logger.warning("radacct open-session lookup failed for %s: %s", username, exc)
         return []
 
 
@@ -733,7 +733,9 @@ def disconnect_subscription_sessions(
     # Primary source: open radacct sessions by login. Keyed by session_id
     # to dedupe against the legacy app-side rows added below.
     targets: dict[str, tuple[Any, str | None, str, str | None]] = {}
+    found = 0
     for sess in _open_radacct_sessions_for_username(login):
+        found += 1
         nas_device = _nas_device_by_ip(db, sess["nas_ip"])
         if not nas_device:
             logger.warning(
@@ -762,8 +764,15 @@ def disconnect_subscription_sessions(
     for session in legacy_sessions:
         if session.session_id in targets:
             continue
+        found += 1
         nas_device = _resolve_nas_device(db, session)
         if not nas_device:
+            logger.warning(
+                "Open session %s for subscription %s has no NAS device — "
+                "cannot target a disconnect.",
+                session.session_id,
+                subscription_id,
+            )
             continue
         credential = db.get(AccessCredential, session.access_credential_id)
         username = (credential.username if credential else None) or login or None
@@ -775,6 +784,13 @@ def disconnect_subscription_sessions(
         )
 
     if not targets:
+        if found:
+            logger.warning(
+                "Failed to disconnect any of %s open sessions for "
+                "subscription %s — no NAS device resolvable.",
+                found,
+                subscription_id,
+            )
         return 0
 
     # Group sessions by NAS so we open at most one SSH connection per device
@@ -824,6 +840,12 @@ def disconnect_subscription_sessions(
             count,
             subscription_id,
             reason or "no_reason",
+        )
+    else:
+        logger.warning(
+            "Failed to disconnect any of %s open sessions for subscription %s.",
+            found,
+            subscription_id,
         )
     return count
 

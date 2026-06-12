@@ -9,6 +9,7 @@ import logging
 
 from app.celery_app import celery_app
 from app.services import autopay as autopay_service
+from app.services.billing_settings import billing_enabled
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,9 @@ def charge_due_invoices() -> dict:
     """Run autopay for every active mandate with open invoices."""
     session = SessionLocal()
     try:
+        if not billing_enabled(session):
+            logger.info("autopay skipped: local billing disabled (billing_enabled)")
+            return {"skipped": "billing_disabled"}
         result = autopay_service.run_all_due(session)
         if "total" in result:
             result["total"] = str(result["total"])

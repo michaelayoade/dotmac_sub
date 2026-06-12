@@ -190,7 +190,10 @@ def _refresh_cookie_secure(db: Session | None) -> bool:
     value = _setting_value(db, "refresh_cookie_secure")
     if value is not None:
         return str(value).lower() in {"1", "true", "yes", "on"}
-    return False
+    # Secure-by-default: callers AND this with an HTTPS-request check, so plain
+    # HTTP (local dev) still works while production never drops the flag over
+    # TLS. Set REFRESH_COOKIE_SECURE=false to force-disable.
+    return True
 
 
 def _refresh_cookie_samesite(db: Session | None) -> str:

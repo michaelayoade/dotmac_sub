@@ -6,6 +6,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// FCM: only apply the Google Services plugin when the config file is present,
+// so a checkout without google-services.json still builds (push disabled).
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 // Release signing is configured via android/key.properties (gitignored). When
 // the file is absent (e.g. local `flutter run --release`, or CI without the
 // signing secrets), the release build falls back to the debug key so it still
@@ -25,6 +31,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Required by flutter_local_notifications (FCM display) for Java 8+ API
+        // support on older Android versions.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -75,4 +84,10 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Core library desugaring runtime — paired with
+    // isCoreLibraryDesugaringEnabled above (flutter_local_notifications).
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

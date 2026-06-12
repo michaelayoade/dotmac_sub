@@ -6,6 +6,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.gis import CustomerLocationChangeRequestStatus
+from app.services import customer_location_requests as location_requests_service
 from app.services import web_gis as web_gis_service
 from app.services.auth_dependencies import require_permission
 
@@ -30,13 +32,74 @@ def _gis_context(request: Request, db: Session, **extra) -> dict:
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
-def gis_index(request: Request, tab: str = "locations", db: Session = Depends(get_db)):
+def gis_index(
+    request: Request,
+    tab: str = "locations",
+    status: str = "pending",
+    db: Session = Depends(get_db),
+):
     context = _gis_context(
         request,
         db,
         **web_gis_service.build_index_data(db, tab=tab),
     )
+    if tab == "customer-requests":
+        try:
+            status_filter = (
+                CustomerLocationChangeRequestStatus(status) if status else None
+            )
+        except ValueError:
+            status_filter = CustomerLocationChangeRequestStatus.pending
+        context.update(
+            location_requests_service.get_admin_review_context(db, status=status_filter)
+        )
     return templates.TemplateResponse("admin/gis/index.html", context)
+
+
+@router.post(
+    "/location-requests/{request_id}/approve",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def gis_location_request_approve(
+    request: Request,
+    request_id: str,
+    review_note: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    location_requests_service.approve_request(
+        db,
+        request_id=request_id,
+        actor_id=str(current_user.get("id") or "") or None,
+        actor_name=str(current_user.get("name") or "") or None,
+        review_note=review_note,
+    )
+    return RedirectResponse(url="/admin/gis?tab=customer-requests", status_code=303)
+
+
+@router.post(
+    "/location-requests/{request_id}/reject",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def gis_location_request_reject(
+    request: Request,
+    request_id: str,
+    review_note: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    location_requests_service.reject_request(
+        db,
+        request_id=request_id,
+        actor_id=str(current_user.get("id") or "") or None,
+        actor_name=str(current_user.get("name") or "") or None,
+        review_note=review_note,
+    )
+    return RedirectResponse(url="/admin/gis?tab=customer-requests", status_code=303)
 
 
 @router.get("/locations/new", response_class=HTMLResponse)
