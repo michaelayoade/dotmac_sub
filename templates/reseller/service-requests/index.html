@@ -1,0 +1,192 @@
+{% extends "layouts/reseller.html" %}
+
+{% block title %}Service Requests - Reseller{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Service Requests</h1>
+        <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Request new installations for leads, with the install location pinned on the map.</p>
+    </div>
+
+    {% if submitted %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Service request submitted — serviceability is pre-checked from the fiber plant and our team will follow up.
+    </div>
+    {% endif %}
+    {% if form_error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">
+        {{ form_error }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,1fr)]">
+        <!-- New request form -->
+        <form method="post" action="/reseller/service-requests" class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800 space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <div>
+                <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">New service request</h2>
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">For a new lead: contact details plus where the service should be installed.</p>
+            </div>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="contact_name">Contact name *</label>
+                    <input type="text" id="contact_name" name="contact_name" required maxlength="160"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-indigo-500 focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="contact_phone">Contact phone *</label>
+                    <input type="tel" id="contact_phone" name="contact_phone" required maxlength="40"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-indigo-500 focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="contact_email">Contact email</label>
+                <input type="email" id="contact_email" name="contact_email" maxlength="200"
+                       class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-indigo-500 focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="address">Install address</label>
+                <input type="text" id="address" name="address" maxlength="255"
+                       class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-indigo-500 focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+            </div>
+            <div>
+                <div class="flex items-center justify-between">
+                    <p class="text-sm font-semibold text-stone-700 dark:text-stone-300">Install location pin (optional)</p>
+                    <button type="button" id="sr-use-gps"
+                            class="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-medium text-stone-600 hover:bg-stone-50 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8a4 4 0 100 8 4 4 0 000-8zm0-6v3m0 14v3M2 12h3m14 0h3"/></svg>
+                        <span id="sr-use-gps-label">Use my location</span>
+                    </button>
+                </div>
+                <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Tap the map to drop the pin — serviceability is checked against the fiber plant.</p>
+                <div id="sr-map" class="mt-2 h-64 w-full overflow-hidden rounded-xl"></div>
+                <p id="sr-pin-label" class="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400"></p>
+                <input type="hidden" name="latitude" id="sr-latitude">
+                <input type="hidden" name="longitude" id="sr-longitude">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="notes">Notes</label>
+                <textarea id="notes" name="notes" rows="2" maxlength="2000"
+                          class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-indigo-500 focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white"></textarea>
+            </div>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+                Submit request
+            </button>
+        </form>
+
+        <!-- Request list -->
+        <div class="rounded-2xl border border-stone-200 bg-white shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+                <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">My requests</h2>
+            </div>
+            <div class="divide-y divide-stone-200 dark:divide-stone-700">
+                {% for item in service_requests %}
+                <div class="px-6 py-4">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                            <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ item.contact_name or 'Existing customer' }}</p>
+                            <p class="text-xs text-stone-500 dark:text-stone-400">{{ item.contact_phone or '' }}{% if item.address %} · {{ item.address }}{% endif %}</p>
+                        </div>
+                        <div class="flex gap-1.5">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
+                                {% if item.status == 'pending' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300
+                                {% elif item.status in ['approved', 'completed'] %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300
+                                {% elif item.status == 'rejected' %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300
+                                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-300{% endif %}">
+                                {{ item.status | replace('_', ' ') | title }}
+                            </span>
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
+                                {% if item.serviceability == 'serviceable' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300
+                                {% elif item.serviceability == 'not_serviceable' %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300
+                                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-300{% endif %}">
+                                {{ item.serviceability | replace('_', ' ') | title }}
+                            </span>
+                        </div>
+                    </div>
+                    {% if item.latitude is not none and item.longitude is not none %}
+                    <p class="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">
+                        {{ '%.6f'|format(item.latitude) }}, {{ '%.6f'|format(item.longitude) }}
+                        <a class="ml-1 text-indigo-600 hover:text-indigo-700" target="_blank" rel="noopener"
+                           href="https://www.openstreetmap.org/?mlat={{ item.latitude }}&mlon={{ item.longitude }}#map=17/{{ item.latitude }}/{{ item.longitude }}">view map</a>
+                    </p>
+                    {% endif %}
+                    {% if item.notes %}<p class="mt-1 text-xs text-stone-600 dark:text-stone-300">{{ item.notes }}</p>{% endif %}
+                    {% if item.admin_notes %}<p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Staff note: {{ item.admin_notes }}</p>{% endif %}
+                    <p class="mt-1 text-xs text-stone-400 dark:text-stone-500">{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '' }}</p>
+                </div>
+                {% else %}
+                <p class="px-6 py-8 text-sm text-stone-500 dark:text-stone-400">No service requests yet.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if (typeof L === 'undefined') return;
+    const latInput = document.getElementById('sr-latitude');
+    const lonInput = document.getElementById('sr-longitude');
+    const pinLabel = document.getElementById('sr-pin-label');
+    let marker = null;
+
+    const map = L.map('sr-map').setView([6.5244, 3.3792], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap',
+        maxZoom: 20
+    }).addTo(map);
+
+    function setPin(lat, lon) {
+        if (marker) {
+            marker.setLatLng([lat, lon]);
+        } else {
+            marker = L.marker([lat, lon], {draggable: true}).addTo(map);
+            marker.on('dragend', function(event) {
+                const position = event.target.getLatLng();
+                setPin(position.lat, position.lng);
+            });
+        }
+        if (latInput) latInput.value = lat.toFixed(6);
+        if (lonInput) lonInput.value = lon.toFixed(6);
+        if (pinLabel) pinLabel.textContent = lat.toFixed(6) + ', ' + lon.toFixed(6);
+    }
+
+    map.on('click', function(event) {
+        setPin(event.latlng.lat, event.latlng.lng);
+    });
+
+    const gpsButton = document.getElementById('sr-use-gps');
+    const gpsLabel = document.getElementById('sr-use-gps-label');
+    if (gpsButton) {
+        if (!navigator.geolocation) {
+            gpsButton.classList.add('hidden');
+        } else {
+            gpsButton.addEventListener('click', function() {
+                if (gpsLabel) gpsLabel.textContent = 'Locating...';
+                gpsButton.disabled = true;
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    setPin(position.coords.latitude, position.coords.longitude);
+                    map.setView([position.coords.latitude, position.coords.longitude], 17);
+                    if (gpsLabel) gpsLabel.textContent = 'Use my location';
+                    gpsButton.disabled = false;
+                }, function() {
+                    if (gpsLabel) gpsLabel.textContent = 'Location unavailable';
+                    setTimeout(function() {
+                        if (gpsLabel) gpsLabel.textContent = 'Use my location';
+                        gpsButton.disabled = false;
+                    }, 2500);
+                }, {enableHighAccuracy: true, timeout: 15000});
+            });
+        }
+    }
+});
+</script>
+{% endblock %}
