@@ -65,13 +65,19 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
       await repo.payVerify(reference);
       ref.invalidate(resellerBillingProvider);
       messenger.showSnackBar(
-          const SnackBar(content: Text('Payment recorded — thank you.')));
+        const SnackBar(content: Text('Payment recorded — thank you.')),
+      );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(
-          content: Text(e.toString().contains('400')
-              ? 'Payment could not be completed.'
-              : 'Something went wrong — if you were charged, the payment '
-                  'will be reconciled automatically.')));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString().contains('400')
+                ? 'Payment could not be completed.'
+                : 'Something went wrong — if you were charged, the payment '
+                      'will be reconciled automatically.',
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _paying = false);
     }
@@ -109,9 +115,7 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                               child: Text(
                                 Fmt.money(b.totalOutstanding, 'NGN'),
                                 maxLines: 1,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
+                                style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       fontWeight: FontWeight.w700,
                                       color: b.totalOutstanding > 0
@@ -121,8 +125,10 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text('Outstanding',
-                                style: Theme.of(context).textTheme.bodySmall),
+                            Text(
+                              'Outstanding',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           ],
                         ),
                       ),
@@ -142,15 +148,15 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                               child: Text(
                                 Fmt.money(b.unallocatedBalance, 'NGN'),
                                 maxLines: 1,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
+                                style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text('Unallocated credit',
-                                style: Theme.of(context).textTheme.bodySmall),
+                            Text(
+                              'Unallocated credit',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           ],
                         ),
                       ),
@@ -165,15 +171,18 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                 label: Text(_paying ? 'Starting payment…' : 'Pay'),
               ),
               const SizedBox(height: 16),
-              Text('Recent payments',
-                  style: Theme.of(context).textTheme.titleSmall),
+              Text(
+                'Recent payments',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
               const SizedBox(height: 8),
               if (b.recentPayments.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: EmptyState(
-                      icon: Icons.payments_outlined,
-                      message: 'No payments yet'),
+                    icon: Icons.payments_outlined,
+                    message: 'No payments yet',
+                  ),
                 )
               else
                 for (final pmt in b.recentPayments)
@@ -183,10 +192,12 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                       dense: true,
                       leading: const Icon(Icons.receipt_long_outlined),
                       title: Text(Fmt.money(pmt.amount, pmt.currency)),
-                      subtitle: Text([
-                        if (pmt.method != null) pmt.method!,
-                        if (pmt.receivedAt != null) Fmt.date(pmt.receivedAt!),
-                      ].join(' · ')),
+                      subtitle: Text(
+                        [
+                          if (pmt.method != null) pmt.method!,
+                          if (pmt.receivedAt != null) Fmt.date(pmt.receivedAt!),
+                        ].join(' · '),
+                      ),
                     ),
                   ),
             ],

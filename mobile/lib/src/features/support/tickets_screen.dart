@@ -52,8 +52,11 @@ class TicketsScreen extends ConsumerWidget {
                 return Card(
                   margin: EdgeInsets.zero,
                   child: ListTile(
-                    title: Text(t.title,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    title: Text(
+                      t.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     subtitle: Text(
                       '${t.number ?? t.id.substring(0, 8)} · ${Fmt.date(t.createdAt)}',
                     ),

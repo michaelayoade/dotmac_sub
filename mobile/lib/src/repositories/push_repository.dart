@@ -14,10 +14,12 @@ class PushRepository {
     required String token,
     required String platform,
   }) async {
-    await guard(() => dio.post('/me/push-tokens', data: {
-          'token': token,
-          'platform': platform,
-        }));
+    await guard(
+      () => dio.post(
+        '/me/push-tokens',
+        data: {'token': token, 'platform': platform},
+      ),
+    );
   }
 
   /// De-register a device token (on logout / token rotation).

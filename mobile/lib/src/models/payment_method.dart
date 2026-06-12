@@ -6,9 +6,9 @@ class AutopayStatus {
   final String? paymentMethodId;
 
   factory AutopayStatus.fromJson(Map<String, dynamic> json) => AutopayStatus(
-        enabled: json['enabled'] as bool? ?? false,
-        paymentMethodId: json['payment_method_id']?.toString(),
-      );
+    enabled: json['enabled'] as bool? ?? false,
+    paymentMethodId: json['payment_method_id']?.toString(),
+  );
 }
 
 /// A saved card (GET /me/payment-methods). The reusable token is never sent to
@@ -50,13 +50,13 @@ class SavedCard {
   }
 
   factory SavedCard.fromJson(Map<String, dynamic> json) => SavedCard(
-        id: json['id'].toString(),
-        methodType: json['method_type'] as String? ?? 'card',
-        label: json['label'] as String?,
-        last4: json['last4'] as String?,
-        brand: json['brand'] as String?,
-        expiresMonth: (json['expires_month'] as num?)?.toInt(),
-        expiresYear: (json['expires_year'] as num?)?.toInt(),
-        isDefault: json['is_default'] as bool? ?? false,
-      );
+    id: json['id'].toString(),
+    methodType: json['method_type'] as String? ?? 'card',
+    label: json['label'] as String?,
+    last4: json['last4'] as String?,
+    brand: json['brand'] as String?,
+    expiresMonth: (json['expires_month'] as num?)?.toInt(),
+    expiresYear: (json['expires_year'] as num?)?.toInt(),
+    isDefault: json['is_default'] as bool? ?? false,
+  );
 }

@@ -25,36 +25,45 @@ class ServiceDetailScreen extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(s.displayName,
-                    style: Theme.of(context).textTheme.titleLarge),
+                child: Text(
+                  s.displayName,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
               ),
               StatusChip.forSubscription(s.status),
             ],
           ),
           if (s.planType != null) ...[
             const SizedBox(height: 4),
-            Text(s.planType!,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: Theme.of(context).colorScheme.outline)),
+            Text(
+              s.planType!,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.outline,
+              ),
+            ),
           ],
           const SizedBox(height: 16),
           _ExpiryCard(service: s),
           const SizedBox(height: 12),
-          _Section(title: 'Connection', rows: [
-            _Row('IPv4 address', s.ipv4Address, copyable: true),
-            if (s.ipv6Address != null)
-              _Row('IPv6 address', s.ipv6Address, copyable: true),
-            if (s.login != null) _Row('Login', s.login),
-            if (s.macAddress != null) _Row('MAC address', s.macAddress),
-          ]),
+          _Section(
+            title: 'Connection',
+            rows: [
+              _Row('IPv4 address', s.ipv4Address, copyable: true),
+              if (s.ipv6Address != null)
+                _Row('IPv6 address', s.ipv6Address, copyable: true),
+              if (s.login != null) _Row('Login', s.login),
+              if (s.macAddress != null) _Row('MAC address', s.macAddress),
+            ],
+          ),
           const SizedBox(height: 12),
-          _Section(title: 'Plan', rows: [
-            _Row('Billing', s.isPrepaid ? 'Prepaid' : 'Postpaid'),
-            _Row('Started', Fmt.date(s.startAt)),
-            _Row('Expires', Fmt.date(s.expiresAt)),
-          ]),
+          _Section(
+            title: 'Plan',
+            rows: [
+              _Row('Billing', s.isPrepaid ? 'Prepaid' : 'Postpaid'),
+              _Row('Started', Fmt.date(s.startAt)),
+              _Row('Expires', Fmt.date(s.expiresAt)),
+            ],
+          ),
           const SizedBox(height: 24),
           OutlinedButton.icon(
             onPressed: () =>
@@ -115,11 +124,17 @@ class _ExpiryCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: color, fontWeight: FontWeight.w700)),
-                  Text('Valid until ${Fmt.date(service.expiresAt)}',
-                      style: Theme.of(context).textTheme.bodySmall),
+                  Text(
+                    label,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: color,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    'Valid until ${Fmt.date(service.expiresAt)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ],
               ),
             ),
@@ -175,9 +190,11 @@ class _Row extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Flexible(
-            child: Text(v,
-                textAlign: TextAlign.end,
-                style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+            child: Text(
+              v,
+              textAlign: TextAlign.end,
+              style: TextStyle(color: Theme.of(context).colorScheme.outline),
+            ),
           ),
           if (copyable && value != null)
             IconButton(
@@ -186,9 +203,9 @@ class _Row extends StatelessWidget {
               tooltip: 'Copy',
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: value!));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('$label copied')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('$label copied')));
               },
             ),
         ],

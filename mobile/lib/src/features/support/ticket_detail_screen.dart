@@ -38,8 +38,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
       ref.invalidate(ticketCommentsProvider(widget.ticketId));
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -65,8 +66,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(t.title,
-                            style: Theme.of(context).textTheme.titleLarge),
+                        child: Text(
+                          t.title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
                       ),
                       StatusChip.forTicket(t.status),
                     ],
@@ -85,8 +88,10 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
-                  Text('Conversation',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Conversation',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 8),
                   comments.when(
                     loading: () => const Padding(
@@ -95,8 +100,9 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                     ),
                     error: (e, _) => Text('Could not load replies: $e'),
                     data: (page) {
-                      final visible =
-                          page.items.where((c) => !c.isInternal).toList();
+                      final visible = page.items
+                          .where((c) => !c.isInternal)
+                          .toList();
                       if (visible.isEmpty) {
                         return const Padding(
                           padding: EdgeInsets.symmetric(vertical: 16),
@@ -144,7 +150,8 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                         ? const SizedBox(
                             height: 18,
                             width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Icon(Icons.send),
                   ),
                 ],

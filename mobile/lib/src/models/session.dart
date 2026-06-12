@@ -25,8 +25,9 @@ class AuthSessionInfo {
     final ua = userAgent ?? '';
     if (ua.isEmpty) return 'Unknown device';
     if (ua.contains('Dart')) return 'Mobile app';
-    final match = RegExp(r'(iPhone|iPad|Android|Macintosh|Windows|Linux|CrOS)')
-        .firstMatch(ua);
+    final match = RegExp(
+      r'(iPhone|iPad|Android|Macintosh|Windows|Linux|CrOS)',
+    ).firstMatch(ua);
     final os = match?.group(1);
     String browser = '';
     if (ua.contains('Edg')) {

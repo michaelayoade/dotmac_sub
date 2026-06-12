@@ -24,17 +24,17 @@ class TopupPage {
   final String? customerEmail;
 
   factory TopupPage.fromJson(Map<String, dynamic> json) => TopupPage(
-        providerType: json['provider_type'] as String? ?? 'paystack',
-        currency: json['currency'] as String? ?? 'NGN',
-        minAmount: (json['min_amount'] as num?)?.toInt() ?? 1000,
-        maxAmount: (json['max_amount'] as num?)?.toInt() ?? 500000,
-        providerPublicKey: json['provider_public_key'] as String?,
-        prepaidBalance: asDoubleOrNull(json['prepaid_balance']),
-        presetAmounts: (json['preset_amounts'] as List? ?? const [])
-            .map((e) => (e as num).toInt())
-            .toList(),
-        customerEmail: json['customer_email'] as String?,
-      );
+    providerType: json['provider_type'] as String? ?? 'paystack',
+    currency: json['currency'] as String? ?? 'NGN',
+    minAmount: (json['min_amount'] as num?)?.toInt() ?? 1000,
+    maxAmount: (json['max_amount'] as num?)?.toInt() ?? 500000,
+    providerPublicKey: json['provider_public_key'] as String?,
+    prepaidBalance: asDoubleOrNull(json['prepaid_balance']),
+    presetAmounts: (json['preset_amounts'] as List? ?? const [])
+        .map((e) => (e as num).toInt())
+        .toList(),
+    customerEmail: json['customer_email'] as String?,
+  );
 }
 
 class TopupInitiation {
@@ -84,10 +84,10 @@ class TopupResult {
   final double? creditAdded;
 
   factory TopupResult.fromJson(Map<String, dynamic> json) => TopupResult(
-        reference: json['reference'].toString(),
-        amount: asDouble(json['amount']),
-        alreadyRecorded: json['already_recorded'] as bool? ?? false,
-        availableBalance: asDoubleOrNull(json['available_balance']),
-        creditAdded: asDoubleOrNull(json['credit_added']),
-      );
+    reference: json['reference'].toString(),
+    amount: asDouble(json['amount']),
+    alreadyRecorded: json['already_recorded'] as bool? ?? false,
+    availableBalance: asDoubleOrNull(json['available_balance']),
+    creditAdded: asDoubleOrNull(json['credit_added']),
+  );
 }

@@ -125,14 +125,19 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off,
-                size: 48, color: Theme.of(context).colorScheme.error),
+            Icon(
+              Icons.cloud_off,
+              size: 48,
+              color: Theme.of(context).colorScheme.error,
+            ),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             if (onRetry != null) ...[
               const SizedBox(height: 16),
               FilledButton.tonal(
-                  onPressed: onRetry, child: const Text('Retry')),
+                onPressed: onRetry,
+                child: const Text('Retry'),
+              ),
             ],
           ],
         ),

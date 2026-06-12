@@ -134,10 +134,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // bottom-nav shell), entered with context.push so back returns to the
       // originating screen. Everything else (drill-downs) stays inside the
       // shell and keeps the bottom bar.
-      GoRoute(
-        path: '/topup',
-        builder: (_, __) => const TopUpScreen(),
-      ),
+      GoRoute(path: '/topup', builder: (_, __) => const TopUpScreen()),
       GoRoute(
         path: '/pay',
         builder: (_, state) =>
@@ -189,120 +186,134 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __, navigationShell) =>
             HomeShell(navigationShell: navigationShell),
         branches: [
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/dashboard',
-              builder: (_, __) => const DashboardScreen(),
-              routes: [
-                GoRoute(
-                  path: 'notifications',
-                  builder: (_, __) => const NotificationsScreen(),
-                ),
-              ],
-            ),
-            // Service drill-down + its sub-screens, in the Home branch (it is
-            // entered from the dashboard). The originating screen passes the
-            // Subscription via `extra`; deep links resolve the id from the
-            // subscriptions cache (see ServiceRoute).
-            GoRoute(
-              path: '/service/:id',
-              builder: (_, state) => ServiceRoute(
-                id: state.pathParameters['id']!,
-                initial: state.extra as Subscription?,
-                builder: (s) => ServiceDetailScreen(service: s),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/dashboard',
+                builder: (_, __) => const DashboardScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'notifications',
+                    builder: (_, __) => const NotificationsScreen(),
+                  ),
+                ],
               ),
-              routes: [
-                GoRoute(
-                  path: 'change-plan',
-                  builder: (_, state) => ServiceRoute(
-                    id: state.pathParameters['id']!,
-                    initial: state.extra as Subscription?,
-                    builder: (s) => ChangePlanScreen(service: s),
+              // Service drill-down + its sub-screens, in the Home branch (it is
+              // entered from the dashboard). The originating screen passes the
+              // Subscription via `extra`; deep links resolve the id from the
+              // subscriptions cache (see ServiceRoute).
+              GoRoute(
+                path: '/service/:id',
+                builder: (_, state) => ServiceRoute(
+                  id: state.pathParameters['id']!,
+                  initial: state.extra as Subscription?,
+                  builder: (s) => ServiceDetailScreen(service: s),
+                ),
+                routes: [
+                  GoRoute(
+                    path: 'change-plan',
+                    builder: (_, state) => ServiceRoute(
+                      id: state.pathParameters['id']!,
+                      initial: state.extra as Subscription?,
+                      builder: (s) => ChangePlanScreen(service: s),
+                    ),
                   ),
-                ),
-                GoRoute(
-                  path: 'addons',
-                  builder: (_, state) => ServiceRoute(
-                    id: state.pathParameters['id']!,
-                    initial: state.extra as Subscription?,
-                    builder: (s) => AddOnsScreen(service: s),
+                  GoRoute(
+                    path: 'addons',
+                    builder: (_, state) => ServiceRoute(
+                      id: state.pathParameters['id']!,
+                      initial: state.extra as Subscription?,
+                      builder: (s) => AddOnsScreen(service: s),
+                    ),
                   ),
-                ),
-                GoRoute(
-                  path: 'buy-data',
-                  builder: (_, state) => ServiceRoute(
-                    id: state.pathParameters['id']!,
-                    initial: state.extra as Subscription?,
-                    builder: (s) => DataBundleScreen(service: s),
+                  GoRoute(
+                    path: 'buy-data',
+                    builder: (_, state) => ServiceRoute(
+                      id: state.pathParameters['id']!,
+                      initial: state.extra as Subscription?,
+                      builder: (s) => DataBundleScreen(service: s),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/billing',
-              builder: (_, __) => const InvoicesScreen(),
-              routes: [
-                GoRoute(
-                  path: 'transfer-proofs',
-                  builder: (_, __) => const TransferProofsScreen(),
-                ),
-                GoRoute(
-                  path: 'invoices/:id',
-                  builder: (_, state) => InvoiceDetailScreen(
-                      invoiceId: state.pathParameters['id']!),
-                ),
-              ],
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            // Path kept as /usage so old deep links and notifications keep working;
-            // the tab itself is now the Service tab (plan + data + add-ons + usage).
-            GoRoute(
-                path: '/usage', builder: (_, __) => const ServiceTabScreen()),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/support',
-              builder: (_, __) => const TicketsScreen(),
-              routes: [
-                GoRoute(
-                  path: 'new',
-                  builder: (_, __) => const CreateTicketScreen(),
-                ),
-                GoRoute(
-                  path: ':id',
-                  builder: (_, state) =>
-                      TicketDetailScreen(ticketId: state.pathParameters['id']!),
-                ),
-              ],
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/profile',
-              builder: (_, __) => const ProfileScreen(),
-              routes: [
-                GoRoute(
-                  path: 'sessions',
-                  builder: (_, __) => const SessionsScreen(),
-                ),
-                GoRoute(
-                  path: 'payment-methods',
-                  builder: (_, __) => const PaymentMethodsScreen(),
-                ),
-                GoRoute(
-                  path: 'settings',
-                  builder: (_, __) => const SettingsScreen(),
-                ),
-                GoRoute(
-                  path: 'service-location',
-                  builder: (_, __) => const ServiceLocationScreen(),
-                ),
-              ],
-            ),
-          ]),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/billing',
+                builder: (_, __) => const InvoicesScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'transfer-proofs',
+                    builder: (_, __) => const TransferProofsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'invoices/:id',
+                    builder: (_, state) => InvoiceDetailScreen(
+                      invoiceId: state.pathParameters['id']!,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              // Path kept as /usage so old deep links and notifications keep working;
+              // the tab itself is now the Service tab (plan + data + add-ons + usage).
+              GoRoute(
+                path: '/usage',
+                builder: (_, __) => const ServiceTabScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/support',
+                builder: (_, __) => const TicketsScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'new',
+                    builder: (_, __) => const CreateTicketScreen(),
+                  ),
+                  GoRoute(
+                    path: ':id',
+                    builder: (_, state) => TicketDetailScreen(
+                      ticketId: state.pathParameters['id']!,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/profile',
+                builder: (_, __) => const ProfileScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'sessions',
+                    builder: (_, __) => const SessionsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'payment-methods',
+                    builder: (_, __) => const PaymentMethodsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'settings',
+                    builder: (_, __) => const SettingsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'service-location',
+                    builder: (_, __) => const ServiceLocationScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ],
       ),
     ],

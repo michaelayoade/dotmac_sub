@@ -10,11 +10,12 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// to currently-known ids to keep it bounded.
 class ReadNotifications extends StateNotifier<Set<String>> {
   ReadNotifications([FlutterSecureStorage? storage])
-      : _storage = storage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            ),
-        super(const {}) {
+    : _storage =
+          storage ??
+          const FlutterSecureStorage(
+            aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          ),
+      super(const {}) {
     _load();
   }
 
@@ -63,5 +64,5 @@ class ReadNotifications extends StateNotifier<Set<String>> {
 
 final readNotificationsProvider =
     StateNotifierProvider<ReadNotifications, Set<String>>(
-  (ref) => ReadNotifications(),
-);
+      (ref) => ReadNotifications(),
+    );

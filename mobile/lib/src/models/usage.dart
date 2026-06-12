@@ -51,17 +51,17 @@ class QuotaBucket {
   bool get isUnlimited => includedGb == null;
 
   factory QuotaBucket.fromJson(Map<String, dynamic> json) => QuotaBucket(
-        id: json['id'].toString(),
-        subscriptionId: json['subscription_id'].toString(),
-        periodStart: DateTime.parse(json['period_start'].toString()).toLocal(),
-        periodEnd: DateTime.parse(json['period_end'].toString()).toLocal(),
-        includedGb: asDoubleOrNull(json['included_gb']),
-        usedGb: asDouble(json['used_gb']),
-        rolloverGb: asDouble(json['rollover_gb']),
-        topupGb: asDouble(json['topup_gb']),
-        overageGb: asDouble(json['overage_gb']),
-        overageAmount: asDoubleOrNull(json['overage_amount']),
-      );
+    id: json['id'].toString(),
+    subscriptionId: json['subscription_id'].toString(),
+    periodStart: DateTime.parse(json['period_start'].toString()).toLocal(),
+    periodEnd: DateTime.parse(json['period_end'].toString()).toLocal(),
+    includedGb: asDoubleOrNull(json['included_gb']),
+    usedGb: asDouble(json['used_gb']),
+    rolloverGb: asDouble(json['rollover_gb']),
+    topupGb: asDouble(json['topup_gb']),
+    overageGb: asDouble(json['overage_gb']),
+    overageAmount: asDoubleOrNull(json['overage_amount']),
+  );
 }
 
 /// Mirrors RadiusAccountingSessionRead from app/schemas/usage.py.
@@ -135,9 +135,9 @@ class LiveBandwidth {
   bool get hasSignal => (downloadBps ?? 0) > 0 || (uploadBps ?? 0) > 0;
 
   factory LiveBandwidth.fromJson(Map<String, dynamic> json) => LiveBandwidth(
-        downloadBps: (json['download_bps'] as num?)?.toDouble(),
-        uploadBps: (json['upload_bps'] as num?)?.toDouble(),
-      );
+    downloadBps: (json['download_bps'] as num?)?.toDouble(),
+    uploadBps: (json['upload_bps'] as num?)?.toDouble(),
+  );
 }
 
 /// One bar of the usage chart. Mirrors UsageSeriesPoint from schemas/usage.py.
@@ -196,19 +196,19 @@ class FupStatus {
   bool get needsAttention => isThrottled || isBlocked;
 
   factory FupStatus.fromJson(Map<String, dynamic> json) => FupStatus(
-        status: json['status']?.toString() ?? 'full_speed',
-        isReduced: json['is_reduced'] as bool? ?? false,
-        speedReductionPercent:
-            (json['speed_reduction_percent'] as num?)?.toDouble(),
-        activeRuleName: json['active_rule_name'] as String?,
-        resetsAt: _toDate(json['resets_at']),
-        summary: json['summary'] as String?,
-        thresholdGb: (json['threshold_gb'] as num?)?.toDouble(),
-        usedGb: (json['used_gb'] as num?)?.toDouble(),
-        gbUntilThrottle: (json['gb_until_throttle'] as num?)?.toDouble(),
-        usageRatio: (json['usage_ratio'] as num?)?.toDouble(),
-        policySummary: json['policy_summary'] as String?,
-      );
+    status: json['status']?.toString() ?? 'full_speed',
+    isReduced: json['is_reduced'] as bool? ?? false,
+    speedReductionPercent: (json['speed_reduction_percent'] as num?)
+        ?.toDouble(),
+    activeRuleName: json['active_rule_name'] as String?,
+    resetsAt: _toDate(json['resets_at']),
+    summary: json['summary'] as String?,
+    thresholdGb: (json['threshold_gb'] as num?)?.toDouble(),
+    usedGb: (json['used_gb'] as num?)?.toDouble(),
+    gbUntilThrottle: (json['gb_until_throttle'] as num?)?.toDouble(),
+    usageRatio: (json['usage_ratio'] as num?)?.toDouble(),
+    policySummary: json['policy_summary'] as String?,
+  );
 }
 
 /// Windowed data-usage summary. Mirrors UsageSummaryResponse from
@@ -237,20 +237,20 @@ class UsageSummary {
   final FupStatus? fup;
 
   factory UsageSummary.fromJson(Map<String, dynamic> json) => UsageSummary(
-        period: json['period'].toString(),
-        start: DateTime.parse(json['start'].toString()).toLocal(),
-        end: DateTime.parse(json['end'].toString()).toLocal(),
-        totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
-        totalSource: json['total_source'].toString(),
-        isAuthoritative: json['is_authoritative'] as bool? ?? false,
-        bucket: json['bucket'] as String?,
-        series: (json['series'] as List? ?? const [])
-            .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        fup: json['fup'] == null
-            ? null
-            : FupStatus.fromJson(json['fup'] as Map<String, dynamic>),
-      );
+    period: json['period'].toString(),
+    start: DateTime.parse(json['start'].toString()).toLocal(),
+    end: DateTime.parse(json['end'].toString()).toLocal(),
+    totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
+    totalSource: json['total_source'].toString(),
+    isAuthoritative: json['is_authoritative'] as bool? ?? false,
+    bucket: json['bucket'] as String?,
+    series: (json['series'] as List? ?? const [])
+        .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    fup: json['fup'] == null
+        ? null
+        : FupStatus.fromJson(json['fup'] as Map<String, dynamic>),
+  );
 }
 
 DateTime? _toDate(dynamic v) {

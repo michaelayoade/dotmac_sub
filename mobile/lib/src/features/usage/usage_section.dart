@@ -42,8 +42,10 @@ class UsageSection extends StatelessWidget {
         ),
         if (sessions.isNotEmpty) ...[
           const SizedBox(height: 20),
-          Text('Recent sessions',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'Recent sessions',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           for (final s in sessions) _SessionTile(session: s),
         ],
@@ -77,12 +79,17 @@ class QuotaCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('${Fmt.date(b.periodStart)} – ${Fmt.date(b.periodEnd)}',
-                    style: theme.textTheme.bodySmall),
+                Text(
+                  '${Fmt.date(b.periodStart)} – ${Fmt.date(b.periodEnd)}',
+                  style: theme.textTheme.bodySmall,
+                ),
                 if (b.isUnlimited)
-                  Text('Unlimited',
-                      style: theme.textTheme.labelMedium
-                          ?.copyWith(color: theme.colorScheme.primary)),
+                  Text(
+                    'Unlimited',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -117,8 +124,9 @@ class QuotaCard extends StatelessWidget {
                   if (b.topupGb > 0)
                     Text(
                       '+${Fmt.gb(b.topupGb)} top-up',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.primary),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
                     ),
                 ],
               ),
@@ -137,14 +145,18 @@ class QuotaCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.info_outline,
-                      size: 14, color: theme.colorScheme.outline),
+                  Icon(
+                    Icons.info_outline,
+                    size: 14,
+                    color: theme.colorScheme.outline,
+                  ),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       policyLine!,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                   ),
                 ],
@@ -158,12 +170,12 @@ class QuotaCard extends StatelessWidget {
 }
 
 String _periodLabel(String p) => switch (p) {
-      'hour' => 'Past hour',
-      'today' => 'Today',
-      'week' => 'This week',
-      'cycle' => 'This billing cycle',
-      _ => 'All time',
-    };
+  'hour' => 'Past hour',
+  'today' => 'Today',
+  'week' => 'This week',
+  'cycle' => 'This billing cycle',
+  _ => 'All time',
+};
 
 /// Sourcing note so a throughput-estimated total isn't mistaken for billing.
 String _sourceNote(UsageSummary s) {
@@ -217,15 +229,22 @@ class _WindowSummaryCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(_periodLabel(summary.period),
-                style: theme.textTheme.bodyMedium),
+            Text(
+              _periodLabel(summary.period),
+              style: theme.textTheme.bodyMedium,
+            ),
             const SizedBox(height: 4),
-            Text(Fmt.bytes(summary.totalBytes),
-                style: theme.textTheme.headlineMedium),
+            Text(
+              Fmt.bytes(summary.totalBytes),
+              style: theme.textTheme.headlineMedium,
+            ),
             const SizedBox(height: 2),
-            Text(_sourceNote(summary),
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline)),
+            Text(
+              _sourceNote(summary),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
             if (hasChart) ...[
               const SizedBox(height: 16),
               _UsageBarChart(series: summary.series, bucket: summary.bucket!),
@@ -243,10 +262,10 @@ class _UsageBarChart extends StatelessWidget {
   final String bucket;
 
   String _xLabel(DateTime d) => switch (bucket) {
-        'minute' => '${d.hour}:${d.minute.toString().padLeft(2, '0')}',
-        'hour' => '${d.hour}:00',
-        _ => '${d.day}/${d.month}',
-      };
+    'minute' => '${d.hour}:${d.minute.toString().padLeft(2, '0')}',
+    'hour' => '${d.hour}:00',
+    _ => '${d.day}/${d.month}',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -287,10 +306,12 @@ class _UsageBarChart extends StatelessWidget {
               gridData: const FlGridData(show: true, drawVerticalLine: false),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
-                topTitles:
-                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles:
-                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
@@ -312,8 +333,10 @@ class _UsageBarChart extends StatelessWidget {
                       }
                       return Padding(
                         padding: const EdgeInsets.only(top: 4),
-                        child: Text(_xLabel(series[i].bucketStart),
-                            style: theme.textTheme.labelSmall),
+                        child: Text(
+                          _xLabel(series[i].bucketStart),
+                          style: theme.textTheme.labelSmall,
+                        ),
                       );
                     },
                   ),
@@ -321,14 +344,17 @@ class _UsageBarChart extends StatelessWidget {
               ),
               barGroups: [
                 for (var i = 0; i < series.length; i++)
-                  BarChartGroupData(x: i, barRods: [
-                    BarChartRodData(
-                      toY: toUnit(series[i].bytes),
-                      width: series.length > 20 ? 6 : 12,
-                      borderRadius: BorderRadius.circular(3),
-                      color: theme.colorScheme.primary,
-                    ),
-                  ]),
+                  BarChartGroupData(
+                    x: i,
+                    barRods: [
+                      BarChartRodData(
+                        toY: toUnit(series[i].bytes),
+                        width: series.length > 20 ? 6 : 12,
+                        borderRadius: BorderRadius.circular(3),
+                        color: theme.colorScheme.primary,
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),

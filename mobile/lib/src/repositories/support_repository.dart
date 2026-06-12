@@ -20,12 +20,16 @@ class SupportRepository {
     int limit = 50,
     int offset = 0,
   }) async {
-    final data =
-        await guard(() => dio.get('/me/support/tickets', queryParameters: {
-              if (status != null) 'status': status,
-              'limit': limit,
-              'offset': offset,
-            }));
+    final data = await guard(
+      () => dio.get(
+        '/me/support/tickets',
+        queryParameters: {
+          if (status != null) 'status': status,
+          'limit': limit,
+          'offset': offset,
+        },
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, Ticket.fromJson);
   }
 
@@ -42,32 +46,43 @@ class SupportRepository {
     String priority = 'normal',
     String? ticketType,
   }) async {
-    final data = await guard(() => dio.post('/me/support/tickets', data: {
+    final data = await guard(
+      () => dio.post(
+        '/me/support/tickets',
+        data: {
           'title': title,
           if (description != null) 'description': description,
           'priority': priority,
           if (ticketType != null) 'ticket_type': ticketType,
-        }));
+        },
+      ),
+    );
     return Ticket.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET /me/support/tickets/{id}/comments
-  Future<Page<TicketComment>> comments(String ticketId,
-      {int limit = 100, int offset = 0}) async {
-    final data = await guard(() =>
-        dio.get('/me/support/tickets/$ticketId/comments', queryParameters: {
-          'limit': limit,
-          'offset': offset,
-        }));
+  Future<Page<TicketComment>> comments(
+    String ticketId, {
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final data = await guard(
+      () => dio.get(
+        '/me/support/tickets/$ticketId/comments',
+        queryParameters: {'limit': limit, 'offset': offset},
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, TicketComment.fromJson);
   }
 
   /// POST /me/support/tickets/{id}/comments
   Future<TicketComment> addComment(String ticketId, String body) async {
-    final data = await guard(() => dio.post(
-          '/me/support/tickets/$ticketId/comments',
-          data: {'body': body},
-        ));
+    final data = await guard(
+      () => dio.post(
+        '/me/support/tickets/$ticketId/comments',
+        data: {'body': body},
+      ),
+    );
     return TicketComment.fromJson(data as Map<String, dynamic>);
   }
 }

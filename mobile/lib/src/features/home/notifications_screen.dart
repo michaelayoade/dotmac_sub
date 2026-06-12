@@ -38,13 +38,15 @@ class NotificationsScreen extends ConsumerWidget {
         title: const Text('Notifications'),
         actions: [
           if (notifications.asData != null &&
-              notifications.asData!.value.items
-                  .any((n) => !readIds.contains(n.id)))
+              notifications.asData!.value.items.any(
+                (n) => !readIds.contains(n.id),
+              ))
             TextButton(
-              onPressed: () =>
-                  ref.read(readNotificationsProvider.notifier).markAllRead(
-                        notifications.asData!.value.items.map((n) => n.id),
-                      ),
+              onPressed: () => ref
+                  .read(readNotificationsProvider.notifier)
+                  .markAllRead(
+                    notifications.asData!.value.items.map((n) => n.id),
+                  ),
               child: const Text('Mark all read'),
             ),
         ],
@@ -114,12 +116,12 @@ class _NotificationCard extends StatelessWidget {
   final VoidCallback onTap;
 
   IconData get _icon => switch (n.channel) {
-        'email' => Icons.mail_outline,
-        'sms' => Icons.sms_outlined,
-        'push' => Icons.notifications_active_outlined,
-        'webhook' => Icons.webhook_outlined,
-        _ => Icons.notifications_none_outlined,
-      };
+    'email' => Icons.mail_outline,
+    'sms' => Icons.sms_outlined,
+    'push' => Icons.notifications_active_outlined,
+    'webhook' => Icons.webhook_outlined,
+    _ => Icons.notifications_none_outlined,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -137,33 +139,40 @@ class _NotificationCard extends StatelessWidget {
               CircleAvatar(
                 radius: 18,
                 backgroundColor: theme.colorScheme.secondaryContainer,
-                child: Icon(_icon,
-                    size: 18, color: theme.colorScheme.onSecondaryContainer),
+                child: Icon(
+                  _icon,
+                  size: 18,
+                  color: theme.colorScheme.onSecondaryContainer,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(n.title,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight:
-                              unread ? FontWeight.w700 : FontWeight.w400,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      n.title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: unread ? FontWeight.w700 : FontWeight.w400,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     if (n.body != null && n.body!.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(n.body!.trim(),
-                          style: theme.textTheme.bodySmall,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis),
+                      Text(
+                        n.body!.trim(),
+                        style: theme.textTheme.bodySmall,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ],
                     const SizedBox(height: 6),
                     Text(
                       '${n.channel} · ${Fmt.dateTime(n.createdAt)}',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                   ],
                 ),
@@ -181,8 +190,11 @@ class _NotificationCard extends StatelessWidget {
               if (hasAction)
                 Padding(
                   padding: const EdgeInsets.only(left: 4),
-                  child: Icon(Icons.chevron_right,
-                      size: 18, color: theme.colorScheme.outline),
+                  child: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
             ],
           ),

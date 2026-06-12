@@ -62,9 +62,11 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
 
       messenger.showSnackBar(
         SnackBar(
-          content: Text(result.succeeded
-              ? 'Payment of ${Fmt.money(result.amount, result.currency)} received'
-              : 'Payment recorded (${result.status})'),
+          content: Text(
+            result.succeeded
+                ? 'Payment of ${Fmt.money(result.amount, result.currency)} received'
+                : 'Payment recorded (${result.status})',
+          ),
         ),
       );
     } on ApiException catch (e) {
@@ -91,7 +93,8 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
             ? const SizedBox(
                 height: 16,
                 width: 16,
-                child: CircularProgressIndicator(strokeWidth: 2))
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
             : const Text('Pay'),
       );
     }
@@ -101,7 +104,8 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
           ? const SizedBox(
               height: 18,
               width: 18,
-              child: CircularProgressIndicator(strokeWidth: 2))
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
           : const Icon(Icons.payment),
       label: Text('Pay ${Fmt.money(inv.balanceDue, inv.currency)}'),
       onPressed: _busy ? null : _pay,

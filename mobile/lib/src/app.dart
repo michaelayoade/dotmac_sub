@@ -59,16 +59,16 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
     final router = ref.watch(routerProvider);
 
     ThemeData themeFor(Brightness brightness) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Brand.primaryColor,
-            brightness: brightness,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(centerTitle: false),
-          inputDecorationTheme: const InputDecorationTheme(
-            border: OutlineInputBorder(),
-          ),
-        );
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Brand.primaryColor,
+        brightness: brightness,
+      ),
+      useMaterial3: true,
+      appBarTheme: const AppBarTheme(centerTitle: false),
+      inputDecorationTheme: const InputDecorationTheme(
+        border: OutlineInputBorder(),
+      ),
+    );
 
     return MaterialApp.router(
       title: Brand.name,

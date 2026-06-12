@@ -35,24 +35,24 @@ class FupCard extends StatelessWidget {
     final accent = blocked
         ? scheme.error
         : approaching
-            ? scheme.secondary
-            : scheme.tertiary;
+        ? scheme.secondary
+        : scheme.tertiary;
     final title = blocked
         ? 'Service paused'
         : approaching
-            ? 'Approaching your limit'
-            : 'Speed reduced';
+        ? 'Approaching your limit'
+        : 'Speed reduced';
     final icon = blocked
         ? Icons.block
         : approaching
-            ? Icons.data_usage
-            : Icons.speed;
+        ? Icons.data_usage
+        : Icons.speed;
 
     final fallback = blocked
         ? 'Your fair-usage limit has been reached.'
         : approaching
-            ? 'You are close to your fair-usage limit.'
-            : 'Speed reduced — fair-usage limit reached.';
+        ? 'You are close to your fair-usage limit.'
+        : 'Speed reduced — fair-usage limit reached.';
 
     return Card(
       color: accent.withValues(alpha: 0.10),
@@ -66,9 +66,13 @@ class FupCard extends StatelessWidget {
                 Icon(icon, color: accent),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                          color: accent, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    title,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: accent,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -88,8 +92,9 @@ class FupCard extends StatelessWidget {
               Text(
                 '${blocked ? 'Paused' : 'Throttled'} until '
                 '${Fmt.date(fup.resetsAt!)}',
-                style:
-                    theme.textTheme.bodySmall?.copyWith(color: scheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.outline,
+                ),
               ),
             ],
             if (serviceId != null) ...[
@@ -103,9 +108,9 @@ class FupCard extends StatelessWidget {
                       onPressed: () =>
                           context.push('/service/$serviceId/buy-data'),
                       icon: const Icon(Icons.add_chart_outlined, size: 18),
-                      label: Text(fup.needsAttention
-                          ? 'Buy data to restore'
-                          : 'Buy data'),
+                      label: Text(
+                        fup.needsAttention ? 'Buy data to restore' : 'Buy data',
+                      ),
                     ),
                   OutlinedButton.icon(
                     onPressed: () =>

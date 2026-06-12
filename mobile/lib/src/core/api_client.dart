@@ -15,7 +15,7 @@ import 'token_storage.dart';
 ///  * notify the app when the session can no longer be recovered.
 class ApiClient {
   ApiClient({required TokenStorage storage, this.cache, this.onSessionExpired})
-      : _storage = storage {
+    : _storage = storage {
     _dio = Dio(
       BaseOptions(
         baseUrl: Env.apiRoot,
@@ -33,10 +33,7 @@ class ApiClient {
     );
 
     _dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: _onRequest,
-        onResponse: _onResponse,
-      ),
+      InterceptorsWrapper(onRequest: _onRequest, onResponse: _onResponse),
     );
 
     // Stale-while-revalidate fallback: serve the last good GET body when a
@@ -52,10 +49,7 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          Log.breadcrumb(
-            '${options.method} ${options.path}',
-            category: 'http',
-          );
+          Log.breadcrumb('${options.method} ${options.path}', category: 'http');
           handler.next(options);
         },
         onResponse: (response, handler) {

@@ -39,8 +39,10 @@ class ProfileScreen extends ConsumerWidget {
                 Center(child: _AvatarEditor(me: me)),
                 const SizedBox(height: 12),
                 Center(
-                  child: Text(me.fullName,
-                      style: Theme.of(context).textTheme.titleLarge),
+                  child: Text(
+                    me.fullName,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                 ),
                 Center(child: Text(me.email)),
                 const SizedBox(height: 24),
@@ -113,10 +115,12 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 24),
                 FilledButton.tonalIcon(
                   style: FilledButton.styleFrom(
-                    backgroundColor:
-                        Theme.of(context).colorScheme.errorContainer,
-                    foregroundColor:
-                        Theme.of(context).colorScheme.onErrorContainer,
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.errorContainer,
+                    foregroundColor: Theme.of(
+                      context,
+                    ).colorScheme.onErrorContainer,
                   ),
                   icon: const Icon(Icons.logout),
                   label: const Text('Sign out'),
@@ -160,15 +164,18 @@ class _AvatarEditorState extends ConsumerState<_AvatarEditor> {
         imageQuality: 85,
       );
     } catch (e) {
-      messenger
-          .showSnackBar(SnackBar(content: Text('Could not open gallery: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not open gallery: $e')),
+      );
       return;
     }
     if (picked == null) return;
     setState(() => _busy = true);
     try {
       final bytes = await picked.readAsBytes();
-      await ref.read(authRepositoryProvider).uploadAvatar(
+      await ref
+          .read(authRepositoryProvider)
+          .uploadAvatar(
             bytes: bytes,
             filename: picked.name,
             contentType: picked.mimeType,
@@ -315,8 +322,9 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
         if (ok) {
           setState(() => _enabled = true);
         } else {
-          messenger.showSnackBar(const SnackBar(
-              content: Text('Could not enable biometric unlock')));
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Could not enable biometric unlock')),
+          );
         }
       } else {
         await controller.disableBiometricLock();
@@ -339,8 +347,9 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
         child: ListTile(
           leading: const Icon(Icons.fingerprint),
           title: const Text('Biometric unlock'),
-          subtitle:
-              const Text('Not available on this device. Tap to check again.'),
+          subtitle: const Text(
+            'Not available on this device. Tap to check again.',
+          ),
           onTap: _load,
         ),
       );
@@ -399,9 +408,10 @@ class _EmailVerifiedTile extends StatelessWidget {
         children: [
           Icon(Icons.error_outline, size: 18, color: scheme.error),
           const SizedBox(width: 6),
-          Text('Not verified',
-              style:
-                  TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+          Text(
+            'Not verified',
+            style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600),
+          ),
         ],
       ),
     );
@@ -418,9 +428,11 @@ class _Tile extends StatelessWidget {
     return ListTile(
       title: Text(label),
       trailing: Flexible(
-        child: Text(value,
-            textAlign: TextAlign.end,
-            style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+        child: Text(
+          value,
+          textAlign: TextAlign.end,
+          style: TextStyle(color: Theme.of(context).colorScheme.outline),
+        ),
       ),
     );
   }
@@ -488,8 +500,10 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
           Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
           if (_error != null) ...[
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
             const SizedBox(height: 8),
           ],
           TextField(
@@ -510,8 +524,10 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             decoration: const InputDecoration(labelText: 'Phone'),
           ),
           const SizedBox(height: 8),
-          Text('Email: ${widget.me.email}',
-              style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            'Email: ${widget.me.email}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           const SizedBox(height: 20),
           FilledButton(
             onPressed: _busy ? null : _save,
@@ -519,7 +535,8 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                 ? const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text('Save'),
           ),
         ],
@@ -559,15 +576,17 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
       _error = null;
     });
     try {
-      await ref.read(authRepositoryProvider).changePassword(
+      await ref
+          .read(authRepositoryProvider)
+          .changePassword(
             currentPassword: _current.text,
             newPassword: _next.text,
           );
       if (mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Password changed')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Password changed')));
       }
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -585,8 +604,10 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Change password',
-              style: Theme.of(context).textTheme.titleLarge),
+          Text(
+            'Change password',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           const SizedBox(height: 4),
           Text(
             'This updates the password you use to sign in to the app and '
@@ -596,8 +617,10 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
           ),
           const SizedBox(height: 16),
           if (_error != null) ...[
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
             const SizedBox(height: 8),
           ],
           TextField(
@@ -618,7 +641,8 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
                 ? const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text('Save'),
           ),
         ],
