@@ -124,6 +124,7 @@ from app.tasks.usage import (
     run_usage_rating,
 )
 from app.tasks.vacation_holds import resume_expired_holds
+from app.tasks.vas import run_wallet_auto_deduct
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -157,6 +158,7 @@ __all__ = [
     "cleanup_old_operations",
     "sync_gis_sources",
     "run_batch_geocode_job",
+    "run_wallet_auto_deduct",
     "run_import_job",
     "run_integration_job",
     "generate_invoice_pdf_export",

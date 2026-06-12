@@ -27,6 +27,7 @@ from app.services.domain_settings import (
     subscriber_settings,
     tr069_settings,
     usage_settings,
+    vas_settings,
 )
 from app.services.secrets import is_openbao_ref
 from app.timezone import APP_TIMEZONE_NAME
@@ -1077,6 +1078,47 @@ def seed_geocoding_settings(db: Session) -> None:
         key="batch_geocode_log_rows",
         value_type=SettingValueType.json,
         value_json=[],
+    )
+
+
+def seed_vas_settings(db: Session) -> None:
+    vas_settings.ensure_by_key(
+        db,
+        key="enabled",
+        value_type=SettingValueType.boolean,
+        value_text=os.getenv("VAS_ENABLED", "false"),
+        value_json=os.getenv("VAS_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="topup_min",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_TOPUP_MIN", "100"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="topup_max_per_txn",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_TOPUP_MAX_PER_TXN", "50000"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="topup_daily_limit",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_TOPUP_DAILY_LIMIT", "100000"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="purchase_txn_limit",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_PURCHASE_TXN_LIMIT", "50000"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="auth_threshold",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_AUTH_THRESHOLD", "5000"),
     )
 
 

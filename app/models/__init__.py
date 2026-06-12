@@ -517,6 +517,12 @@ from app.models.usage import (  # noqa: F401
     UsageRecord,
     UsageSource,
 )
+from app.models.vas import (  # noqa: F401
+    VasEntryCategory,
+    VasEntryType,
+    VasWallet,
+    VasWalletEntry,
+)
 from app.models.webhook import (  # noqa: F401
     WebhookDelivery,
     WebhookDeliveryStatus,

@@ -414,6 +414,15 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.gis.sync_gis_sources",
                 "schedule": timedelta(minutes=max(interval_minutes, 1)),
             }
+        vas_enabled = _effective_bool(
+            session, SettingDomain.vas, "enabled", "VAS_ENABLED", False
+        )
+        if vas_enabled:
+            # Daily sweep; pay_bill settlement is idempotent so re-runs are safe.
+            schedule["vas_wallet_auto_deduct"] = {
+                "task": "app.tasks.vas.run_wallet_auto_deduct",
+                "schedule": timedelta(hours=24),
+            }
         usage_enabled = _effective_bool(
             session,
             SettingDomain.usage,

@@ -211,6 +211,22 @@ class DashboardScreen extends ConsumerWidget {
                 onTap: () => context.go('/billing'),
               ),
             ],
+            Consumer(builder: (context, ref, _) {
+              final wallet = ref.watch(walletProvider).asData?.value;
+              if (wallet == null) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.wallet_outlined),
+                    title: Text(Fmt.money(wallet.balance, wallet.currency)),
+                    subtitle: const Text('Wallet — fund once, pay bills'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/wallet'),
+                  ),
+                ),
+              );
+            }),
             const SizedBox(height: 16),
 
             // --- At-a-glance summary ---

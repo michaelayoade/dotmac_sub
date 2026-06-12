@@ -12,16 +12,16 @@
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl {% if auth_logo_main or auth_logo_dark %}overflow-hidden bg-white ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700{% else %}bg-primary-600{% endif %}">
                         {% if auth_logo_main or auth_logo_dark %}
                         {% if auth_logo_main %}
-                        <img src="{{ auth_logo_main }}" alt="{{ portal_name or (brand.name if brand is defined and brand else 'Dotmac') }} logo" class="h-10 w-10 object-contain dark:hidden">
+                        <img src="{{ auth_logo_main }}" alt="{{ portal_name or (brand.name if brand is defined and brand else 'DotMac') }} logo" class="h-10 w-10 object-contain dark:hidden">
                         {% endif %}
-                        <img src="{{ auth_logo_dark or auth_logo_main }}" alt="{{ portal_name or (brand.name if brand is defined and brand else 'Dotmac') }} logo" class="hidden h-10 w-10 object-contain dark:block">
+                        <img src="{{ auth_logo_dark or auth_logo_main }}" alt="{{ portal_name or (brand.name if brand is defined and brand else 'DotMac') }} logo" class="hidden h-10 w-10 object-contain dark:block">
                         {% else %}
                         <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
                         {% endif %}
                     </div>
-                    <span class="text-xl font-bold text-slate-900 dark:text-white">{{ portal_name or (brand.name if brand is defined and brand else 'Dotmac') }}</span>
+                    <span class="text-xl font-bold text-slate-900 dark:text-white">{{ portal_name or (brand.name if brand is defined and brand else 'DotMac') }}</span>
                 </a>
 
                 <!-- Dark mode toggle -->
@@ -51,7 +51,7 @@
     <footer class="py-6">
         <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div class="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-slate-500 dark:text-slate-400">
-                <p>&copy; 2026 {{ portal_name or (brand.legal_name if brand is defined and brand else 'Dotmac') }}. All rights reserved.</p>
+                <p>&copy; 2026 {{ portal_name or (brand.legal_name if brand is defined and brand else 'Dotmac Technologies') }}. All rights reserved.</p>
                 <div class="flex items-center gap-6">
                     <a href="/contact" class="hover:text-slate-700 dark:hover:text-slate-200 transition-colors">Contact</a>
                     <a href="/privacy" class="hover:text-slate-700 dark:hover:text-slate-200 transition-colors">Privacy</a>
