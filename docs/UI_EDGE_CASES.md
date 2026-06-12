@@ -44,7 +44,7 @@ running finding numbers from the 2026-06-12 driving session.
 
 ## 4. Subscriptions, lifecycle & enforcement
 - [x] Suspend ↔ reactivate (status + RADIUS is_active flip) (2026-06-12)
-- [ ] Duplicate active subscription for one subscriber (enforce_single_active)
+- [x] Duplicate active subscription blocked (enforce_single_active held; 2nd active not created) (2026-06-12); minor: redirect to list without an obvious error flash
 - [ ] Pending → service order created; Active → skips
 - [ ] Static-IP plan with no IP pool → clear error
 - [ ] Expire (past end_at) cuts access; vacation-hold auto-resume
@@ -91,9 +91,12 @@ running finding numbers from the 2026-06-12 driving session.
 
 ## 8. Wallet & top-up
 - [ ] Top-up happy path (NO real gateway) + `dotmacpay` return deep-link
-- [ ] Top-up 0 / negative / huge amount; currency mismatch
+- [x] Top-up amount limits enforced on web (below ₦1k min / above ₦500k max → button disabled + clear message; server also validates) (2026-06-12)
+- [x] Bank-transfer proof flow is UNCAPPED (only amount>0) — correct; the ₦500k max is card/gateway-only (2026-06-12)
+- [!] `#13` No bank-transfer option on the WEB Add Funds page (proof flow is mobile/API-only) → the ₦500k card cap has no transfer escape hatch on web; web customers can't self-serve a >₦500k top-up. Product decision: surface bank-transfer on web Add Funds
 - [ ] Stranded intent reconcile; double-credit idempotency on gateway ref
 - [x] Insufficient wallet blocks upgrade (via shortfall) (2026-06-12)
+- Note: 5 console errors on Add Funds are external Paystack SDK assets blocked in sandbox (environmental, not a bug); Paystack SDK loads eagerly on page view
 
 ## 9. Support tickets & CRM
 - [x] Create ticket from portal (2026-06-12)
@@ -104,12 +107,12 @@ running finding numbers from the 2026-06-12 driving session.
 
 ## 10. Security — IDOR / RBAC / injection
 - [x] IDOR invoice/ticket/PDF/pay 404 cross-customer (2026-06-12)
-- [ ] `/me/*` JSON APIs, change-requests, arrangements, usage by id
-- [ ] Customer hitting /admin/* and /reseller/* → 403/redirect
-- [ ] Reseller view-as a customer outside their reseller (cross-reseller IDOR)
-- [ ] Object-scoped grants / wildcard perms (P1b) staff boundaries
-- [ ] XSS in customer name / ticket body / notes renders escaped; injection in search
-- [ ] CSRF on state-changing POSTs; direct-POST gate bypass
+- [ ] `/me/*` JSON APIs, change-requests, arrangements, usage by id (session-scoped; lower risk)
+- [x] Customer → /admin/* bounced to staff login; customer → /reseller/* → 303 no access (2026-06-12)
+- [ ] Reseller view-as a customer outside their reseller (cross-reseller IDOR) — needs a 2nd reseller + foreign customer
+- [ ] Object-scoped grants / wildcard perms (P1b) staff boundaries (covered by build-failing RBAC arch test)
+- [x] XSS escaped — stored (customer name → detail) and reflected (search param); neither fired (2026-06-12)
+- [ ] CSRF on state-changing POSTs; direct-POST gate bypass (change-plan archived-offer gate verified earlier)
 - [ ] Rate limits on login / speedtest / forgot-password
 
 ## 11. Reseller portal
@@ -143,6 +146,8 @@ running finding numbers from the 2026-06-12 driving session.
 
 ## 16. Empty / loading / error states & a11y
 - [x] Several list empty states (customers/offers/invoices/tickets) (2026-06-12)
-- [ ] Backend dep down (Zabbix/VictoriaMetrics) → graceful; 500/404 branded
+- [x] Unknown URL → branded 404 (no stack trace), shows Reference ID (2026-06-12)
+- [!] `#14` Generic error templates (errors/404,400,403,409,500) hardcode "Go to dashboard" → /admin/dashboard; wrong for portal/reseller context (customer→staff login). FOLLOW-UP (cross-cutting: context-aware link or route unknown /portal & /reseller 404s to their own templates)
+- [x] Backend dep down (VictoriaMetrics) → graceful (logged errors, page renders) (2026-06-12, observed)
 - [!] Console errors on change-plan page — `#4` fixed PR #224
 - [ ] Keyboard nav / focus / aria on forms; dark-mode; responsive breakpoints
