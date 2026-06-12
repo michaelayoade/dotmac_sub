@@ -44,6 +44,11 @@ from app.schemas.catalog import (
     SubscriptionRead,
 )
 from app.schemas.common import ListResponse
+from app.schemas.gis import (
+    MyLocationRead,
+    MyLocationRequestCreate,
+    MyLocationRequestRead,
+)
 from app.schemas.notification import (
     NotificationRead,
     PushTokenRead,
@@ -65,10 +70,12 @@ from app.schemas.usage import (
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
+from app.services import customer_location_requests as location_service
 from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
+from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import push as push_service
 from app.services import support as support_service
@@ -738,3 +745,91 @@ def my_add_ticket_comment(
     if getattr(comment, "id", None):
         enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
     return comment
+
+
+# --- Geocoding (self-care helpers) ----------------------------------------------
+
+
+@router.get("/geocode/reverse")
+def my_reverse_geocode(
+    lat: float = Query(ge=-90, le=90),
+    lon: float = Query(ge=-180, le=180),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Resolve device coordinates to the nearest known address, for the
+    opt-in "attach my location" flow. Returns display_name=None when the
+    point is unknown or geocoding is disabled."""
+    result = geocoding_service.reverse_geocode(db, lat, lon)
+    if not result:
+        return {"display_name": None}
+    return {
+        "display_name": result.get("display_name"),
+        "latitude": result.get("latitude"),
+        "longitude": result.get("longitude"),
+    }
+
+
+# --- Service location (pin validation) -------------------------------------------
+
+
+@router.get("/location", response_model=MyLocationRead)
+def my_location(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's service-location pin plus any correction requests."""
+    subscriber_id = _subscriber_id(principal)
+    context = location_service.get_customer_location_page_context(
+        db, {"subscriber_id": subscriber_id}
+    )
+    return MyLocationRead(
+        address_label=context.get("location_address_label"),
+        current_latitude=context.get("current_latitude"),
+        current_longitude=context.get("current_longitude"),
+        can_submit_request=bool(context.get("can_submit_request")),
+        has_address_anchor=bool(context.get("has_address_anchor")),
+        pending_request=context.get("pending_request"),
+        history=context.get("request_history") or [],
+    )
+
+
+@router.post(
+    "/location-requests", response_model=MyLocationRequestRead, status_code=201
+)
+def my_location_request_create(
+    payload: MyLocationRequestCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Submit a pin correction for the caller's own service address. One
+    pending request at a time; an admin reviews before anything changes."""
+    subscriber_id = _subscriber_id(principal)
+    return location_service.submit_request(
+        db,
+        subscriber_id=subscriber_id,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        customer_note=payload.note,
+        actor_id=subscriber_id,
+        actor_name=None,
+        submitted_from_ip=request.client.host if request.client else None,
+    )
+
+
+@router.post(
+    "/location-requests/{request_id}/cancel", response_model=MyLocationRequestRead
+)
+def my_location_request_cancel(
+    request_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    subscriber_id = _subscriber_id(principal)
+    return location_service.cancel_request(
+        db,
+        request_id=request_id,
+        subscriber_id=subscriber_id,
+        actor_id=subscriber_id,
+    )

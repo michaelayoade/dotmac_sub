@@ -83,6 +83,16 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 Card(
                   child: ListTile(
+                    leading: const Icon(Icons.place_outlined),
+                    title: const Text('Service location'),
+                    subtitle: const Text('Check & correct your map pin'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/service-location'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
                     leading: const Icon(Icons.devices_outlined),
                     title: const Text('Active sessions'),
                     trailing: const Icon(Icons.chevron_right),
