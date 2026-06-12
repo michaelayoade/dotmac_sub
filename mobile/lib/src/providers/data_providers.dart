@@ -16,6 +16,8 @@ import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../models/reseller.dart';
+import '../models/service_location.dart';
+import '../repositories/location_repository.dart';
 import '../models/vas.dart';
 import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
@@ -39,6 +41,8 @@ final catalogRepositoryProvider = Provider<CatalogRepository>(
 final supportRepositoryProvider = Provider<SupportRepository>(
     (ref) => SupportRepository(ref.watch(apiClientProvider).dio));
 
+final locationRepositoryProvider = Provider<LocationRepository>(
+    (ref) => LocationRepository(ref.watch(apiClientProvider).dio));
 final walletRepositoryProvider = Provider<WalletRepository>(
     (ref) => WalletRepository(ref.watch(apiClientProvider).dio));
 
@@ -327,6 +331,12 @@ final notificationsProvider =
     FutureProvider.autoDispose<Page<AppNotification>>((ref) async {
   cacheFor(ref);
   return ref.watch(notificationRepositoryProvider).list();
+});
+
+final serviceLocationProvider =
+    FutureProvider.autoDispose<ServiceLocation>((ref) async {
+  cacheFor(ref);
+  return ref.watch(locationRepositoryProvider).location();
 });
 
 final vasCatalogProvider =

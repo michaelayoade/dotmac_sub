@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <!-- Android 13+ runtime permission for FCM/local notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Service-location pin validation + reseller install pins (geolocator).
+         Foreground-only; no background location. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <application
         android:label="DotMac Self-Care"
         android:name="${applicationName}"
