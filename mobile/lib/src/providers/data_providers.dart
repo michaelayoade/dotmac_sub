@@ -329,8 +329,7 @@ final notificationsProvider =
 });
 
 /// Null when the wallet feature is disabled server-side (404) — UI hides.
-final walletProvider =
-    FutureProvider.autoDispose<WalletOverview?>((ref) async {
+final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
   cacheFor(ref);
   return ref.watch(walletRepositoryProvider).overviewOrNull();
 });

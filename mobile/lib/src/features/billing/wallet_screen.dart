@@ -108,7 +108,8 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(labelText: 'Amount (₦)', helperText: hint),
+          decoration:
+              InputDecoration(labelText: 'Amount (₦)', helperText: hint),
         ),
         actions: [
           TextButton(
@@ -215,8 +216,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(
-                  child:
-                      Text('No activity yet — fund your wallet to begin.')),
+                  child: Text('No activity yet — fund your wallet to begin.')),
             ),
           for (final entry in wallet.entries)
             ListTile(
