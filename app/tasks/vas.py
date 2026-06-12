@@ -72,3 +72,23 @@ def run_vas_requery():
     finally:
         session.close()
         observe_job("vas_requery", status, time.monotonic() - start)
+
+
+@celery_app.task(name="app.tasks.vas.run_vas_review_requery")
+def run_vas_review_requery():
+    """Daily closing loop for purchases parked in review."""
+    start = time.monotonic()
+    status = "success"
+    session = SessionLocal()
+    try:
+        from app.services import vas_purchases
+
+        stats = vas_purchases.run_review_requery(session)
+        logger.info("vas_review_requery %s", stats)
+        return stats
+    except Exception:
+        status = "failure"
+        raise
+    finally:
+        session.close()
+        observe_job("vas_review_requery", status, time.monotonic() - start)

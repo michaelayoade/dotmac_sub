@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.gis import GeoAreaType, GeoLayerSource, GeoLayerType, GeoLocationType
 
@@ -152,3 +152,40 @@ class ElevationRead(BaseModel):
     source: str
     available: bool
     void: bool
+
+
+class MyLocationRequestCreate(BaseModel):
+    """Customer self-care pin correction. Coordinates only — the `/me`
+    endpoint forces subscriber_id to the caller."""
+
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class MyLocationRequestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status: str
+    requested_latitude: float
+    requested_longitude: float
+    customer_note: str | None = None
+    review_note: str | None = None
+    created_at: datetime
+    reviewed_at: datetime | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_value(cls, value):
+        return getattr(value, "value", value)
+
+
+class MyLocationRead(BaseModel):
+    address_label: str | None = None
+    current_latitude: float | None = None
+    current_longitude: float | None = None
+    can_submit_request: bool
+    has_address_anchor: bool
+    pending_request: MyLocationRequestRead | None = None
+    history: list[MyLocationRequestRead] = []

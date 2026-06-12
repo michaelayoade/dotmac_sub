@@ -16,6 +16,7 @@ from app.models.integration_hook import IntegrationHook
 from app.models.network import OLTDevice, OntProfileWanService, OntUnit
 from app.models.network_monitoring import NetworkDevice
 from app.models.tr069 import Tr069AcsServer
+from app.models.vas import VasTransaction
 from app.models.webhook import WebhookEndpoint
 from app.services.credential_crypto import (
     ENCRYPTED_MODEL_FIELDS,
@@ -53,6 +54,7 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
     "WebhookEndpoint": WebhookEndpoint,
     "PaymentMethod": PaymentMethod,
     "BankAccount": BankAccount,
+    "VasTransaction": VasTransaction,
 }
 
 _MODEL_FIELDS: tuple[tuple[type[Any], tuple[str, ...]], ...] = tuple(
