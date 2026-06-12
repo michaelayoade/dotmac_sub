@@ -61,10 +61,16 @@ def create_customer_session(
     subscription_id: UUID | None = None,
     return_to: str | None = None,
     is_impersonation: bool = False,
+    read_only: bool = False,
     remember: bool = False,
     db: Session | None = None,
 ) -> str:
-    """Create a new customer session and return the session token."""
+    """Create a new customer session and return the session token.
+
+    ``read_only`` marks a viewing-only session (reseller "view as customer"):
+    state-changing requests are blocked by the portal write-guard and write
+    controls are hidden in the UI. Admin "Login as Customer" is not read-only.
+    """
     session_token = secrets.token_urlsafe(32)
     ttl_seconds = _session_ttl_seconds(remember, db)
     session_payload = {
@@ -74,6 +80,7 @@ def create_customer_session(
         "subscription_id": str(subscription_id) if subscription_id else None,
         "return_to": return_to,
         "is_impersonation": is_impersonation,
+        "read_only": read_only,
         "remember": remember,
         "created_at": datetime.now(UTC).isoformat(),
         "expires_at": (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat(),
