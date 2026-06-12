@@ -25,6 +25,13 @@ celery_app = Celery("dotmac_sm")
 celery_app.conf.update(get_celery_config())
 celery_app.conf.beat_schedule = build_beat_schedule()
 celery_app.conf.beat_scheduler = "app.celery_scheduler.DbScheduler"
+# How often DbScheduler rebuilds the schedule from the DB. The default 30s
+# meant ~2,880 full build_beat_schedule() passes/day (dozens of settings
+# queries each) against the cross-host Postgres. Schedule changes are rare;
+# 5 min is plenty responsive.
+celery_app.conf.beat_refresh_seconds = int(
+    os.getenv("CELERY_BEAT_REFRESH_SECONDS", "300")
+)
 celery_app.autodiscover_tasks(["app.tasks"])
 
 # Route critical OLT authorization and ACS/TR-069 tasks to dedicated queues.

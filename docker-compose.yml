@@ -127,84 +127,7 @@ services:
     - --concurrency=3
     - --max-tasks-per-child=50
     - -Q
-    - celery
-  celery-worker-nin:
-    build: .
-    container_name: dotmac_sub_celery_worker_nin
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
-      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      REDIS_URL: ${REDIS_URL}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=1
-    - --max-tasks-per-child=50
-    - -Q
-    # nin is near-idle, so this worker also serves the daily business runners
-    # (billing/dunning/expiry/rating/FUP) — they must never queue behind the
-    # default queue's backlog.
-    - nin,billing
-  celery-worker-crm:
-    build: .
-    container_name: dotmac_sub_celery_worker_crm
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
-      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      REDIS_URL: ${REDIS_URL}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=1
-    - --max-tasks-per-child=50
-    - -Q
-    - crm
+    - celery,nin,crm
   celery-worker-tr069:
     build: .
     container_name: dotmac_sub_celery_worker_tr069
@@ -249,105 +172,13 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=1
+    - --concurrency=2
     - --max-tasks-per-child=50
     - -Q
-    - tr069
-  celery-worker-acs:
-    build: .
-    container_name: dotmac_sub_celery_worker_acs
-    restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.0
-    pids_limit: 96
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
-      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      CELERY_ACS_TASK_SOFT_TIME_LIMIT: ${CELERY_ACS_TASK_SOFT_TIME_LIMIT:-240}
-      CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
-      CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
-      CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: ${REDIS_URL}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=1
-    - --max-tasks-per-child=50
-    - -Q
-    - acs
+    - tr069,acs
   celery-worker-bandwidth:
     build: .
     container_name: dotmac_sub_celery_worker_bandwidth
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      REDIS_URL: ${REDIS_URL}
-      VICTORIAMETRICS_URL: http://victoriametrics:8428
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    depends_on:
-      victoriametrics:
-        condition: service_started
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=2
-    - --max-tasks-per-child=100
-    - -Q
-    - bandwidth
-  celery-worker-ingestion:
-    build: .
-    container_name: dotmac_sub_celery_worker_ingestion
     restart: unless-stopped
     mem_limit: 768m
     mem_reservation: 256m
@@ -385,10 +216,10 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=2
+    - --concurrency=3
     - --max-tasks-per-child=100
     - -Q
-    - ingestion
+    - bandwidth,ingestion
   celery-beat:
     build: .
     container_name: dotmac_sub_celery_beat
@@ -558,7 +389,7 @@ services:
       REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       BANDWIDTH_POLLING_ENABLED: 'true'
-      BANDWIDTH_POLL_INTERVAL_MS: '5000'
+      BANDWIDTH_POLL_INTERVAL_MS: '30000'
       BANDWIDTH_HOT_RETENTION_HOURS: '24'
       BANDWIDTH_REDIS_STREAM: bandwidth:samples
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
