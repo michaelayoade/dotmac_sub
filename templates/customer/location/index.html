@@ -40,6 +40,22 @@
                     No approved pin is on file yet. Tap the map once to place your service location before submitting.
                     {% endif %}
                 </p>
+                <div class="mt-3 flex gap-2">
+                    <div class="relative flex-1">
+                        <input type="text" id="location-address-search" autocomplete="off"
+                               placeholder="Search for a street or area to move the map..."
+                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                        <div id="location-address-results"
+                             class="absolute inset-x-0 top-full z-[1100] mt-1 hidden overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-stone-600 dark:bg-stone-800"></div>
+                    </div>
+                    <button type="button" id="location-use-gps"
+                            class="inline-flex shrink-0 items-center gap-2 rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200 dark:hover:bg-stone-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8a4 4 0 100 8 4 4 0 000-8zm0-6v3m0 14v3M2 12h3m14 0h3"/>
+                        </svg>
+                        <span id="location-use-gps-label">Use my location</span>
+                    </button>
+                </div>
             </div>
             <div id="customer-location-map" class="h-[28rem] w-full"></div>
             <div id="customer-location-map-fallback" class="hidden border-t border-stone-200 px-6 py-4 text-sm text-amber-800 dark:border-stone-700 dark:text-amber-300">
@@ -115,6 +131,7 @@
                         Waiting for map selection
                         {% endif %}
                     </p>
+                    <p id="selected-address" class="mt-1 text-xs text-stone-500 dark:text-stone-400"></p>
                 </div>
                 <div>
                     <label for="customer_note" class="block text-sm font-semibold text-stone-700 dark:text-stone-300">What is wrong with the current pin?</label>
@@ -211,11 +228,24 @@ document.addEventListener('DOMContentLoaded', function() {
         }).addTo(map).bindPopup('Pending requested location');
     }
 
-    if (!canSubmit) {
-        return;
-    }
-
     let marker = null;
+    const addressLabel = document.getElementById('selected-address');
+    let reverseTimer = null;
+
+    function showResolvedAddress(lat, lon) {
+        if (!addressLabel) return;
+        clearTimeout(reverseTimer);
+        reverseTimer = setTimeout(function() {
+            fetch('/portal/location/reverse-geocode?lat=' + lat + '&lon=' + lon)
+                .then(function(res) { return res.ok ? res.json() : null; })
+                .then(function(data) {
+                    addressLabel.textContent = (data && data.display_name)
+                        ? '≈ ' + data.display_name
+                        : '';
+                })
+                .catch(function() { addressLabel.textContent = ''; });
+        }, 400);
+    }
 
     function ensureMarker(lat, lon) {
         if (marker) {
@@ -240,19 +270,111 @@ document.addEventListener('DOMContentLoaded', function() {
         if (submitButton) {
             submitButton.disabled = false;
         }
+        showResolvedAddress(lat, lon);
     }
 
-    if (latInput && lonInput && latInput.value && lonInput.value) {
-        const initialLat = parseFloat(latInput.value);
-        const initialLon = parseFloat(lonInput.value);
-        ensureMarker(initialLat, initialLon);
-        updateCoordinates(initialLat, initialLon);
+    if (canSubmit) {
+        if (latInput && lonInput && latInput.value && lonInput.value) {
+            const initialLat = parseFloat(latInput.value);
+            const initialLon = parseFloat(lonInput.value);
+            ensureMarker(initialLat, initialLon);
+            updateCoordinates(initialLat, initialLon);
+        }
+
+        map.on('click', function(event) {
+            ensureMarker(event.latlng.lat, event.latlng.lng);
+            updateCoordinates(event.latlng.lat, event.latlng.lng);
+        });
     }
 
-    map.on('click', function(event) {
-        ensureMarker(event.latlng.lat, event.latlng.lng);
-        updateCoordinates(event.latlng.lat, event.latlng.lng);
-    });
+    const searchInput = document.getElementById('location-address-search');
+    const searchResults = document.getElementById('location-address-results');
+    let searchTimer = null;
+
+    function hideSearchResults() {
+        if (!searchResults) return;
+        searchResults.classList.add('hidden');
+        searchResults.replaceChildren();
+    }
+
+    function renderSearchResults(items) {
+        if (!searchResults) return;
+        searchResults.replaceChildren();
+        if (!items.length) {
+            hideSearchResults();
+            return;
+        }
+        items.forEach(function(item) {
+            if (item.latitude === null || item.longitude === null) return;
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'block w-full px-4 py-2.5 text-left text-sm text-stone-700 hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-stone-700';
+            option.textContent = item.display_name || (item.latitude + ', ' + item.longitude);
+            option.addEventListener('click', function() {
+                hideSearchResults();
+                if (searchInput) searchInput.value = item.display_name || '';
+                map.setView([item.latitude, item.longitude], 17);
+                if (canSubmit) {
+                    ensureMarker(item.latitude, item.longitude);
+                    updateCoordinates(item.latitude, item.longitude);
+                }
+            });
+            searchResults.appendChild(option);
+        });
+        searchResults.classList.remove('hidden');
+    }
+
+    const gpsButton = document.getElementById('location-use-gps');
+    const gpsLabel = document.getElementById('location-use-gps-label');
+    if (gpsButton) {
+        if (!navigator.geolocation) {
+            gpsButton.classList.add('hidden');
+        } else {
+            gpsButton.addEventListener('click', function() {
+                if (gpsLabel) gpsLabel.textContent = 'Locating...';
+                gpsButton.disabled = true;
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    const lat = position.coords.latitude;
+                    const lon = position.coords.longitude;
+                    map.setView([lat, lon], 17);
+                    if (canSubmit) {
+                        ensureMarker(lat, lon);
+                        updateCoordinates(lat, lon);
+                    }
+                    if (gpsLabel) gpsLabel.textContent = 'Use my location';
+                    gpsButton.disabled = false;
+                }, function() {
+                    if (gpsLabel) gpsLabel.textContent = 'Location unavailable';
+                    setTimeout(function() {
+                        if (gpsLabel) gpsLabel.textContent = 'Use my location';
+                        gpsButton.disabled = false;
+                    }, 2500);
+                }, {enableHighAccuracy: true, timeout: 15000});
+            });
+        }
+    }
+
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            const query = searchInput.value.trim();
+            clearTimeout(searchTimer);
+            if (query.length < 3) {
+                hideSearchResults();
+                return;
+            }
+            searchTimer = setTimeout(function() {
+                fetch('/portal/location/geocode-search?q=' + encodeURIComponent(query))
+                    .then(function(res) { return res.ok ? res.json() : []; })
+                    .then(renderSearchResults)
+                    .catch(hideSearchResults);
+            }, 350);
+        });
+        document.addEventListener('click', function(event) {
+            if (searchResults && !searchResults.contains(event.target) && event.target !== searchInput) {
+                hideSearchResults();
+            }
+        });
+    }
 });
 </script>
 {% endblock %}
