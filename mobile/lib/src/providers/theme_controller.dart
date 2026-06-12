@@ -6,11 +6,10 @@ import 'auth_controller.dart';
 
 /// App theme preference, persisted in secure storage. Defaults to
 /// [ThemeMode.system] until the stored value loads.
-final themeModeProvider = StateNotifierProvider<ThemeModeController, ThemeMode>(
-  (ref) {
-    return ThemeModeController(ref.watch(tokenStorageProvider));
-  },
-);
+final themeModeProvider =
+    StateNotifierProvider<ThemeModeController, ThemeMode>((ref) {
+  return ThemeModeController(ref.watch(tokenStorageProvider));
+});
 
 class ThemeModeController extends StateNotifier<ThemeMode> {
   ThemeModeController(this._storage) : super(ThemeMode.system) {
@@ -41,8 +40,8 @@ class ThemeModeController extends StateNotifier<ThemeMode> {
   }
 
   static ThemeMode _parse(String? value) => switch (value) {
-    'light' => ThemeMode.light,
-    'dark' => ThemeMode.dark,
-    _ => ThemeMode.system,
-  };
+        'light' => ThemeMode.light,
+        'dark' => ThemeMode.dark,
+        _ => ThemeMode.system,
+      };
 }

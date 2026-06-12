@@ -26,11 +26,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 /// a no-op until FCM server credentials are configured, so the two halves can
 /// be enabled independently.
 class PushService {
-  PushService({
-    FirebaseMessaging? messaging,
-    FlutterLocalNotificationsPlugin? local,
-  }) : _messaging = messaging,
-       _local = local ?? FlutterLocalNotificationsPlugin();
+  PushService(
+      {FirebaseMessaging? messaging, FlutterLocalNotificationsPlugin? local})
+      : _messaging = messaging,
+        _local = local ?? FlutterLocalNotificationsPlugin();
 
   FirebaseMessaging? _messaging;
   final FlutterLocalNotificationsPlugin _local;
@@ -60,11 +59,8 @@ class PushService {
     } catch (e) {
       // No google-services.json / GoogleService-Info.plist, or Firebase not
       // set up for this build — run with push disabled.
-      Log.breadcrumb(
-        'push: firebase init skipped',
-        category: 'push',
-        data: {'error': '$e'},
-      );
+      Log.breadcrumb('push: firebase init skipped',
+          category: 'push', data: {'error': '$e'});
       _available = false;
       return false;
     }
@@ -82,17 +78,13 @@ class PushService {
       );
       await _local
           .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >()
+              AndroidFlutterLocalNotificationsPlugin>()
           ?.createNotificationChannel(_androidChannel);
       _available = true;
       return true;
     } catch (e) {
-      Log.breadcrumb(
-        'push: local-notification init failed',
-        category: 'push',
-        data: {'error': '$e'},
-      );
+      Log.breadcrumb('push: local-notification init failed',
+          category: 'push', data: {'error': '$e'});
       _available = false;
       return false;
     }
@@ -108,11 +100,8 @@ class PushService {
       return settings.authorizationStatus == AuthorizationStatus.authorized ||
           settings.authorizationStatus == AuthorizationStatus.provisional;
     } catch (e) {
-      Log.breadcrumb(
-        'push: permission request failed',
-        category: 'push',
-        data: {'error': '$e'},
-      );
+      Log.breadcrumb('push: permission request failed',
+          category: 'push', data: {'error': '$e'});
       return false;
     }
   }
@@ -125,11 +114,8 @@ class PushService {
     FirebaseMessaging.onMessage.listen(_showForeground);
     messaging.onTokenRefresh.listen((token) {
       onToken(token).catchError((Object e) {
-        Log.breadcrumb(
-          'push: token refresh re-register failed',
-          category: 'push',
-          data: {'error': '$e'},
-        );
+        Log.breadcrumb('push: token refresh re-register failed',
+            category: 'push', data: {'error': '$e'});
       });
     });
   }
@@ -154,11 +140,8 @@ class PushService {
         ),
       );
     } catch (e) {
-      Log.breadcrumb(
-        'push: foreground display failed',
-        category: 'push',
-        data: {'error': '$e'},
-      );
+      Log.breadcrumb('push: foreground display failed',
+          category: 'push', data: {'error': '$e'});
     }
   }
 
@@ -169,11 +152,8 @@ class PushService {
     try {
       return await messaging.getToken();
     } catch (e) {
-      Log.breadcrumb(
-        'push: getToken failed',
-        category: 'push',
-        data: {'error': '$e'},
-      );
+      Log.breadcrumb('push: getToken failed',
+          category: 'push', data: {'error': '$e'});
       return null;
     }
   }
@@ -186,11 +166,8 @@ class PushService {
     try {
       await messaging.deleteToken();
     } catch (e) {
-      Log.breadcrumb(
-        'push: deleteToken failed',
-        category: 'push',
-        data: {'error': '$e'},
-      );
+      Log.breadcrumb('push: deleteToken failed',
+          category: 'push', data: {'error': '$e'});
     }
   }
 

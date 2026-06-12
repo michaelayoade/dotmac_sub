@@ -67,8 +67,7 @@ class ServiceLocation {
         longitude: (json['current_longitude'] as num?)?.toDouble(),
         pendingRequest: json['pending_request'] != null
             ? LocationRequest.fromJson(
-                json['pending_request'] as Map<String, dynamic>,
-              )
+                json['pending_request'] as Map<String, dynamic>)
             : null,
         history: [
           for (final item in (json['history'] as List? ?? const []))

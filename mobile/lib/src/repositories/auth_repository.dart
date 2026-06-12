@@ -18,17 +18,15 @@ class AuthRepository {
     required String password,
     String? provider, // 'local' | 'radius'
   }) async {
-    final data = await guard(
-      () => dio.post(
-        '/auth/login',
-        data: {
-          'username': username,
-          'password': password,
-          if (provider != null) 'provider': provider,
-        },
-        options: Options(extra: {'skipAuth': true}),
-      ),
-    );
+    final data = await guard(() => dio.post(
+          '/auth/login',
+          data: {
+            'username': username,
+            'password': password,
+            if (provider != null) 'provider': provider,
+          },
+          options: Options(extra: {'skipAuth': true}),
+        ));
     final result = LoginResult.fromJson(data as Map<String, dynamic>);
     if (result.isAuthenticated) {
       await storage.save(
@@ -44,13 +42,11 @@ class AuthRepository {
     required String mfaToken,
     required String code,
   }) async {
-    final data = await guard(
-      () => dio.post(
-        '/auth/mfa/verify',
-        data: {'mfa_token': mfaToken, 'code': code},
-        options: Options(extra: {'skipAuth': true}),
-      ),
-    );
+    final data = await guard(() => dio.post(
+          '/auth/mfa/verify',
+          data: {'mfa_token': mfaToken, 'code': code},
+          options: Options(extra: {'skipAuth': true}),
+        ));
     final pair = TokenPair.fromJson(data as Map<String, dynamic>);
     await storage.save(
       accessToken: pair.accessToken,
@@ -76,15 +72,10 @@ class AuthRepository {
     required String currentPassword,
     required String newPassword,
   }) async {
-    await guard(
-      () => dio.post(
-        '/auth/me/password',
-        data: {
+    await guard(() => dio.post('/auth/me/password', data: {
           'current_password': currentPassword,
           'new_password': newPassword,
-        },
-      ),
-    );
+        }));
   }
 
   /// POST /auth/me/avatar (multipart field `file`) — returns the new avatar URL.
@@ -132,13 +123,11 @@ class AuthRepository {
 
   /// POST /auth/forgot-password
   Future<void> forgotPassword(String email) async {
-    await guard(
-      () => dio.post(
-        '/auth/forgot-password',
-        data: {'email': email},
-        options: Options(extra: {'skipAuth': true}),
-      ),
-    );
+    await guard(() => dio.post(
+          '/auth/forgot-password',
+          data: {'email': email},
+          options: Options(extra: {'skipAuth': true}),
+        ));
   }
 
   /// POST /auth/reset-password — complete a reset with the emailed token.
@@ -146,13 +135,11 @@ class AuthRepository {
     required String token,
     required String newPassword,
   }) async {
-    await guard(
-      () => dio.post(
-        '/auth/reset-password',
-        data: {'token': token, 'new_password': newPassword},
-        options: Options(extra: {'skipAuth': true}),
-      ),
-    );
+    await guard(() => dio.post(
+          '/auth/reset-password',
+          data: {'token': token, 'new_password': newPassword},
+          options: Options(extra: {'skipAuth': true}),
+        ));
   }
 
   static String? _guessImageContentType(String filename) {

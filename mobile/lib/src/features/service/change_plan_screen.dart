@@ -39,9 +39,8 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
       _error = null;
     });
     try {
-      final opts = await ref
-          .read(catalogRepositoryProvider)
-          .planChangeOptions(_subId);
+      final opts =
+          await ref.read(catalogRepositoryProvider).planChangeOptions(_subId);
       if (mounted) setState(() => _options = opts);
     } catch (e) {
       if (mounted) setState(() => _error = e);
@@ -86,9 +85,11 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
     final navigator = Navigator.of(context);
     setState(() => _busy = true);
     try {
-      await ref
-          .read(catalogRepositoryProvider)
-          .submitPlanChange(_subId, offerId: offer.id, effectiveDate: _today);
+      await ref.read(catalogRepositoryProvider).submitPlanChange(
+            _subId,
+            offerId: offer.id,
+            effectiveDate: _today,
+          );
       // A prepaid change debits the wallet — refresh balance + ledger too.
       ref.invalidate(subscriptionsProvider);
       ref.invalidate(balanceProvider);
@@ -111,15 +112,13 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _options == null
-          ? AsyncValueView(
-              value: AsyncValue<void>.error(
-                _error ?? 'error',
-                StackTrace.empty,
-              ),
-              data: (_) => const SizedBox.shrink(),
-              onRetry: _load,
-            )
-          : _list(_options!),
+              ? AsyncValueView(
+                  value: AsyncValue<void>.error(
+                      _error ?? 'error', StackTrace.empty),
+                  data: (_) => const SizedBox.shrink(),
+                  onRetry: _load,
+                )
+              : _list(_options!),
     );
   }
 
@@ -137,8 +136,7 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                   leading: const Icon(Icons.check_circle, color: Colors.green),
                   title: Text('Current: ${opts.currentOffer!.name}'),
                   subtitle: Text(
-                    '${Fmt.money(opts.currentOffer!.amount, opts.currentOffer!.currency)} ${opts.currentOffer!.periodLabel}',
-                  ),
+                      '${Fmt.money(opts.currentOffer!.amount, opts.currentOffer!.currency)} ${opts.currentOffer!.periodLabel}'),
                 ),
               ),
             if (opts.walletBalance != null)
@@ -165,8 +163,7 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                 child: ListTile(
                   title: Text(o.name),
                   subtitle: Text(
-                    '${Fmt.money(o.amount, o.currency)} ${o.periodLabel}',
-                  ),
+                      '${Fmt.money(o.amount, o.currency)} ${o.periodLabel}'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _busy ? null : () => _confirm(o),
                 ),
@@ -213,52 +210,36 @@ class _ConfirmSheet extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    'Switch to ${offer.name}',
-                    style: theme.textTheme.titleLarge,
-                  ),
+                  child: Text('Switch to ${offer.name}',
+                      style: theme.textTheme.titleLarge),
                 ),
                 if (q != null && (q.isUpgrade || q.isDowngrade))
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: q.isUpgrade
                           ? theme.colorScheme.primaryContainer
                           : theme.colorScheme.secondaryContainer,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text(
-                      q.isUpgrade ? 'Upgrade' : 'Downgrade',
-                      style: theme.textTheme.labelMedium,
-                    ),
+                    child: Text(q.isUpgrade ? 'Upgrade' : 'Downgrade',
+                        style: theme.textTheme.labelMedium),
                   ),
               ],
             ),
             const SizedBox(height: 4),
-            Text(
-              '${Fmt.money(offer.amount, cur)} ${offer.periodLabel}',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
+            Text('${Fmt.money(offer.amount, cur)} ${offer.periodLabel}',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.outline)),
             if (q != null && q.hasProration) ...[
               const Divider(height: 24),
-              _row(
-                context,
-                'Prorated charge (${q.daysRemaining} days left)',
-                Fmt.money(q.chargeAmount, cur),
-              ),
+              _row(context, 'Prorated charge (${q.daysRemaining} days left)',
+                  Fmt.money(q.chargeAmount, cur)),
               _row(context, 'Wallet balance', Fmt.money(q.currentBalance, cur)),
               const Divider(height: 16),
-              _row(
-                context,
-                'Payable now',
-                Fmt.money(q.netAmount, cur),
-                bold: true,
-              ),
+              _row(context, 'Payable now', Fmt.money(q.netAmount, cur),
+                  bold: true),
               if (q.needsTopUp) ...[
                 const SizedBox(height: 10),
                 Container(
@@ -269,19 +250,15 @@ class _ConfirmSheet extends StatelessWidget {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        size: 18,
-                        color: theme.colorScheme.onErrorContainer,
-                      ),
+                      Icon(Icons.warning_amber_rounded,
+                          size: 18, color: theme.colorScheme.onErrorContainer),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           'Insufficient balance — top up ${Fmt.money(q.shortfall, cur)} to apply now.',
                           style: TextStyle(
-                            color: theme.colorScheme.onErrorContainer,
-                            fontSize: 12,
-                          ),
+                              color: theme.colorScheme.onErrorContainer,
+                              fontSize: 12),
                         ),
                       ),
                     ],
@@ -317,12 +294,8 @@ class _ConfirmSheet extends StatelessWidget {
     );
   }
 
-  Widget _row(
-    BuildContext context,
-    String label,
-    String value, {
-    bool bold = false,
-  }) {
+  Widget _row(BuildContext context, String label, String value,
+      {bool bold = false}) {
     final style = TextStyle(fontWeight: bold ? FontWeight.w700 : null);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),

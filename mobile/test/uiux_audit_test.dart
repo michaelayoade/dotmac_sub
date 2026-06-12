@@ -92,9 +92,7 @@ void main() {
 
     test('billing-flavoured notifications deep-link to /billing', () {
       expect(
-        notificationRoute(n(subject: 'Your invoice is ready')),
-        '/billing',
-      );
+          notificationRoute(n(subject: 'Your invoice is ready')), '/billing');
       expect(notificationRoute(n(eventType: 'service_suspended')), '/billing');
       expect(notificationRoute(n(subject: 'Payment received')), '/billing');
     });

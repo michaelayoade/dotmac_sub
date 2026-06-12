@@ -44,18 +44,17 @@ class LedgerTxn {
   }
 
   factory LedgerTxn.fromJson(Map<String, dynamic> json) => LedgerTxn(
-    id: json['id'].toString(),
-    entryType: json['entry_type'] as String? ?? 'debit',
-    amount: asDouble(json['amount']),
-    currency: json['currency'] as String? ?? 'NGN',
-    createdAt: DateTime.tryParse(
-      json['created_at']?.toString() ?? '',
-    )?.toLocal(),
-    source: json['source'] as String?,
-    memo: json['memo'] as String?,
-    invoiceId: json['invoice_id']?.toString(),
-    paymentId: json['payment_id']?.toString(),
-  );
+        id: json['id'].toString(),
+        entryType: json['entry_type'] as String? ?? 'debit',
+        amount: asDouble(json['amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        createdAt:
+            DateTime.tryParse(json['created_at']?.toString() ?? '')?.toLocal(),
+        source: json['source'] as String?,
+        memo: json['memo'] as String?,
+        invoiceId: json['invoice_id']?.toString(),
+        paymentId: json['payment_id']?.toString(),
+      );
 }
 
 /// The customer's wallet/credit balance (GET /me/balance). Positive means
@@ -70,7 +69,7 @@ class AccountBalance {
   bool get owes => creditBalance < 0;
 
   factory AccountBalance.fromJson(Map<String, dynamic> json) => AccountBalance(
-    creditBalance: asDouble(json['credit_balance']),
-    currency: json['currency'] as String? ?? 'NGN',
-  );
+        creditBalance: asDouble(json['credit_balance']),
+        currency: json['currency'] as String? ?? 'NGN',
+      );
 }

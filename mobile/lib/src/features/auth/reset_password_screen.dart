@@ -19,9 +19,8 @@ class ResetPasswordScreen extends ConsumerStatefulWidget {
 
 class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _token = TextEditingController(
-    text: widget.token ?? '',
-  );
+  late final TextEditingController _token =
+      TextEditingController(text: widget.token ?? '');
   final _password = TextEditingController();
   bool _obscure = true;
   bool _submitting = false;
@@ -41,9 +40,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
       _error = null;
     });
     try {
-      await ref
-          .read(authRepositoryProvider)
-          .resetPassword(
+      await ref.read(authRepositoryProvider).resetPassword(
             token: _token.text.trim(),
             newPassword: _password.text,
           );
@@ -53,11 +50,9 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
       );
       context.go('/login');
     } on ApiException catch (e) {
-      setState(
-        () => _error = e.isUnauthorized
-            ? 'That code is invalid or has expired.'
-            : e.message,
-      );
+      setState(() => _error = e.isUnauthorized
+          ? 'That code is invalid or has expired.'
+          : e.message);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -81,20 +76,14 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(
-                      Icons.password,
-                      size: 56,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
+                    Icon(Icons.password,
+                        size: 56, color: Theme.of(context).colorScheme.primary),
                     const SizedBox(height: 24),
                     if (_error != null) ...[
-                      Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
+                      Text(_error!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.error)),
                       const SizedBox(height: 12),
                     ],
                     TextFormField(
@@ -116,11 +105,9 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
                         helperText: 'At least 8 characters',
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscure
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
+                          icon: Icon(_obscure
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined),
                           onPressed: () => setState(() => _obscure = !_obscure),
                         ),
                       ),
@@ -135,8 +122,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
                           ? const SizedBox(
                               height: 20,
                               width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : const Text('Reset password'),
                     ),
                   ],

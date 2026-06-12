@@ -25,16 +25,13 @@ class Env {
   /// Use a dedicated mobile GlitchTip project over HTTPS, not the backend DSN.
   /// Supply at build time:
   /// `--dart-define=GLITCHTIP_DSN=https://key@observability-host/<project-id>`.
-  static const String glitchtipDsn = String.fromEnvironment(
-    'GLITCHTIP_DSN',
-    defaultValue: '',
-  );
+  static const String glitchtipDsn =
+      String.fromEnvironment('GLITCHTIP_DSN', defaultValue: '');
 
   /// Deployment environment tag reported with crashes (production, staging…).
   static const String glitchtipEnvironment = String.fromEnvironment(
-    'GLITCHTIP_ENVIRONMENT',
-    defaultValue: 'production',
-  );
+      'GLITCHTIP_ENVIRONMENT',
+      defaultValue: 'production');
 
   /// Resolve a possibly-relative URL from the API (e.g. an avatar served at
   /// `/static/avatars/...`) into an absolute one against [apiBaseUrl].
@@ -60,10 +57,8 @@ class Env {
 class Brand {
   const Brand._();
 
-  static const String name = String.fromEnvironment(
-    'BRAND_MOBILE_APP_NAME',
-    defaultValue: 'DotMac Self-Care',
-  );
+  static const String name = String.fromEnvironment('BRAND_MOBILE_APP_NAME',
+      defaultValue: 'DotMac Self-Care');
 
   static const String tagline = String.fromEnvironment(
     'BRAND_TAGLINE',
@@ -72,35 +67,25 @@ class Brand {
 
   /// Support contact + legal name shown on the About screen. From the shared
   /// brand.json (BRAND_SUPPORT_EMAIL / BRAND_LEGAL_NAME).
-  static const String supportEmail = String.fromEnvironment(
-    'BRAND_SUPPORT_EMAIL',
-    defaultValue: '',
-  );
+  static const String supportEmail =
+      String.fromEnvironment('BRAND_SUPPORT_EMAIL', defaultValue: '');
 
-  static const String legalName = String.fromEnvironment(
-    'BRAND_LEGAL_NAME',
-    defaultValue: '',
-  );
+  static const String legalName =
+      String.fromEnvironment('BRAND_LEGAL_NAME', defaultValue: '');
 
   /// App version label for the About screen (set per release build).
-  static const String version = String.fromEnvironment(
-    'APP_VERSION',
-    defaultValue: '1.0.0',
-  );
+  static const String version =
+      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
 
   /// Hex brand colour (e.g. `#3b82f6`) used as the Material seed colour.
-  static const String _primaryColorHex = String.fromEnvironment(
-    'BRAND_PRIMARY_COLOR',
-    defaultValue: '#3b82f6',
-  );
+  static const String _primaryColorHex =
+      String.fromEnvironment('BRAND_PRIMARY_COLOR', defaultValue: '#3b82f6');
 
   /// Custom URL scheme the payment WebView uses for success/cancel callbacks
   /// (e.g. `dotmacpay`). Kept unique per brand so two white-label apps on one
   /// device don't collide.
-  static const String paymentScheme = String.fromEnvironment(
-    'BRAND_PAYMENT_SCHEME',
-    defaultValue: 'dotmacpay',
-  );
+  static const String paymentScheme =
+      String.fromEnvironment('BRAND_PAYMENT_SCHEME', defaultValue: 'dotmacpay');
 
   /// Parsed seed colour; falls back to a blue if the hex is malformed.
   static Color get primaryColor => _parseHexColor(_primaryColorHex);

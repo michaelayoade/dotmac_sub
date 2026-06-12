@@ -32,9 +32,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
     try {
-      final ticket = await ref
-          .read(supportRepositoryProvider)
-          .createTicket(
+      final ticket = await ref.read(supportRepositoryProvider).createTicket(
             title: _title.text.trim(),
             description: _description.text.trim().isEmpty
                 ? null
@@ -46,9 +44,8 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
       context.go('/support/${ticket.id}');
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.message)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
         setState(() => _submitting = false);
       }
     }
@@ -101,8 +98,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                   ? const SizedBox(
                       height: 20,
                       width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                      child: CircularProgressIndicator(strokeWidth: 2))
                   : const Text('Submit ticket'),
             ),
           ],

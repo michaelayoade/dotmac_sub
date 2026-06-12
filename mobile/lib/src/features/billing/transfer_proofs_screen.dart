@@ -156,9 +156,7 @@ class _SubmitProofSheetState extends ConsumerState<_SubmitProofSheet> {
       _error = null;
     });
     try {
-      await ref
-          .read(billingRepositoryProvider)
-          .submitPaymentProof(
+      await ref.read(billingRepositoryProvider).submitPaymentProof(
             amount: _amount.text.trim(),
             bankName: _bank.text.trim(),
             reference: _reference.text.trim(),

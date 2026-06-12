@@ -30,16 +30,16 @@ class AddonOption {
   bool get isDataTopup => grantGb != null && grantGb! > 0;
 
   factory AddonOption.fromJson(Map<String, dynamic> json) => AddonOption(
-    addOnId: json['add_on_id'].toString(),
-    name: json['name'] as String? ?? 'Add-on',
-    addonType: json['addon_type'] as String? ?? 'custom',
-    amount: asDouble(json['amount']),
-    currency: json['currency'] as String? ?? 'NGN',
-    minQuantity: (json['min_quantity'] as num?)?.toInt() ?? 1,
-    maxQuantity: (json['max_quantity'] as num?)?.toInt(),
-    description: json['description'] as String?,
-    grantGb: (json['grant_gb'] as num?)?.toInt(),
-  );
+        addOnId: json['add_on_id'].toString(),
+        name: json['name'] as String? ?? 'Add-on',
+        addonType: json['addon_type'] as String? ?? 'custom',
+        amount: asDouble(json['amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        minQuantity: (json['min_quantity'] as num?)?.toInt() ?? 1,
+        maxQuantity: (json['max_quantity'] as num?)?.toInt(),
+        description: json['description'] as String?,
+        grantGb: (json['grant_gb'] as num?)?.toInt(),
+      );
 }
 
 class ActiveAddon {
@@ -84,21 +84,21 @@ class ActiveAddon {
   }
 
   factory ActiveAddon.fromJson(Map<String, dynamic> json) => ActiveAddon(
-    id: json['id'].toString(),
-    name: json['name'] as String? ?? 'Add-on',
-    quantity: (json['quantity'] as num?)?.toInt() ?? 1,
-    addonType: json['addon_type'] as String?,
-    grantGb: (json['grant_gb'] as num?)?.toInt(),
-    totalGrantGb: (json['total_grant_gb'] as num?)?.toInt(),
-    startsAt: json['starts_at'] == null
-        ? null
-        : DateTime.tryParse(json['starts_at'].toString())?.toLocal(),
-    expiresAt: json['expires_at'] == null
-        ? null
-        : DateTime.tryParse(json['expires_at'].toString())?.toLocal(),
-    validityDays: (json['validity_days'] as num?)?.toInt(),
-    isExpired: json['is_expired'] as bool? ?? false,
-  );
+        id: json['id'].toString(),
+        name: json['name'] as String? ?? 'Add-on',
+        quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+        addonType: json['addon_type'] as String?,
+        grantGb: (json['grant_gb'] as num?)?.toInt(),
+        totalGrantGb: (json['total_grant_gb'] as num?)?.toInt(),
+        startsAt: json['starts_at'] == null
+            ? null
+            : DateTime.tryParse(json['starts_at'].toString())?.toLocal(),
+        expiresAt: json['expires_at'] == null
+            ? null
+            : DateTime.tryParse(json['expires_at'].toString())?.toLocal(),
+        validityDays: (json['validity_days'] as num?)?.toInt(),
+        isExpired: json['is_expired'] as bool? ?? false,
+      );
 }
 
 class AddonsAvailable {
@@ -147,12 +147,12 @@ class AddonQuote {
   final bool canAfford;
 
   factory AddonQuote.fromJson(Map<String, dynamic> json) => AddonQuote(
-    charge: asDouble(json['charge']),
-    currency: json['currency'] as String? ?? 'NGN',
-    currentBalance: asDouble(json['current_balance']),
-    shortfall: asDouble(json['shortfall']),
-    canAfford: json['can_afford'] as bool? ?? false,
-  );
+        charge: asDouble(json['charge']),
+        currency: json['currency'] as String? ?? 'NGN',
+        currentBalance: asDouble(json['current_balance']),
+        shortfall: asDouble(json['shortfall']),
+        canAfford: json['can_afford'] as bool? ?? false,
+      );
 }
 
 class AddonPurchaseResult {
@@ -181,11 +181,9 @@ class AddonPurchaseResult {
         reason: json['reason'] as String?,
         charge: json['charge'] == null ? null : asDouble(json['charge']),
         currency: json['currency'] as String? ?? 'NGN',
-        newBalance: json['new_balance'] == null
-            ? null
-            : asDouble(json['new_balance']),
-        shortfall: json['shortfall'] == null
-            ? null
-            : asDouble(json['shortfall']),
+        newBalance:
+            json['new_balance'] == null ? null : asDouble(json['new_balance']),
+        shortfall:
+            json['shortfall'] == null ? null : asDouble(json['shortfall']),
       );
 }

@@ -56,15 +56,12 @@ class ResellerRevenueScreen extends ConsumerWidget {
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 32),
                   child: EmptyState(
-                    icon: Icons.bar_chart_outlined,
-                    message: 'No paid invoices yet.',
-                  ),
+                      icon: Icons.bar_chart_outlined,
+                      message: 'No paid invoices yet.'),
                 )
               else ...[
-                Text(
-                  'Paid revenue — last ${r.monthly.length} months',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
+                Text('Paid revenue — last ${r.monthly.length} months',
+                    style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 16),
                 _RevenueChart(monthly: r.monthly),
                 const SizedBox(height: 16),
@@ -72,9 +69,8 @@ class ResellerRevenueScreen extends ConsumerWidget {
                   ListTile(
                     dense: true,
                     title: Text(m.label),
-                    subtitle: Text(
-                      '${m.count} invoice${m.count == 1 ? '' : 's'}',
-                    ),
+                    subtitle:
+                        Text('${m.count} invoice${m.count == 1 ? '' : 's'}'),
                     trailing: Text(
                       Fmt.money(m.total, 'NGN'),
                       style: Theme.of(context).textTheme.titleSmall,
@@ -90,11 +86,8 @@ class ResellerRevenueScreen extends ConsumerWidget {
 }
 
 class _Kpi extends StatelessWidget {
-  const _Kpi({
-    required this.label,
-    required this.value,
-    this.highlight = false,
-  });
+  const _Kpi(
+      {required this.label, required this.value, this.highlight = false});
 
   final String label;
   final String value;
@@ -138,10 +131,8 @@ class _RevenueChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final maxTotal = monthly.fold<double>(
-      0,
-      (a, m) => m.total > a ? m.total : a,
-    );
+    final maxTotal =
+        monthly.fold<double>(0, (a, m) => m.total > a ? m.total : a);
     final maxY = maxTotal <= 0 ? 1.0 : maxTotal * 1.25;
     final labelStep = (monthly.length / 6).ceil().clamp(1, 12);
 
@@ -154,12 +145,10 @@ class _RevenueChart extends StatelessWidget {
           gridData: const FlGridData(show: true, drawVerticalLine: false),
           borderData: FlBorderData(show: false),
           titlesData: FlTitlesData(
-            topTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
-            rightTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
@@ -181,10 +170,8 @@ class _RevenueChart extends StatelessWidget {
                   }
                   return Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      monthly[i].label,
-                      style: theme.textTheme.labelSmall,
-                    ),
+                    child: Text(monthly[i].label,
+                        style: theme.textTheme.labelSmall),
                   );
                 },
               ),
@@ -192,17 +179,14 @@ class _RevenueChart extends StatelessWidget {
           ),
           barGroups: [
             for (var i = 0; i < monthly.length; i++)
-              BarChartGroupData(
-                x: i,
-                barRods: [
-                  BarChartRodData(
-                    toY: monthly[i].total,
-                    width: monthly.length > 8 ? 10 : 16,
-                    borderRadius: BorderRadius.circular(3),
-                    color: theme.colorScheme.primary,
-                  ),
-                ],
-              ),
+              BarChartGroupData(x: i, barRods: [
+                BarChartRodData(
+                  toY: monthly[i].total,
+                  width: monthly.length > 8 ? 10 : 16,
+                  borderRadius: BorderRadius.circular(3),
+                  color: theme.colorScheme.primary,
+                ),
+              ]),
           ],
         ),
       ),

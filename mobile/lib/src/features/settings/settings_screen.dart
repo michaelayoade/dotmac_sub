@@ -25,20 +25,17 @@ class SettingsScreen extends ConsumerWidget {
             child: SegmentedButton<ThemeMode>(
               segments: const [
                 ButtonSegment(
-                  value: ThemeMode.system,
-                  label: Text('System'),
-                  icon: Icon(Icons.brightness_auto_outlined),
-                ),
+                    value: ThemeMode.system,
+                    label: Text('System'),
+                    icon: Icon(Icons.brightness_auto_outlined)),
                 ButtonSegment(
-                  value: ThemeMode.light,
-                  label: Text('Light'),
-                  icon: Icon(Icons.light_mode_outlined),
-                ),
+                    value: ThemeMode.light,
+                    label: Text('Light'),
+                    icon: Icon(Icons.light_mode_outlined)),
                 ButtonSegment(
-                  value: ThemeMode.dark,
-                  label: Text('Dark'),
-                  icon: Icon(Icons.dark_mode_outlined),
-                ),
+                    value: ThemeMode.dark,
+                    label: Text('Dark'),
+                    icon: Icon(Icons.dark_mode_outlined)),
               ],
               selected: {mode},
               onSelectionChanged: (s) =>
@@ -69,9 +66,8 @@ class SettingsScreen extends ConsumerWidget {
           Center(
             child: Text(
               Brand.tagline,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.outline),
             ),
           ),
         ],
@@ -91,9 +87,8 @@ class _Header extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
       child: Text(
         text.toUpperCase(),
-        style: theme.textTheme.labelMedium?.copyWith(
-          color: theme.colorScheme.primary,
-        ),
+        style: theme.textTheme.labelMedium
+            ?.copyWith(color: theme.colorScheme.primary),
       ),
     );
   }

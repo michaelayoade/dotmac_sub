@@ -65,21 +65,17 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final router = GoRouter.of(context);
     if (amount == null || amount < page.minAmount || amount > page.maxAmount) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
+      messenger.showSnackBar(SnackBar(
+        content: Text(
             'Enter an amount between ${Fmt.money(page.minAmount, page.currency)} '
-            'and ${Fmt.money(page.maxAmount, page.currency)}',
-          ),
-        ),
-      );
+            'and ${Fmt.money(page.maxAmount, page.currency)}'),
+      ));
       return;
     }
     setState(() => _busy = true);
     try {
-      final initiation = await ref
-          .read(billingRepositoryProvider)
-          .initiateTopup(amount);
+      final initiation =
+          await ref.read(billingRepositoryProvider).initiateTopup(amount);
       if (!mounted) return;
       final reference = await router.push<String>(
         '/pay',
@@ -94,15 +90,11 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       ref.invalidate(invoicesProvider);
       ref.invalidate(balanceProvider);
       ref.invalidate(ledgerProvider);
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            result.availableBalance != null
-                ? 'Topped up — balance ${Fmt.money(result.availableBalance!, page.currency)}'
-                : 'Top-up of ${Fmt.money(result.amount, page.currency)} received',
-          ),
-        ),
-      );
+      messenger.showSnackBar(SnackBar(
+        content: Text(result.availableBalance != null
+            ? 'Topped up — balance ${Fmt.money(result.availableBalance!, page.currency)}'
+            : 'Top-up of ${Fmt.money(result.amount, page.currency)} received'),
+      ));
       await _loadPage();
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
@@ -129,15 +121,13 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       body: _loadingPage
           ? const Center(child: CircularProgressIndicator())
           : _page == null
-          ? AsyncValueView(
-              value: AsyncValue<void>.error(
-                _loadError ?? 'error',
-                StackTrace.empty,
-              ),
-              data: (_) => const SizedBox.shrink(),
-              onRetry: _loadPage,
-            )
-          : _form(_page!),
+              ? AsyncValueView(
+                  value: AsyncValue<void>.error(
+                      _loadError ?? 'error', StackTrace.empty),
+                  data: (_) => const SizedBox.shrink(),
+                  onRetry: _loadPage,
+                )
+              : _form(_page!),
     );
   }
 
@@ -215,14 +205,11 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
               ? const SizedBox(
                   height: 18,
                   width: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
+                  child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.add_card_outlined),
-          label: Text(
-            _amount == null
-                ? 'Top up'
-                : 'Top up ${Fmt.money(_amount!, page.currency)}',
-          ),
+          label: Text(_amount == null
+              ? 'Top up'
+              : 'Top up ${Fmt.money(_amount!, page.currency)}'),
         ),
       ],
     );

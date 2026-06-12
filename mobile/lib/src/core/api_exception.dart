@@ -40,7 +40,8 @@ class ApiException implements Exception {
     final fallback = switch (e.type) {
       DioExceptionType.connectionTimeout ||
       DioExceptionType.sendTimeout ||
-      DioExceptionType.receiveTimeout => 'The server took too long to respond.',
+      DioExceptionType.receiveTimeout =>
+        'The server took too long to respond.',
       DioExceptionType.connectionError =>
         'Could not reach the server. Check your connection.',
       _ => 'Something went wrong (${status ?? 'network error'}).',

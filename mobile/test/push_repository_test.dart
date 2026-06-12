@@ -34,13 +34,9 @@ Dio _dio(_FakeAdapter adapter) {
 void main() {
   test('registerToken POSTs token + platform to /me/push-tokens', () async {
     final adapter = _FakeAdapter(
-      (_) => ResponseBody.fromString(
-        '{}',
-        201,
-        headers: {
-          Headers.contentTypeHeader: [Headers.jsonContentType],
-        },
-      ),
+      (_) => ResponseBody.fromString('{}', 201, headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      }),
     );
     final repo = PushRepository(_dio(adapter));
 
@@ -54,7 +50,9 @@ void main() {
   });
 
   test('unregisterToken DELETEs /me/push-tokens/{token}', () async {
-    final adapter = _FakeAdapter((_) => ResponseBody.fromString('', 204));
+    final adapter = _FakeAdapter(
+      (_) => ResponseBody.fromString('', 204),
+    );
     final repo = PushRepository(_dio(adapter));
 
     await repo.unregisterToken('fcm-tok-123');

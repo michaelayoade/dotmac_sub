@@ -44,9 +44,9 @@ class StatusChip extends StatelessWidget {
       StatusTone.negative => (Colors.red.shade100, Colors.red.shade900),
       StatusTone.warning => (Colors.orange.shade100, Colors.orange.shade900),
       StatusTone.neutral => (
-        Colors.blueGrey.shade100,
-        Colors.blueGrey.shade900,
-      ),
+          Colors.blueGrey.shade100,
+          Colors.blueGrey.shade900
+        ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

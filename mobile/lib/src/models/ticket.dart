@@ -34,20 +34,22 @@ class Ticket {
       closedAt == null && status != 'closed' && status != 'resolved';
 
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
-    id: json['id'].toString(),
-    title: json['title'] as String? ?? '(no title)',
-    status: json['status'] as String? ?? 'open',
-    priority: json['priority'] as String? ?? 'normal',
-    number: json['number'] as String?,
-    description: json['description'] as String?,
-    ticketType: json['ticket_type'] as String?,
-    channel: json['channel'] as String?,
-    tags: (json['tags'] as List? ?? const []).map((e) => e.toString()).toList(),
-    createdAt: _toDate(json['created_at']),
-    updatedAt: _toDate(json['updated_at']),
-    resolvedAt: _toDate(json['resolved_at']),
-    closedAt: _toDate(json['closed_at']),
-  );
+        id: json['id'].toString(),
+        title: json['title'] as String? ?? '(no title)',
+        status: json['status'] as String? ?? 'open',
+        priority: json['priority'] as String? ?? 'normal',
+        number: json['number'] as String?,
+        description: json['description'] as String?,
+        ticketType: json['ticket_type'] as String?,
+        channel: json['channel'] as String?,
+        tags: (json['tags'] as List? ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        createdAt: _toDate(json['created_at']),
+        updatedAt: _toDate(json['updated_at']),
+        resolvedAt: _toDate(json['resolved_at']),
+        closedAt: _toDate(json['closed_at']),
+      );
 }
 
 class TicketComment {
@@ -66,12 +68,12 @@ class TicketComment {
   final DateTime? createdAt;
 
   factory TicketComment.fromJson(Map<String, dynamic> json) => TicketComment(
-    id: json['id'].toString(),
-    ticketId: json['ticket_id'].toString(),
-    body: json['body'] as String? ?? '',
-    isInternal: json['is_internal'] as bool? ?? false,
-    createdAt: _toDate(json['created_at']),
-  );
+        id: json['id'].toString(),
+        ticketId: json['ticket_id'].toString(),
+        body: json['body'] as String? ?? '',
+        isInternal: json['is_internal'] as bool? ?? false,
+        createdAt: _toDate(json['created_at']),
+      );
 }
 
 DateTime? _toDate(dynamic v) {

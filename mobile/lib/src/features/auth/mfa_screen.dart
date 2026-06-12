@@ -37,9 +37,10 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
       _error = null;
     });
     try {
-      await ref
-          .read(authControllerProvider.notifier)
-          .verifyMfa(mfaToken: widget.mfaToken, code: code);
+      await ref.read(authControllerProvider.notifier).verifyMfa(
+            mfaToken: widget.mfaToken,
+            code: code,
+          );
       // Router redirect handles navigation once authenticated.
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -66,26 +67,18 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
-                    Icons.shield_outlined,
-                    size: 56,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+                  Icon(Icons.shield_outlined,
+                      size: 56, color: Theme.of(context).colorScheme.primary),
                   const SizedBox(height: 16),
-                  Text(
-                    'Enter your authenticator code',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+                  Text('Enter your authenticator code',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 24),
                   if (_error != null) ...[
-                    Text(
-                      _error!,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error)),
                     const SizedBox(height: 12),
                   ],
                   TextField(
@@ -106,8 +99,7 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
                         ? const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                            child: CircularProgressIndicator(strokeWidth: 2))
                         : const Text('Verify'),
                   ),
                 ],

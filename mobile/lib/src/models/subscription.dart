@@ -64,10 +64,9 @@ class Subscription {
 
   /// "Business · fiber" style plan descriptor, when available.
   String? get planType {
-    final parts = [
-      offerServiceType,
-      offerAccessType,
-    ].where((e) => e != null && e.isNotEmpty).toList();
+    final parts = [offerServiceType, offerAccessType]
+        .where((e) => e != null && e.isNotEmpty)
+        .toList();
     return parts.isEmpty ? null : parts.join(' · ');
   }
 

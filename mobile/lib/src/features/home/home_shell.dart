@@ -19,13 +19,13 @@ class HomeShell extends ConsumerWidget {
     (
       icon: Icons.receipt_long_outlined,
       sel: Icons.receipt_long,
-      label: 'Billing',
+      label: 'Billing'
     ),
     (icon: Icons.wifi_outlined, sel: Icons.wifi, label: 'Service'),
     (
       icon: Icons.support_agent_outlined,
       sel: Icons.support_agent,
-      label: 'Support',
+      label: 'Support'
     ),
     (icon: Icons.person_outline, sel: Icons.person, label: 'Profile'),
   ];
@@ -42,28 +42,24 @@ class HomeShell extends ConsumerWidget {
               child: SafeArea(
                 bottom: false,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.supervisor_account,
-                        size: 18,
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onTertiaryContainer,
-                      ),
+                      Icon(Icons.supervisor_account,
+                          size: 18,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onTertiaryContainer),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           'Viewing as ${impersonation.customerName} '
                           '(read-only)',
                           style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onTertiaryContainer,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onTertiaryContainer,
                             fontWeight: FontWeight.w600,
                           ),
                           overflow: TextOverflow.ellipsis,

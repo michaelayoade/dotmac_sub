@@ -69,9 +69,7 @@ class _ResellerAccountsScreenState
       }
     });
     try {
-      final page = await ref
-          .read(resellerRepositoryProvider)
-          .accounts(
+      final page = await ref.read(resellerRepositoryProvider).accounts(
             search: _search,
             status: _status,
             orderBy: _orderBy,
@@ -158,9 +156,8 @@ class _ResellerAccountsScreenState
                         },
                       ),
                 isDense: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ),

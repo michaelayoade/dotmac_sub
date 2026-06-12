@@ -24,9 +24,8 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
   ImpersonationState? build() => null;
 
   Future<ImpersonationState> start(String accountId) async {
-    final grant = await ref
-        .read(resellerRepositoryProvider)
-        .impersonate(accountId);
+    final grant =
+        await ref.read(resellerRepositoryProvider).impersonate(accountId);
     ref.read(apiClientProvider).impersonationToken = grant.accessToken;
     final s = ImpersonationState(
       customerName: grant.customerName,
@@ -58,5 +57,4 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
 
 final impersonationProvider =
     NotifierProvider<ImpersonationController, ImpersonationState?>(
-      ImpersonationController.new,
-    );
+        ImpersonationController.new);

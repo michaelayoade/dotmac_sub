@@ -17,7 +17,8 @@ class _FakeAdapter implements HttpClientAdapter {
     RequestOptions options,
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
-  ) => onFetch(options);
+  ) =>
+      onFetch(options);
 
   @override
   void close({bool force = false}) {}
@@ -37,9 +38,8 @@ String _encode(Map<String, dynamic> body) =>
     '{${body.entries.map((e) => '"${e.key}":"${e.value}"').join(',')}}';
 
 void main() {
-  const storageChannel = MethodChannel(
-    'plugins.it_nomads.com/flutter_secure_storage',
-  );
+  const storageChannel =
+      MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
 
   late Map<String, String> store;
 
@@ -48,27 +48,27 @@ void main() {
     store = {'access_token': 'expired', 'refresh_token': 'r1'};
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(storageChannel, (call) async {
-          final args = (call.arguments as Map?) ?? const {};
-          final key = args['key'] as String?;
-          switch (call.method) {
-            case 'read':
-              return store[key];
-            case 'write':
-              store[key!] = args['value'] as String;
-              return null;
-            case 'delete':
-              store.remove(key);
-              return null;
-            case 'deleteAll':
-              store.clear();
-              return null;
-            case 'containsKey':
-              return store.containsKey(key);
-            case 'readAll':
-              return Map<String, String>.from(store);
-          }
+      final args = (call.arguments as Map?) ?? const {};
+      final key = args['key'] as String?;
+      switch (call.method) {
+        case 'read':
+          return store[key];
+        case 'write':
+          store[key!] = args['value'] as String;
           return null;
-        });
+        case 'delete':
+          store.remove(key);
+          return null;
+        case 'deleteAll':
+          store.clear();
+          return null;
+        case 'containsKey':
+          return store.containsKey(key);
+        case 'readAll':
+          return Map<String, String>.from(store);
+      }
+      return null;
+    });
   });
 
   tearDown(() {
@@ -76,44 +76,47 @@ void main() {
         .setMockMethodCallHandler(storageChannel, null);
   });
 
-  test('replay failing after a successful refresh surfaces the real error, '
-      'not the stale 401', () async {
-    var sessionExpired = false;
-    final api = ApiClient(
-      storage: TokenStorage(),
-      onSessionExpired: () => sessionExpired = true,
-    );
-    api.dio.httpClientAdapter = _FakeAdapter((options) async {
-      if (options.path == '/auth/refresh') {
-        return _json({'access_token': 'fresh', 'refresh_token': 'r2'}, 200);
-      }
-      // First hit on the protected path -> 401 (expired token).
-      if (options.extra['authRetried'] != true) {
-        return _json({'detail': 'Unauthorized'}, 401);
-      }
-      // The replay (post-refresh) times out under load.
-      throw DioException(
-        requestOptions: options,
-        type: DioExceptionType.receiveTimeout,
-        message: 'simulated overload timeout',
+  test(
+    'replay failing after a successful refresh surfaces the real error, '
+    'not the stale 401',
+    () async {
+      var sessionExpired = false;
+      final api = ApiClient(
+        storage: TokenStorage(),
+        onSessionExpired: () => sessionExpired = true,
       );
-    });
+      api.dio.httpClientAdapter = _FakeAdapter((options) async {
+        if (options.path == '/auth/refresh') {
+          return _json({'access_token': 'fresh', 'refresh_token': 'r2'}, 200);
+        }
+        // First hit on the protected path -> 401 (expired token).
+        if (options.extra['authRetried'] != true) {
+          return _json({'detail': 'Unauthorized'}, 401);
+        }
+        // The replay (post-refresh) times out under load.
+        throw DioException(
+          requestOptions: options,
+          type: DioExceptionType.receiveTimeout,
+          message: 'simulated overload timeout',
+        );
+      });
 
-    // Before the fix this resolved with the stale 401 Response; now the
-    // replay's timeout must propagate so the UI shows a retryable state.
-    await expectLater(
-      api.dio.get('/me/subscriptions'),
-      throwsA(
-        isA<DioException>().having(
-          (e) => e.type,
-          'type',
-          DioExceptionType.receiveTimeout,
+      // Before the fix this resolved with the stale 401 Response; now the
+      // replay's timeout must propagate so the UI shows a retryable state.
+      await expectLater(
+        api.dio.get('/me/subscriptions'),
+        throwsA(
+          isA<DioException>().having(
+            (e) => e.type,
+            'type',
+            DioExceptionType.receiveTimeout,
+          ),
         ),
-      ),
-    );
-    // The token was genuinely refreshed, so this is not a session expiry.
-    expect(sessionExpired, isFalse);
-  });
+      );
+      // The token was genuinely refreshed, so this is not a session expiry.
+      expect(sessionExpired, isFalse);
+    },
+  );
 
   test('successful refresh + replay returns the replayed response', () async {
     final api = ApiClient(storage: TokenStorage());

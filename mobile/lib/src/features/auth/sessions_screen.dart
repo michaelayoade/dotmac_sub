@@ -29,18 +29,15 @@ class SessionsScreen extends ConsumerWidget {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Sign out other sessions?'),
-        content: const Text(
-          'This signs you out everywhere except this device.',
-        ),
+        content:
+            const Text('This signs you out everywhere except this device.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sign out'),
-          ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Sign out')),
         ],
       ),
     );
@@ -49,8 +46,7 @@ class SessionsScreen extends ConsumerWidget {
       await ref.read(authRepositoryProvider).revokeOtherSessions();
       ref.invalidate(sessionsProvider);
       messenger.showSnackBar(
-        const SnackBar(content: Text('Other sessions signed out')),
-      );
+          const SnackBar(content: Text('Other sessions signed out')));
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     }
@@ -79,20 +75,17 @@ class SessionsScreen extends ConsumerWidget {
                 for (final s in list)
                   _SessionCard(
                     session: s,
-                    onRevoke: s.isCurrent
-                        ? null
-                        : () => _revoke(context, ref, s.id),
+                    onRevoke:
+                        s.isCurrent ? null : () => _revoke(context, ref, s.id),
                   ),
                 if (hasOthers) ...[
                   const SizedBox(height: 12),
                   FilledButton.tonalIcon(
                     style: FilledButton.styleFrom(
-                      backgroundColor: Theme.of(
-                        context,
-                      ).colorScheme.errorContainer,
-                      foregroundColor: Theme.of(
-                        context,
-                      ).colorScheme.onErrorContainer,
+                      backgroundColor:
+                          Theme.of(context).colorScheme.errorContainer,
+                      foregroundColor:
+                          Theme.of(context).colorScheme.onErrorContainer,
                     ),
                     icon: const Icon(Icons.logout),
                     label: const Text('Sign out all other sessions'),
@@ -161,14 +154,11 @@ class _Badge extends StatelessWidget {
         color: scheme.primaryContainer,
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          color: scheme.onPrimaryContainer,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 11,
+              color: scheme.onPrimaryContainer,
+              fontWeight: FontWeight.w600)),
     );
   }
 }

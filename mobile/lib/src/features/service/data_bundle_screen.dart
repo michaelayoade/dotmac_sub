@@ -58,13 +58,11 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Buy'),
-          ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Buy')),
         ],
       ),
     );
@@ -85,21 +83,15 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
         );
         await _load();
       } else if (result.insufficient) {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}',
-            ),
-          ),
-        );
+        messenger.showSnackBar(SnackBar(
+          content: Text(
+              'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
+        ));
       } else if (result.serviceNotActive) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Your service is not active — purchases resume once it is restored',
-            ),
-          ),
-        );
+        messenger.showSnackBar(const SnackBar(
+          content: Text(
+              'Your service is not active — purchases resume once it is restored'),
+        ));
       } else {
         messenger.showSnackBar(
           const SnackBar(content: Text('Could not buy this bundle')),
@@ -122,20 +114,16 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error != null
-            ? ListView(
-                children: [
-                  const SizedBox(height: 80),
-                  const Center(child: Text('Could not load data bundles')),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: TextButton(
-                      onPressed: _load,
-                      child: const Text('Retry'),
+                ? ListView(children: [
+                    const SizedBox(height: 80),
+                    const Center(child: Text('Could not load data bundles')),
+                    const SizedBox(height: 8),
+                    Center(
+                      child: TextButton(
+                          onPressed: _load, child: const Text('Retry')),
                     ),
-                  ),
-                ],
-              )
-            : _content(theme),
+                  ])
+                : _content(theme),
       ),
     );
   }

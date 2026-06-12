@@ -26,9 +26,8 @@ class ResellerFiberMapScreen extends ConsumerWidget {
         data: (m) {
           if (m.points.isEmpty && m.lines.isEmpty) {
             return const EmptyState(
-              icon: Icons.map_outlined,
-              message: 'No mapped fiber plant yet.',
-            );
+                icon: Icons.map_outlined,
+                message: 'No mapped fiber plant yet.');
           }
           final bounds = _bounds(m);
           return FlutterMap(

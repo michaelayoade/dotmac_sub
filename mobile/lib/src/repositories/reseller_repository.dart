@@ -14,10 +14,10 @@ class ResellerRepository {
   /// GET /reseller/dashboard — KPIs plus a first page of managed accounts.
   Future<ResellerDashboard> dashboard({int limit = 10, int offset = 0}) async {
     final data = await guard(
-      () => dio.get(
-        '/reseller/dashboard',
-        queryParameters: {'limit': limit, 'offset': offset},
-      ),
+      () => dio.get('/reseller/dashboard', queryParameters: {
+        'limit': limit,
+        'offset': offset,
+      }),
     );
     return ResellerDashboard.fromJson(data as Map<String, dynamic>);
   }
@@ -32,22 +32,17 @@ class ResellerRepository {
     int offset = 0,
   }) async {
     final data = await guard(
-      () => dio.get(
-        '/reseller/accounts',
-        queryParameters: {
-          if (search != null && search.isNotEmpty) 'search': search,
-          if (status != null && status.isNotEmpty) 'status': status,
-          'order_by': orderBy,
-          'order_dir': orderDir,
-          'limit': limit,
-          'offset': offset,
-        },
-      ),
+      () => dio.get('/reseller/accounts', queryParameters: {
+        if (search != null && search.isNotEmpty) 'search': search,
+        if (status != null && status.isNotEmpty) 'status': status,
+        'order_by': orderBy,
+        'order_dir': orderDir,
+        'limit': limit,
+        'offset': offset,
+      }),
     );
     return Page.fromJson(
-      data as Map<String, dynamic>,
-      ResellerAccount.fromJson,
-    );
+        data as Map<String, dynamic>, ResellerAccount.fromJson);
   }
 
   /// GET /reseller/revenue — 12-month paid revenue + outstanding totals.
@@ -74,16 +69,11 @@ class ResellerRepository {
     String? contactPhone,
     String? notes,
   }) async {
-    final data = await guard(
-      () => dio.patch(
-        '/reseller/profile',
-        data: {
+    final data = await guard(() => dio.patch('/reseller/profile', data: {
           if (contactEmail != null) 'contact_email': contactEmail,
           if (contactPhone != null) 'contact_phone': contactPhone,
           if (notes != null) 'notes': notes,
-        },
-      ),
-    );
+        }));
     return ResellerProfile.fromJson(data as Map<String, dynamic>);
   }
 
@@ -94,16 +84,10 @@ class ResellerRepository {
   }
 
   /// POST /reseller/profile/mfa/confirm — verify the first code.
-  Future<void> mfaConfirm({
-    required String methodId,
-    required String code,
-  }) async {
-    await guard(
-      () => dio.post(
-        '/reseller/profile/mfa/confirm',
-        data: {'method_id': methodId, 'code': code},
-      ),
-    );
+  Future<void> mfaConfirm(
+      {required String methodId, required String code}) async {
+    await guard(() => dio.post('/reseller/profile/mfa/confirm',
+        data: {'method_id': methodId, 'code': code}));
   }
 
   /// GET /reseller/billing — consolidated statement.
@@ -114,20 +98,15 @@ class ResellerRepository {
 
   /// POST /reseller/billing/pay/intent — start a consolidated payment.
   Future<ResellerPayIntent> payIntent(String amount) async {
-    final data = await guard(
-      () => dio.post('/reseller/billing/pay/intent', data: {'amount': amount}),
-    );
+    final data = await guard(() =>
+        dio.post('/reseller/billing/pay/intent', data: {'amount': amount}));
     return ResellerPayIntent.fromJson(data as Map<String, dynamic>);
   }
 
   /// POST /reseller/billing/pay/verify — confirm + record the charge.
   Future<void> payVerify(String reference) async {
-    await guard(
-      () => dio.post(
-        '/reseller/billing/pay/verify',
-        data: {'reference': reference},
-      ),
-    );
+    await guard(() => dio
+        .post('/reseller/billing/pay/verify', data: {'reference': reference}));
   }
 
   /// GET /reseller/fiber-map — fiber plant GeoJSON for the coverage map.
@@ -157,32 +136,27 @@ class ResellerRepository {
     double? longitude,
     String? notes,
   }) async {
-    final data = await guard(
-      () => dio.post(
-        '/reseller/service-requests',
-        data: {
-          if (subscriberId != null) 'subscriber_id': subscriberId,
-          if (contactName != null && contactName.isNotEmpty)
-            'contact_name': contactName,
-          if (contactPhone != null && contactPhone.isNotEmpty)
-            'contact_phone': contactPhone,
-          if (contactEmail != null && contactEmail.isNotEmpty)
-            'contact_email': contactEmail,
-          if (address != null && address.isNotEmpty) 'address': address,
-          if (latitude != null) 'latitude': latitude,
-          if (longitude != null) 'longitude': longitude,
-          if (notes != null && notes.isNotEmpty) 'notes': notes,
-        },
-      ),
-    );
+    final data =
+        await guard(() => dio.post('/reseller/service-requests', data: {
+              if (subscriberId != null) 'subscriber_id': subscriberId,
+              if (contactName != null && contactName.isNotEmpty)
+                'contact_name': contactName,
+              if (contactPhone != null && contactPhone.isNotEmpty)
+                'contact_phone': contactPhone,
+              if (contactEmail != null && contactEmail.isNotEmpty)
+                'contact_email': contactEmail,
+              if (address != null && address.isNotEmpty) 'address': address,
+              if (latitude != null) 'latitude': latitude,
+              if (longitude != null) 'longitude': longitude,
+              if (notes != null && notes.isNotEmpty) 'notes': notes,
+            }));
     return ResellerServiceRequest.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
   Future<ResellerTicketsPage> accountTickets(String accountId) async {
-    final data = await guard(
-      () => dio.get('/reseller/accounts/$accountId/tickets'),
-    );
+    final data =
+        await guard(() => dio.get('/reseller/accounts/$accountId/tickets'));
     return ResellerTicketsPage.fromJson(data as Map<String, dynamic>);
   }
 
@@ -190,8 +164,7 @@ class ResellerRepository {
   /// customer token for "view as customer".
   Future<ResellerImpersonationGrant> impersonate(String accountId) async {
     final data = await guard(
-      () => dio.post('/reseller/accounts/$accountId/impersonate'),
-    );
+        () => dio.post('/reseller/accounts/$accountId/impersonate'));
     return ResellerImpersonationGrant.fromJson(data as Map<String, dynamic>);
   }
 
@@ -202,10 +175,8 @@ class ResellerRepository {
     int offset = 0,
   }) async {
     final data = await guard(
-      () => dio.get(
-        '/reseller/accounts/$accountId/invoices',
-        queryParameters: {'limit': limit, 'offset': offset},
-      ),
+      () => dio.get('/reseller/accounts/$accountId/invoices',
+          queryParameters: {'limit': limit, 'offset': offset}),
     );
     final items = (data as Map<String, dynamic>)['items'] as List? ?? const [];
     return items

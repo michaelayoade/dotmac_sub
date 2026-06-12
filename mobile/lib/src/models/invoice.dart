@@ -37,20 +37,20 @@ class Invoice {
       !isPaid && dueAt != null && dueAt!.isBefore(DateTime.now());
 
   factory Invoice.fromJson(Map<String, dynamic> json) => Invoice(
-    id: json['id'].toString(),
-    accountId: json['account_id'].toString(),
-    status: json['status'] as String? ?? 'draft',
-    currency: json['currency'] as String? ?? 'NGN',
-    subtotal: asDouble(json['subtotal']),
-    taxTotal: asDouble(json['tax_total']),
-    total: asDouble(json['total']),
-    balanceDue: asDouble(json['balance_due']),
-    invoiceNumber: json['invoice_number'] as String?,
-    issuedAt: _toDate(json['issued_at']),
-    dueAt: _toDate(json['due_at']),
-    paidAt: _toDate(json['paid_at']),
-    memo: json['memo'] as String?,
-  );
+        id: json['id'].toString(),
+        accountId: json['account_id'].toString(),
+        status: json['status'] as String? ?? 'draft',
+        currency: json['currency'] as String? ?? 'NGN',
+        subtotal: asDouble(json['subtotal']),
+        taxTotal: asDouble(json['tax_total']),
+        total: asDouble(json['total']),
+        balanceDue: asDouble(json['balance_due']),
+        invoiceNumber: json['invoice_number'] as String?,
+        issuedAt: _toDate(json['issued_at']),
+        dueAt: _toDate(json['due_at']),
+        paidAt: _toDate(json['paid_at']),
+        memo: json['memo'] as String?,
+      );
 }
 
 /// Mirrors PaymentRead from app/schemas/billing.py.
@@ -74,14 +74,14 @@ class Payment {
   final String? externalId;
 
   factory Payment.fromJson(Map<String, dynamic> json) => Payment(
-    id: json['id'].toString(),
-    amount: asDouble(json['amount']),
-    currency: json['currency'] as String? ?? 'NGN',
-    status: json['status'] as String? ?? 'pending',
-    paidAt: _toDate(json['paid_at']),
-    memo: json['memo'] as String?,
-    externalId: json['external_id'] as String?,
-  );
+        id: json['id'].toString(),
+        amount: asDouble(json['amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        status: json['status'] as String? ?? 'pending',
+        paidAt: _toDate(json['paid_at']),
+        memo: json['memo'] as String?,
+        externalId: json['external_id'] as String?,
+      );
 }
 
 DateTime? _toDate(dynamic v) {

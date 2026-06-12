@@ -38,9 +38,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     try {
       // Customers authenticate against their portal credential; the backend
       // resolves the identifier by username, account number, or email.
-      final result = await ref
-          .read(authControllerProvider.notifier)
-          .login(
+      final result = await ref.read(authControllerProvider.notifier).login(
             username: _username.text.trim(),
             password: _password.text,
             provider: 'local',
@@ -53,13 +51,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
       // Otherwise the router redirect reacts to the authenticated state.
     } on ApiException catch (e) {
-      setState(
-        () => _error = e.isPasswordResetRequired
-            ? 'Password reset required. Please reset your password on the web portal.'
-            : e.isUnauthorized
-            ? 'Incorrect username or password.'
-            : e.message,
-      );
+      setState(() => _error = e.isPasswordResetRequired
+          ? 'Password reset required. Please reset your password on the web portal.'
+          : e.isUnauthorized
+              ? 'Incorrect username or password.'
+              : e.message);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -87,32 +83,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     Image.asset(
                       'assets/images/login_logo.png',
                       height: 72,
-                      errorBuilder: (_, __, ___) => Icon(
-                        Icons.wifi,
-                        size: 72,
-                        color: theme.colorScheme.primary,
-                      ),
+                      errorBuilder: (_, __, ___) => Icon(Icons.wifi,
+                          size: 72, color: theme.colorScheme.primary),
                     ),
                     const SizedBox(height: 16),
-                    Text(
-                      Brand.name,
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.headlineSmall,
-                    ),
+                    Text(Brand.name,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.headlineSmall),
                     const SizedBox(height: 4),
-                    Text(
-                      Brand.tagline,
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
+                    Text(Brand.tagline,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant)),
                     const SizedBox(height: 32),
                     Card(
                       elevation: 1,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                          borderRadius: BorderRadius.circular(16)),
                       child: Padding(
                         padding: const EdgeInsets.all(20),
                         child: Form(
@@ -141,8 +128,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 ),
                                 validator: (v) =>
                                     (v == null || v.trim().isEmpty)
-                                    ? 'Required'
-                                    : null,
+                                        ? 'Required'
+                                        : null,
                               ),
                               const SizedBox(height: 16),
                               TextFormField(
@@ -156,16 +143,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                   labelText: 'Password',
                                   prefixIcon: const Icon(Icons.lock_outline),
                                   suffixIcon: IconButton(
-                                    icon: Icon(
-                                      _obscure
-                                          ? Icons.visibility_outlined
-                                          : Icons.visibility_off_outlined,
-                                    ),
+                                    icon: Icon(_obscure
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined),
                                     onPressed: _submitting
                                         ? null
                                         : () => setState(
-                                            () => _obscure = !_obscure,
-                                          ),
+                                            () => _obscure = !_obscure),
                                   ),
                                 ),
                                 validator: (v) => (v == null || v.isEmpty)
@@ -180,8 +164,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                         height: 20,
                                         width: 20,
                                         child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
+                                            strokeWidth: 2),
                                       )
                                     : const Text('Sign in'),
                               ),
@@ -225,10 +208,8 @@ class _ErrorBanner extends StatelessWidget {
           Icon(Icons.error_outline, color: scheme.onErrorContainer, size: 20),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              message,
-              style: TextStyle(color: scheme.onErrorContainer),
-            ),
+            child:
+                Text(message, style: TextStyle(color: scheme.onErrorContainer)),
           ),
         ],
       ),

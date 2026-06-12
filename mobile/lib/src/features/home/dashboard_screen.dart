@@ -26,8 +26,7 @@ class DashboardScreen extends ConsumerWidget {
     final notifications = ref.watch(notificationsProvider);
     final readIds = ref.watch(readNotificationsProvider);
 
-    final unread =
-        notifications.asData?.value.items
+    final unread = notifications.asData?.value.items
             .where((n) => !readIds.contains(n.id))
             .length ??
         0;
@@ -37,8 +36,7 @@ class DashboardScreen extends ConsumerWidget {
     // Services the customer can fix by paying (blocked/suspended). The
     // provider already drops terminated plans, so this can't false-alarm
     // on history.
-    final needsPayment =
-        subList?.where((s) => s.needsPayment).toList() ??
+    final needsPayment = subList?.where((s) => s.needsPayment).toList() ??
         const <Subscription>[];
 
     // The service the dashboard is "about": the user's switcher pick, else
@@ -72,11 +70,8 @@ class DashboardScreen extends ConsumerWidget {
     final fupHeadroom = fup?.gbUntilThrottle;
     // Yesterday's total gives "77.3 GB" a point of reference; 0/unavailable
     // just keeps the plain label.
-    final dataYesterday = ref
-        .watch(usageSummaryProvider('yesterday'))
-        .asData
-        ?.value
-        .totalBytes;
+    final dataYesterday =
+        ref.watch(usageSummaryProvider('yesterday')).asData?.value.totalBytes;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -201,9 +196,8 @@ class DashboardScreen extends ConsumerWidget {
               known: subList != null,
               // A blocked/suspended service is resolved by paying — deep-link
               // to billing.
-              onTap: needsPayment.isNotEmpty
-                  ? () => context.go('/billing')
-                  : null,
+              onTap:
+                  needsPayment.isNotEmpty ? () => context.go('/billing') : null,
             ),
             if (fup != null && (fup.needsAttention || fup.isApproaching)) ...[
               const SizedBox(height: 12),
@@ -246,17 +240,16 @@ class DashboardScreen extends ConsumerWidget {
                     label: currentQuota != null
                         ? 'Data left'
                         : fupHeadroom != null
-                        ? 'To slowdown'
-                        : (dataYesterday ?? 0) > 0
-                        ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
-                        : 'Data today',
+                            ? 'To slowdown'
+                            : (dataYesterday ?? 0) > 0
+                                ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
+                                : 'Data today',
                     value: currentQuota != null
                         ? Fmt.gb(currentQuota.remainingGb ?? 0)
                         : fupHeadroom != null
-                        ? Fmt.gb(fupHeadroom)
-                        : (dataToday == null ? null : Fmt.bytes(dataToday)),
-                    highlight:
-                        (currentQuota != null &&
+                            ? Fmt.gb(fupHeadroom)
+                            : (dataToday == null ? null : Fmt.bytes(dataToday)),
+                    highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
@@ -279,10 +272,8 @@ class DashboardScreen extends ConsumerWidget {
             const SizedBox(height: 20),
 
             // --- Quick actions ---
-            Text(
-              'Quick actions',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Quick actions',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 10),
             _QuickActions(buyDataService: buyDataService),
             const SizedBox(height: 20),
@@ -317,11 +308,9 @@ class DashboardScreen extends ConsumerWidget {
                         _ServiceSwitcher(
                           services: services,
                           selectedId: selected.id,
-                          onSelect: (id) =>
-                              ref
-                                      .read(selectedServiceIdProvider.notifier)
-                                      .state =
-                                  id,
+                          onSelect: (id) => ref
+                              .read(selectedServiceIdProvider.notifier)
+                              .state = id,
                         ),
                         const SizedBox(height: 10),
                       ],
@@ -335,8 +324,7 @@ class DashboardScreen extends ConsumerWidget {
                 return subs.isLoading
                     ? const CardSkeleton()
                     : const _MessageCard(
-                        'Couldn’t load your service. Pull down to refresh.',
-                      );
+                        'Couldn’t load your service. Pull down to refresh.');
               },
             ),
           ],
@@ -459,10 +447,8 @@ class _ConnectionBanner extends StatelessWidget {
           Icon(icon, color: fg),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              text,
-              style: TextStyle(color: fg, fontWeight: FontWeight.w600),
-            ),
+            child: Text(text,
+                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -491,21 +477,21 @@ class _StatusBanner extends StatelessWidget {
             scheme.surfaceContainerHighest,
             scheme.onSurface,
             Icons.hourglass_empty,
-            'Loading your account…',
+            'Loading your account…'
           )
         : suspendedMessage != null
-        ? (
-            scheme.errorContainer,
-            scheme.onErrorContainer,
-            Icons.warning_amber_rounded,
-            suspendedMessage!,
-          )
-        : (
-            scheme.primaryContainer,
-            scheme.onPrimaryContainer,
-            Icons.check_circle_outline,
-            'All services active',
-          );
+            ? (
+                scheme.errorContainer,
+                scheme.onErrorContainer,
+                Icons.warning_amber_rounded,
+                suspendedMessage!
+              )
+            : (
+                scheme.primaryContainer,
+                scheme.onPrimaryContainer,
+                Icons.check_circle_outline,
+                'All services active'
+              );
     final radius = BorderRadius.circular(14);
     return Material(
       color: bg,
@@ -520,10 +506,8 @@ class _StatusBanner extends StatelessWidget {
               Icon(icon, color: fg),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
-                ),
+                child: Text(text,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -566,10 +550,8 @@ class _RenewBanner extends StatelessWidget {
               Icon(expired ? Icons.error_outline : Icons.schedule, color: fg),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  message,
-                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
-                ),
+                child: Text(message,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -593,20 +575,19 @@ class _FupBanner extends StatelessWidget {
     final bg = blocked
         ? scheme.errorContainer
         : approaching
-        ? scheme.secondaryContainer
-        : scheme.tertiaryContainer;
+            ? scheme.secondaryContainer
+            : scheme.tertiaryContainer;
     final fg = blocked
         ? scheme.onErrorContainer
         : approaching
-        ? scheme.onSecondaryContainer
-        : scheme.onTertiaryContainer;
-    final text =
-        fup.summary ??
+            ? scheme.onSecondaryContainer
+            : scheme.onTertiaryContainer;
+    final text = fup.summary ??
         (blocked
             ? 'Service paused — fair-usage limit reached'
             : approaching
-            ? 'Approaching your fair-usage limit'
-            : 'Speed reduced — fair-usage limit reached');
+                ? 'Approaching your fair-usage limit'
+                : 'Speed reduced — fair-usage limit reached');
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(14),
@@ -621,16 +602,14 @@ class _FupBanner extends StatelessWidget {
                 blocked
                     ? Icons.block
                     : approaching
-                    ? Icons.data_usage
-                    : Icons.speed,
+                        ? Icons.data_usage
+                        : Icons.speed,
                 color: fg,
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
-                ),
+                child: Text(text,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -664,11 +643,8 @@ class _ServiceSwitcher extends StatelessWidget {
         itemBuilder: (_, i) {
           final s = services[i];
           return ChoiceChip(
-            label: Text(
-              s.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            label: Text(s.displayName,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
             selected: s.id == selectedId,
             avatar: Icon(
               s.isActive ? Icons.circle : Icons.pause_circle_outline,
@@ -725,23 +701,18 @@ class _StatCard extends StatelessWidget {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
-                  child: Text(
-                    value!,
-                    maxLines: 1,
-                    softWrap: false,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: highlight ? theme.colorScheme.error : null,
-                    ),
-                  ),
+                  child: Text(value!,
+                      maxLines: 1,
+                      softWrap: false,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: highlight ? theme.colorScheme.error : null,
+                      )),
                 ),
               const SizedBox(height: 2),
-              Text(
-                label,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
-              ),
+              Text(label,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline)),
             ],
           ),
         ),
@@ -793,11 +764,8 @@ class _QuickActions extends StatelessWidget {
 }
 
 class _ActionTile extends StatelessWidget {
-  const _ActionTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
+  const _ActionTile(
+      {required this.icon, required this.label, required this.onTap});
   final IconData icon;
   final String label;
   final VoidCallback onTap;
@@ -815,11 +783,9 @@ class _ActionTile extends StatelessWidget {
           children: [
             Icon(icon, color: theme.colorScheme.primary),
             const SizedBox(height: 6),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.labelMedium,
-            ),
+            Text(label,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.labelMedium),
           ],
         ),
       ),
@@ -862,24 +828,19 @@ class _CurrentServiceCard extends StatelessWidget {
                   const Icon(Icons.router_outlined),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(
-                      s.displayName,
-                      style: theme.textTheme.titleMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    child: Text(s.displayName,
+                        style: theme.textTheme.titleMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                   ),
                   StatusChip.forSubscription(s.status),
                 ],
               ),
               if (s.planType != null) ...[
                 const SizedBox(height: 2),
-                Text(
-                  s.planType!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                  ),
-                ),
+                Text(s.planType!,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
               ],
               const Divider(height: 20),
               Row(
@@ -904,70 +865,66 @@ class _CurrentServiceCard extends StatelessWidget {
               ),
               if (quota?.usedFraction != null) ...[
                 const SizedBox(height: 10),
-                Builder(
-                  builder: (context) {
-                    final q = quota!;
-                    final fraction = q.usedFraction!;
-                    final nearCap = fraction >= 0.9;
-                    final color = nearCap
-                        ? theme.colorScheme.error
-                        : theme.colorScheme.primary;
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: fraction,
-                            minHeight: 6,
-                            color: color,
-                            backgroundColor:
-                                theme.colorScheme.surfaceContainerHighest,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${q.usedGb.toStringAsFixed(1)} of '
-                          '${q.allowanceGb!.toStringAsFixed(0)} GB used',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: nearCap
-                                ? theme.colorScheme.error
-                                : theme.colorScheme.outline,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-              const SizedBox(height: 8),
-              Builder(
-                builder: (context) {
-                  // Surface a pay CTA when the service needs attention: suspended,
-                  // or expiring within 3 days / already expired.
-                  final needsAttention =
-                      !s.isActive || (days != null && days <= 3);
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                Builder(builder: (context) {
+                  final q = quota!;
+                  final fraction = q.usedFraction!;
+                  final nearCap = fraction >= 0.9;
+                  final color = nearCap
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.primary;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (needsAttention)
-                        Expanded(
-                          child: FilledButton.icon(
-                            icon: const Icon(Icons.payment, size: 18),
-                            onPressed: () => context.go('/billing'),
-                            label: Text(s.isActive ? 'Renew' : 'Reactivate'),
-                          ),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: fraction,
+                          minHeight: 6,
+                          color: color,
+                          backgroundColor:
+                              theme.colorScheme.surfaceContainerHighest,
                         ),
-                      if (needsAttention) const SizedBox(width: 8),
-                      TextButton(
-                        onPressed: () =>
-                            context.push('/service/${s.id}', extra: s),
-                        child: const Text('Manage'),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${q.usedGb.toStringAsFixed(1)} of '
+                        '${q.allowanceGb!.toStringAsFixed(0)} GB used',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: nearCap
+                              ? theme.colorScheme.error
+                              : theme.colorScheme.outline,
+                        ),
                       ),
                     ],
                   );
-                },
-              ),
+                }),
+              ],
+              const SizedBox(height: 8),
+              Builder(builder: (context) {
+                // Surface a pay CTA when the service needs attention: suspended,
+                // or expiring within 3 days / already expired.
+                final needsAttention =
+                    !s.isActive || (days != null && days <= 3);
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (needsAttention)
+                      Expanded(
+                        child: FilledButton.icon(
+                          icon: const Icon(Icons.payment, size: 18),
+                          onPressed: () => context.go('/billing'),
+                          label: Text(s.isActive ? 'Renew' : 'Reactivate'),
+                        ),
+                      ),
+                    if (needsAttention) const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () =>
+                          context.push('/service/${s.id}', extra: s),
+                      child: const Text('Manage'),
+                    ),
+                  ],
+                );
+              }),
             ],
           ),
         ),
@@ -1000,10 +957,8 @@ class _MiniStat extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(label, style: theme.textTheme.labelSmall),
-            Text(
-              value,
-              style: TextStyle(fontWeight: FontWeight.w600, color: color),
-            ),
+            Text(value,
+                style: TextStyle(fontWeight: FontWeight.w600, color: color)),
           ],
         ),
       ],
@@ -1029,6 +984,9 @@ class _MessageCard extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) => Card(
-    child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
-  );
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(message),
+        ),
+      );
 }
