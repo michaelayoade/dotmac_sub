@@ -125,8 +125,15 @@ def test_as_utc_and_ttl_defaults(monkeypatch):
     assert auth_flow_service._refresh_ttl_days(None) == 30
 
 
-def test_refresh_cookie_secure_default_false(monkeypatch):
+def test_refresh_cookie_secure_default_true(monkeypatch):
+    # Secure-by-default: callers AND this with an HTTPS-request check, so dev
+    # over plain http still works while prod never drops Secure over TLS.
     monkeypatch.delenv("REFRESH_COOKIE_SECURE", raising=False)
+    assert auth_flow_service._refresh_cookie_secure(None) is True
+
+
+def test_refresh_cookie_secure_env_can_force_disable(monkeypatch):
+    monkeypatch.setenv("REFRESH_COOKIE_SECURE", "false")
     assert auth_flow_service._refresh_cookie_secure(None) is False
 
 
