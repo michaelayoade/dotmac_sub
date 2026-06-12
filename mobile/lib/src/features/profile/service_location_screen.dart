@@ -102,9 +102,7 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
     if (selected == null) return;
     setState(() => _submitting = true);
     try {
-      await ref
-          .read(locationRepositoryProvider)
-          .submitCorrection(
+      await ref.read(locationRepositoryProvider).submitCorrection(
             latitude: selected.latitude,
             longitude: selected.longitude,
             note: _note.text.trim(),
@@ -148,12 +146,10 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
   Widget _body(BuildContext context, ServiceLocation data) {
     final theme = Theme.of(context);
     final pending = data.pendingRequest;
-    final current = data.hasPin
-        ? LatLng(data.latitude!, data.longitude!)
-        : null;
-    final pendingPoint = pending != null
-        ? LatLng(pending.latitude, pending.longitude)
-        : null;
+    final current =
+        data.hasPin ? LatLng(data.latitude!, data.longitude!) : null;
+    final pendingPoint =
+        pending != null ? LatLng(pending.latitude, pending.longitude) : null;
     final canEdit = data.canSubmitRequest;
     final center = _selected ?? pendingPoint ?? current ?? _fallbackCenter;
 
@@ -250,12 +246,12 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
         Text(
           canEdit
               ? 'Tap the map (or use the GPS button) to place the pin where '
-                    'your service is actually installed.'
+                  'your service is actually installed.'
               : pending != null
-              ? 'A correction is waiting for review. Cancel it to '
-                    'submit a different one.'
-              : 'No service address is on file yet — contact support '
-                    'first so the address record can be created.',
+                  ? 'A correction is waiting for review. Cancel it to '
+                      'submit a different one.'
+                  : 'No service address is on file yet — contact support '
+                      'first so the address record can be created.',
           style: theme.textTheme.bodySmall,
         ),
         if (_selected != null) ...[
