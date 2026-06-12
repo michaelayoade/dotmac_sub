@@ -19,7 +19,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.models.vas import VasEntryCategory, VasEntryType, VasWallet, VasWalletEntry
+from app.models.vas import (
+    VasEntryCategory,
+    VasEntryType,
+    VasTopupIntent,
+    VasWallet,
+    VasWalletEntry,
+)
 from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.common import coerce_uuid
@@ -67,6 +73,33 @@ def get_or_create_wallet(db: Session, subscriber_id: str) -> VasWallet:
     db.commit()
     db.refresh(wallet)
     return wallet
+
+
+def get_or_create_reseller_wallet(db: Session, reseller_id: str) -> VasWallet:
+    """The reseller float wallet (commissions credit here; sells debit it)."""
+    rid = coerce_uuid(reseller_id)
+    wallet = db.scalars(select(VasWallet).where(VasWallet.reseller_id == rid)).first()
+    if wallet:
+        return wallet
+    wallet = VasWallet(reseller_id=rid)
+    db.add(wallet)
+    db.commit()
+    db.refresh(wallet)
+    return wallet
+
+
+def _lock_wallet_owner(db: Session, wallet: VasWallet) -> None:
+    """Serialize read-modify-write per wallet owner (cf. lock_account)."""
+    if wallet.subscriber_id is not None:
+        lock_account(db, str(wallet.subscriber_id))
+        return
+    from app.models.subscriber import Reseller
+
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        db.query(Reseller).filter(Reseller.id == wallet.reseller_id).with_for_update(
+            of=Reseller
+        ).first()
 
 
 def wallet_balance(db: Session, wallet_id) -> Decimal:
@@ -145,10 +178,8 @@ def debit_wallet(
     payment_id=None,
     memo: str | None = None,
 ) -> VasWalletEntry:
-    """Debit under lock_account — insufficient funds is a 400, never negative."""
-    if wallet.subscriber_id is None:
-        raise HTTPException(status_code=400, detail="Unsupported wallet owner")
-    lock_account(db, str(wallet.subscriber_id))
+    """Debit under an owner lock — insufficient funds is a 400, never negative."""
+    _lock_wallet_owner(db, wallet)
     balance = wallet_balance(db, wallet.id)
     if amount > balance:
         raise HTTPException(status_code=400, detail="Insufficient wallet balance")
@@ -188,6 +219,16 @@ def initiate_topup(db: Session, subscriber_id: str, amount: Decimal) -> dict:
     """
     require_enabled(db)
     wallet = get_or_create_wallet(db, subscriber_id)
+    return _initiate_topup_for_wallet(db, wallet, amount)
+
+
+def initiate_reseller_topup(db: Session, reseller_id: str, amount: Decimal) -> dict:
+    require_enabled(db)
+    wallet = get_or_create_reseller_wallet(db, reseller_id)
+    return _initiate_topup_for_wallet(db, wallet, amount)
+
+
+def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) -> dict:
     amount = Decimal(str(amount))
     min_amount = Decimal(_setting_int(db, "topup_min", 100))
     max_amount = Decimal(_setting_int(db, "topup_max_per_txn", 50000))
@@ -205,6 +246,12 @@ def initiate_topup(db: Session, subscriber_id: str, amount: Decimal) -> dict:
             status_code=400, detail="Daily wallet funding limit reached"
         )
     context = payment_gateway_adapter.build_context(db, provider_type=_provider(db))
+    # Bind the reference to THIS wallet — verify refuses unknown references,
+    # so a leaked/stolen reference can never credit a different wallet.
+    db.add(
+        VasTopupIntent(reference=context.reference, wallet_id=wallet.id, amount=amount)
+    )
+    db.commit()
     return {
         "provider_type": context.provider_type,
         "provider_public_key": context.public_key,
@@ -227,6 +274,25 @@ def verify_topup(
     """Verify a gateway top-up and credit the wallet (idempotent on reference)."""
     require_enabled(db)
     wallet = get_or_create_wallet(db, subscriber_id)
+    return _verify_topup_for_wallet(db, wallet, reference, provider=provider)
+
+
+def verify_reseller_topup(
+    db: Session, reseller_id: str, reference: str, *, provider: str | None = None
+) -> dict:
+    require_enabled(db)
+    wallet = get_or_create_reseller_wallet(db, reseller_id)
+    return _verify_topup_for_wallet(db, wallet, reference, provider=provider)
+
+
+def _verify_topup_for_wallet(
+    db: Session, wallet: VasWallet, reference: str, *, provider: str | None = None
+) -> dict:
+    intent = db.scalars(
+        select(VasTopupIntent).where(VasTopupIntent.reference == reference)
+    ).first()
+    if not intent or intent.wallet_id != wallet.id:
+        raise HTTPException(status_code=400, detail="Unknown payment reference")
 
     existing = db.scalars(
         select(VasWalletEntry).where(VasWalletEntry.reference == reference)
@@ -284,6 +350,28 @@ def pay_bill(db: Session, subscriber_id: str, amount: Decimal) -> dict:
 
     wallet = get_or_create_wallet(db, subscriber_id)
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+
+    # Double-submit guard: an identical bill payment within the last minute
+    # is almost certainly a double-click, not intent.
+    from datetime import timedelta
+
+    recent = (
+        db.query(VasWalletEntry)
+        .filter(
+            VasWalletEntry.wallet_id == wallet.id,
+            VasWalletEntry.entry_type == VasEntryType.debit,
+            VasWalletEntry.category == VasEntryCategory.bill_payment,
+            VasWalletEntry.amount == amount,
+            VasWalletEntry.created_at >= datetime.now(UTC) - timedelta(seconds=60),
+        )
+        .first()
+    )
+    if recent:
+        raise HTTPException(
+            status_code=409,
+            detail="An identical bill payment was made moments ago — wait a "
+            "minute if you really mean to pay again.",
+        )
 
     entry = debit_wallet(
         db,
@@ -415,3 +503,52 @@ def run_auto_deduct_sweep(db: Session) -> dict:
         "errors": errors,
         "swept_total": str(swept_total),
     }
+
+
+def wallet_entries(db: Session, wallet_id, *, limit: int = 20) -> list[VasWalletEntry]:
+    return (
+        db.query(VasWalletEntry)
+        .filter(VasWalletEntry.wallet_id == wallet_id)
+        .order_by(VasWalletEntry.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def commission_summary(db: Session, wallet_id) -> dict:
+    """Total + recent commission entries for a (reseller) wallet."""
+    total = db.query(
+        func.coalesce(func.sum(VasWalletEntry.amount), Decimal("0.00"))
+    ).filter(
+        VasWalletEntry.wallet_id == wallet_id,
+        VasWalletEntry.entry_type == VasEntryType.credit,
+        VasWalletEntry.category == VasEntryCategory.commission,
+    ).scalar() or Decimal("0.00")
+    entries = (
+        db.query(VasWalletEntry)
+        .filter(
+            VasWalletEntry.wallet_id == wallet_id,
+            VasWalletEntry.category == VasEntryCategory.commission,
+        )
+        .order_by(VasWalletEntry.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return {"total": Decimal(str(total)), "entries": entries}
+
+
+def topup_entry(db: Session, entry_id: str) -> VasWalletEntry | None:
+    return db.get(VasWalletEntry, entry_id)
+
+
+def wallet_by_id(db: Session, wallet_id) -> VasWallet | None:
+    return db.get(VasWallet, wallet_id)
+
+
+def refund_reference_exists(db: Session, entry_id: str) -> bool:
+    return (
+        db.query(VasWalletEntry)
+        .filter(VasWalletEntry.reference == f"rts-{entry_id}")
+        .first()
+        is not None
+    )

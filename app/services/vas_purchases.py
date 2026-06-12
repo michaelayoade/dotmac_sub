@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.models.vas import (
     VasEntryCategory,
+    VasPartyType,
+    VasRateCard,
     VasService,
     VasServiceVariation,
     VasTransaction,
@@ -293,6 +295,102 @@ def _resolve_amount(
     return value
 
 
+def resolve_rate(
+    db: Session, category: str, party: VasPartyType, at: datetime | None = None
+) -> Decimal | None:
+    """Latest effective rate for (category, party) at `at` (default now)."""
+    moment = at or datetime.now(UTC)
+    card = (
+        db.query(VasRateCard)
+        .filter(
+            VasRateCard.category == category,
+            VasRateCard.party_type == party,
+            VasRateCard.effective_from <= moment,
+        )
+        .order_by(VasRateCard.effective_from.desc())
+        .first()
+    )
+    return Decimal(str(card.rate_pct)) if card else None
+
+
+def _kobo_floor(value: Decimal) -> Decimal:
+    from decimal import ROUND_DOWN
+
+    return value.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+
+
+def _settle_commission(db: Session, txn: VasTransaction) -> None:
+    """Snapshot rates + credit the reseller float — ONLY on confirmed delivery.
+
+    Splits: gross = amount × owner_rate (what the provider pays us);
+    reseller payout = floor(amount × reseller_rate) to the kobo (remainder to
+    owner, so payout + owner_net == gross exactly). Idempotent via the unique
+    commission entry reference. Missing rate cards skip silently-but-logged —
+    delivery must never fail because commercials aren't configured yet.
+    """
+    category = txn.service.category if txn.service else None
+    if not category:
+        return
+    owner_rate = resolve_rate(db, category, VasPartyType.owner)
+    if owner_rate is None:
+        logger.info("vas commission: no owner rate card for %s — skipped", category)
+        return
+    amount = Decimal(str(txn.amount))
+    gross = _kobo_floor(amount * owner_rate / Decimal("100"))
+    txn.vtpass_rate_pct = owner_rate
+
+    if txn.reseller_id is None:
+        txn.owner_net = gross
+        db.commit()
+        return
+
+    reseller_rate = resolve_rate(db, category, VasPartyType.reseller)
+    if reseller_rate is None:
+        logger.warning(
+            "vas commission: reseller txn %s has no reseller rate card for %s "
+            "— owner keeps gross, NO payout recorded (fix rate cards)",
+            txn.id,
+            category,
+        )
+        txn.owner_net = gross
+        db.commit()
+        return
+
+    payout = _kobo_floor(amount * reseller_rate / Decimal("100"))
+    txn.reseller_rate_pct = reseller_rate
+    txn.owner_net = gross - payout
+    if txn.owner_net < 0:
+        logger.warning(
+            "vas commission: NEGATIVE spread on %s (%s: owner %s%% < reseller "
+            "%s%%) — check the rate cards",
+            txn.id,
+            category,
+            owner_rate,
+            reseller_rate,
+        )
+    db.commit()
+    if payout <= 0:
+        return
+    reseller_wallet = wallet_service.get_or_create_reseller_wallet(
+        db, str(txn.reseller_id)
+    )
+    try:
+        wallet_service.credit_wallet(
+            db,
+            reseller_wallet,
+            amount=payout,
+            category=VasEntryCategory.commission,
+            reference=f"vas-comm-{txn.request_id}",
+            memo=f"Commission: {txn.service.name if txn.service else category}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Unique-reference violation -> already credited (idempotent
+        # re-delivery); anything else must not poison the session for the
+        # rest of the sweep.
+        db.rollback()
+        logger.info("vas commission credit skipped for %s: %s", txn.id, exc)
+
+
 def _extract_token(body: dict) -> str | None:
     candidates = [body.get("purchased_code"), body.get("Token"), body.get("token")]
     content = body.get("content")
@@ -342,6 +440,56 @@ def purchase(
     confirm_duplicate: bool = False,
 ) -> VasTransaction:
     wallet_service.require_enabled(db)
+    wallet = wallet_service.get_or_create_wallet(db, subscriber_id)
+    return _purchase_from_wallet(
+        db,
+        wallet,
+        service_id=service_id,
+        identifier=identifier,
+        variation_code=variation_code,
+        amount=amount,
+        phone=phone,
+        confirm_duplicate=confirm_duplicate,
+    )
+
+
+def reseller_purchase(
+    db: Session,
+    *,
+    reseller_id: str,
+    service_id: str,
+    identifier: str,
+    variation_code: str | None = None,
+    amount: Decimal | None = None,
+    phone: str | None = None,
+    confirm_duplicate: bool = False,
+) -> VasTransaction:
+    """Sell-for-customer from the reseller float wallet."""
+    wallet_service.require_enabled(db)
+    wallet = wallet_service.get_or_create_reseller_wallet(db, reseller_id)
+    return _purchase_from_wallet(
+        db,
+        wallet,
+        service_id=service_id,
+        identifier=identifier,
+        variation_code=variation_code,
+        amount=amount,
+        phone=phone,
+        confirm_duplicate=confirm_duplicate,
+    )
+
+
+def _purchase_from_wallet(
+    db: Session,
+    wallet,
+    *,
+    service_id: str,
+    identifier: str,
+    variation_code: str | None = None,
+    amount: Decimal | None = None,
+    phone: str | None = None,
+    confirm_duplicate: bool = False,
+) -> VasTransaction:
     service = _get_enabled_service(db, service_id)
     variation = None
     if variation_code:
@@ -366,8 +514,6 @@ def purchase(
         raise HTTPException(status_code=400, detail="Customer number is required")
 
     _float_gate(db, value)
-
-    wallet = wallet_service.get_or_create_wallet(db, subscriber_id)
 
     # Duplicate-intent guard: a re-tap mints a NEW request_id, so provider
     # dedup can't catch it — block a same-looking purchase made moments ago
@@ -413,15 +559,23 @@ def purchase(
     db.commit()
     db.refresh(txn)
 
-    # Debit (immediate; refund-on-failure) — insufficient funds aborts cleanly.
-    wallet_service.debit_wallet(
-        db,
-        wallet,
-        amount=value,
-        category=VasEntryCategory.purchase,
-        reference=f"vas-{txn.request_id}",
-        memo=f"{service.name}",
-    )
+    # Debit (immediate; refund-on-failure). A failed debit must mark the
+    # transaction failed — otherwise the orphaned `pending` row trips the
+    # duplicate-intent guard and blocks the retry after the wallet is funded.
+    try:
+        wallet_service.debit_wallet(
+            db,
+            wallet,
+            amount=value,
+            category=VasEntryCategory.purchase,
+            reference=f"vas-{txn.request_id}",
+            memo=f"{service.name}",
+        )
+    except HTTPException:
+        txn.status = VasTransactionStatus.failed
+        txn.error = "Wallet debit failed"
+        db.commit()
+        raise
     txn.status = VasTransactionStatus.debited
     db.commit()
 
@@ -465,6 +619,13 @@ def _mark_delivered(db: Session, txn: VasTransaction, body: dict) -> None:
         db.commit()
     txn.status = VasTransactionStatus.delivered
     txn.delivered_at = datetime.now(UTC)
+    db.commit()
+    try:
+        _settle_commission(db, txn)
+    except Exception:  # noqa: BLE001
+        # Never let commission bookkeeping break a delivered purchase; the
+        # unique reference makes a later repair run idempotent.
+        logger.exception("vas commission settlement failed for txn %s", txn.id)
 
 
 def _mark_failed_and_refund(db: Session, txn: VasTransaction, detail: str) -> None:
@@ -616,3 +777,87 @@ def run_review_requery(db: Session) -> dict:
         "refunded": refunded,
         "remaining": remaining,
     }
+
+
+def list_reseller_transactions(
+    db: Session, reseller_id: str, *, limit: int = 50
+) -> list[VasTransaction]:
+    wallet_service.require_enabled(db)
+    wallet = wallet_service.get_or_create_reseller_wallet(db, reseller_id)
+    return (
+        db.query(VasTransaction)
+        .filter(VasTransaction.wallet_id == wallet.id)
+        .order_by(VasTransaction.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_reseller_transaction(
+    db: Session, reseller_id: str, txn_id: str
+) -> VasTransaction:
+    wallet_service.require_enabled(db)
+    wallet = wallet_service.get_or_create_reseller_wallet(db, reseller_id)
+    txn = db.get(VasTransaction, txn_id)
+    if not txn or txn.wallet_id != wallet.id:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return txn
+
+
+# --- Admin ops data -------------------------------------------------------------
+
+
+def admin_services(db: Session) -> list[VasService]:
+    return db.query(VasService).order_by(VasService.category, VasService.name).all()
+
+
+def admin_review_queue(db: Session, *, limit: int = 100) -> list[VasTransaction]:
+    return (
+        db.query(VasTransaction)
+        .filter(VasTransaction.status == VasTransactionStatus.review)
+        .order_by(VasTransaction.created_at)
+        .limit(limit)
+        .all()
+    )
+
+
+def admin_rate_cards(db: Session, *, limit: int = 200) -> list[VasRateCard]:
+    return (
+        db.query(VasRateCard)
+        .order_by(
+            VasRateCard.category,
+            VasRateCard.party_type,
+            VasRateCard.effective_from.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+
+def get_service(db: Session, service_pk: str) -> VasService | None:
+    return db.get(VasService, service_pk)
+
+
+def get_transaction_by_id(db: Session, txn_id: str) -> VasTransaction | None:
+    return db.get(VasTransaction, txn_id)
+
+
+def add_rate_card(
+    db: Session,
+    *,
+    category: str,
+    party: VasPartyType,
+    rate_pct: Decimal,
+    effective_from: datetime,
+    memo: str | None,
+) -> VasRateCard:
+    card = VasRateCard(
+        category=category,
+        party_type=party,
+        rate_pct=rate_pct,
+        effective_from=effective_from,
+        memo=memo,
+    )
+    db.add(card)
+    db.commit()
+    return card

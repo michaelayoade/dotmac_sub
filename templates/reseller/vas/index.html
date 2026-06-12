@@ -1,0 +1,183 @@
+{% extends "layouts/reseller.html" %}
+
+{% block title %}Airtime & Bills - Reseller{% endblock %}
+
+{% block content %}
+<div class="space-y-8" x-data="resellerVas()">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+            <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Airtime & Bills</h1>
+            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Sell from your float wallet — commission lands back in the wallet on delivery.</p>
+        </div>
+        <div class="flex gap-3">
+            <div class="rounded-2xl border border-stone-200 bg-white px-6 py-4 text-right shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Float balance</p>
+                <p class="mt-1 text-2xl font-display font-bold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(balance) }}</p>
+            </div>
+            <div class="rounded-2xl border border-stone-200 bg-white px-6 py-4 text-right shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Commission earned</p>
+                <p class="mt-1 text-2xl font-display font-bold text-emerald-600">₦{{ '%,.2f'|format(commission_total) }}</p>
+            </div>
+        </div>
+    </div>
+
+    {% if funded %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        {{ 'Sale completed.' if funded == 'sold' else 'Float funded with ₦' ~ funded ~ '.' }}
+    </div>
+    {% endif %}
+    {% if form_error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">{{ form_error }}</div>
+    {% endif %}
+
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,1fr)]">
+        <!-- Sell -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Sell to a customer</h2>
+            <form method="post" action="/reseller/vas/sell" class="mt-4 space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Service</label>
+                    <select name="service_id" x-model="serviceId" x-on:change="serviceChanged()" required
+                            class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                        <option value="">Select…</option>
+                        {% for bucket in catalog %}
+                        <optgroup label="{{ bucket.category | replace('-', ' ') | title }}">
+                            {% for service in bucket.services %}
+                            <option value="{{ service.service_id }}" data-service="{{ service | tojson | forceescape }}">{{ service.name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" x-text="selected ? selected.identifier_label : 'Customer number'"></label>
+                    <input type="text" name="identifier" required
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </div>
+                <template x-if="selected && selected.variations && selected.variations.length">
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Plan</label>
+                        <select name="variation_code" x-model="variation"
+                                class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                            <option value="">Select a plan…</option>
+                            <template x-for="v in selected.variations" :key="v.code">
+                                <option :value="v.code" x-text="v.name + (v.amount ? ' — ₦' + v.amount : '')"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+                <div x-show="!variationHasPrice()">
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Amount (₦)</label>
+                    <input type="number" name="amount" min="1" step="0.01"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </div>
+                <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+                    Sell from float
+                </button>
+                <p class="text-xs text-stone-500 dark:text-stone-400">Failed deliveries refund the float instantly. Commission credits on confirmed delivery.</p>
+            </form>
+        </div>
+
+        <!-- Fund float -->
+        <div class="space-y-6">
+            <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Fund float</h2>
+                <div class="mt-3 flex gap-2">
+                    <input type="number" x-model="fundAmount" min="{{ min_topup }}" placeholder="Amount (₦)"
+                           class="block w-full rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    <button type="button" x-on:click="fund()" :disabled="processing"
+                            class="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">
+                        <span x-text="processing ? '…' : 'Fund'"></span>
+                    </button>
+                </div>
+                <p class="mt-2 text-sm text-rose-600" x-text="fundError" x-show="fundError"></p>
+            </div>
+
+            <div class="rounded-2xl border border-stone-200 bg-white shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+                    <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Recent sales</h2>
+                </div>
+                <div class="divide-y divide-stone-200 dark:divide-stone-700">
+                    {% for txn in transactions %}
+                    <div class="flex items-center justify-between px-6 py-3 text-sm">
+                        <div>
+                            <p class="font-medium text-stone-900 dark:text-white">{{ txn.service.name if txn.service else '?' }} · {{ txn.identifier }}</p>
+                            <p class="text-xs text-stone-500 dark:text-stone-400">{{ txn.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="font-mono font-semibold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(txn.amount) }}</p>
+                            <span class="text-xs font-semibold uppercase {{ 'text-emerald-600' if txn.status.value == 'delivered' else 'text-rose-600' if txn.status.value in ['failed','refunded'] else 'text-amber-600' }}">{{ txn.status.value }}</span>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="px-6 py-6 text-sm text-stone-500 dark:text-stone-400">No sales yet.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function resellerVas() {
+    return {
+        serviceId: '',
+        selected: null,
+        variation: '',
+        fundAmount: '',
+        processing: false,
+        fundError: '',
+        serviceChanged() {
+            const option = document.querySelector('select[name=service_id] option:checked');
+            this.selected = option && option.dataset.service ? JSON.parse(option.dataset.service) : null;
+            this.variation = '';
+        },
+        variationHasPrice() {
+            if (!this.selected || !this.variation) return false;
+            const v = (this.selected.variations || []).find(x => x.code === this.variation);
+            return !!(v && v.amount);
+        },
+        async fund() {
+            const self = this;
+            const value = parseFloat(this.fundAmount);
+            if (!value || value <= 0) { this.fundError = 'Enter an amount.'; return; }
+            this.fundError = '';
+            this.processing = true;
+            let intent;
+            try {
+                const response = await fetch('/reseller/vas/topup/intent', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({amount: value})
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.detail || 'Unable to start payment.');
+                intent = payload;
+            } catch (error) {
+                this.processing = false;
+                this.fundError = error.message;
+                return;
+            }
+            if (intent.provider_type !== 'paystack' || typeof PaystackPop === 'undefined') {
+                this.processing = false;
+                this.fundError = 'Checkout unavailable.';
+                return;
+            }
+            PaystackPop.setup({
+                key: intent.provider_public_key,
+                email: '{{ reseller.contact_email or (reseller.code ~ "@reseller.invalid") }}',
+                amount: Math.round(value * 100),
+                currency: intent.currency || 'NGN',
+                ref: intent.reference,
+                callback: function(response) {
+                    window.location.href = '/reseller/vas/topup/verify?reference=' + encodeURIComponent(response.reference);
+                },
+                onClose: function() { self.processing = false; }
+            }).openIframe();
+        }
+    };
+}
+</script>
+<script src="https://js.paystack.co/v1/inline.js"></script>
+{% endblock %}
