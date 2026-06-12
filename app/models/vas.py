@@ -224,6 +224,12 @@ class VasTransaction(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
+    # Initiator attribution, set at purchase time from the wallet owner —
+    # NULL for customer-direct. Designed in ahead of Phase 3 (reseller
+    # commissions) so no backfill is ever needed.
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id")
+    )
     service_pk: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("vas_services.id"), nullable=False
     )
@@ -237,6 +243,11 @@ class VasTransaction(Base):
         nullable=False,
     )
     requery_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # Rate snapshot at time of sale (Phase 3 fills these; rate cards answer
+    # "what's the rate now", the snapshot answers "what was THIS priced at").
+    vtpass_rate_pct: Mapped[Decimal | None] = mapped_column(Numeric(7, 4))
+    reseller_rate_pct: Mapped[Decimal | None] = mapped_column(Numeric(7, 4))
+    owner_net: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     provider_status: Mapped[str | None] = mapped_column(String(120))
     provider_response: Mapped[dict | None] = mapped_column(JSON)
     # Encrypted at rest (credential_crypto); written BEFORE delivered.

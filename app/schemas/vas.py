@@ -114,6 +114,8 @@ class VasPurchaseRequest(BaseModel):
     variation_code: str | None = Field(default=None, max_length=120)
     amount: Decimal | None = Field(default=None, gt=0)
     phone: str | None = Field(default=None, max_length=40)
+    # Re-tap acknowledgement for the 5-minute duplicate-intent guard.
+    confirm_duplicate: bool = False
 
 
 class VasTransactionRead(BaseModel):
