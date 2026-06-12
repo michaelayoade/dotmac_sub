@@ -47,6 +47,7 @@ class VasTopupInitiateResponse(BaseModel):
     reference: str
     amount: Decimal
     currency: str = "NGN"
+    customer_email: str | None = None
 
 
 class VasTopupVerifyRequest(BaseModel):

@@ -773,7 +773,10 @@ def my_wallet_topup_initiate(
 ):
     subscriber_id = _subscriber_id(principal)
     result = vas_wallet_service.initiate_topup(db, subscriber_id, payload.amount)
-    return VasTopupInitiateResponse(**result)
+    customer = _customer(db, principal)
+    return VasTopupInitiateResponse(
+        **result, customer_email=customer.get("username") or None
+    )
 
 
 @router.post("/wallet/topup/verify", response_model=VasTopupVerifyResponse)

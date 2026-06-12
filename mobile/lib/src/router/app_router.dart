@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/observability.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/billing/topup_screen.dart';
+import '../features/billing/wallet_screen.dart';
 import '../features/auth/lock_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/mfa_screen.dart';
@@ -136,6 +137,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/topup',
         builder: (_, __) => const TopUpScreen(),
+      ),
+      GoRoute(
+        path: '/wallet',
+        builder: (_, __) => const WalletScreen(),
       ),
       GoRoute(
         path: '/pay',
