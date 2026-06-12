@@ -21,8 +21,7 @@ class ServiceLocationScreen extends ConsumerStatefulWidget {
       _ServiceLocationScreenState();
 }
 
-class _ServiceLocationScreenState
-    extends ConsumerState<ServiceLocationScreen> {
+class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
   // Lagos as a sane fallback when no pin is on file yet.
   static const _fallbackCenter = LatLng(6.5244, 3.3792);
 
@@ -93,8 +92,9 @@ class _ServiceLocationScreenState
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _submit() async {
@@ -102,7 +102,9 @@ class _ServiceLocationScreenState
     if (selected == null) return;
     setState(() => _submitting = true);
     try {
-      await ref.read(locationRepositoryProvider).submitCorrection(
+      await ref
+          .read(locationRepositoryProvider)
+          .submitCorrection(
             latitude: selected.latitude,
             longitude: selected.longitude,
             note: _note.text.trim(),
@@ -149,8 +151,9 @@ class _ServiceLocationScreenState
     final current = data.hasPin
         ? LatLng(data.latitude!, data.longitude!)
         : null;
-    final pendingPoint =
-        pending != null ? LatLng(pending.latitude, pending.longitude) : null;
+    final pendingPoint = pending != null
+        ? LatLng(pending.latitude, pending.longitude)
+        : null;
     final canEdit = data.canSubmitRequest;
     final center = _selected ?? pendingPoint ?? current ?? _fallbackCenter;
 
@@ -167,78 +170,92 @@ class _ServiceLocationScreenState
           borderRadius: BorderRadius.circular(16),
           child: SizedBox(
             height: 320,
-            child: Stack(children: [
-              FlutterMap(
-                mapController: _mapController,
-                options: MapOptions(
-                  initialCenter: center,
-                  initialZoom: data.hasPin || _selected != null ? 16 : 11,
-                  onTap: canEdit ? (_, point) => _select(point) : null,
-                ),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'io.dotmac.selfcare',
+            child: Stack(
+              children: [
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: center,
+                    initialZoom: data.hasPin || _selected != null ? 16 : 11,
+                    onTap: canEdit ? (_, point) => _select(point) : null,
                   ),
-                  MarkerLayer(markers: [
-                    if (current != null)
-                      Marker(
-                        point: current,
-                        width: 36,
-                        height: 36,
-                        child: Icon(Icons.home,
-                            color: theme.colorScheme.primary, size: 32),
-                      ),
-                    if (pendingPoint != null)
-                      Marker(
-                        point: pendingPoint,
-                        width: 36,
-                        height: 36,
-                        child: const Icon(Icons.hourglass_top,
-                            color: Colors.amber, size: 30),
-                      ),
-                    if (_selected != null)
-                      Marker(
-                        point: _selected!,
-                        width: 40,
-                        height: 40,
-                        alignment: Alignment.topCenter,
-                        child: const Icon(Icons.place,
-                            color: Colors.red, size: 40),
-                      ),
-                  ]),
-                ],
-              ),
-              if (canEdit)
-                Positioned(
-                  right: 12,
-                  bottom: 12,
-                  child: FloatingActionButton.small(
-                    heroTag: 'gps',
-                    onPressed: _locating ? null : _useMyLocation,
-                    tooltip: 'Use my current location',
-                    child: _locating
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.my_location),
-                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'io.dotmac.selfcare',
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        if (current != null)
+                          Marker(
+                            point: current,
+                            width: 36,
+                            height: 36,
+                            child: Icon(
+                              Icons.home,
+                              color: theme.colorScheme.primary,
+                              size: 32,
+                            ),
+                          ),
+                        if (pendingPoint != null)
+                          Marker(
+                            point: pendingPoint,
+                            width: 36,
+                            height: 36,
+                            child: const Icon(
+                              Icons.hourglass_top,
+                              color: Colors.amber,
+                              size: 30,
+                            ),
+                          ),
+                        if (_selected != null)
+                          Marker(
+                            point: _selected!,
+                            width: 40,
+                            height: 40,
+                            alignment: Alignment.topCenter,
+                            child: const Icon(
+                              Icons.place,
+                              color: Colors.red,
+                              size: 40,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
-            ]),
+                if (canEdit)
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: FloatingActionButton.small(
+                      heroTag: 'gps',
+                      onPressed: _locating ? null : _useMyLocation,
+                      tooltip: 'Use my current location',
+                      child: _locating
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.my_location),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 8),
         Text(
           canEdit
               ? 'Tap the map (or use the GPS button) to place the pin where '
-                  'your service is actually installed.'
+                    'your service is actually installed.'
               : pending != null
-                  ? 'A correction is waiting for review. Cancel it to '
-                      'submit a different one.'
-                  : 'No service address is on file yet — contact support '
-                      'first so the address record can be created.',
+              ? 'A correction is waiting for review. Cancel it to '
+                    'submit a different one.'
+              : 'No service address is on file yet — contact support '
+                    'first so the address record can be created.',
           style: theme.textTheme.bodySmall,
         ),
         if (_selected != null) ...[
@@ -258,8 +275,10 @@ class _ServiceLocationScreenState
                   ),
                   if (_resolvedAddress != null) ...[
                     const SizedBox(height: 4),
-                    Text('≈ $_resolvedAddress',
-                        style: theme.textTheme.bodySmall),
+                    Text(
+                      '≈ $_resolvedAddress',
+                      style: theme.textTheme.bodySmall,
+                    ),
                   ],
                   const SizedBox(height: 12),
                   TextField(
@@ -268,8 +287,7 @@ class _ServiceLocationScreenState
                     minLines: 1,
                     decoration: const InputDecoration(
                       labelText: "What's wrong with the current pin?",
-                      hintText:
-                          'Example: the pin is on the next street over.',
+                      hintText: 'Example: the pin is on the next street over.',
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -279,7 +297,8 @@ class _ServiceLocationScreenState
                         ? const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Text('Submit for review'),
                   ),
                 ],
