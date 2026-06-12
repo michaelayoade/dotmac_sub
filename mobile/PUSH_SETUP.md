@@ -16,7 +16,8 @@ needed to "light it up".
   and de-registers on logout; `main.dart` registers the background handler.
 - Android: `POST_NOTIFICATIONS` permission + default-channel metadata; the
   `com.google.gms.google-services` plugin is applied **only when**
-  `android/app/google-services.json` exists.
+  `android/app/google-services.json` exists. Core library desugaring is enabled
+  in `android/app/build.gradle.kts` (required by `flutter_local_notifications`).
 - iOS: `UIBackgroundModes: remote-notification` + `Runner.entitlements`
   (`aps-environment`).
 
@@ -31,7 +32,14 @@ needed to "light it up".
    Signing & Capabilities → **+ Capability → Push Notifications**. This wires
    `Runner.entitlements` into the target. Add `GoogleService-Info.plist` to the
    Runner target in Xcode (so it's bundled). Upload an **APNs auth key (.p8)**
-   to Firebase → Project settings → Cloud Messaging → Apple app config.
+   to Firebase → Project settings → Cloud Messaging → Apple app config (the same
+   `.p8` serves both the development and production APNs slots).
+   For a signed **release / TestFlight** build: enable **Push Notifications** on
+   the App ID in the Apple Developer portal, then **regenerate** the distribution
+   provisioning profile so it carries the push entitlement (an older profile
+   created before push was enabled will fail signing with an entitlement
+   mismatch), and set `aps-environment` to `production` in `Runner.entitlements`
+   (the committed default is `development`, for debug builds).
 3. **Backend** (server send): set in the prod `.env` and rebuild/redeploy app +
    celery workers:
    - `FCM_PROJECT_ID=<your-firebase-project-id>`
