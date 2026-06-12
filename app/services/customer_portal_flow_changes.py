@@ -589,8 +589,19 @@ def apply_instant_plan_change(
     lock_account(db, str(subscription.subscriber_id))
 
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
-    if not new_offer or not new_offer.is_active:
+    if not new_offer:
         raise ValueError("Selected plan is not available")
+    # Gate on the same single source as the deferred path: this enforces
+    # status==active + show_on_customer_portal + plan_family + reseller
+    # availability, not just is_active — otherwise the instant path could
+    # switch a customer onto an archived/hidden/cross-family offer by POSTing
+    # its id directly (the deferred/mobile path was already guarded).
+    available = get_available_portal_offers(db, subscription)
+    if str(new_offer.id) not in {str(o.id) for o in available}:
+        raise ValueError(
+            "This plan is not available for self-service change. "
+            "Contact support to migrate to it."
+        )
 
     current_offer = (
         db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
