@@ -48,12 +48,6 @@ CATEGORY_MAP = {
     "company": "business",
 }
 
-BILLING_TYPE_MAP = {
-    "recurring": "postpaid",
-    "prepaid": "prepaid",
-    "prepaid_monthly": "prepaid",
-}
-
 SERVICE_STATUS_MAP = {
     "active": "active",
     "blocked": "blocked",
@@ -154,10 +148,25 @@ def _map_service_status(status_raw: str | None, *, is_deleted: bool):
 
 
 def _map_billing_mode(billing_type_raw: str | None):
-    from app.models.catalog import BillingMode
+    # Delegate to the shared helper so the Splynx billing_type → BillingMode
+    # mapping lives in exactly one place (see app.services.migrations.billing_modes).
+    from app.services.migrations.billing_modes import map_billing_mode
 
-    mapped = BILLING_TYPE_MAP.get((billing_type_raw or "").strip().lower(), "prepaid")
-    return BillingMode.postpaid if mapped == "postpaid" else BillingMode.prepaid
+    return map_billing_mode(billing_type_raw)
+
+
+def _load_customer_billing_types(conn) -> dict[int, str]:
+    """Map Splynx customer_id → ``customers.billing_type``.
+
+    This is the authoritative billing-type source. ``services_internet`` /
+    ``services_custom`` carry NO billing_type column, so deriving a
+    subscription's billing mode from a service row silently defaults the whole
+    base to prepaid — the bug this loader exists to prevent.
+    """
+    return {
+        int(r["id"]): (r.get("billing_type") or "")
+        for r in fetch_all(conn, "SELECT id, billing_type FROM customers")
+    }
 
 
 def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
@@ -291,6 +300,10 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
                 reseller_id=reseller_id,
                 # Billing fields from customer_billing
                 billing_enabled=row.get("billing_enabled") in (1, "1", True),
+                # Authoritative billing mode from customers.billing_type (NOT
+                # services_internet, which has no billing_type column). Without
+                # this the account defaults to prepaid for everyone.
+                billing_mode=_map_billing_mode(row.get("billing_type")),
                 billing_day=row.get("billing_date"),
                 payment_due_days=row.get("billing_due"),
                 grace_period_days=row.get("grace_period"),
@@ -484,6 +497,9 @@ def migrate_services(
     # Track usernames for dedup
     existing_usernames = set(db.scalars(select(AccessCredential.username)).all())
 
+    # Authoritative billing type comes from the customer, not the service row.
+    customer_billing_types = _load_customer_billing_types(conn)
+
     mapping: dict[int, uuid.UUID] = dict(existing_maps)
     created = 0
     skipped = 0
@@ -540,7 +556,9 @@ def migrate_services(
                 else None
             )
 
-            billing_mode = _map_billing_mode(row.get("billing_type"))
+            billing_mode = _map_billing_mode(
+                customer_billing_types.get(row.get("customer_id"))
+            )
 
             subscription = Subscription(
                 subscriber_id=subscriber_id,
@@ -659,6 +677,9 @@ def migrate_custom_services(
         ).all()
     }
 
+    # Authoritative billing type comes from the customer, not the service row.
+    customer_billing_types = _load_customer_billing_types(conn)
+
     query = "SELECT * FROM services_custom ORDER BY id"
     rows = fetch_all(conn, query)
     existing_maps = {
@@ -731,7 +752,9 @@ def migrate_custom_services(
             subscriber_id=subscriber_id,
             offer_id=offer_id,
             status=status_enum,
-            billing_mode=_map_billing_mode(row.get("billing_type")),
+            billing_mode=_map_billing_mode(
+                customer_billing_types.get(row.get("customer_id"))
+            ),
             contract_term=ContractTerm.month_to_month,
             start_at=start_at,
             splynx_service_id=mapping_id,

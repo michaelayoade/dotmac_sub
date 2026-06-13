@@ -28,6 +28,35 @@ def billing_enabled(db: Session, *, default: bool = True) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def check_billing_switch(db: Session) -> dict:
+    """Invariant check on the ``billing_enabled`` master switch.
+
+    ``billing_enabled`` flipping to true unexpectedly is what let the local
+    runner generate phantom invoices — a config-integrity failure, not a code
+    bug, so the void cleaned the symptom, not the mechanism. This compares the
+    live switch against a pinned *expected* value (``billing_enabled_expected``
+    / env ``BILLING_ENABLED_EXPECTED``, default false pre-cutover). At cutover,
+    set the expected value to true in the same change that enables billing.
+
+    Returns a dict; callers should alert when ``ok`` is false.
+    """
+    import os
+
+    actual = billing_enabled(db, default=False)
+    # Read the pinned expected value directly (it is not a registered spec key):
+    # a DomainSetting row wins, else the BILLING_ENABLED_EXPECTED env, else false.
+    expected_raw = _setting_value(db, "billing_enabled_expected")
+    if expected_raw is None:
+        expected_raw = os.getenv("BILLING_ENABLED_EXPECTED")
+    if expected_raw is None:
+        expected = False
+    elif isinstance(expected_raw, bool):
+        expected = expected_raw
+    else:
+        expected = str(expected_raw).strip().lower() in {"1", "true", "yes", "on"}
+    return {"ok": actual == expected, "expected": expected, "actual": actual}
+
+
 def _coerce_int(value: object, default: int) -> int:
     if isinstance(value, bool):
         return default
