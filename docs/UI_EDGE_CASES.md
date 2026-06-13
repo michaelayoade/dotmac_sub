@@ -100,7 +100,9 @@ running finding numbers from the 2026-06-12 driving session.
 
 ## 9. Support tickets & CRM
 - [x] Create ticket from portal (2026-06-12)
-- [ ] Comment thread; close/reopen; empty subject/body
+- [!] `#20` Empty title was rejected (`min_length=1`) but **whitespace-only** title/comment-body slipped through (length ≥ 1, no strip) → blank-titled tickets. FIXED 2026-06-13: added `str_strip_whitespace=True` to the ticket/comment input schemas (TicketBase, TicketUpdate, TicketCommentBase/Update, MySupport*), so whitespace strips before `min_length` and good input is trimmed. Verified at the schema layer + unit tests
+- [!] `#21` Admin new-ticket POST had **no** validation-error handling — an invalid title raised straight to a **500** (whitespace after #20; empty title already did). FIXED 2026-06-13: `ticket_create` now catches `ValidationError`/`ValueError`, rolls back, and re-renders the form at 400 with a clean "A ticket title is required." + preserved input; added an error banner to the template. Verified live (whitespace → 400 w/ message; valid still creates, title trimmed). NOTE: the customer-portal create path already returns 400 but via a generic "try again later" message (handle_ticket_create swallows the ValidationError) — a clearer portal message is a small follow-up
+- [ ] Comment thread; close/reopen
 - [ ] Ticket-comment IDOR (B comments on A's ticket id)
 - [ ] CRM push unset (no-op) vs set; CRM unreachable → ticket still creates (async)
 - [ ] Admin ticket vs CRM-native resolution (crm_subscriber_id)
