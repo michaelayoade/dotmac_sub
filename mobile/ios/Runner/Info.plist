@@ -6,6 +6,11 @@
 		<string>Use Face ID to unlock the app.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
 		<string>Attach your current location to a fault report so our technicians can find your service address.</string>
+		<!-- The app only uses foreground (when-in-use) location, but the
+		     geolocator plugin references the Always-authorization API, so
+		     App Store validation (ITMS-90683) requires this string too. -->
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>Attach your current location to a fault report so our technicians can find your service address.</string>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
 		<key>CFBundleDevelopmentRegion</key>
