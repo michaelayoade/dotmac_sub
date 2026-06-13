@@ -1488,6 +1488,7 @@ def person_delete(
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -1550,6 +1551,7 @@ def business_delete(
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
