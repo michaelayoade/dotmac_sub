@@ -147,7 +147,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [ ] Copyright/brand consistency across portals
 
 ## 15. Concurrency & idempotency
-- [ ] Double-submit money forms (payment, change-plan, top-up) → no duplicate
+- [x] `#29` Double-submit money forms → no duplicate (2026-06-13): **gateway** payments are deduped by the `uq_payments_active_external_id` partial unique index (+ `uq_payment_provider_events_external_id` for webhooks) — a customer double-submitting an online payment can't double-charge. Wallet `pay_bill` has a 60s identical-debit guard. **GAP FOUND+FIXED**: manually-recorded admin/offline payments have no `external_id`/`provider_id`, so the index didn't cover them — a double-clicked "record payment" created two rows (over-credit). `Payments.create` now rejects an identical manual payment (same account + amount, no external_id/provider_id, active) recorded in the last 60s with a 409 (mirrors `pay_bill`). Unit-tested (dup manual → 409; different amount → allowed). Tradeoff: two genuinely-distinct same-amount manual payments within 60s are blocked (refresh + retry) — acceptable, matches the wallet guard
 - [ ] Two admins editing same customer/subscription
 - [ ] Wallet read-modify-write race under concurrent debits
 - [ ] Idempotent task re-runs (invoice cycle, autopay) don't double-charge
