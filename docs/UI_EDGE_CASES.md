@@ -28,7 +28,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] Duplicate email rejected, no duplicate row (2026-06-12)
 - [ ] Duplicate phone; email case-sensitivity collision
 - [!] `#18` Blank / whitespace-only / over-length required name fields were ACCEPTED on customer create+edit (server declared `first_name`/`last_name` as `Form(None)` and passed them raw; only `email` was validated) → customers created with empty display names. FIXED 2026-06-13: `_require_text()` trims, rejects blank/whitespace-only, and caps length (names 80, business name 120) across person/business create+edit; clean `ValueError` surfaced as a 400 form error. Verified live (whitespace → "First name is required", valid still creates) + unit tests. Emoji names still accepted (valid unicode, intentionally allowed)
-- [ ] Invalid email & phone formats; international phone; long address; special chars
+- [x] Invalid email format rejected on customer create (`SubscriberCreate.email` is `EmailStr`) → 400, no row created (2026-06-13). Message is the verbose Pydantic dump (the known #12 "shared admin-form error formatter" residual, not re-fixed here). Phone format / international / long address still untested
 - [ ] Wizard back/forward preserves data; cancel mid-wizard; double-submit → 1 customer
 - [ ] Business vs individual (Contacts step business-only)
 - [ ] Geocode unresolvable address; Nominatim unreachable
@@ -104,7 +104,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [!] `#20` Empty title was rejected (`min_length=1`) but **whitespace-only** title/comment-body slipped through (length ≥ 1, no strip) → blank-titled tickets. FIXED 2026-06-13: added `str_strip_whitespace=True` to the ticket/comment input schemas (TicketBase, TicketUpdate, TicketCommentBase/Update, MySupport*), so whitespace strips before `min_length` and good input is trimmed. Verified at the schema layer + unit tests
 - [!] `#21` Admin new-ticket POST had **no** validation-error handling — an invalid title raised straight to a **500** (whitespace after #20; empty title already did). FIXED 2026-06-13: `ticket_create` now catches `ValidationError`/`ValueError`, rolls back, and re-renders the form at 400 with a clean "A ticket title is required." + preserved input; added an error banner to the template. Verified live (whitespace → 400 w/ message; valid still creates, title trimmed). NOTE: the customer-portal create path already returns 400 but via a generic "try again later" message (handle_ticket_create swallows the ValidationError) — a clearer portal message is a small follow-up
 - [ ] Comment thread; close/reopen
-- [ ] Ticket-comment IDOR (B comments on A's ticket id)
+- [x] Ticket-comment IDOR is SECURE (2026-06-13): the portal comment route derives `subscriber_ids` from the authenticated session (not client input) and `handle_ticket_comment` rejects any ticket whose `subscriber_id` is outside the caller's allowed set ("Ticket not found")
 - [ ] CRM push unset (no-op) vs set; CRM unreachable → ticket still creates (async)
 - [ ] Admin ticket vs CRM-native resolution (crm_subscriber_id)
 
