@@ -242,7 +242,7 @@ class OfferRadiusProfileLinkRead(BaseModel):
 class OfferPriceCreate(BaseModel):
     offer_id: UUID
     price_type: PriceType = PriceType.recurring
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, lt=100_000_000)
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -253,7 +253,7 @@ class OfferPriceCreate(BaseModel):
 class OfferPriceUpdate(BaseModel):
     offer_id: UUID | None = None
     price_type: PriceType | None = None
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, lt=100_000_000)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -279,7 +279,7 @@ class AddOnPriceRead(BaseModel):
 class AddOnPriceCreate(BaseModel):
     add_on_id: UUID
     price_type: PriceType = PriceType.recurring
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, lt=100_000_000)
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -290,7 +290,7 @@ class AddOnPriceCreate(BaseModel):
 class AddOnPriceUpdate(BaseModel):
     add_on_id: UUID | None = None
     price_type: PriceType | None = None
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, lt=100_000_000)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
