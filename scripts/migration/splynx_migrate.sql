@@ -250,6 +250,7 @@ INSERT INTO subscribers (
     organization_id,
     -- Billing fields (merged from customer_billing)
     billing_enabled,
+    billing_mode,
     billing_name,
     billing_address_line1,
     billing_city,
@@ -303,6 +304,13 @@ SELECT
     mp.organization_id,
     -- Billing (from customer_billing)
     COALESCE(b.enabled, true),
+    -- Authoritative billing mode from customers.billing_type (recurring =>
+    -- postpaid; prepaid/prepaid_monthly => prepaid). Read from the customer,
+    -- NOT services_internet (which carries no billing_type).
+    CASE
+        WHEN lower(COALESCE(ed.billing_type, '')) = 'recurring' THEN 'postpaid'
+        ELSE 'prepaid'
+    END::billingmode,
     b.billing_person,
     substring(b.billing_street_1 from 1 for 160),
     b.billing_city,
@@ -569,7 +577,12 @@ SELECT
         WHEN s.status = 'stopped' THEN 'canceled'
         ELSE 'pending'
     END::subscriptionstatus,
-    'prepaid'::billingmode,
+    -- Billing mode from the CUSTOMER's billing_type (services_internet has no
+    -- billing_type column), keeping subscription mode == account mode.
+    CASE
+        WHEN lower(COALESCE(sc.billing_type, '')) = 'recurring' THEN 'postpaid'
+        ELSE 'prepaid'
+    END::billingmode,
     'month_to_month'::contractterm,
     s.start_date,
     s.end_date,
@@ -595,6 +608,7 @@ FROM splynx_staging.splynx_services_internet s
 JOIN splynx_staging.map_services map ON map.splynx_service_id = s.id
 JOIN splynx_staging.map_customers cust_map ON cust_map.splynx_customer_id = s.customer_id
 JOIN splynx_staging.map_tariffs tariff_map ON tariff_map.splynx_tariff_id = s.tariff_id
+LEFT JOIN splynx_staging.splynx_customers sc ON sc.id = s.customer_id
 LEFT JOIN splynx_staging.map_routers router_map ON router_map.splynx_router_id = s.router_id
 ON CONFLICT (id) DO NOTHING;
 

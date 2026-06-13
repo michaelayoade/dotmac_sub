@@ -39,6 +39,7 @@
         <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/reboot"
                 hx-swap="none"
                 hx-confirm="Reboot this ONT via TR-069?"
+                hx-headers='{"X-CSRFToken": "{{ request.state.csrf_token }}"}'
                 data-network-action
                 data-loading-label="Rebooting..."
                 class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
