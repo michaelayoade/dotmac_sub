@@ -74,7 +74,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] `#12` Payment form now formats validation errors cleanly (no raw Pydantic dump / pydantic.dev URL) — fixed PR #224 (payment_create handler). Broader admin forms still use str(exc); a shared formatter remains a wider follow-up
 - [ ] Non-numeric amount; wrong currency vs invoice currency
 - [ ] Customer-portal pay of an already-paid invoice (blocked/hidden)
-- [ ] Void / refund invoice with a payment; refund > paid
+- [!] `#23` Single invoice-**void** did not guard against voiding a **paid** invoice — `Invoices.void()` reversed the AR debits and set balance_due=0 while leaving the customer's payment allocated to a now-voided invoice (stranded money / AR desync). Inconsistent with **bulk**-void, which already skips `paid`/`void`. FIXED 2026-06-13: the canonical `Invoices.void()` now rejects `paid` ("refund the payment first") and already-`void` invoices with a 400 (protects all callers; bulk pre-check still stands). The admin UI already hides the void control on paid invoices, so this closes the server-side gap behind it. Unit-tested (paid → 400 + status unchanged; double-void → 400); existing draft-void test still passes. Refund path is already guarded (only `succeeded` payments refundable → double-refund 400)
 - [ ] VAT inclusive/exclusive/exempt tax math; multi-line totals
 - [x] Invoice PDF generates (2026-06-12)
 - [ ] PDF for multi-line / VAT / zero invoice; brand name correct

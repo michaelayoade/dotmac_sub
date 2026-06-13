@@ -251,6 +251,36 @@ class TestInvoiceWriteOffVoid:
         assert result.balance_due == Decimal("0.00")
         assert result.memo == "Void reason"
 
+    def test_void_paid_invoice_rejected(self, db_session, subscriber):
+        # Voiding a paid invoice would strand its payment / desync AR. The
+        # canonical service must refuse it (matching bulk-void's skip rule).
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("0.00"),
+            status=InvoiceStatus.paid,
+        )
+        with pytest.raises(HTTPException) as exc:
+            billing_service.invoices.void(db_session, str(invoice.id))
+        assert exc.value.status_code == 400
+        refreshed = db_session.get(Invoice, invoice.id)
+        assert refreshed.status == InvoiceStatus.paid
+
+    def test_void_already_void_rejected(self, db_session, subscriber):
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("50.00"),
+        )
+        billing_service.invoices.void(db_session, str(invoice.id))
+        with pytest.raises(HTTPException) as exc:
+            billing_service.invoices.void(db_session, str(invoice.id))
+        assert exc.value.status_code == 400
+
     def test_bulk_write_off(self, db_session, subscriber):
         inv1 = _make_invoice(
             db_session,
