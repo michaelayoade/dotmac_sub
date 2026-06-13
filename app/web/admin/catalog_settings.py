@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.csrf import get_csrf_token
-from app.db import get_db
+from app.db import form_write, get_db
 from app.services import web_catalog_settings as settings_svc
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data
@@ -152,7 +152,8 @@ def region_zone_create(
     """Create region zone."""
     zone = settings_svc.parse_region_zone_form(form)
     try:
-        settings_svc.create_region_zone_from_form(db, form=form)
+        with form_write(db):
+            settings_svc.create_region_zone_from_form(db, form=form)
         return RedirectResponse("/admin/catalog/settings/region-zones", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -202,7 +203,8 @@ def region_zone_update(
     """Update region zone."""
     zone = {"id": zone_id, **settings_svc.parse_region_zone_form(form)}
     try:
-        settings_svc.update_region_zone_from_form(db, zone_id=zone_id, form=form)
+        with form_write(db):
+            settings_svc.update_region_zone_from_form(db, zone_id=zone_id, form=form)
         return RedirectResponse("/admin/catalog/settings/region-zones", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -308,7 +310,8 @@ def usage_allowance_create(
     allowance = settings_svc.parse_usage_allowance_form(form)
 
     try:
-        settings_svc.create_usage_allowance_from_form(db, form=form)
+        with form_write(db):
+            settings_svc.create_usage_allowance_from_form(db, form=form)
         return RedirectResponse(
             "/admin/catalog/settings/usage-allowances", status_code=303
         )
@@ -365,9 +368,10 @@ def usage_allowance_update(
     allowance = {"id": allowance_id, **settings_svc.parse_usage_allowance_form(form)}
 
     try:
-        settings_svc.update_usage_allowance_from_form(
-            db, allowance_id=allowance_id, form=form
-        )
+        with form_write(db):
+            settings_svc.update_usage_allowance_from_form(
+                db, allowance_id=allowance_id, form=form
+            )
         return RedirectResponse(
             "/admin/catalog/settings/usage-allowances", status_code=303
         )
@@ -475,7 +479,8 @@ def sla_profile_create(
     profile = settings_svc.parse_sla_profile_form(form)
 
     try:
-        settings_svc.create_sla_profile_from_form(db, form=form)
+        with form_write(db):
+            settings_svc.create_sla_profile_from_form(db, form=form)
         return RedirectResponse("/admin/catalog/settings/sla-profiles", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -526,7 +531,10 @@ def sla_profile_update(
     profile = {"id": profile_id, **settings_svc.parse_sla_profile_form(form)}
 
     try:
-        settings_svc.update_sla_profile_from_form(db, profile_id=profile_id, form=form)
+        with form_write(db):
+            settings_svc.update_sla_profile_from_form(
+                db, profile_id=profile_id, form=form
+            )
         return RedirectResponse("/admin/catalog/settings/sla-profiles", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -639,7 +647,8 @@ def policy_set_create(
     policy = settings_svc.parse_policy_set_form(form)
 
     try:
-        settings_svc.create_policy_set_from_form(db, form=form)
+        with form_write(db):
+            settings_svc.create_policy_set_from_form(db, form=form)
         return RedirectResponse("/admin/catalog/settings/policy-sets", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -689,7 +698,8 @@ def policy_set_update(
     }
 
     try:
-        settings_svc.update_policy_set_from_form(db, policy_id=policy_id, form=form)
+        with form_write(db):
+            settings_svc.update_policy_set_from_form(db, policy_id=policy_id, form=form)
         return RedirectResponse("/admin/catalog/settings/policy-sets", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -802,7 +812,8 @@ def add_on_create(
     addon = settings_svc.parse_add_on_form(form)
 
     try:
-        settings_svc.create_add_on_from_form(db, form=form)
+        with form_write(db):
+            settings_svc.create_add_on_from_form(db, form=form)
         return RedirectResponse("/admin/catalog/settings/add-ons", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -852,7 +863,8 @@ def add_on_update(
     }
 
     try:
-        settings_svc.update_add_on_from_form(db, addon_id=addon_id, form=form)
+        with form_write(db):
+            settings_svc.update_add_on_from_form(db, addon_id=addon_id, form=form)
         return RedirectResponse("/admin/catalog/settings/add-ons", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
