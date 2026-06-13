@@ -100,8 +100,27 @@ def _set_prepaid_last_run_date(db: Session, run_date: date) -> None:
 
 
 def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
-    """Compute prepaid available balance as credit minus open invoice balance."""
+    """Authoritative prepaid available balance.
+
+    For Splynx-linked accounts the synced ``deposit`` IS the balance: Splynx's
+    billing engine already nets invoices, payments and transactions into it,
+    and it does not reconcile to any naive local recomputation (verified —
+    e.g. cust 25313 deposit 31,965.11 vs payments-minus-invoices 163,236).
+    Re-deriving it locally is what produced the phantom-invoice divergence, so
+    we trust the net rather than recompute it.
+
+    Native (non-Splynx) accounts have no authoritative deposit, so they fall
+    back to the local ledger model: credit minus open invoice balance.
+    """
     from app.services.billing._common import get_account_credit_balance
+
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if (
+        account is not None
+        and account.splynx_customer_id is not None
+        and account.deposit is not None
+    ):
+        return Decimal(str(account.deposit))
 
     credit_balance = get_account_credit_balance(db, account_id)
     open_balance = (
