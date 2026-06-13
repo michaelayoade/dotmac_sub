@@ -61,6 +61,7 @@ def billing_tax_rate_create(
             description=description,
         )
     except Exception as exc:
+        db.rollback()
         state = web_billing_tax_rates_service.list_data(db)
         from app.web.admin import get_current_user, get_sidebar_stats
 

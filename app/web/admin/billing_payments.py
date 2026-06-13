@@ -377,6 +377,7 @@ def payment_create(
         balance_value = result["balance_value"]
         balance_display = result["balance_display"]
     except Exception as exc:
+        db.rollback()
         # Surface a clean message instead of the raw Pydantic ValidationError
         # dump (which leaks internal type names and a pydantic.dev URL to staff).
         from fastapi import HTTPException as _HTTPException
@@ -552,6 +553,7 @@ def payment_update(
             memo=memo,
         )
     except Exception as exc:
+        db.rollback()
         edit_state = web_billing_payments_service.build_payment_edit_data(
             db, payment_id=str(payment_id)
         )

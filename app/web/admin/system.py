@@ -1761,6 +1761,7 @@ def role_create(
             permission_ids=permission_ids,
         )
     except Exception as exc:
+        db.rollback()
         error_state = web_system_role_forms_service.build_role_error_state(
             db,
             role=payload.model_dump(),
@@ -1848,6 +1849,7 @@ def role_update(
             permission_ids=permission_ids,
         )
     except Exception as exc:
+        db.rollback()
         error_state = web_system_role_forms_service.build_role_error_state(
             db=db,
             role={"id": role_id, **payload.model_dump()},
@@ -1958,6 +1960,7 @@ def permission_create(
     try:
         rbac_service.permissions.create(db, payload)
     except Exception as exc:
+        db.rollback()
         error_state = web_system_permission_forms_service.build_permission_error_state(
             permission=payload.model_dump(),
             action_url="/admin/system/permissions",
@@ -2036,6 +2039,7 @@ def permission_update(
     try:
         rbac_service.permissions.update(db, permission_id, payload)
     except Exception as exc:
+        db.rollback()
         error_state = web_system_permission_forms_service.build_permission_error_state(
             permission={"id": permission_id, **payload.model_dump()},
             action_url=f"/admin/system/permissions/{permission_id}",
@@ -2138,6 +2142,7 @@ def api_key_create(
             url=f"/admin/system/api-keys?new_key={raw_key}", status_code=303
         )
     except Exception as e:
+        db.rollback()
         context = {
             "request": request,
             "active_page": "api-keys",
@@ -2221,6 +2226,7 @@ def webhook_create(
         )
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
+        db.rollback()
         context: dict[str, object] = {
             "request": request,
             "active_page": "webhooks",
@@ -2290,6 +2296,7 @@ def webhook_update(
             return RedirectResponse(url="/admin/system/webhooks", status_code=303)
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
+        db.rollback()
         form_data = web_system_webhook_forms_service.get_webhook_form_data(
             db, endpoint_id
         )
