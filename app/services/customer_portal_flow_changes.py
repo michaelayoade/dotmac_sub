@@ -350,6 +350,18 @@ def submit_change_plan(
             "Contact support to migrate to it."
         )
 
+    # Same block-until-settled policy as apply_instant_plan_change: an account
+    # in arrears must clear overdue invoices before any plan change (including a
+    # future-dated request).
+    from app.services.payment_arrangements import get_account_outstanding_balance
+
+    arrears = get_account_outstanding_balance(db, str(subscription.subscriber_id))
+    if arrears > Decimal("0.00"):
+        raise ValueError(
+            f"You have an overdue balance of {arrears:,.2f}. "
+            "Please settle it before changing your plan."
+        )
+
     eff_date = datetime.strptime(effective_date, "%Y-%m-%d").date()
     if eff_date < date.today():
         raise ValueError("Effective date must be today or later.")
@@ -610,6 +622,20 @@ def apply_instant_plan_change(
         _validate_plan_change(db, subscription, str(new_offer.id))
     except HTTPException as exc:
         raise ValueError(str(exc.detail)) from exc
+
+    # Block self-service plan changes while the account is in arrears. Policy:
+    # the customer must settle overdue invoices first (covers prepaid AND
+    # postpaid — the old affordability gate only looked at prepaid wallet credit
+    # and never considered outstanding debt). Account 100000016 could upgrade
+    # while owing because this check did not exist.
+    from app.services.payment_arrangements import get_account_outstanding_balance
+
+    arrears = get_account_outstanding_balance(db, str(subscription.subscriber_id))
+    if arrears > Decimal("0.00"):
+        raise ValueError(
+            f"You have an overdue balance of {arrears:,.2f}. "
+            "Please settle it before changing your plan."
+        )
 
     old_price = (
         _get_offer_recurring_price(current_offer) if current_offer else Decimal("0")

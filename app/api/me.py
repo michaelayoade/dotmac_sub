@@ -375,11 +375,14 @@ def my_plan_change_submit(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Submit a plan-change request for the caller's own service."""
+    """Apply a plan change for the caller's own service.
+
+    Mirrors the web portal: same-family changes apply instantly when the
+    customer is eligible (no arrears, sufficient prepaid funds); a cross-family
+    change is queued as a migration support ticket. apply_instant_plan_change
+    verifies ownership, availability, arrears, and prepaid affordability.
+    """
     customer = _customer(db, principal)
-    # submit_change_plan does NOT verify ownership, so guard it here: the
-    # subscription must belong to the caller (prevents changing another
-    # customer's plan via a guessed subscription id).
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
     )
@@ -388,17 +391,57 @@ def my_plan_change_submit(
     ):
         raise HTTPException(status_code=404, detail="Service not found")
     try:
-        result = customer_changes.submit_change_plan(
-            db,
-            customer,
-            subscription_id,
-            str(payload.offer_id),
-            payload.effective_date,
-            payload.notes,
+        result = customer_changes.apply_instant_plan_change(
+            db=db,
+            customer=customer,
+            subscription_id=subscription_id,
+            offer_id=str(payload.offer_id),
+            notes=payload.notes,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return PlanChangeSubmitResponse(success=bool(result.get("success", True)))
+        message = str(exc)
+        # Cross-family changes can't apply instantly — queue a migration ticket.
+        if "same plan family" in message.lower():
+            from app.models.catalog import CatalogOffer
+            from app.services.common import coerce_uuid
+
+            offer = db.get(CatalogOffer, coerce_uuid(str(payload.offer_id)))
+            target_family = str(getattr(offer, "plan_family", "") or "").strip()
+            if target_family:
+                customer_changes.request_plan_migration(
+                    db=db,
+                    customer=customer,
+                    subscription_id=subscription_id,
+                    target_family=target_family,
+                    requested_offer_id=str(payload.offer_id),
+                    notes=payload.notes,
+                )
+                return PlanChangeSubmitResponse(
+                    success=True,
+                    status="migration_requested",
+                    message=(
+                        "This plan needs a migration. We've opened a support "
+                        "request to move you."
+                    ),
+                )
+        # Arrears / validation errors → 400 with the clear message.
+        raise HTTPException(status_code=400, detail=message) from exc
+
+    if not result.get("success", False):
+        # Insufficient prepaid balance for the prorated upgrade.
+        shortfall = result.get("shortfall")
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"Insufficient wallet balance — top up {shortfall} to apply this "
+                "upgrade."
+                if shortfall is not None
+                else "Insufficient wallet balance to apply this upgrade."
+            ),
+        )
+    return PlanChangeSubmitResponse(
+        success=True, status="applied", message="Your plan has been changed."
+    )
 
 
 @router.get(

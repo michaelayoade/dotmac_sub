@@ -58,6 +58,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [!] `#5` heading "Upgrade Summary" for downgrades — fixed PR #224
 - [!] `#6` downgrade "₦0 remaining value" misleading — fixed PR #224
 - [!] `#7` empty-family instant change 400 — fixed PR #224
+- [!] `#30` (found on PROD by driving account 100000016) Self-service plan change **ignored account debt** and the two paths disagreed: (a) the affordability check used credit-only `get_account_credit_balance` (overdue invoices invisible); (b) the gate was **prepaid-only** — postpaid/indebted accounts applied with NO balance/debt check; (c) the web path auto-applied while the mobile/`/me` API path only queued a pending request ("request sent"). FIXED 2026-06-13 (decision: block-until-settled + auto-apply both paths): `apply_instant_plan_change` AND `submit_change_plan` now block with a clear "overdue balance" 400 if `get_account_outstanding_balance` (overdue arrears) > 0, for prepaid AND postpaid; the `/me` API path now routes through `apply_instant_plan_change` (auto-applies same-family when eligible; cross-family → migration ticket; insufficient prepaid funds → 402). Unit-tested (arrears blocks postpaid change + leaves offer unchanged; no-arrears postpaid auto-applies). Follow-up: surface the arrears block on the change-plan page/quote too (currently enforced at submit)
 - [ ] Change to the same plan (excluded)
 - [ ] Cross-family change → migration/support ticket path
 - [ ] Boundary: shortfall exactly 0; 1 kobo short
