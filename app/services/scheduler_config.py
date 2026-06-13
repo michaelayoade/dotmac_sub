@@ -1550,6 +1550,16 @@ def build_beat_schedule() -> dict:
                 "schedule": crontab(hour=2, minute=30),
             }
 
+        # Daily re-drive of CRM push dead-letters — a multi-hour CRM outage
+        # self-recovers without manual action. Runs whenever CRM sync is on
+        # (gated by the same ticket-pull flag, the canonical CRM-enabled
+        # signal). Cheap no-op when the dead-letter table is empty.
+        if crm_ticket_pull_enabled or crm_billing_push_enabled:
+            schedule["crm_dead_letter_redrive"] = {
+                "task": "app.tasks.crm_sync.redrive_crm_dead_letters",
+                "schedule": crontab(hour=4, minute=10),
+            }
+
         # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
         olt_queue_enabled = _effective_bool(
             session,
