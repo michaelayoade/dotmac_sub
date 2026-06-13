@@ -27,7 +27,7 @@ running finding numbers from the 2026-06-12 driving session.
 ## 2. Customer CRUD & onboarding
 - [x] Duplicate email rejected, no duplicate row (2026-06-12)
 - [ ] Duplicate phone; email case-sensitivity collision
-- [ ] Blank / whitespace-only / max-length-overflow / emoji-unicode required fields
+- [!] `#18` Blank / whitespace-only / over-length required name fields were ACCEPTED on customer create+edit (server declared `first_name`/`last_name` as `Form(None)` and passed them raw; only `email` was validated) → customers created with empty display names. FIXED 2026-06-13: `_require_text()` trims, rejects blank/whitespace-only, and caps length (names 80, business name 120) across person/business create+edit; clean `ValueError` surfaced as a 400 form error. Verified live (whitespace → "First name is required", valid still creates) + unit tests. Emoji names still accepted (valid unicode, intentionally allowed)
 - [ ] Invalid email & phone formats; international phone; long address; special chars
 - [ ] Wizard back/forward preserves data; cancel mid-wizard; double-submit → 1 customer
 - [ ] Business vs individual (Contacts step business-only)

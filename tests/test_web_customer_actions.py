@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from app.models.auth import UserCredential
 from app.models.billing import TaxRate
 from app.models.catalog import (
@@ -215,3 +217,110 @@ def test_bulk_activate_business_restores_admin_locked_member(db_session):
     assert not has_active_lock(
         db_session, str(subscription.id), EnforcementReason.admin
     )
+
+
+def _person_form_data(**overrides):
+    data = {"first_name": "Jane", "last_name": "Doe", "email": "jane@example.com"}
+    data.update(overrides)
+    return data
+
+
+_EMPTY_CONTACTS = {
+    "first_name": [],
+    "last_name": [],
+    "title": [],
+    "role": [],
+    "email": [],
+    "phone": [],
+    "is_primary": [],
+}
+
+
+def test_create_person_rejects_whitespace_only_names(db_session):
+    with pytest.raises(ValueError, match="First name is required"):
+        actions.create_customer_from_form(
+            db=db_session,
+            customer_type="person",
+            form_data=_person_form_data(
+                first_name="   ", email="ws-create@example.com"
+            ),
+            contact_columns=_EMPTY_CONTACTS,
+        )
+
+
+def test_create_person_rejects_overlong_name(db_session):
+    with pytest.raises(ValueError, match="80 characters or fewer"):
+        actions.create_customer_from_form(
+            db=db_session,
+            customer_type="person",
+            form_data=_person_form_data(
+                first_name="A" * 81, email="long-create@example.com"
+            ),
+            contact_columns=_EMPTY_CONTACTS,
+        )
+
+
+def test_create_person_trims_surrounding_whitespace(db_session):
+    _, created_id = actions.create_customer_from_form(
+        db=db_session,
+        customer_type="person",
+        form_data=_person_form_data(
+            first_name="  John  ",
+            last_name="  Smith ",
+            email="trim-create@example.com",
+        ),
+        contact_columns=_EMPTY_CONTACTS,
+    )
+    created = db_session.get(Subscriber, created_id)
+    assert created.first_name == "John"
+    assert created.last_name == "Smith"
+
+
+def test_create_business_rejects_blank_name(db_session):
+    with pytest.raises(ValueError, match="Business name is required"):
+        actions.create_customer_from_form(
+            db=db_session,
+            customer_type="business",
+            form_data={"name": "   "},
+            contact_columns=_EMPTY_CONTACTS,
+        )
+
+
+def test_update_person_rejects_blank_name(db_session, subscriber):
+    with pytest.raises(ValueError, match="Last name is required"):
+        actions.update_person_customer(
+            db=db_session,
+            customer_id=str(subscriber.id),
+            first_name="Test",
+            last_name="   ",
+            display_name=None,
+            avatar_url=None,
+            email=subscriber.email,
+            email_verified="false",
+            phone=None,
+            date_of_birth=None,
+            gender="unknown",
+            preferred_contact_method=None,
+            locale=None,
+            timezone_value=None,
+            address_line1=None,
+            address_line2=None,
+            city=None,
+            region=None,
+            postal_code=None,
+            country_code=None,
+            status="active",
+            is_active="true",
+            marketing_opt_in="false",
+            notes=None,
+            account_start_date=None,
+            billing_enabled_override="false",
+            billing_day=None,
+            payment_due_days=None,
+            grace_period_days=None,
+            min_balance=None,
+            captive_redirect_enabled="false",
+            tax_rate_id=None,
+            payment_method=None,
+            metadata_json=None,
+        )
