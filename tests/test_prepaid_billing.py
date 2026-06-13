@@ -188,9 +188,7 @@ def test_resolver_uses_deposit_until_seeded_then_ledger(
     ) == Decimal("5123.00")
 
 
-def test_drawdown_reduces_seeded_balance(
-    db_session, subscriber_account, subscription
-):
+def test_drawdown_reduces_seeded_balance(db_session, subscriber_account, subscription):
     """End-to-end: after seeding, a drawdown debit lowers the resolved balance
     that enforcement reads."""
     subscriber_account.splynx_customer_id = 4243
