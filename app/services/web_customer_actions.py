@@ -658,6 +658,18 @@ def _normalize_optional(value: str | None) -> str | None:
     return stripped or None
 
 
+def _require_text(value: str | None, label: str, *, max_length: int) -> str:
+    """Validate a required free-text field: trim, reject blank/whitespace-only,
+    and enforce a max length so we surface a clean message instead of relying on
+    a raw DB length error."""
+    normalized = _normalize_optional(value)
+    if not normalized:
+        raise ValueError(f"{label} is required")
+    if len(normalized) > max_length:
+        raise ValueError(f"{label} must be {max_length} characters or fewer")
+    return normalized
+
+
 def _optional_int(value: str | None) -> int | None:
     normalized = _normalize_optional(value)
     if normalized is None:
@@ -1114,6 +1126,12 @@ def create_customer_from_form(
         normalized_email = _normalize_optional(form_data.get("email"))
         if not normalized_email:
             raise ValueError("email is required")
+        first_name = _require_text(
+            form_data.get("first_name"), "First name", max_length=80
+        )
+        last_name = _require_text(
+            form_data.get("last_name"), "Last name", max_length=80
+        )
         existing = (
             db.query(Subscriber)
             .filter(func.lower(Subscriber.email) == normalized_email.lower())
@@ -1126,8 +1144,8 @@ def create_customer_from_form(
         customer = _create_subscriber(
             db=db,
             payload={
-                "first_name": form_data.get("first_name"),
-                "last_name": form_data.get("last_name"),
+                "first_name": first_name,
+                "last_name": last_name,
                 "display_name": _normalize_optional(form_data.get("display_name")),
                 "avatar_url": _normalize_optional(form_data.get("avatar_url")),
                 "email": normalized_email,
@@ -1160,9 +1178,7 @@ def create_customer_from_form(
             _create_subscriber_channels_from_rows(db, str(customer.id), contact_rows)
         return "person", str(customer.id)
 
-    company_name = cast(str, form_data.get("name") or "").strip()
-    if not company_name:
-        raise ValueError("Business name is required")
+    company_name = _require_text(form_data.get("name"), "Business name", max_length=120)
     identity = _business_identity_from_contacts(company_name, contact_rows)
     business = _create_subscriber(
         db=db,
@@ -1327,16 +1343,30 @@ def update_person_customer(
     raw_status = str(status or "").strip().lower()
     should_block_subscriptions = raw_status == "blocked"
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    normalized_email = _normalize_optional(email)
+    if normalized_email:
+        clash = (
+            db.query(Subscriber)
+            .filter(
+                func.lower(Subscriber.email) == normalized_email.lower(),
+                Subscriber.id != before.id,
+            )
+            .first()
+        )
+        if clash:
+            raise ValueError(
+                f"A customer with email {normalized_email} already exists."
+            )
     active = before.is_active if is_active is None else (is_active == "true")
     normalized_status, active = _normalize_status_for_customer_edit(
         status, is_active=active
     )
     data = {
-        "first_name": first_name,
-        "last_name": last_name,
+        "first_name": _require_text(first_name, "First name", max_length=80),
+        "last_name": _require_text(last_name, "Last name", max_length=80),
         "display_name": _normalize_optional(display_name),
         "avatar_url": _normalize_optional(avatar_url),
-        "email": email or None,
+        "email": normalized_email,
         "email_verified": email_verified == "true",
         "phone": phone or None,
         "date_of_birth": date_of_birth or None,
@@ -1420,10 +1450,11 @@ def update_business_customer(
     payment_method: str | None,
 ):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    company_name = _require_text(name, "Business name", max_length=120)
     payload = SubscriberUpdate.model_validate(
         {
-            "company_name": name,
-            "display_name": name,
+            "company_name": company_name,
+            "display_name": company_name,
             "legal_name": _normalize_optional(legal_name),
             "tax_id": _normalize_optional(tax_id),
             "domain": _normalize_optional(domain),
