@@ -1228,6 +1228,31 @@ class TestPaymentCRUD:
         assert payment.amount == Decimal("100.00")
         assert payment.currency == "USD"
 
+    def test_duplicate_manual_payment_blocked(self, db_session, subscriber):
+        # #29: a double-clicked manual "record payment" must not double-credit.
+        billing_service.payments.create(
+            db_session,
+            PaymentCreate(account_id=subscriber.id, amount=Decimal("5000.00")),
+        )
+        with pytest.raises(HTTPException) as exc:
+            billing_service.payments.create(
+                db_session,
+                PaymentCreate(account_id=subscriber.id, amount=Decimal("5000.00")),
+            )
+        assert exc.value.status_code == 409
+
+    def test_manual_payment_different_amount_not_blocked(self, db_session, subscriber):
+        # The guard is amount-specific: a genuinely different amount goes through.
+        billing_service.payments.create(
+            db_session,
+            PaymentCreate(account_id=subscriber.id, amount=Decimal("5000.00")),
+        )
+        second = billing_service.payments.create(
+            db_session,
+            PaymentCreate(account_id=subscriber.id, amount=Decimal("5001.00")),
+        )
+        assert second.id is not None
+
     def test_create_payment_zero_amount(self, db_session, subscriber):
         with pytest.raises(Exception):
             billing_service.payments.create(
