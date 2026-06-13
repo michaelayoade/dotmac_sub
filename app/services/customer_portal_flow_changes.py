@@ -236,6 +236,15 @@ def get_change_plan_page(
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
     wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    # Surface arrears up-front: a self-service plan change is blocked at submit
+    # while the account has overdue invoices (block-until-settled, #30). Showing
+    # it here lets the customer settle first instead of hitting the error on
+    # submit.
+    from app.services.payment_arrangements import get_account_outstanding_balance
+
+    arrears_amount = get_account_outstanding_balance(
+        db, str(subscription.subscriber_id)
+    )
     # Plan-change quotes are computed lazily — one per offer the customer
     # selects — via get_plan_change_quote(). Pricing the whole catalog here ran a
     # proration calc per available offer, making this page take ~46s for large
@@ -261,6 +270,8 @@ def get_change_plan_page(
         "selected_offer_id": None,
         "insufficient_balance": None,
         "next_billing_date": next_billing_date,
+        "arrears_amount": _to_float(arrears_amount),
+        "in_arrears": arrears_amount > Decimal("0.00"),
         **copy,
     }
 
@@ -435,6 +446,12 @@ def get_change_plan_error_context(
         "selected_offer_id": selected_offer_id,
         "insufficient_balance": insufficient_balance,
         "next_billing_date": next_billing_date,
+        "arrears_amount": (
+            page_data.get("arrears_amount", 0.0) if page_data is not None else 0.0
+        ),
+        "in_arrears": (
+            bool(page_data.get("in_arrears", False)) if page_data is not None else False
+        ),
         **copy,
     }
 

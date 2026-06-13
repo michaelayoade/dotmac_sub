@@ -1164,3 +1164,33 @@ def test_postpaid_plan_change_applies_when_no_arrears(
     db_session.refresh(subscription)
     assert result["success"] is True
     assert subscription.offer_id == target_offer.id
+
+
+def test_change_plan_page_flags_arrears(db_session, subscriber):
+    """The change-plan page context surfaces arrears so the UI can show a
+    'settle first' notice and hide the plan picker (#30 follow-up)."""
+    from app.services.customer_portal_flow_changes import get_change_plan_page
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    cust = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
+
+    page = get_change_plan_page(db_session, cust, str(subscription.id))
+    assert page["in_arrears"] is False
+    assert page["arrears_amount"] == 0.0
+
+    _add_overdue_invoice(db_session, subscriber, Decimal("5000.00"))
+    page = get_change_plan_page(db_session, cust, str(subscription.id))
+    assert page["in_arrears"] is True
+    assert page["arrears_amount"] == 5000.0
