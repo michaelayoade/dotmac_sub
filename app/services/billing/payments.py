@@ -1,7 +1,7 @@
 """Payment and payment method management services."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -670,6 +670,43 @@ class Payments(ListResponseMixin):
             raise HTTPException(
                 status_code=400, detail="Payment amount must be greater than 0"
             )
+        # Double-submit guard for manually recorded payments. Gateway payments
+        # are deduped by the uq_payments_active_external_id partial index, but a
+        # manual/offline payment has no external_id/provider_id, so a
+        # double-clicked "record payment" would create two rows and over-credit
+        # the account. Reject an identical manual payment recorded in the last
+        # minute (mirrors vas_wallet.pay_bill's guard). (#29)
+        if (
+            payload.external_id is None
+            and payload.provider_id is None
+            and payload.amount is not None
+        ):
+            scope_col, scope_val = (
+                (Payment.account_id, payload.account_id)
+                if payload.account_id is not None
+                else (Payment.billing_account_id, payload.billing_account_id)
+            )
+            if scope_val is not None:
+                duplicate = (
+                    db.query(Payment.id)
+                    .filter(
+                        scope_col == scope_val,
+                        Payment.amount == payload.amount,
+                        Payment.external_id.is_(None),
+                        Payment.provider_id.is_(None),
+                        Payment.is_active.is_(True),
+                        Payment.created_at >= datetime.now(UTC) - timedelta(seconds=60),
+                    )
+                    .first()
+                )
+                if duplicate:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "An identical payment was just recorded moments ago. "
+                            "Refresh the page to confirm it before recording again."
+                        ),
+                    )
         data = payload.model_dump(exclude={"allocations"})
         fields_set = payload.model_fields_set
         if "currency" not in fields_set:

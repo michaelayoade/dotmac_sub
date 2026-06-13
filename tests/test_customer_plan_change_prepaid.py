@@ -1101,3 +1101,131 @@ def test_plan_change_refreshes_unit_price(db_session, subscriber, monkeypatch):
     )
     db_session.refresh(subscription)
     assert subscription.unit_price == Decimal("200.00")
+
+
+def _add_overdue_invoice(db_session, subscriber, amount: Decimal) -> None:
+    from app.models.billing import Invoice, InvoiceStatus
+
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            status=InvoiceStatus.overdue,
+            currency="NGN",
+            subtotal=amount,
+            total=amount,
+            balance_due=amount,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+
+def test_plan_change_blocked_when_account_in_arrears(
+    db_session, subscriber, monkeypatch
+):
+    """An account with an overdue balance cannot self-service change plans
+    (policy: block-until-settled). Covers POSTPAID too — the old gate only
+    looked at prepaid wallet credit and never considered debt (account
+    100000016 could upgrade while owing)."""
+    _stub_plan_change_side_effects(monkeypatch)
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+        billing_mode=BillingMode.postpaid,
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+        billing_mode=BillingMode.postpaid,
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    _add_overdue_invoice(db_session, subscriber, Decimal("5000.00"))
+
+    with pytest.raises(ValueError, match="overdue balance"):
+        apply_instant_plan_change(
+            db_session,
+            {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+            str(subscription.id),
+            str(target_offer.id),
+        )
+
+    db_session.refresh(subscription)
+    assert subscription.offer_id == current_offer.id  # unchanged
+
+
+def test_postpaid_plan_change_applies_when_no_arrears(
+    db_session, subscriber, monkeypatch
+):
+    """With no overdue balance, a postpaid change still auto-applies."""
+    _stub_plan_change_side_effects(monkeypatch)
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+        billing_mode=BillingMode.postpaid,
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Unlimited Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+        billing_mode=BillingMode.postpaid,
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+
+    result = apply_instant_plan_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+    )
+    db_session.refresh(subscription)
+    assert result["success"] is True
+    assert subscription.offer_id == target_offer.id
+
+
+def test_change_plan_page_flags_arrears(db_session, subscriber):
+    """The change-plan page context surfaces arrears so the UI can show a
+    'settle first' notice and hide the plan picker (#30 follow-up)."""
+    from app.services.customer_portal_flow_changes import get_change_plan_page
+
+    current_offer = _make_offer(
+        db_session,
+        name="Unlimited Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    cust = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
+
+    page = get_change_plan_page(db_session, cust, str(subscription.id))
+    assert page["in_arrears"] is False
+    assert page["arrears_amount"] == 0.0
+
+    _add_overdue_invoice(db_session, subscriber, Decimal("5000.00"))
+    page = get_change_plan_page(db_session, cust, str(subscription.id))
+    assert page["in_arrears"] is True
+    assert page["arrears_amount"] == 5000.0
