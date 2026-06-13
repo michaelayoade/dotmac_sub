@@ -1343,6 +1343,20 @@ def update_person_customer(
     raw_status = str(status or "").strip().lower()
     should_block_subscriptions = raw_status == "blocked"
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    normalized_email = _normalize_optional(email)
+    if normalized_email:
+        clash = (
+            db.query(Subscriber)
+            .filter(
+                func.lower(Subscriber.email) == normalized_email.lower(),
+                Subscriber.id != before.id,
+            )
+            .first()
+        )
+        if clash:
+            raise ValueError(
+                f"A customer with email {normalized_email} already exists."
+            )
     active = before.is_active if is_active is None else (is_active == "true")
     normalized_status, active = _normalize_status_for_customer_edit(
         status, is_active=active
@@ -1352,7 +1366,7 @@ def update_person_customer(
         "last_name": _require_text(last_name, "Last name", max_length=80),
         "display_name": _normalize_optional(display_name),
         "avatar_url": _normalize_optional(avatar_url),
-        "email": email or None,
+        "email": normalized_email,
         "email_verified": email_verified == "true",
         "phone": phone or None,
         "date_of_birth": date_of_birth or None,

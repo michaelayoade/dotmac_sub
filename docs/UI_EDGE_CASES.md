@@ -32,7 +32,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [ ] Wizard back/forward preserves data; cancel mid-wizard; double-submit → 1 customer
 - [ ] Business vs individual (Contacts step business-only)
 - [ ] Geocode unresolvable address; Nominatim unreachable
-- [ ] Edit customer email into a collision
+- [!] `#19` Edit customer email into a collision → **500 error**. Two bugs: (a) the person/business edit paths never pre-checked email uniqueness (unlike create), relying on the DB unique constraint; (b) worse, the edit handlers' `except` blocks re-queried the DB to re-render the form WITHOUT `db.rollback()`, so the aborted transaction turned the unique-violation into a 500 instead of a graceful 400. FIXED 2026-06-13: `update_person_customer` pre-checks email uniqueness (excluding self) → clean "A customer with email X already exists."; both edit handlers now `db.rollback()` before re-querying (matching the create handler). Verified live (collision now a 400 with the clear message, no 500) + unit tests (collision rejected, keeping own email allowed)
 
 ## 3. Catalog & offers
 - [ ] Offer with 0 / negative / huge / non-numeric price

@@ -324,3 +324,62 @@ def test_update_person_rejects_blank_name(db_session, subscriber):
             payment_method=None,
             metadata_json=None,
         )
+
+
+def _update_person(db, subscriber, **overrides):
+    kwargs = dict(
+        first_name="Test",
+        last_name="User",
+        display_name=None,
+        avatar_url=None,
+        email=subscriber.email,
+        email_verified="false",
+        phone=None,
+        date_of_birth=None,
+        gender="unknown",
+        preferred_contact_method=None,
+        locale=None,
+        timezone_value=None,
+        address_line1=None,
+        address_line2=None,
+        city=None,
+        region=None,
+        postal_code=None,
+        country_code=None,
+        status="active",
+        is_active="true",
+        marketing_opt_in="false",
+        notes=None,
+        account_start_date=None,
+        billing_enabled_override="false",
+        billing_day=None,
+        payment_due_days=None,
+        grace_period_days=None,
+        min_balance=None,
+        captive_redirect_enabled="false",
+        tax_rate_id=None,
+        payment_method=None,
+        metadata_json=None,
+    )
+    kwargs.update(overrides)
+    return actions.update_person_customer(
+        db=db, customer_id=str(subscriber.id), **kwargs
+    )
+
+
+def test_update_person_rejects_email_collision(db_session, subscriber):
+    other = Subscriber(
+        first_name="Other", last_name="Person", email="taken@example.com"
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="already exists"):
+        _update_person(db_session, subscriber, email="taken@example.com")
+
+
+def test_update_person_allows_keeping_own_email(db_session, subscriber):
+    # Re-saving the same email (self) must not be treated as a collision.
+    _update_person(db_session, subscriber, email=subscriber.email, first_name="Renamed")
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed.first_name == "Renamed"
