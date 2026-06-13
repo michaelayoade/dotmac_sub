@@ -42,7 +42,7 @@ def _arg(flag: str, default: str) -> str:
     return default
 
 
-def main() -> None:
+def main() -> bool:
     tolerance = Decimal(_arg("--tolerance", "1.00"))
     limit = int(_arg("--limit", "25"))
     now = datetime.now(UTC)
@@ -135,9 +135,13 @@ def main() -> None:
                 else "MISMATCHES FOUND — investigate before enable."
             )
         )
+        return ok
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    main()
+    # Machine-enforced cutover gate: non-zero exit on any mismatch so
+    # `reconcile && seed && enable` (or any wrapper) HALTS on a dirty result
+    # instead of sailing through an advisory print.
+    raise SystemExit(0 if main() else 1)

@@ -8,6 +8,11 @@ Pair with the kill switch: set ``billing_enabled=false`` to halt the engine,
 then run this for the bad date. Idempotent: a charge already reversed is
 skipped (the reversal credit references the original debit id). Dry-run default.
 
+Note: reversing a charge does NOT re-arm same-day charging — the engine already
+advanced ``next_billing_at`` one period, so it won't re-charge until the next
+period regardless. Re-charge protection after a reversal rests on that cursor
+(the day-marker still matches the original debit), which is intended.
+
 Usage:
     python scripts/billing/reverse_prepaid_charges.py --date 2026-07-01
     python scripts/billing/reverse_prepaid_charges.py --date 2026-07-01 --execute
