@@ -496,13 +496,34 @@ def _get_offer_recurring_price(offer: CatalogOffer) -> Decimal:
     return Decimal("0")
 
 
+def _format_speed_mbps(value: object) -> str | None:
+    """Format catalog plan speed for customer display.
+
+    Some imported rows store Kbps-style values such as 6000, while native
+    catalog rows use the field's Mbps meaning such as 6. Normalize both to
+    a Mbps display so customers compare plans correctly.
+    """
+    speed = _to_int(value)
+    if speed <= 0:
+        return None
+    if speed >= 1000 and speed % 1000 == 0:
+        return f"{speed // 1000} Mbps"
+    if speed >= 1000:
+        return f"{speed / 1000:g} Mbps"
+    return f"{speed} Mbps"
+
+
 def get_offer_price_summary(offer: CatalogOffer | None) -> SimpleNamespace:
     """Build recurring price display details for customer portal templates."""
     amount = Decimal("0")
     currency = "NGN"
     cycle_value = "monthly"
+    download_speed_label = None
+    upload_speed_label = None
 
     if offer:
+        download_speed_label = _format_speed_mbps(offer.speed_download_mbps)
+        upload_speed_label = _format_speed_mbps(offer.speed_upload_mbps)
         for price in offer.prices or []:
             if price.is_active and price.price_type == PriceType.recurring:
                 amount = Decimal(str(price.amount or 0))
@@ -521,6 +542,9 @@ def get_offer_price_summary(offer: CatalogOffer | None) -> SimpleNamespace:
                 cycle_value = (
                     raw_cycle.value if hasattr(raw_cycle, "value") else str(raw_cycle)
                 )
+    speed_label = None
+    if download_speed_label or upload_speed_label:
+        speed_label = f"{download_speed_label or '-'} / {upload_speed_label or '-'}"
 
     return SimpleNamespace(
         amount=float(amount),
@@ -528,6 +552,9 @@ def get_offer_price_summary(offer: CatalogOffer | None) -> SimpleNamespace:
         currency=currency,
         billing_cycle=cycle_value,
         period_label=_CYCLE_LABELS.get(cycle_value, "/cycle"),
+        download_speed_label=download_speed_label,
+        upload_speed_label=upload_speed_label,
+        speed_label=speed_label,
     )
 
 

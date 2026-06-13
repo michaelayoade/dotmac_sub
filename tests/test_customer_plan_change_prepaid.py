@@ -39,6 +39,8 @@ def _make_offer(
     show_on_customer_portal: bool = True,
     is_active: bool = True,
     status: OfferStatus = OfferStatus.active,
+    speed_download_mbps: int | None = None,
+    speed_upload_mbps: int | None = None,
 ) -> CatalogOffer:
     offer = CatalogOffer(
         name=name,
@@ -52,6 +54,8 @@ def _make_offer(
         show_on_customer_portal=show_on_customer_portal,
         is_active=is_active,
         status=status,
+        speed_download_mbps=speed_download_mbps,
+        speed_upload_mbps=speed_upload_mbps,
     )
     db_session.add(offer)
     db_session.flush()
@@ -203,12 +207,16 @@ def test_change_plan_page_separates_migration_offers(db_session, subscriber):
         name="Unlimited Plus",
         amount=Decimal("150.00"),
         plan_family="unlimited",
+        speed_download_mbps=6,
+        speed_upload_mbps=6,
     )
     migration_offer = _make_offer(
         db_session,
         name="Dedicated 1",
         amount=Decimal("300.00"),
         plan_family="dedicated",
+        speed_download_mbps=25000,
+        speed_upload_mbps=10000,
     )
     subscription = _make_subscription(
         db_session,
@@ -233,6 +241,33 @@ def test_change_plan_page_separates_migration_offers(db_session, subscriber):
         str(migration_offer.id),
     }
     assert str(migration_offer.id) in page["migration_offer_summaries"]
+    assert (
+        page["available_offer_summaries"][str(instant_offer.id)].speed_label
+        == "6 Mbps / 6 Mbps"
+    )
+    assert (
+        page["migration_offer_summaries"][str(migration_offer.id)].speed_label
+        == "25 Mbps / 10 Mbps"
+    )
+
+
+def test_plan_speed_summary_normalizes_legacy_kbps_values():
+    from app.services import customer_portal_flow_changes as flow
+
+    offer = CatalogOffer(
+        name="Unlimited Basic",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        speed_download_mbps=6000,
+        speed_upload_mbps=6000,
+    )
+
+    summary = flow.get_offer_price_summary(offer)
+
+    assert summary.speed_label == "6 Mbps / 6 Mbps"
 
 
 def test_validate_plan_change_rejects_cross_family_change(db_session, subscriber):

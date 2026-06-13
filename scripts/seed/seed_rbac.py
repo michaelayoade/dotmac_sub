@@ -12,6 +12,11 @@ DEFAULT_PERMISSIONS = [
     ("audit:read", "Read audit events"),
     # Auth & System
     ("auth:manage", "Manage authentication settings"),
+    ("auth:credential:read", "View authentication credentials"),
+    ("auth:credential:write", "Manage authentication credentials"),
+    ("system:read", "View system administration pages"),
+    ("system:write", "Modify system administration settings"),
+    ("system:db_admin", "Perform database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
     # RBAC - Granular permissions for role builder
@@ -25,6 +30,7 @@ DEFAULT_PERMISSIONS = [
     # Customers/Subscribers
     ("customer:read", "View customers and subscribers"),
     ("customer:create", "Create customers and subscribers"),
+    ("customer:write", "Manage customer records"),
     ("customer:update", "Update customers and subscribers"),
     ("customer:delete", "Delete customers and subscribers"),
     ("customer:impersonate", "Impersonate customer accounts"),
@@ -80,6 +86,7 @@ DEFAULT_PERMISSIONS = [
     # Network - Devices
     ("network:hub:read", "View the network operations hub"),
     ("network:map:read", "View the comprehensive network map"),
+    ("network:admin", "Perform network administrative actions"),
     ("network:device:read", "View network devices"),
     ("network:device:write", "Manage network devices"),
     ("network:nas:read", "View NAS device management"),
@@ -163,6 +170,9 @@ DEFAULT_PERMISSIONS = [
     ("reports:network", "View network reports"),
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
+    # Usage
+    ("usage:read", "View usage records"),
+    ("usage:write", "Manage usage records"),
     # Router Management
     ("router:read", "View routers, templates, push history, snapshots"),
     ("router:write", "Create/edit routers, templates, trigger sync/snapshots"),
