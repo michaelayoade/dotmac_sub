@@ -97,6 +97,14 @@ def create_request(
     longitude: float | None,
     notes: str | None,
 ) -> dict:
+    # Normalize before validating: the guard must see whitespace-only input as
+    # empty, otherwise "   " is truthy here yet stored as None below — letting a
+    # blank-contact request through the exact check meant to block it.
+    contact_name = (contact_name or "").strip() or None
+    contact_phone = (contact_phone or "").strip() or None
+    contact_email = (contact_email or "").strip() or None
+    address = (address or "").strip() or None
+    notes = (notes or "").strip() or None
     if not subscriber_id and not (contact_name and contact_phone):
         raise HTTPException(
             status_code=400,
@@ -112,14 +120,14 @@ def create_request(
     req = ResellerServiceRequest(
         reseller_id=coerce_uuid(reseller_id),
         subscriber_id=coerce_uuid(subscriber_id) if subscriber_id else None,
-        contact_name=(contact_name or "").strip() or None,
-        contact_phone=(contact_phone or "").strip() or None,
-        contact_email=(contact_email or "").strip() or None,
-        address=(address or "").strip() or None,
+        contact_name=contact_name,
+        contact_phone=contact_phone,
+        contact_email=contact_email,
+        address=address,
         latitude=latitude,
         longitude=longitude,
         serviceability=flag,
-        notes=(notes or "").strip() or None,
+        notes=notes,
     )
     db.add(req)
     db.commit()
