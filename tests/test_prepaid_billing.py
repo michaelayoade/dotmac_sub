@@ -109,6 +109,33 @@ def test_idempotent_within_period(db_session, subscriber_account, subscription):
     assert debits == 1
 
 
+def test_idempotency_guard_blocks_duplicate_same_day(
+    db_session, subscriber_account, subscription
+):
+    """Even if the cursor is reset (simulating a concurrent run that saw the
+    subscription due before the first advanced it), the (subscription, day)
+    marker prevents a second charge."""
+    _make_prepaid(db_session, subscriber_account, subscription, unit_price="3000")
+    subscription.next_billing_at = NOW - timedelta(days=1)
+    db_session.commit()
+
+    run_prepaid_charges(db_session, dry_run=False, now=NOW)
+    # Force the subscription back to "due", as a racing run would have seen it.
+    subscription.next_billing_at = NOW - timedelta(days=1)
+    db_session.commit()
+
+    summary = run_prepaid_charges(db_session, dry_run=False, now=NOW)
+    assert summary["charged"] == 0
+    assert summary["skipped_duplicate"] == 1
+    debits = (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.account_id == subscriber_account.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .count()
+    )
+    assert debits == 1  # not 2
+
+
 def test_dry_run_posts_nothing(db_session, subscriber_account, subscription):
     _make_prepaid(db_session, subscriber_account, subscription)
     subscription.next_billing_at = NOW - timedelta(days=1)
@@ -186,6 +213,43 @@ def test_resolver_uses_deposit_until_seeded_then_ledger(
     assert _resolve_prepaid_available_balance(
         db_session, str(subscriber_account.id)
     ) == Decimal("5123.00")
+
+
+def test_billing_switch_guard_detects_drift(db_session):
+    """Guard flags when billing_enabled != the pinned expected value."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.services.billing_settings import check_billing_switch
+
+    def _set(key: str, value: str):
+        db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.billing, DomainSetting.key == key
+        ).delete()
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key=key,
+                value_text=value,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+    # Pre-cutover: switch off, expected off (default) -> ok.
+    _set("billing_enabled", "false")
+    assert check_billing_switch(db_session) == {
+        "ok": True,
+        "expected": False,
+        "actual": False,
+    }
+
+    # Flip billing_enabled true while expected stays false -> drift.
+    _set("billing_enabled", "true")
+    r = check_billing_switch(db_session)
+    assert r["actual"] is True and r["expected"] is False and r["ok"] is False
+
+    # Pin expected true (cutover) -> ok again.
+    _set("billing_enabled_expected", "true")
+    assert check_billing_switch(db_session)["ok"] is True
 
 
 def test_drawdown_reduces_seeded_balance(db_session, subscriber_account, subscription):

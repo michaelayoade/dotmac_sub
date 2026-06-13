@@ -62,15 +62,43 @@ Order matters — each step is safe on its own and reversible until the last:
    memo `Prepaid opening balance @ cutover`) equal to each prepaid subscriber's
    `deposit`. After this, ledger balance == deposit, and the resolver switches
    those accounts to the ledger. Idempotent (skips accounts already seeded).
-4. **Enable the engine** — set `billing_enabled=true`. The daily charge task and
-   prepaid enforcement (and the postpaid invoice cycle for recurring accounts)
-   begin acting. Drawdown debits start reducing balances; enforcement suspends
-   when they cross `min_balance`.
-5. **Stop the Splynx deposit re-sync** so two writers don't fight over the
+4. **Shadow rehearsal (≥ a few days, do NOT skip)** —
+   `reconcile_prepaid_billing.py` daily: it computes what the engine *would*
+   charge and what every balance *would* be, and reconciles both against Splynx
+   **without debiting**. Two checks: (a) charge rate vs the imported price —
+   flags zero-charge ("free internet") subs and rate mismatches; (b) seeded
+   balance vs the live Splynx `deposit`. Proceed only when it reports CLEAN. (A
+   non-empty balance-mismatch set before step 2 is expected deposit drift — it
+   is exactly why step 2 is mandatory.)
+5. **Enable the engine** — set `billing_enabled=true` **and**
+   `billing_enabled_expected=true` in the same change (so the config guard
+   doesn't alert). The daily charge task and prepaid enforcement (and the
+   postpaid invoice cycle for recurring accounts) begin acting. Drawdown debits
+   reduce balances; enforcement warns → grace → suspends on `min_balance`.
+6. **Stop the Splynx deposit re-sync** so two writers don't fight over the
    balance (the ledger now owns it).
 
 Recurring (postpaid) accounts can cut over independently and earlier — they ride
 the existing invoice cycle and don't need the seed.
+
+## Safety & operations
+
+- **Idempotency (no double-charge).** Each subscription is charged in its own
+  transaction under a per-subscriber row lock (`lock_account`); `next_billing_at`
+  is re-read under the lock and a deterministic `(subscription, charge_date)`
+  marker (in the debit memo) is checked before posting. The task is also
+  `@idempotent_task`-wrapped (one run/day). A double beat, retry overlap, or
+  redeploy mid-run therefore cannot double-charge — the second writer blocks,
+  then sees the advanced cursor / existing marker and no-ops.
+- **Kill switch.** `billing_enabled=false` halts the engine immediately (and all
+  other local billing).
+- **Day reversal.** `reverse_prepaid_charges.py --date YYYY-MM-DD` credits back
+  every prepaid charge posted that day (offsetting credit, original kept for
+  audit). Idempotent; dry-run default. Use after halting if a day charged wrong.
+- **Config guard.** `check_billing_switch` (hourly `billing_switch_guard` beat,
+  NOT gated by `billing_enabled`) logs CRITICAL when the live switch ≠ the
+  pinned `billing_enabled_expected` — so an unexpected flip (the mechanism
+  behind the earlier phantom invoices) is alerted, not silently armed.
 
 ## Charge mechanics
 
@@ -95,14 +123,19 @@ subscription is exactly one mode.
 
 ## Components
 
-- `app/services/prepaid_billing.py` — `run_prepaid_charges(db, dry_run)` service.
-- `app/tasks/prepaid_billing.py` — `run_prepaid_charges` Celery task,
-  `billing_enabled`-gated, daily, `billing` queue.
-- `scripts/billing/seed_prepaid_opening_balance.py` — cutover seed (dry-run
-  default).
+- `app/services/prepaid_billing.py` — `run_prepaid_charges(db, dry_run)` service
+  (per-subscription locked, idempotent).
+- `app/tasks/prepaid_billing.py` — `run_prepaid_charges` Celery task
+  (`billing_enabled`-gated, `@idempotent_task`, daily, `billing` queue) +
+  `check_billing_switch` guard task (ungated, hourly).
+- `app/services/billing_settings.py::check_billing_switch` — config-drift guard.
+- `scripts/billing/seed_prepaid_opening_balance.py` — cutover seed (dry-run).
+- `scripts/billing/reconcile_prepaid_billing.py` — read-only shadow rehearsal +
+  seed reconciliation vs Splynx.
+- `scripts/billing/reverse_prepaid_charges.py` — day-reversal (dry-run default).
 - `_resolve_prepaid_available_balance` — per-account ledger switch on seed.
-- Registration: `app/tasks/__init__.py`, `app/celery_app.py` (route),
-  `app/services/scheduler_config.py` (beat, gated by `billing_enabled`).
+- Registration: `app/tasks/__init__.py`, `app/celery_app.py` (routes),
+  `app/services/scheduler_config.py` (beats).
 
 ## Out of scope (follow-ups)
 

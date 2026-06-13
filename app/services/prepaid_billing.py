@@ -17,7 +17,7 @@ Gated by ``billing_enabled`` at the task layer — inert until cutover.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -35,12 +35,38 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services.billing._common import lock_account
 from app.services.common import round_money
 
 logger = logging.getLogger(__name__)
 
 # Memo prefix for drawdown debits (used for idempotency / audit lookups).
 PREPAID_CHARGE_MEMO_PREFIX = "Prepaid charge"
+
+
+def _charge_token(subscription_id, charge_date: date) -> str:
+    """Deterministic per-(subscription, day) marker embedded in the charge memo.
+
+    This is the hard idempotency key: a charge for the same subscription on the
+    same day is detected and skipped, so a double beat / retry / redeploy
+    mid-run cannot double-charge.
+    """
+    return f"[sub={subscription_id}|date={charge_date.isoformat()}]"
+
+
+def _already_charged(
+    db: Session, subscription: Subscription, charge_date: date
+) -> bool:
+    token = _charge_token(subscription.id, charge_date)
+    return db.query(
+        db.query(LedgerEntry.id)
+        .filter(LedgerEntry.account_id == subscription.subscriber_id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .filter(LedgerEntry.is_active.is_(True))
+        .filter(LedgerEntry.memo.like(f"%{token}%"))
+        .exists()
+    ).scalar()
+
 
 # Memo on the one-time cutover opening-balance credit. Its presence flips a
 # Splynx-linked account's balance source from the synced deposit (#247) to the
@@ -146,35 +172,90 @@ def run_prepaid_charges(
     posted and ``next_billing_at`` advances one period from now (no backlog
     catch-up, so downtime can't multiply charges). Charges are posted even when
     the balance goes negative; enforcement suspends on the threshold.
+
+    Idempotency (critical — this debits ~98% of the base): each subscription is
+    processed in its own transaction under a per-subscriber row lock
+    (``lock_account``); ``next_billing_at`` is re-read under the lock and a
+    ``(subscription, charge_date)`` marker is checked before posting. A double
+    beat, a retry overlap, or a redeploy mid-run therefore cannot double-charge:
+    the second writer blocks on the lock, then sees the advanced cursor / the
+    existing marker and no-ops. The task itself is also wrapped in
+    ``@idempotent_task`` (one run per day). Use ``dry_run`` for a read-only
+    estimate; ``reconcile_prepaid_billing.py`` for the pre-enable rehearsal.
     """
     now = now or datetime.now(UTC)
+    charge_date = now.date()
     scanned = 0
     initialised = 0
     charged = 0
     skipped_zero_price = 0
+    skipped_duplicate = 0
+    errors = 0
     total_charged = Decimal("0.00")
 
-    for subscription in _due_prepaid_subscriptions(db, now):
-        scanned += 1
+    # Snapshot the due set, then process each subscription in its own locked
+    # transaction (so progress is durable and locks are short).
+    due_ids = [s.id for s in _due_prepaid_subscriptions(db, now)]
+    scanned = len(due_ids)
 
-        # First sighting: initialise the cadence without charging.
-        if subscription.next_billing_at is None:
-            _charge, _currency, period_days = _period_charge(db, subscription, now)
-            if not dry_run:
-                subscription.next_billing_at = now + timedelta(days=period_days)
-            initialised += 1
+    for sub_id in due_ids:
+        if dry_run:
+            subscription = db.get(Subscription, sub_id)
+            if subscription is None:
+                continue
+            charge, _currency, _period_days = _period_charge(db, subscription, now)
+            if subscription.next_billing_at is None:
+                initialised += 1
+            elif charge <= Decimal("0.00"):
+                skipped_zero_price += 1
+            else:
+                charged += 1
+                total_charged += charge
             continue
 
-        charge, currency, period_days = _period_charge(db, subscription, now)
-        if charge <= Decimal("0.00"):
-            # Nothing to charge (e.g. unpriced offer) — still advance so we
-            # don't reprocess every run.
-            if not dry_run:
-                subscription.next_billing_at = now + timedelta(days=period_days)
-            skipped_zero_price += 1
-            continue
+        try:
+            subscription = db.get(Subscription, sub_id)
+            if subscription is None:
+                continue
+            # Lock the subscriber row, then re-read state under the lock.
+            lock_account(db, str(subscription.subscriber_id))
+            db.refresh(subscription)
 
-        if not dry_run:
+            # Re-validate under the lock: another run may have advanced the
+            # cursor or the subscription may have changed state.
+            next_at = subscription.next_billing_at
+            if next_at is not None and next_at.tzinfo is None:
+                next_at = next_at.replace(tzinfo=UTC)  # SQLite round-trip is naive
+            if (
+                subscription.billing_mode != BillingMode.prepaid
+                or subscription.status != SubscriptionStatus.active
+                or (next_at is not None and next_at > now)
+            ):
+                db.commit()
+                continue
+
+            charge, currency, period_days = _period_charge(db, subscription, now)
+
+            # First sighting: initialise cadence without charging.
+            if subscription.next_billing_at is None:
+                subscription.next_billing_at = now + timedelta(days=period_days)
+                db.commit()
+                initialised += 1
+                continue
+
+            # Hard idempotency guard (defence beyond the cursor + lock).
+            if _already_charged(db, subscription, charge_date):
+                subscription.next_billing_at = now + timedelta(days=period_days)
+                db.commit()
+                skipped_duplicate += 1
+                continue
+
+            if charge <= Decimal("0.00"):
+                subscription.next_billing_at = now + timedelta(days=period_days)
+                db.commit()
+                skipped_zero_price += 1
+                continue
+
             offer_name = subscription.offer.name if subscription.offer else "service"
             db.add(
                 LedgerEntry(
@@ -184,21 +265,30 @@ def run_prepaid_charges(
                     category=LedgerCategory.internet_service,
                     amount=charge,
                     currency=currency,
-                    memo=f"{PREPAID_CHARGE_MEMO_PREFIX}: {period_days}d ({offer_name})",
+                    memo=(
+                        f"{PREPAID_CHARGE_MEMO_PREFIX}: {period_days}d ({offer_name}) "
+                        f"{_charge_token(subscription.id, charge_date)}"
+                    ),
                 )
             )
             subscription.next_billing_at = now + timedelta(days=period_days)
-        charged += 1
-        total_charged += charge
-
-    if not dry_run:
-        db.commit()
+            db.commit()
+            charged += 1
+            total_charged += charge
+        except Exception:
+            db.rollback()
+            errors += 1
+            logger.exception(
+                "prepaid_charge_failed", extra={"subscription": str(sub_id)}
+            )
 
     summary = {
         "scanned": scanned,
         "initialised": initialised,
         "charged": charged,
         "skipped_zero_price": skipped_zero_price,
+        "skipped_duplicate": skipped_duplicate,
+        "errors": errors,
         "total_charged": str(total_charged),
         "dry_run": dry_run,
     }

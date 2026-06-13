@@ -61,12 +61,24 @@ invoice→overdue→suspend path — no seed needed.
 3. `seed_prepaid_opening_balance.py --execute` — opening-balance ledger entries
    (dry-run today: 2,384 credit ₦48.3M / 177 debit ₦515.6M / 12,694 marker).
    This switches seeded accounts to the ledger.
-4. Set `billing_enabled=true` — drawdown charges, prepaid enforcement, postpaid
-   invoicing, dunning and autopay all activate together.
-5. Stop the Splynx `deposit` re-sync (the ledger now owns the balance).
+4. **Shadow rehearsal** — `reconcile_prepaid_billing.py` daily until CLEAN: it
+   reconciles the engine's intended charge and every seeded balance against
+   Splynx **without debiting** (flags zero-charge "free internet" subs, rate
+   mismatches, and balance/seed mismatches). Don't enable until it's clean.
+5. Set `billing_enabled=true` **and** `billing_enabled_expected=true` together —
+   drawdown charges, prepaid enforcement, postpaid invoicing, dunning and autopay
+   activate together.
+6. Stop the Splynx `deposit` re-sync (the ledger now owns the balance).
 
-Reversible until step 4. Run on a low-traffic window; spot-check a sample of
-each type (credit / arrears / zero) before and after step 4.
+Reversible until step 5. Run on a low-traffic window; spot-check a sample of
+each type (credit / arrears / zero) before and after step 5.
+
+**Safety nets after enable:** kill switch = `billing_enabled=false` (halts
+immediately); a wrongly-charged day = `reverse_prepaid_charges.py --date … --execute`
+(idempotent credit-back, audit-preserving); config-drift guard
+(`billing_switch_guard`, hourly, ungated) alerts CRITICAL if `billing_enabled`
+ever diverges from `billing_enabled_expected`. Charges are idempotent per
+`(subscription, day)` so a double beat / retry / redeploy cannot double-charge.
 
 ## 5. Known limitations / follow-ups
 
