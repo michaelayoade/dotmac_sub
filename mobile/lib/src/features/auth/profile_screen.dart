@@ -416,11 +416,16 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      title: Text(label),
-      trailing: Flexible(
-        child: Text(value,
-            textAlign: TextAlign.end,
-            style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+      title: Row(
+        children: [
+          Text(label),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(value,
+                textAlign: TextAlign.end,
+                style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+          ),
+        ],
       ),
     );
   }
