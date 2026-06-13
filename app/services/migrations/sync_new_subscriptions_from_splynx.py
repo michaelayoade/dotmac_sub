@@ -81,8 +81,12 @@ def run(dry_run: bool = True) -> dict[str, int]:
         if not candidates:
             return dict(stats)
 
+        # Keep the whole subscriber so the synced subscription inherits the
+        # account's billing_mode (migrated from Splynx's billing_type) instead
+        # of hardcoding prepaid — otherwise postpaid Splynx customers got
+        # prepaid subscriptions, diverging account vs subscription mode.
         sub_by_splynx = {
-            s.splynx_customer_id: s.id
+            s.splynx_customer_id: s
             for s in db.scalars(
                 select(Subscriber).where(Subscriber.splynx_customer_id.isnot(None))
             ).all()
@@ -99,10 +103,12 @@ def run(dry_run: bool = True) -> dict[str, int]:
         to_insert: list[dict] = []
         to_update: list[dict] = []
         for svc in candidates:
-            subscriber_id = sub_by_splynx.get(svc["customer_id"])
-            if subscriber_id is None:
+            subscriber = sub_by_splynx.get(svc["customer_id"])
+            if subscriber is None:
                 stats["skipped_no_subscriber"] += 1
                 continue
+            subscriber_id = subscriber.id
+            account_billing_mode = subscriber.billing_mode or BillingMode.prepaid
             offer_id = tariff_to_offer.get(svc["tariff_id"])
             if offer_id is None:
                 stats["skipped_no_offer_mapping"] += 1
@@ -129,6 +135,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
             rec = {
                 "splynx_id": svc["id"],
                 "subscriber_id": subscriber_id,
+                "billing_mode": account_billing_mode,
                 "offer_id": offer_id,
                 "status": target_status,
                 "login": login,
@@ -175,7 +182,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
                 subscriber_id=rec["subscriber_id"],
                 offer_id=rec["offer_id"],
                 status=rec["status"],
-                billing_mode=BillingMode.prepaid,
+                billing_mode=rec["billing_mode"],
                 contract_term=ContractTerm.month_to_month,
                 login=rec["login"],
                 ipv4_address=rec["ipv4_address"],
