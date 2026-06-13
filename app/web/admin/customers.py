@@ -1614,9 +1614,28 @@ def create_address(
             return HTMLResponse(content="", headers={"HX-Redirect": redirect_url})
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    except (IntegrityError, ValueError) as e:
+        # Recoverable input errors (duplicate/constraint, bad id, validation)
+        # must not render a 500. Roll back first so the aborted transaction
+        # can't poison the error-path re-render (the #19/#24 pattern), then
+        # surface a clean toast (HX) or 4xx.
+        db.rollback()
+        conflict = isinstance(e, IntegrityError)
+        message = (
+            "This conflicts with an existing record."
+            if conflict
+            else _safe_form_error(e)
+        )
+        status_code = 409 if conflict else 400
+        if request.headers.get("HX-Request"):
+            return _htmx_error_response(
+                message, status_code=200, title="Could not save", reswap="none"
+            )
+        raise HTTPException(status_code=status_code, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
 
+        db.rollback()
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
@@ -1744,9 +1763,28 @@ def create_contact(
             return HTMLResponse(content="", headers={"HX-Redirect": redirect_url})
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    except (IntegrityError, ValueError) as e:
+        # Recoverable input errors (duplicate/constraint, bad id, validation)
+        # must not render a 500. Roll back first so the aborted transaction
+        # can't poison the error-path re-render (the #19/#24 pattern), then
+        # surface a clean toast (HX) or 4xx.
+        db.rollback()
+        conflict = isinstance(e, IntegrityError)
+        message = (
+            "This conflicts with an existing record."
+            if conflict
+            else _safe_form_error(e)
+        )
+        status_code = 409 if conflict else 400
+        if request.headers.get("HX-Request"):
+            return _htmx_error_response(
+                message, status_code=200, title="Could not save", reswap="none"
+            )
+        raise HTTPException(status_code=status_code, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
 
+        db.rollback()
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
