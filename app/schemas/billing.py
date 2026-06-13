@@ -124,9 +124,9 @@ class CreditNoteBase(BaseModel):
     credit_number: str | None = Field(default=None, max_length=80)
     status: CreditNoteStatus = CreditNoteStatus.draft
     currency: str = Field(default="NGN", min_length=3, max_length=3)
-    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0)
-    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0)
-    total: Decimal = Field(default=Decimal("0.00"), ge=0)
+    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
     memo: str | None = None
     is_active: bool = True
 
@@ -141,9 +141,9 @@ class CreditNoteUpdate(BaseModel):
     credit_number: str | None = Field(default=None, max_length=80)
     status: CreditNoteStatus | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
-    subtotal: Decimal | None = Field(default=None, ge=0)
-    tax_total: Decimal | None = Field(default=None, ge=0)
-    total: Decimal | None = Field(default=None, ge=0)
+    subtotal: Decimal | None = Field(default=None, ge=0, lt=10000000000)
+    tax_total: Decimal | None = Field(default=None, ge=0, lt=10000000000)
+    total: Decimal | None = Field(default=None, ge=0, lt=10000000000)
     memo: str | None = None
     is_active: bool | None = None
 
@@ -295,7 +295,7 @@ class PaymentBase(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, lt=10000000000)
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     status: PaymentStatus = PaymentStatus.pending
     paid_at: datetime | None = None
@@ -323,7 +323,7 @@ class PaymentUpdate(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, lt=10000000000)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     status: PaymentStatus | None = None
     paid_at: datetime | None = None
@@ -572,7 +572,7 @@ class LedgerEntryRead(LedgerEntryBase):
 class TaxRateBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     code: str | None = Field(default=None, max_length=40)
-    rate: Decimal = Field(default=Decimal("0.0000"), ge=0)
+    rate: Decimal = Field(default=Decimal("0.0000"), ge=0, lt=100)
     is_active: bool = True
     description: str | None = None
 
@@ -584,7 +584,7 @@ class TaxRateCreate(TaxRateBase):
 class TaxRateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     code: str | None = Field(default=None, max_length=40)
-    rate: Decimal | None = Field(default=None, ge=0)
+    rate: Decimal | None = Field(default=None, ge=0, lt=100)
     is_active: bool | None = None
     description: str | None = None
 
