@@ -95,7 +95,7 @@
 
                 <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-stone-100 pt-4 dark:border-stone-700">
                     <div class="flex flex-wrap items-center gap-4">
-                        <a href="/portal/services/{{ service.id }}/change" class="text-sm font-semibold text-[var(--color-brand-600)] hover:text-[var(--color-brand-700)] dark:text-[var(--color-brand-400)] transition-colors">Change Plan</a>
+                        {% if not (customer and customer.read_only) %}<a href="/portal/services/{{ service.id }}/change" class="text-sm font-semibold text-[var(--color-brand-600)] hover:text-[var(--color-brand-700)] dark:text-[var(--color-brand-400)] transition-colors">Change Plan</a>{% endif %}
                         <a href="/portal/billing" class="text-sm font-semibold text-[var(--color-brand-600)] hover:text-[var(--color-brand-700)] dark:text-[var(--color-brand-400)] transition-colors">View Billing</a>
                         <a href="/portal/support" class="text-sm font-medium text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-300 transition-colors">Report Issue</a>
                     </div>

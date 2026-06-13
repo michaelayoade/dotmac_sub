@@ -120,16 +120,21 @@
                 </button>
             </form>
             {% endif %}
+            {% if not (customer and customer.read_only) %}
             <a href="/portal/services/{{ subscription.id }}/change" class="inline-flex items-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-600)]/20 transition-all hover:bg-[var(--color-brand-700)]">
                 Change Plan
             </a>
+            {% endif %}
+            {% if not (customer and customer.read_only) %}
             <a href="/portal/services/{{ subscription.id }}/suspend" class="inline-flex items-center gap-2 rounded-xl border-2 border-amber-200 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:border-amber-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 Pause Service
             </a>
+            {% endif %}
             {% elif status_value == 'suspended' %}
+            {% if not (customer and customer.read_only) %}
             <a href="/portal/services/{{ subscription.id }}/resume" class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-600/20 transition-all hover:bg-emerald-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
@@ -137,10 +142,13 @@
                 </svg>
                 Resume Service
             </a>
+            {% endif %}
             {% else %}
+            {% if not (customer and customer.read_only) %}
             <a href="/portal/services/{{ subscription.id }}/change" class="inline-flex items-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-600)]/20 transition-all hover:bg-[var(--color-brand-700)]">
                 Change Plan
             </a>
+            {% endif %}
             {% endif %}
             <a href="/portal/change-requests" class="inline-flex items-center gap-2 rounded-xl border-2 border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all hover:border-stone-300 hover:shadow-md dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:border-stone-600">
                 View Requests
@@ -317,9 +325,11 @@
             </div>
             {% endif %}
             <div class="mt-5 flex flex-wrap items-center gap-3">
+                {% if not (customer and customer.read_only) %}
                 <a href="/portal/services/{{ subscription.id }}/change" class="inline-flex items-center gap-2 rounded-lg bg-[var(--color-brand-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-brand-700)]">
                     Change plan
                 </a>
+                {% endif %}
                 <a href="/portal/change-requests" class="inline-flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-4 py-2 text-sm font-semibold text-stone-700 hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
                     View change requests
                 </a>
