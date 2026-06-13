@@ -26,8 +26,10 @@
                     Your internet service has been {{ account_status_display|lower or 'restricted' }}.
                     {% if outstanding_balance > 0 %}
                     You have an outstanding balance of <strong class="text-white">&#8358;{{ '{:,.2f}'.format(outstanding_balance) }}</strong>.
-                    {% endif %}
                     Please contact support or settle your outstanding balance to restore service.
+                    {% else %}
+                    Please contact support to restore service.
+                    {% endif %}
                 </p>
             </div>
             <div class="flex flex-col gap-3">

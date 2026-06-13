@@ -986,6 +986,23 @@ def test_create_impersonation_session_success_no_subscriptions(
     assert len(token) > 20
 
 
+def test_impersonation_session_is_read_only(db_session, reseller_account, reseller):
+    """Reseller 'view as customer' sessions are read-only (#17): the session
+    carries read_only=True, which the portal write-guard enforces."""
+    from app.services import customer_portal
+
+    token = reseller_portal.create_customer_impersonation_session(
+        db_session,
+        reseller_id=str(reseller.id),
+        account_id=str(reseller_account.id),
+        return_to="/dashboard",
+    )
+    session = customer_portal.get_customer_session(token)
+    assert session is not None
+    assert session.get("is_impersonation") is True
+    assert session.get("read_only") is True
+
+
 def test_create_impersonation_session_with_active_subscription(
     db_session, reseller, subscriber
 ):

@@ -1,0 +1,154 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}VAS / Bill Payments - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-wrap items-end justify-between gap-3">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">VAS / Bill Payments</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Service toggles, rate cards, float, and the manual review queue.</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if vas_enabled else 'bg-stone-200 text-stone-700 dark:bg-slate-700 dark:text-slate-300' }}">
+                Feature {{ 'ENABLED' if vas_enabled else 'disabled' }}
+            </span>
+            <a href="/admin/system/settings?domain=vas" class="text-sm font-semibold text-primary-600 hover:text-primary-700">Settings →</a>
+        </div>
+    </div>
+
+    {% if submitted %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">Saved.</div>
+    {% endif %}
+    {% if form_error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">{{ form_error }}</div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <!-- Float -->
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="font-semibold text-slate-900 dark:text-white">VTPass float</h2>
+            {% if float_balance is not none %}
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">₦{{ '%,.2f'|format(float_balance) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Purchases pause automatically when float − amount falls below the threshold (vas.float_min_threshold).</p>
+            {% else %}
+            <p class="mt-2 text-sm text-rose-600 dark:text-rose-400">{{ float_error or 'Provider not configured.' }}</p>
+            {% endif %}
+        </div>
+
+        <!-- Categories -->
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 lg:col-span-2">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Enabled categories</h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Comma-separated. Known from catalog: {{ categories | join(', ') if categories else '— sync the catalog first' }}</p>
+            <form method="post" action="/admin/vas/categories" class="mt-3 flex gap-2">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="text" name="enabled_categories" value="{{ enabled_categories }}"
+                       class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Save</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Review queue -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Review queue <span class="ml-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">{{ review_queue | length }}</span></h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Requery exhausted without a definitive outcome — customer money is HELD on these. Confirm against the VTPass dashboard, then resolve.</p>
+        </div>
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for txn in review_queue %}
+            <div class="px-6 py-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <div>
+                        <p class="font-semibold text-slate-900 dark:text-white">{{ txn.service.name if txn.service else '?' }} · {{ txn.identifier }} · ₦{{ '%,.2f'|format(txn.amount) }}</p>
+                        <p class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ txn.request_id }} · {{ txn.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    </div>
+                    <div class="flex items-end gap-2">
+                        <form method="post" action="/admin/vas/review/{{ txn.id }}/delivered" class="flex gap-2">
+                            {% include "components/forms/csrf_input.html" %}
+                            <input type="text" name="token" placeholder="Token (if any)" class="rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <button type="submit" class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Mark delivered</button>
+                        </form>
+                        <form method="post" action="/admin/vas/review/{{ txn.id }}/refund" onsubmit="return confirm('Refund this purchase to the wallet?');">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700">Refund</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <p class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">Queue is empty — the requery loops are keeping up.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Rate cards -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Rate cards</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective-dated. Owner = our VTPass rate; reseller = their locked rate. The spread is internal — never shown to resellers.</p>
+            </div>
+            <div class="p-6">
+                <form method="post" action="/admin/vas/rate-cards" class="grid gap-2 sm:grid-cols-5">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="text" name="category" placeholder="category" required class="rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select name="party_type" class="rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="owner">owner</option>
+                        <option value="reseller">reseller</option>
+                    </select>
+                    <input type="text" name="rate_pct" placeholder="% e.g. 3.0" required class="rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input type="text" name="effective_from" placeholder="YYYY-MM-DD (opt)" class="rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <button type="submit" class="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700">Add</button>
+                </form>
+                <table class="mt-4 min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                    <thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400"><th class="py-1">Category</th><th>Party</th><th>Rate</th><th>Effective</th></tr></thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for card in rate_cards %}
+                        <tr><td class="py-1.5 text-slate-900 dark:text-white">{{ card.category }}</td><td>{{ card.party_type.value }}</td><td class="font-mono">{{ card.rate_pct }}%</td><td class="text-xs text-slate-500">{{ card.effective_from.strftime('%Y-%m-%d') }}</td></tr>
+                        {% else %}
+                        <tr><td colspan="4" class="py-3 text-slate-500 dark:text-slate-400">No rate cards yet — commissions are skipped until owner rates exist.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Services -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Services <span class="text-xs font-normal text-slate-500">(synced; new ones land disabled)</span></h2>
+            </div>
+            <div class="max-h-[32rem] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-700">
+                {% for service in services %}
+                <div class="flex items-center justify-between px-6 py-2.5 text-sm">
+                    <div>
+                        <p class="font-medium text-slate-900 dark:text-white">{{ service.name }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ service.category }} · {{ service.service_id }}</p>
+                    </div>
+                    <form method="post" action="/admin/vas/services/{{ service.id }}/toggle">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="rounded-lg px-3 py-1.5 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300' if service.is_enabled else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">
+                            {{ 'Enabled' if service.is_enabled else 'Disabled' }}
+                        </button>
+                    </form>
+                </div>
+                {% else %}
+                <p class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No services yet — run the catalog sync (12h beat, or trigger app.tasks.vas.sync_vas_catalog) once VTPass keys are configured.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Refund to source -->
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Refund a top-up to source</h2>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Gateway refund against the ORIGINAL funding transaction (never an arbitrary account). Requires the wallet to still hold the full top-up amount. Paste the wallet entry id from the customer's wallet activity.</p>
+        <form method="post" action="/admin/vas/refund-to-source" class="mt-3 flex gap-2" onsubmit="return confirm('Refund this top-up to the funding card?');">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="text" name="entry_id" placeholder="Wallet entry id" required class="block w-96 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700">Refund to source</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

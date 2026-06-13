@@ -7,6 +7,7 @@
             <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">Support</h1>
             <p class="text-sm text-stone-500 dark:text-stone-400">Track your support tickets and get help.</p>
         </div>
+        {% if not (customer and customer.read_only) %}
         <a href="/portal/support/new"
            class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition-all hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -14,6 +15,7 @@
             </svg>
             New Ticket
         </a>
+        {% endif %}
     </div>
 
     {% if crm_error %}

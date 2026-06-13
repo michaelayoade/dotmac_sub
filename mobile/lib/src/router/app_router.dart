@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/observability.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/billing/topup_screen.dart';
+import '../features/billing/pay_bills_screen.dart';
 import '../features/billing/wallet_screen.dart';
 import '../features/auth/lock_screen.dart';
 import '../features/auth/login_screen.dart';
@@ -12,6 +13,7 @@ import '../features/auth/mfa_screen.dart';
 import '../features/auth/profile_screen.dart';
 import '../features/auth/reset_password_screen.dart';
 import '../features/auth/sessions_screen.dart';
+import '../features/profile/service_location_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
 import '../features/billing/invoices_screen.dart';
 import '../features/billing/transfer_proofs_screen.dart';
@@ -25,6 +27,7 @@ import '../features/reseller/reseller_account_screen.dart';
 import '../features/reseller/reseller_accounts_screen.dart';
 import '../features/reseller/reseller_billing_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
+import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
 import '../features/reseller/reseller_revenue_screen.dart';
@@ -143,6 +146,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const WalletScreen(),
       ),
       GoRoute(
+        path: '/bills',
+        builder: (_, __) => const PayBillsScreen(),
+      ),
+      GoRoute(
         path: '/pay',
         builder: (_, state) =>
             PaymentWebViewScreen(args: state.extra as CheckoutArgs),
@@ -160,6 +167,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'billing',
             builder: (_, __) => const ResellerBillingScreen(),
+          ),
+          GoRoute(
+            path: 'vas',
+            builder: (_, __) => const ResellerVasScreen(),
           ),
           GoRoute(
             path: 'fiber-map',
@@ -299,6 +310,10 @@ final routerProvider = Provider<GoRouter>((ref) {
                 GoRoute(
                   path: 'settings',
                   builder: (_, __) => const SettingsScreen(),
+                ),
+                GoRoute(
+                  path: 'service-location',
+                  builder: (_, __) => const ServiceLocationScreen(),
                 ),
               ],
             ),

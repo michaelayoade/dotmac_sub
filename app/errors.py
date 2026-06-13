@@ -121,10 +121,25 @@ def _friendly_redirect_error_message(error_value: str, status_code: int) -> str:
 
 def _template_response(request: Request, status_code: int, message: str):
     template_name = f"errors/{status_code}.html"
-    if request.url.path.startswith("/admin"):
-        admin_template = _TEMPLATES_ROOT / "admin" / "errors" / f"{status_code}.html"
-        if admin_template.exists():
-            template_name = f"admin/errors/{status_code}.html"
+    # Route to the context-specific branded error template (which carries the
+    # correct "back to dashboard" link for that portal) when one exists;
+    # otherwise fall back to the generic template. Previously only /admin was
+    # routed, so /portal and /reseller errors used the generic template whose
+    # "Go to dashboard" link points at /admin/dashboard.
+    path = request.url.path
+    context_dir = (
+        "admin"
+        if path.startswith("/admin")
+        else "customer"
+        if path.startswith("/portal")
+        else "reseller"
+        if path.startswith("/reseller")
+        else None
+    )
+    if context_dir:
+        candidate = _TEMPLATES_ROOT / context_dir / "errors" / f"{status_code}.html"
+        if candidate.exists():
+            template_name = f"{context_dir}/errors/{status_code}.html"
     return templates.TemplateResponse(
         request,
         template_name,

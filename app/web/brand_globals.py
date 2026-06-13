@@ -15,6 +15,7 @@ before this installer runs keep working.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from fastapi.templating import Jinja2Templates
 
@@ -23,6 +24,11 @@ from app.services.branding_config import get_brand
 logger = logging.getLogger(__name__)
 
 _installed = False
+
+
+def _current_year() -> int:
+    """Live current year for footers, so hardcoded years can't go stale."""
+    return datetime.now(UTC).year
 
 
 def install_brand_jinja_global() -> None:
@@ -37,6 +43,7 @@ def install_brand_jinja_global() -> None:
         _original_init(self, *args, **kwargs)
         try:
             self.env.globals.setdefault("brand", get_brand())
+            self.env.globals.setdefault("current_year", _current_year)
         except Exception:  # pragma: no cover - never break template setup
             logger.debug("Could not attach brand Jinja global", exc_info=True)
 
@@ -48,5 +55,6 @@ def install_brand_jinja_global() -> None:
         from app.web.templates import templates as _shared
 
         _shared.env.globals.setdefault("brand", get_brand())
+        _shared.env.globals.setdefault("current_year", _current_year)
     except Exception:  # pragma: no cover
         logger.debug("Could not backfill shared templates brand global", exc_info=True)

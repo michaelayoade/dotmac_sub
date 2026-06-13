@@ -84,6 +84,7 @@ from app.web.admin.system import router as system_router
 from app.web.admin.system_whats_new import router as system_whats_new_router
 from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
+from app.web.admin.vas import router as vas_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
 from app.web.auth.dependencies import require_admin_web_auth
@@ -343,6 +344,7 @@ router.include_router(
     gis_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("gis"))],
 )
+router.include_router(vas_router)
 router.include_router(
     reports_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("reports"))],

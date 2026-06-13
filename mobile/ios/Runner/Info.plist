@@ -4,6 +4,8 @@
 	<dict>
 		<key>NSFaceIDUsageDescription</key>
 		<string>Use Face ID to unlock the app.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>Attach your current location to a fault report so our technicians can find your service address.</string>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
 		<key>CFBundleDevelopmentRegion</key>

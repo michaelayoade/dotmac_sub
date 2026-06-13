@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../core/api_exception.dart';
 import '../core/http.dart';
+import '../models/vas.dart';
 import '../models/wallet.dart';
 
 /// Wraps the self-scoped VAS wallet endpoints (app/api/me.py, /me/wallet*).
@@ -55,5 +56,63 @@ class WalletRepository {
     final data = await guard(
         () => dio.patch('/me/wallet/auto-deduct', data: {'enabled': enabled}));
     return WalletOverview.fromJson(data as Map<String, dynamic>);
+  }
+}
+
+/// Bill-payment endpoints (/me/vas/*) — same server flag as the wallet.
+extension VasPurchases on WalletRepository {
+  /// GET /me/vas/catalog
+  Future<List<VasCategory>> catalog() async {
+    final data = await guard(() => dio.get('/me/vas/catalog'));
+    return [
+      for (final item in (data as List))
+        VasCategory.fromJson(item as Map<String, dynamic>),
+    ];
+  }
+
+  /// POST /me/vas/verify — resolve a meter/smartcard to the customer name.
+  Future<String?> verifyIdentifier({
+    required String serviceId,
+    required String identifier,
+  }) async {
+    final data = await guard(() => dio.post('/me/vas/verify', data: {
+          'service_id': serviceId,
+          'identifier': identifier,
+        }));
+    return (data as Map<String, dynamic>)['customer_name'] as String?;
+  }
+
+  /// POST /me/vas/purchases
+  Future<VasTransaction> purchase({
+    required String serviceId,
+    required String identifier,
+    String? variationCode,
+    double? amount,
+    String? phone,
+  }) async {
+    final data = await guard(() => dio.post('/me/vas/purchases', data: {
+          'service_id': serviceId,
+          'identifier': identifier,
+          if (variationCode != null) 'variation_code': variationCode,
+          if (amount != null) 'amount': amount,
+          if (phone != null) 'phone': phone,
+        }));
+    return VasTransaction.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// GET /me/vas/purchases
+  Future<List<VasTransaction>> purchases({int limit = 50}) async {
+    final data = await guard(
+        () => dio.get('/me/vas/purchases', queryParameters: {'limit': limit}));
+    return [
+      for (final item in (data as List))
+        VasTransaction.fromJson(item as Map<String, dynamic>),
+    ];
+  }
+
+  /// GET /me/vas/purchases/{id}
+  Future<VasTransaction> purchaseDetail(String id) async {
+    final data = await guard(() => dio.get('/me/vas/purchases/$id'));
+    return VasTransaction.fromJson(data as Map<String, dynamic>);
   }
 }
