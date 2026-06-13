@@ -77,6 +77,7 @@ from app.tasks.ont_provisioning import (
     queue_bulk_provisioning,
 )
 from app.tasks.payment_reconciliation import reconcile_topups
+from app.tasks.prepaid_billing import run_prepaid_charges_task
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
@@ -181,6 +182,7 @@ __all__ = [
     "expire_subscriptions",
     "run_dunning",
     "run_prepaid_enforcement",
+    "run_prepaid_charges_task",
     "push_crm_subscriber_change",
     "redrive_crm_dead_letters",
     "pull_crm_tickets",
