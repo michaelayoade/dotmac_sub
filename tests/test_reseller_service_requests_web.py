@@ -139,6 +139,37 @@ class TestServiceRequestCreate:
         assert response.status_code == 303
         assert "error=" in response.headers["location"]
 
+    def test_whitespace_contact_redirects_with_error(self, db_session):
+        # Whitespace-only name/phone must be treated as empty: previously they
+        # were truthy at the guard yet stored as None, slipping a blank-contact
+        # request past the very check meant to block it.
+        reseller = _reseller(db_session)
+        with patch.object(
+            web_reseller_routes,
+            "_require_reseller_context",
+            return_value=_context(reseller),
+        ):
+            response = web_reseller_routes.reseller_service_request_create(
+                MagicMock(),
+                db_session,
+                contact_name="   ",
+                contact_phone="   ",
+                contact_email="",
+                address="",
+                latitude="",
+                longitude="",
+                notes="ws",
+            )
+        assert response.status_code == 303
+        assert "error=" in response.headers["location"]
+
+        from app.services import reseller_service_requests
+
+        items = reseller_service_requests.list_for_reseller(
+            db_session, str(reseller.id)
+        )
+        assert items == []
+
     def test_unpaired_coordinate_dropped(self, db_session):
         reseller = _reseller(db_session)
         with patch.object(
