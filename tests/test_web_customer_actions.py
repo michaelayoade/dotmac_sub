@@ -383,3 +383,20 @@ def test_update_person_allows_keeping_own_email(db_session, subscriber):
     _update_person(db_session, subscriber, email=subscriber.email, first_name="Renamed")
     refreshed = db_session.get(Subscriber, subscriber.id)
     assert refreshed.first_name == "Renamed"
+
+
+def test_create_customer_contact_bad_account_id_raises_value_error(db_session):
+    # The create_contact web handler maps ValueError -> 400 (not a 500 page).
+    # A non-UUID account_id must raise ValueError so that mapping engages.
+    with pytest.raises(ValueError):
+        actions.create_customer_contact(
+            db=db_session,
+            account_id="not-a-uuid",
+            first_name="Jo",
+            last_name="Lead",
+            role="primary",
+            title=None,
+            email=None,
+            phone=None,
+            is_primary="false",
+        )
