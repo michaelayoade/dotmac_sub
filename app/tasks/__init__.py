@@ -22,6 +22,7 @@ from app.tasks.catalog import expire_subscriptions
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
+from app.tasks.crm_sync import redrive_crm_dead_letters
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
@@ -181,6 +182,7 @@ __all__ = [
     "run_dunning",
     "run_prepaid_enforcement",
     "push_crm_subscriber_change",
+    "redrive_crm_dead_letters",
     "pull_crm_tickets",
     "sync_crm_ticket",
     "push_ticket_to_crm",

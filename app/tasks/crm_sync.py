@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 
+from celery import Task
+
 from app.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -24,8 +26,37 @@ class CrmPushError(Exception):
     """Raised when an outbound CRM push fails and should be retried."""
 
 
+class CrmPushTask(Task):
+    """Base task that records a dead-letter row when retries are exhausted.
+
+    on_failure fires once, after the final retry — that is the moment a CRM
+    change would otherwise drift silently. Covers both the event-driven and
+    nightly-billing push paths (they share this task).
+    """
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):  # noqa: ANN001, D102
+        try:
+            external_id = args[0] if args else kwargs.get("external_id")
+            subscriber_data = (
+                args[1] if len(args) > 1 else kwargs.get("subscriber_data")
+            )
+            external_system = (
+                args[2] if len(args) > 2 else kwargs.get("external_system", "splynx")
+            )
+            _record_dead_letter(
+                external_id=str(external_id),
+                external_system=str(external_system),
+                payload=subscriber_data if isinstance(subscriber_data, dict) else None,
+                error=str(exc),
+                attempts=self.request.retries + 1,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to record CRM dead-letter for %s", task_id)
+
+
 @celery_app.task(
     name="app.tasks.crm_sync.push_subscriber_change",
+    base=CrmPushTask,
     bind=True,
     max_retries=MAX_RETRIES,
     autoretry_for=(CrmPushError,),
@@ -38,6 +69,8 @@ def push_subscriber_change(
     external_id: int | str,
     subscriber_data: dict,
     external_system: str = "splynx",
+    *,
+    billing_snapshot_subscriber_id: str | None = None,
 ) -> bool:
     """Push one subscriber change to the CRM webhook, retrying on failure.
 
@@ -47,6 +80,12 @@ def push_subscriber_change(
         subscriber_data: Subscriber fields (Splynx-shaped for splynx, CRM
             column names otherwise).
         external_system: CRM external system the payload is keyed under.
+        billing_snapshot_subscriber_id: when set, this push carries a billing
+            snapshot; on success the snapshot key is stamped on that
+            subscriber so the nightly batch won't re-send it. The stamp lives
+            here (not in the batch) so a still-unstamped record is naturally
+            re-enqueued next run — auto-heal — while a terminal failure is
+            recorded in the dead-letter (on_failure).
 
     Returns:
         True on success.
@@ -61,6 +100,8 @@ def push_subscriber_change(
     if crm_subscriber_id:
         if external_system == NATIVE_EXTERNAL_SYSTEM:
             _persist_crm_link(str(external_id), crm_subscriber_id)
+        if billing_snapshot_subscriber_id:
+            _stamp_billing_snapshot(billing_snapshot_subscriber_id, subscriber_data)
         return True
 
     raise CrmPushError(
@@ -86,3 +127,70 @@ def _persist_crm_link(subscriber_id: str, crm_subscriber_id: str) -> None:
         if subscriber and not subscriber.crm_subscriber_id:
             subscriber.crm_subscriber_id = crm_uuid
             db.commit()
+
+
+def _stamp_billing_snapshot(subscriber_id: str, sent_payload: dict) -> None:
+    """Mark the billing snapshot as delivered on the subscriber.
+
+    Mirrors the key the batch (crm_billing_push) compares against, so the
+    next run sees it unchanged and skips re-sending. Splynx pushes drop
+    billing_cycle, so the stored key matches what the batch would build.
+    """
+    from uuid import UUID
+
+    from app.db import task_session
+    from app.models.subscriber import Subscriber
+
+    try:
+        local_uuid = UUID(subscriber_id)
+    except (TypeError, ValueError):
+        return
+    with task_session() as db:
+        subscriber = db.get(Subscriber, local_uuid)
+        if not subscriber:
+            return
+        metadata = dict(subscriber.metadata_ or {})
+        metadata["crm_billing_snapshot"] = sent_payload
+        subscriber.metadata_ = metadata
+        db.commit()
+
+
+def _record_dead_letter(
+    *,
+    external_id: str,
+    external_system: str,
+    payload: dict | None,
+    error: str,
+    attempts: int,
+) -> None:
+    from app.db import task_session
+    from app.models.crm_sync_failure import CrmSyncFailure
+
+    with task_session() as db:
+        db.add(
+            CrmSyncFailure(
+                entity="subscriber",
+                external_id=external_id,
+                external_system=external_system,
+                payload=payload,
+                error=error[:2000],
+                attempts=attempts,
+            )
+        )
+        db.commit()
+    logger.error(
+        "CRM push dead-lettered: %s %s after %d attempts",
+        external_system,
+        external_id,
+        attempts,
+    )
+
+
+@celery_app.task(name="app.tasks.crm_sync.redrive_crm_dead_letters")
+def redrive_crm_dead_letters():
+    """Daily re-drive of unresolved CRM push dead-letters."""
+    from app.db import task_session
+    from app.services import crm_sync_failures
+
+    with task_session() as db:
+        return crm_sync_failures.redrive_all(db)
