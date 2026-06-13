@@ -27,12 +27,12 @@ running finding numbers from the 2026-06-12 driving session.
 ## 2. Customer CRUD & onboarding
 - [x] Duplicate email rejected, no duplicate row (2026-06-12)
 - [ ] Duplicate phone; email case-sensitivity collision
-- [ ] Blank / whitespace-only / max-length-overflow / emoji-unicode required fields
-- [ ] Invalid email & phone formats; international phone; long address; special chars
+- [!] `#18` Blank / whitespace-only / over-length required name fields were ACCEPTED on customer create+edit (server declared `first_name`/`last_name` as `Form(None)` and passed them raw; only `email` was validated) → customers created with empty display names. FIXED 2026-06-13: `_require_text()` trims, rejects blank/whitespace-only, and caps length (names 80, business name 120) across person/business create+edit; clean `ValueError` surfaced as a 400 form error. Verified live (whitespace → "First name is required", valid still creates) + unit tests. Emoji names still accepted (valid unicode, intentionally allowed)
+- [x] Invalid email format rejected on customer create (`SubscriberCreate.email` is `EmailStr`) → 400, no row created (2026-06-13). Message is the verbose Pydantic dump (the known #12 "shared admin-form error formatter" residual, not re-fixed here). Phone format / international / long address still untested
 - [ ] Wizard back/forward preserves data; cancel mid-wizard; double-submit → 1 customer
 - [ ] Business vs individual (Contacts step business-only)
 - [ ] Geocode unresolvable address; Nominatim unreachable
-- [ ] Edit customer email into a collision
+- [!] `#19` Edit customer email into a collision → **500 error**. Two bugs: (a) the person/business edit paths never pre-checked email uniqueness (unlike create), relying on the DB unique constraint; (b) worse, the edit handlers' `except` blocks re-queried the DB to re-render the form WITHOUT `db.rollback()`, so the aborted transaction turned the unique-violation into a 500 instead of a graceful 400. FIXED 2026-06-13: `update_person_customer` pre-checks email uniqueness (excluding self) → clean "A customer with email X already exists."; both edit handlers now `db.rollback()` before re-querying (matching the create handler). Verified live (collision now a 400 with the clear message, no 500) + unit tests (collision rejected, keeping own email allowed)
 
 ## 3. Catalog & offers
 - [ ] Offer with 0 / negative / huge / non-numeric price
@@ -74,7 +74,7 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] `#12` Payment form now formats validation errors cleanly (no raw Pydantic dump / pydantic.dev URL) — fixed PR #224 (payment_create handler). Broader admin forms still use str(exc); a shared formatter remains a wider follow-up
 - [ ] Non-numeric amount; wrong currency vs invoice currency
 - [ ] Customer-portal pay of an already-paid invoice (blocked/hidden)
-- [ ] Void / refund invoice with a payment; refund > paid
+- [!] `#23` Single invoice-**void** did not guard against voiding a **paid** invoice — `Invoices.void()` reversed the AR debits and set balance_due=0 while leaving the customer's payment allocated to a now-voided invoice (stranded money / AR desync). Inconsistent with **bulk**-void, which already skips `paid`/`void`. FIXED 2026-06-13: the canonical `Invoices.void()` now rejects `paid` ("refund the payment first") and already-`void` invoices with a 400 (protects all callers; bulk pre-check still stands). The admin UI already hides the void control on paid invoices, so this closes the server-side gap behind it. Unit-tested (paid → 400 + status unchanged; double-void → 400); existing draft-void test still passes. Refund path is already guarded (only `succeeded` payments refundable → double-refund 400)
 - [ ] VAT inclusive/exclusive/exempt tax math; multi-line totals
 - [x] Invoice PDF generates (2026-06-12)
 - [ ] PDF for multi-line / VAT / zero invoice; brand name correct
@@ -94,14 +94,17 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] Top-up amount limits enforced on web (below ₦1k min / above ₦500k max → button disabled + clear message; server also validates) (2026-06-12)
 - [x] Bank-transfer proof flow is UNCAPPED (only amount>0) — correct; the ₦500k max is card/gateway-only (2026-06-12)
 - [!] `#13` No bank-transfer option on the WEB Add Funds page (proof flow is mobile/API-only) → the ₦500k card cap has no transfer escape hatch on web; web customers can't self-serve a >₦500k top-up. Product decision: surface bank-transfer on web Add Funds
+- [!] `#22` (NOTED, not fixed — VAS disabled in e2e + actively developed in parallel) `POST /portal/wallet/pay-bill` only validates that `amount` parses as a Decimal — it does NOT reject `<= 0`. A zero/negative amount reaches `vas_wallet.pay_bill` → `debit_wallet` (which only guards `amount > balance`, so a negative passes) → `Payments.create` rejects it via Pydantic `gt=0` → `ValidationError`. The route catches only `HTTPException`, so this surfaces as a **500** (not a clean error). No money is gained (the failure path reverses the debit symmetrically), so it's a UX/robustness gap, not a value bug. Today it's masked because `vas.enabled=false` → `require_enabled` returns 404 first. Recommended fix for the VAS owner: reject non-positive `value` at the route with a redirect-error (mirroring the "Invalid amount" branch), and/or guard `amount > 0` in `debit_wallet`
 - [ ] Stranded intent reconcile; double-credit idempotency on gateway ref
 - [x] Insufficient wallet blocks upgrade (via shortfall) (2026-06-12)
 - Note: 5 console errors on Add Funds are external Paystack SDK assets blocked in sandbox (environmental, not a bug); Paystack SDK loads eagerly on page view
 
 ## 9. Support tickets & CRM
 - [x] Create ticket from portal (2026-06-12)
-- [ ] Comment thread; close/reopen; empty subject/body
-- [ ] Ticket-comment IDOR (B comments on A's ticket id)
+- [!] `#20` Empty title was rejected (`min_length=1`) but **whitespace-only** title/comment-body slipped through (length ≥ 1, no strip) → blank-titled tickets. FIXED 2026-06-13: added `str_strip_whitespace=True` to the ticket/comment input schemas (TicketBase, TicketUpdate, TicketCommentBase/Update, MySupport*), so whitespace strips before `min_length` and good input is trimmed. Verified at the schema layer + unit tests
+- [!] `#21` Admin new-ticket POST had **no** validation-error handling — an invalid title raised straight to a **500** (whitespace after #20; empty title already did). FIXED 2026-06-13: `ticket_create` now catches `ValidationError`/`ValueError`, rolls back, and re-renders the form at 400 with a clean "A ticket title is required." + preserved input; added an error banner to the template. Verified live (whitespace → 400 w/ message; valid still creates, title trimmed). NOTE: the customer-portal create path already returns 400 but via a generic "try again later" message (handle_ticket_create swallows the ValidationError) — a clearer portal message is a small follow-up
+- [ ] Comment thread; close/reopen
+- [x] Ticket-comment IDOR is SECURE (2026-06-13): the portal comment route derives `subscriber_ids` from the authenticated session (not client input) and `handle_ticket_comment` rejects any ticket whose `subscriber_id` is outside the caller's allowed set ("Ticket not found")
 - [ ] CRM push unset (no-op) vs set; CRM unreachable → ticket still creates (async)
 - [ ] Admin ticket vs CRM-native resolution (crm_subscriber_id)
 
@@ -153,4 +156,5 @@ running finding numbers from the 2026-06-12 driving session.
 - [x] `#14` Error handler now routes /portal & /reseller errors to their branded templates (correct dashboard link), not just /admin — fixed PR #224 (_template_response). Note: customer/reseller lack some status-code templates (403/409/500) and still fall back to the generic admin-linked one — a minor residual
 - [x] Backend dep down (VictoriaMetrics) → graceful (logged errors, page renders) (2026-06-12, observed)
 - [!] Console errors on change-plan page — `#4` fixed PR #224
+- [!] `#24` (SYSTEMIC, NOTED — needs a focused audit PR, not a blind sweep) Several admin POST handlers have a generic `except Exception:` fallback that re-queries the DB (`get_sidebar_stats`, `_get_subscriber`, `build_*_context`, etc.) and re-renders a form WITHOUT first calling `db.rollback()`. If the caught error left the transaction aborted (any IntegrityError/DataError), those follow-up queries fail on the poisoned session → **500 instead of a clean 400/409**. This is exactly the #19 root cause. An AST sweep (`except` body that re-queries + renders a TemplateResponse, no rollback) flagged ~30 candidate handlers across `billing_accounts/billing_credits/billing_invoice_actions/billing_invoices/billing_payments/billing_reporting/customers/notifications/system`. NOT all are live bugs — the customer **delete** handlers (customers.py:1490/1552) already catch `IntegrityError` specifically (rollback + 409) and only the generic fallback is unguarded; reachability of a poisoning error varies per handler. CONFIRMED+FIXED instance: #19 (customers.py person/business edit). Recommended: audit the list and add a shared "rollback-then-render" helper/decorator rather than 30 ad-hoc `db.rollback()` lines. Candidate list (file:lineno of the `except`): billing_accounts 119/202; billing_credits 101; billing_invoice_actions 111/157; billing_invoices 353/401/490; billing_payments 379/554; billing_reporting 63; customers 1490/1552/1617/1747; notifications 157/242/525/619/762/846; system 458/1255/1763/1850/1960/2038/2140/2223/2292
 - [ ] Keyboard nav / focus / aria on forms; dark-mode; responsive breakpoints

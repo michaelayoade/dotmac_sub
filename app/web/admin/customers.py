@@ -1252,6 +1252,10 @@ def person_update(
     except HTTPException:
         raise
     except Exception as e:
+        # Roll back the failed transaction before re-querying for the form
+        # re-render; otherwise the aborted session turns any DB error (e.g. a
+        # unique-email violation) into a 500 instead of a graceful 400.
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -1341,6 +1345,10 @@ def business_update(
             status_code=303,
         )
     except Exception as e:
+        # Roll back the failed transaction before re-querying for the form
+        # re-render; otherwise the aborted session turns any DB error (e.g. a
+        # unique-email violation) into a 500 instead of a graceful 400.
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)

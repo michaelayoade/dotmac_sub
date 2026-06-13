@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -27,6 +28,21 @@ def _ctx(request: Request, db: Session, active_page: str = "support-tickets") ->
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _ticket_form_error(exc: Exception) -> str:
+    """Turn a validation failure into a clean, user-facing form message."""
+    if isinstance(exc, ValidationError):
+        errors = exc.errors()
+        if errors:
+            loc = errors[0].get("loc") or ()
+            field = str(loc[-1]) if loc else ""
+            if field == "title":
+                return "A ticket title is required."
+            label = field.replace("_", " ").strip().capitalize() or "Value"
+            return f"{label}: {errors[0].get('msg', 'is invalid')}"
+        return "Invalid input."
+    return str(exc)
 
 
 def _actor_id(request: Request) -> str | None:
@@ -150,30 +166,57 @@ def ticket_create(
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id(request)
-    ticket = support_web_service.create_ticket_from_form(
-        db,
-        request=request,
-        actor_id=actor_id,
-        attachments=attachments,
-        title=title,
-        description=description,
-        subscriber_id=subscriber_id,
-        customer_account_id=customer_account_id,
-        customer_person_id=customer_person_id,
-        region=region,
-        technician_person_id=technician_person_id,
-        ticket_manager_person_id=ticket_manager_person_id,
-        site_coordinator_person_id=site_coordinator_person_id,
-        service_team_id=service_team_id,
-        ticket_type=ticket_type,
-        priority=priority,
-        channel=channel,
-        status=status,
-        due_at=due_at,
-        tags=tags,
-        related_outage_ticket_id=related_outage_ticket_id,
-        assignee_person_ids=assignee_person_ids,
-    )
+    try:
+        ticket = support_web_service.create_ticket_from_form(
+            db,
+            request=request,
+            actor_id=actor_id,
+            attachments=attachments,
+            title=title,
+            description=description,
+            subscriber_id=subscriber_id,
+            customer_account_id=customer_account_id,
+            customer_person_id=customer_person_id,
+            region=region,
+            technician_person_id=technician_person_id,
+            ticket_manager_person_id=ticket_manager_person_id,
+            site_coordinator_person_id=site_coordinator_person_id,
+            service_team_id=service_team_id,
+            ticket_type=ticket_type,
+            priority=priority,
+            channel=channel,
+            status=status,
+            due_at=due_at,
+            tags=tags,
+            related_outage_ticket_id=related_outage_ticket_id,
+            assignee_person_ids=assignee_person_ids,
+        )
+    except (ValidationError, ValueError) as exc:
+        # Re-render the form with a clean message instead of a 500 (e.g. a
+        # blank/whitespace-only title that fails schema validation).
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_form_context(
+                db, query_params=request.query_params
+            )
+        )
+        context.update(
+            {
+                "page_title": "New Ticket",
+                "form_mode": "create",
+                "ticket": None,
+                "error": _ticket_form_error(exc),
+                "prefill": {
+                    **(context.get("prefill") or {}),
+                    "title": title,
+                    "description": description,
+                },
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/support/tickets/new.html", context, status_code=400
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket.id}", status_code=303)
 
 

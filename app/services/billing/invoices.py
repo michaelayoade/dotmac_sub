@@ -403,6 +403,18 @@ class Invoices(ListResponseMixin):
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status == InvoiceStatus.void:
+            raise HTTPException(status_code=400, detail="Invoice is already void")
+        if invoice.status == InvoiceStatus.paid:
+            # Voiding a paid invoice would reverse its AR debits while leaving
+            # the customer's payment allocated to it (stranded money / AR
+            # mismatch). Bulk void already skips paid invoices; enforce the same
+            # rule on the single-void path here in the canonical service.
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot void a paid invoice — refund the payment first, "
+                "then void.",
+            )
 
         # Create reversing entries for any active debit ledger entries
         active_debits = (

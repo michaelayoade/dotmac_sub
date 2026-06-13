@@ -16,6 +16,10 @@ class AttachmentMeta(BaseModel):
 
 
 class TicketBase(BaseModel):
+    # Strip surrounding whitespace so a whitespace-only title fails the
+    # ``min_length=1`` check instead of creating a blank-titled ticket.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     subscriber_id: UUID | None = None
     customer_account_id: UUID | None = None
     lead_id: UUID | None = None
@@ -62,6 +66,8 @@ class TicketCreate(TicketBase):
 
 
 class TicketUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     subscriber_id: UUID | None = None
     customer_account_id: UUID | None = None
     lead_id: UUID | None = None
@@ -166,6 +172,8 @@ class TicketBulkUpdateRequest(BaseModel):
 
 
 class TicketCommentBase(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     body: str = Field(min_length=1)
     is_internal: bool = False
     attachments: list[AttachmentMeta] = Field(default_factory=list)
@@ -178,6 +186,8 @@ class TicketCommentCreate(TicketCommentBase):
 
 
 class TicketCommentUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     body: str | None = Field(default=None, min_length=1)
     is_internal: bool | None = None
     attachments: list[AttachmentMeta] | None = None
@@ -203,6 +213,8 @@ class MySupportTicketCreate(BaseModel):
     `subscriber_id` to the caller, so a customer can never raise a ticket on
     another account or self-assign it to staff."""
 
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     priority: str = TicketPriority.normal.value
@@ -213,6 +225,8 @@ class MySupportCommentCreate(BaseModel):
     """Customer self-care reply. Only the body is accepted; the `/me` endpoint
     forces `is_internal=False` so customers can never post (or, by reading the
     filtered list, see) staff-internal notes."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     body: str = Field(min_length=1)
 
