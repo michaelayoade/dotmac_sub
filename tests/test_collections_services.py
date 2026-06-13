@@ -98,3 +98,71 @@ def test_prepaid_enforcement_accounts_for_open_invoice_balance(
     db_session.refresh(subscription)
     assert subscriber_account.status == AccountStatus.suspended
     assert subscription.status == SubscriptionStatus.suspended
+
+
+def test_prepaid_balance_uses_splynx_deposit_when_linked(
+    db_session, subscriber_account
+):
+    """Splynx-linked prepaid: available balance = deposit, ignoring local
+    credit/invoices (Splynx's net is authoritative)."""
+    from decimal import Decimal as D
+
+    from app.services.collections._core import _resolve_prepaid_available_balance
+
+    subscriber_account.splynx_customer_id = 25313
+    subscriber_account.deposit = D("31965.11")
+    db_session.commit()
+
+    # A local open invoice + zero ledger credit would yield a NEGATIVE balance
+    # under the old credit-minus-invoices model; deposit must win.
+    billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber_account.id,
+            status=InvoiceStatus.issued,
+            total=D("87500.00"),
+            balance_due=D("87500.00"),
+            issued_at=datetime.now(UTC),
+        ),
+    )
+    db_session.commit()
+
+    bal = _resolve_prepaid_available_balance(db_session, str(subscriber_account.id))
+    assert bal == D("31965.11")
+
+
+def test_prepaid_balance_deposit_negative_is_arrears(db_session, subscriber_account):
+    from decimal import Decimal as D
+
+    from app.services.collections._core import _resolve_prepaid_available_balance
+
+    subscriber_account.splynx_customer_id = 9875
+    subscriber_account.deposit = D("-2112500.00")
+    db_session.commit()
+    bal = _resolve_prepaid_available_balance(db_session, str(subscriber_account.id))
+    assert bal == D("-2112500.00")
+
+
+def test_prepaid_balance_native_account_uses_ledger_fallback(
+    db_session, subscriber_account
+):
+    """Non-Splynx account (no authoritative deposit) keeps the ledger model."""
+    from decimal import Decimal as D
+
+    from app.services.collections._core import _resolve_prepaid_available_balance
+
+    subscriber_account.splynx_customer_id = None
+    subscriber_account.deposit = None
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber_account.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=D("500.00"),
+            currency="NGN",
+            memo="native top-up",
+        )
+    )
+    db_session.commit()
+    bal = _resolve_prepaid_available_balance(db_session, str(subscriber_account.id))
+    assert bal == D("500.00")

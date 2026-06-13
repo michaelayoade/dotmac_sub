@@ -672,6 +672,39 @@ def build_beat_schedule() -> dict:
             enabled=prepaid_enabled,
             interval_seconds=prepaid_interval_seconds,
         )
+        # Prepaid drawdown charges (per-period debit; cadence/idempotency live
+        # in the service; ultimately gated by billing_enabled in the task).
+        prepaid_charges_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "prepaid_charges_enabled",
+            "PREPAID_CHARGES_ENABLED",
+            True,
+        )
+        prepaid_charges_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "prepaid_charges_interval_seconds",
+            "PREPAID_CHARGES_INTERVAL_SECONDS",
+            86400,
+        )
+        prepaid_charges_interval_seconds = max(prepaid_charges_interval_seconds, 3600)
+        _sync_scheduled_task(
+            session,
+            name="prepaid_charges_runner",
+            task_name="app.tasks.prepaid_billing.run_prepaid_charges",
+            enabled=prepaid_charges_enabled,
+            interval_seconds=prepaid_charges_interval_seconds,
+        )
+        # Billing master-switch config guard — ALWAYS on (independent of
+        # billing_enabled) so an unexpected flip is caught, not silently armed.
+        _sync_scheduled_task(
+            session,
+            name="billing_switch_guard",
+            task_name="app.tasks.prepaid_billing.check_billing_switch",
+            enabled=True,
+            interval_seconds=3600,
+        )
         # Autopay charging (idempotent; due-date gating lives in the service)
         autopay_enabled = _effective_bool(
             session,
