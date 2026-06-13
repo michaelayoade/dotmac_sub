@@ -111,8 +111,15 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
 
     Native (non-Splynx) accounts have no authoritative deposit, so they fall
     back to the local ledger model: credit minus open invoice balance.
+
+    At cutover the local ledger takes over: once a Splynx-linked account has its
+    one-time opening-balance seed (see the prepaid drawdown engine), we switch
+    that account to the ledger so drawdown debits and top-up credits take
+    effect. The seed is the per-account switch — no risky global flip.
     """
+    from app.models.billing import LedgerEntry
     from app.services.billing._common import get_account_credit_balance
+    from app.services.prepaid_billing import PREPAID_OPENING_BALANCE_MEMO
 
     account = db.get(Subscriber, coerce_uuid(account_id))
     if (
@@ -120,7 +127,17 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
         and account.splynx_customer_id is not None
         and account.deposit is not None
     ):
-        return Decimal(str(account.deposit))
+        # The seed (credit for positive deposits, debit for arrears) marks the
+        # account as switched to the ledger; match on memo regardless of type.
+        seeded = (
+            db.query(LedgerEntry.id)
+            .filter(LedgerEntry.account_id == coerce_uuid(account_id))
+            .filter(LedgerEntry.memo == PREPAID_OPENING_BALANCE_MEMO)
+            .filter(LedgerEntry.is_active.is_(True))
+            .first()
+        )
+        if seeded is None:
+            return Decimal(str(account.deposit))
 
     credit_balance = get_account_credit_balance(db, account_id)
     open_balance = (
