@@ -111,9 +111,7 @@ def main(execute: bool) -> None:
                 SplynxIdMapping.entity_type == SplynxEntityType.partner
             )
         }
-        default_reseller = (
-            db.query(Reseller).filter(Reseller.code == "SPL-1").first()
-        )
+        default_reseller = db.query(Reseller).filter(Reseller.code == "SPL-1").first()
         if default_reseller is None:
             raise SystemExit("no default reseller (SPL-1) found — aborting")
 
