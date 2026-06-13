@@ -26,6 +26,23 @@
     </div>
     {% endif %}
 
+    {% if in_arrears %}
+    <div class="rounded-xl border border-red-200 bg-red-50 p-5 shadow-sm dark:border-red-900/40 dark:bg-red-900/20">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <h3 class="text-base font-semibold text-red-800 dark:text-red-300">Settle your balance to change plans</h3>
+                <p class="mt-1 text-sm text-red-700 dark:text-red-400">
+                    Your account has an overdue balance of {{ current_offer_summary.currency }} {{ '{:,.2f}'.format(arrears_amount or 0) }}.
+                    Please clear it before changing your plan.
+                </p>
+            </div>
+            <a href="/portal/billing" class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
+                Pay now
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
     {% if insufficient_balance %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-900/20">
         <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Additional Wallet Balance Required</h2>
@@ -78,6 +95,7 @@
     </div>
     {% endif %}
 
+    {% if not in_arrears %}
     <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6" @submit.prevent="confirmAndSubmit($event)">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="requested_offer_id" x-model="selectedOfferId">
@@ -242,6 +260,7 @@
             </button>
         </div>
     </form>
+    {% endif %}
 
     <!-- Confirmation Modal -->
     <div x-show="showConfirm" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @keydown.escape.window="showConfirm = false">

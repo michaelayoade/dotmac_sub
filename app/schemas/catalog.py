@@ -1106,6 +1106,10 @@ class PlanChangeSubmitRequest(BaseModel):
 
 class PlanChangeSubmitResponse(BaseModel):
     success: bool = True
+    # "applied" when the change took effect instantly, "migration_requested"
+    # when a cross-family change was queued as a support ticket.
+    status: str = "applied"
+    message: str | None = None
 
 
 # --- Customer self-service add-on purchase (app/api/me.py) -----------------
