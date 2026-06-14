@@ -343,12 +343,12 @@ def register_error_handlers(app) -> None:
                 return value
             return str(value)
 
-        errors = []
-        for error in exc.errors():
-            error_copy = dict(error)
-            if "input" in error_copy:
-                error_copy["input"] = _sanitize_input(error_copy.get("input"))
-            errors.append(error_copy)
+        # Sanitize the WHOLE error dict, not just "input": a custom
+        # @model_validator that raises ValueError puts the raw exception in
+        # ctx["error"], which is not JSON-serializable and would otherwise make
+        # JSONResponse raise — turning a 422 into a 500. _sanitize_input recurses
+        # into ctx and coerces any non-JSON-native value (e.g. the exception) to str.
+        errors = [_sanitize_input(dict(error)) for error in exc.errors()]
         return JSONResponse(
             status_code=422,
             content=_error_payload(

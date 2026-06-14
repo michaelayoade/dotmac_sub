@@ -93,3 +93,6 @@ data/olt_samples/
 
 # local type-check cache
 .mypy_cache/
+
+# Edge-case sweep generated artifacts (screenshots + json)
+docs/testing/results/

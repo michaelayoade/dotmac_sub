@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_admin_dashboard as web_admin_dashboard_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_any_permission
 
 router = APIRouter(tags=["web-admin-dashboard"])
 
@@ -14,7 +14,17 @@ router = APIRouter(tags=["web-admin-dashboard"])
 @router.get(
     "/dashboard",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    # The dashboard is the default staff landing page. Gating it on the legacy
+    # broad `billing:read` (which only the `admin` role holds) meant support /
+    # finance / auditor staff hit a 403 right after login. Allow any staff with a
+    # basic read permission to see the overview.
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "billing:read", "billing:invoice:read", "customer:read"
+            )
+        )
+    ],
 )
 def dashboard(request: Request, db: Session = Depends(get_db)):
     """Admin dashboard overview page."""

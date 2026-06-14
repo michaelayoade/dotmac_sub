@@ -528,6 +528,7 @@ def reseller_service_requests_page(request: Request, db: Session):
         {
             "request": request,
             "active_page": "service-requests",
+            "current_user": context["current_user"],
             "reseller": context["reseller"],
             "service_requests": items,
             "form_error": request.query_params.get("error"),
