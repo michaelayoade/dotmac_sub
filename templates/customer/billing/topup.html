@@ -19,6 +19,28 @@
             Add money to your account online. Any overdue invoices are settled first, and any remainder is kept as account credit.
         </p>
     </div>
+    {% if transfer_success %}
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
+        {{ transfer_success }}
+    </div>
+    {% endif %}
+    {% if add_card %}
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
+        <p class="font-semibold">Adding a card</p>
+        <p class="mt-1">Pay with Paystack and we&rsquo;ll save the card for next time. Choose any amount &mdash; it&rsquo;s added to your account balance, nothing is wasted. &ldquo;Save this card&rdquo; is already ticked below.</p>
+    </div>
+    {% endif %}
+    {% if pending_direct_transfer %}
+    <div class="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <p class="font-semibold">You have a pending bank transfer top-up.</p>
+            <p class="mt-1">Reference {{ pending_direct_transfer.reference }} for {{ pending_direct_transfer.currency }} {{ "{:,.2f}".format(pending_direct_transfer.amount) }}.</p>
+        </div>
+        <a href="/portal/billing/topup/transfer" class="inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
+            Continue
+        </a>
+    </div>
+    {% endif %}
 
     <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
         <div class="space-y-6">
@@ -107,14 +129,24 @@
                         x-model="selectedPaymentChoice"
                         class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
                     <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
+                        {% if option.provider_type == "direct_bank_transfer" %}
+                        <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M4 10h16M5 6l7-3 7 3M6 10v8m4-8v8m4-8v8m4-8v8"/>
+                        </svg>
+                        {% else %}
                         <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4-3h5M7 19h10a4 4 0 004-4V9a4 4 0 00-4-4H7a4 4 0 00-4 4v6a4 4 0 004 4z"/>
                         </svg>
+                        {% endif %}
                     </span>
                     <span class="min-w-0 flex-1">
                         <span class="block text-sm font-semibold text-stone-900 dark:text-white">{{ option.label }}</span>
                         <span class="mt-0.5 block text-sm text-stone-500 dark:text-stone-400">
+                            {% if option.provider_type == "direct_bank_transfer" %}
+                            Transfer to our bank account and upload your receipt
+                            {% else %}
                             Secure online checkout
+                            {% endif %}
                         </span>
                     </span>
                 </label>
@@ -282,9 +314,9 @@ function topupPage() {
     return {
         processing: false,
         liveReference: '',
-        customAmount: '',
+        customAmount: '{{ prefill_amount if prefill_amount else "" }}',
         validationError: '',
-        saveCard: false,
+        saveCard: {{ 'true' if add_card else 'false' }},
         selectedPaymentChoice: 'provider:{{ provider_type }}',
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
@@ -382,6 +414,10 @@ function topupPage() {
                 }
                 intent = payload;
                 this.liveReference = intent.reference || '';
+                if (intent.redirect_url) {
+                    window.location.href = intent.redirect_url;
+                    return;
+                }
                 if (intent.charged) {
                     window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(intent.reference) + '&provider=paystack';
                     return;

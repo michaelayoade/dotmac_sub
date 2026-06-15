@@ -5,10 +5,16 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.billing import (
+    CreditNote,
+    CreditNoteStatus,
     InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentProvider,
     PaymentProviderType,
+    PaymentStatus,
     TopupIntent,
 )
 from app.models.subscriber import Subscriber
@@ -221,6 +227,68 @@ def test_get_billing_page_includes_current_balance(monkeypatch, db_session, subs
     )
 
     assert page["prepaid_balance"] == Decimal("2500.00")
+
+
+def test_get_billing_page_includes_payments_and_credit_notes_in_activity(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_billing.get_available_balance",
+        lambda *_args, **_kwargs: Decimal("2500.00"),
+    )
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("1015.23"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        memo="Paystack prepaid top-up ref: DMAC-test",
+        is_active=True,
+    )
+    credit_note = CreditNote(
+        account_id=subscriber.id,
+        credit_number="CN-test",
+        status=CreditNoteStatus.issued,
+        currency="NGN",
+        total=Decimal("1500.00"),
+        memo="Test credit",
+        is_active=True,
+    )
+    payment_ledger = LedgerEntry(
+        account_id=subscriber.id,
+        payment=payment,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=Decimal("1015.23"),
+        currency="NGN",
+        memo="Duplicate payment ledger",
+        is_active=True,
+    )
+    adjustment = LedgerEntry(
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.adjustment,
+        amount=Decimal("500.00"),
+        currency="NGN",
+        memo="Manual adjustment",
+        is_active=True,
+    )
+    db_session.add_all([payment, credit_note, payment_ledger, adjustment])
+    db_session.commit()
+
+    page = get_billing_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    activity = page["billing_activity"]
+    amounts = [item.amount for item in activity]
+    titles = [item.title for item in activity]
+
+    assert Decimal("1015.23") in amounts
+    assert Decimal("1500.00") in amounts
+    assert Decimal("500.00") in amounts
+    assert "Credit added" in titles
+    assert "Duplicate payment ledger" not in titles
 
 
 def test_create_topup_intent_persists_server_owned_reference(

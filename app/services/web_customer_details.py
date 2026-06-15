@@ -360,11 +360,11 @@ def _build_audit_activity_items(
         comment_text = str(metadata.get("comment") or "").strip()
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
-        description = actor_name
+        description = ""
         if comment_text:
-            description = f"{actor_name} · {comment_text}"
+            description = comment_text
         elif change_summary:
-            description = f"{actor_name} · {change_summary}"
+            description = change_summary
         items.append(
             {
                 "type": "audit",
@@ -372,6 +372,7 @@ def _build_audit_activity_items(
                     f"{humanize_entity(getattr(event, 'entity_type', None))} "
                     f"{humanize_action(getattr(event, 'action', None))}"
                 ),
+                "actor_name": actor_name,
                 "description": description,
                 "timestamp": getattr(event, "occurred_at", None),
                 "link": _audit_entity_link(

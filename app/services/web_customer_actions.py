@@ -1971,14 +1971,38 @@ def update_customer_profile(
     metadata = dict(subscriber.metadata_ or {})
     metadata["billing_notifications"] = bool(billing_notifications)
     metadata["sms_updates"] = bool(sms_updates)
-    return subscriber_service.subscribers.update(
+
+    new_email = email.strip()
+    # A changed email address must be re-verified: reset the flag and dispatch a
+    # fresh verification link so the verified state can never lag the address.
+    email_changed = new_email.lower() != (subscriber.email or "").strip().lower()
+
+    update_fields = dict(
+        first_name=name_parts[0] if name_parts else name.strip(),
+        last_name=name_parts[1] if len(name_parts) > 1 else "",
+        email=new_email,
+        phone=phone.strip() if phone else None,
+        metadata_=metadata,
+    )
+    # Set in the constructor so exclude_unset keeps it (post-init assignment
+    # would be dropped by model_dump(exclude_unset=True)).
+    if email_changed:
+        update_fields["email_verified"] = False
+    updated = subscriber_service.subscribers.update(
         db=db,
         subscriber_id=subscriber_id,
-        payload=SubscriberUpdate(
-            first_name=name_parts[0] if name_parts else name.strip(),
-            last_name=name_parts[1] if len(name_parts) > 1 else "",
-            email=email.strip(),
-            phone=phone.strip() if phone else None,
-            metadata_=metadata,
-        ),
+        payload=SubscriberUpdate(**update_fields),
     )
+
+    if email_changed and updated is not None and new_email:
+        try:
+            from app.services import auth_flow
+
+            auth_flow.send_email_verification(db, str(subscriber_id))
+        except Exception:
+            logger.warning(
+                "verification email after profile email change failed for %s",
+                subscriber_id,
+                exc_info=True,
+            )
+    return updated

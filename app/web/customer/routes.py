@@ -6,7 +6,17 @@ from urllib.parse import quote_plus
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Body, Depends, Form, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
@@ -16,6 +26,7 @@ from app.db import get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import crm_portal, customer_portal
+from app.services import payment_proofs as payment_proofs_service
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -1066,6 +1077,7 @@ def customer_notifications(
 def customer_profile(
     request: Request,
     saved: str | None = None,
+    verify_sent: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer profile settings."""
@@ -1100,6 +1112,7 @@ def customer_profile(
             ),
             "active_page": "profile",
             "success": "Profile updated successfully" if saved else None,
+            "verify_sent": verify_sent,
         },
     )
 
@@ -1135,6 +1148,28 @@ def customer_update_profile(
     # POST-Redirect-GET: bounce to the profile page with a success flag so a
     # browser refresh after save can't accidentally resubmit the form.
     return RedirectResponse(url="/portal/profile?saved=1", status_code=303)
+
+
+@router.post("/profile/verify-email/resend")
+def customer_resend_email_verification(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Resend the email-verification link to the caller's own address."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    sent = False
+    subscriber_id = customer.get("subscriber_id")
+    if subscriber_id and not customer.get("read_only"):
+        try:
+            sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
+        except Exception:
+            logger.warning("customer_resend_email_verification_failed", exc_info=True)
+    return RedirectResponse(
+        url=f"/portal/profile?verify_sent={'1' if sent else '0'}",
+        status_code=303,
+    )
 
 
 @router.get("/profile/mfa/setup", response_class=HTMLResponse)
@@ -1510,6 +1545,9 @@ def customer_billing_topup(
     request: Request,
     autopay_error: str | None = Query(None),
     autopay_success: str | None = Query(None),
+    transfer_success: str | None = Query(None),
+    add_card: bool = Query(False),
+    amount: int | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
     """Show add-funds page for a customer account."""
@@ -1534,6 +1572,13 @@ def customer_billing_topup(
             ),
             "autopay_error": autopay_error,
             "autopay_success": autopay_success,
+            "transfer_success": transfer_success,
+            # When arriving from "Add card", default the provider to Paystack
+            # and pre-tick "save this card" so the top-up doubles as adding a
+            # reusable card.
+            "add_card": add_card,
+            # Optional prefill handed off from the dashboard "Pay Now" panel.
+            "prefill_amount": amount,
             "active_page": "billing",
         },
     )
@@ -1566,6 +1611,115 @@ def customer_create_topup_intent(
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.get("/billing/topup/transfer", response_class=HTMLResponse)
+def customer_direct_transfer_topup(
+    request: Request,
+    error: str | None = Query(None),
+    submitted: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show direct bank transfer instructions for the pending top-up intent."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        page_data = customer_portal.get_direct_transfer_topup_page(db, customer)
+    except ValueError as exc:
+        return RedirectResponse(
+            url=f"/portal/billing/topup?autopay_error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "customer/billing/topup_transfer.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "form_error": error,
+            "submitted": submitted,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.post("/billing/topup/transfer", response_class=HTMLResponse)
+async def customer_direct_transfer_topup_submit(
+    request: Request,
+    made_payment: str | None = Form(None),
+    selected_account_id: str | None = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Submit direct bank transfer proof for staff review."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if customer.get("read_only"):
+        return RedirectResponse(
+            url=(
+                "/portal/billing/topup/transfer?error="
+                f"{quote_plus('View-only sessions cannot submit payments')}"
+            ),
+            status_code=303,
+        )
+    try:
+        proof = await customer_portal.submit_direct_transfer_topup(
+            db,
+            customer,
+            made_payment=str(made_payment or "").lower() in {"1", "true", "on", "yes"},
+            selected_account_id=selected_account_id,
+            file=file,
+        )
+    except (ValueError, HTTPException) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return RedirectResponse(
+            url=f"/portal/billing/topup/transfer?error={quote_plus(str(detail))}",
+            status_code=303,
+        )
+    except Exception:
+        logger.warning("customer_direct_transfer_submit_failed", exc_info=True)
+        return RedirectResponse(
+            url="/portal/billing/topup/transfer?error=Unable to submit payment proof",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/portal/billing/topup/transfer/submitted?proof_id={quote_plus(str(proof.get('id') or ''))}",
+        status_code=303,
+    )
+
+
+@router.get("/billing/topup/transfer/submitted", response_class=HTMLResponse)
+def customer_direct_transfer_topup_submitted(
+    request: Request,
+    proof_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show acknowledgement after a direct-transfer receipt is submitted."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    proof = payment_proofs_service.get_proof(db, proof_id)
+    if (
+        proof is None
+        or str(proof.account_id) != str(customer.get("account_id") or "")
+    ):
+        return RedirectResponse(
+            url="/portal/billing/topup?autopay_error="
+            + quote_plus("Submitted transfer receipt was not found."),
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "customer/billing/topup_transfer_submitted.html",
+        {
+            "request": request,
+            "customer": customer,
+            "proof": proof,
+            "active_page": "billing",
+        },
+    )
 
 
 @router.get("/billing/topup/verify", response_class=HTMLResponse)
@@ -1671,6 +1825,100 @@ def customer_autopay_disable(
     autopay_service.disable(db, str(customer.get("account_id") or ""))
     return RedirectResponse(
         url="/portal/billing/topup?autopay_success=" + quote_plus("Autopay is off."),
+        status_code=303,
+    )
+
+
+@router.get("/billing/payment-methods", response_class=HTMLResponse)
+def customer_payment_methods(
+    request: Request,
+    saved: str | None = Query(None),
+    error: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Manage saved cards, autopay, and the bank-transfer method in one place."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing/payment-methods",
+            status_code=303,
+        )
+    page_data = customer_portal.get_payment_methods_page(db, customer)
+    return templates.TemplateResponse(
+        "customer/billing/payment_methods.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "autopay": autopay_service.get_status(
+                db, str(customer.get("account_id") or "")
+            ),
+            "success": saved,
+            "form_error": error,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/default")
+def customer_payment_method_set_default(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Set a saved card as the default (self-scoped to the caller)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if customer.get("read_only"):
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("View-only sessions cannot change payment methods."),
+            status_code=303,
+        )
+    updated = customer_cards.set_default(
+        db, str(customer.get("account_id") or ""), method_id
+    )
+    if updated is None:
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("Card not found."),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/portal/billing/payment-methods?saved="
+        + quote_plus("Default card updated."),
+        status_code=303,
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/remove")
+def customer_payment_method_remove(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove a saved card (also deactivates any autopay mandate on it)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if customer.get("read_only"):
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("View-only sessions cannot change payment methods."),
+            status_code=303,
+        )
+    removed = customer_cards.remove(
+        db, str(customer.get("account_id") or ""), method_id
+    )
+    if not removed:
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("Card not found."),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/portal/billing/payment-methods?saved=" + quote_plus("Card removed."),
         status_code=303,
     )
 

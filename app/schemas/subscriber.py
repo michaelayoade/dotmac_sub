@@ -397,3 +397,85 @@ class SubscriberAccountRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
     id: UUID | None = None
+
+
+# --- Subscriber contacts (customer self-care: /api/v1/me/contacts) ---
+# Mirrors the web portal's /portal/contacts feature (see
+# app/services/customer_portal_contacts.py). Channels are normalized and the
+# "at least one contact channel" rule is enforced server-side by the service;
+# the response is serialized straight from the SubscriberContact model.
+
+_CONTACT_CHANNEL_FIELDS = (
+    "phone",
+    "email",
+    "whatsapp",
+    "facebook",
+    "instagram",
+    "x_handle",
+    "telegram",
+    "linkedin",
+    "other_social",
+)
+
+
+class SubscriberContactBase(BaseModel):
+    """Editable fields of a subscriber contact (mirrors the web ContactForm)."""
+
+    full_name: str | None = Field(default=None, max_length=160)
+    phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=255)
+    whatsapp: str | None = Field(default=None, max_length=80)
+    facebook: str | None = Field(default=None, max_length=160)
+    instagram: str | None = Field(default=None, max_length=160)
+    x_handle: str | None = Field(default=None, max_length=160)
+    telegram: str | None = Field(default=None, max_length=160)
+    linkedin: str | None = Field(default=None, max_length=160)
+    other_social: str | None = None
+    relationship: str | None = Field(default=None, max_length=80)
+    contact_type: str | None = Field(default="general", max_length=40)
+    is_authorized: bool = False
+    receives_notifications: bool = False
+    is_billing_contact: bool = False
+    notes: str | None = None
+
+
+class SubscriberContactCreate(SubscriberContactBase):
+    """Create payload — must carry at least one contact channel."""
+
+
+class SubscriberContactUpdate(SubscriberContactBase):
+    """Update payload — full replace, must carry at least one contact channel."""
+
+
+class SubscriberContactRead(BaseModel):
+    """A subscriber contact as returned by the customer self-care API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    subscriber_id: UUID
+    full_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    whatsapp: str | None = None
+    facebook: str | None = None
+    instagram: str | None = None
+    x_handle: str | None = None
+    telegram: str | None = None
+    linkedin: str | None = None
+    other_social: str | None = None
+    relationship: str | None = None
+    contact_type: str
+    is_billing_contact: bool
+    is_authorized: bool
+    receives_notifications: bool
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SubscriberContactWriteResponse(BaseModel):
+    """Create/update response: the saved contact plus any duplicate warnings."""
+
+    contact: SubscriberContactRead
+    warnings: list[str] = Field(default_factory=list)

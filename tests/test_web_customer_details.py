@@ -28,6 +28,7 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
+from app.models.system_user import SystemUser, SystemUserType
 from app.models.subscription_engine import SettingValueType
 from app.services.credential_crypto import encrypt_credential
 from app.services.web_customer_details import (
@@ -162,6 +163,15 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
     )
     db_session.add(credential)
     db_session.commit()
+    admin = SystemUser(
+        first_name="Audit",
+        last_name="Admin",
+        email="audit-admin@example.com",
+        user_type=SystemUserType.system_user,
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
 
     password, found = reveal_customer_pppoe_password(
         db_session,
@@ -174,6 +184,8 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
         credential_id="00000000-0000-0000-0000-000000000000",
     )
     request = _bare_request()
+    request.state.user = admin
+    request.state.auth = {"principal_type": "system_user"}
     response = customer_routes.person_pppoe_password(
         request=request,
         customer_id=str(subscriber.id),
@@ -197,6 +209,17 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
     )
     assert audit is not None
     assert audit.is_success is True
+    assert audit.actor_id == str(admin.id)
+    assert audit.metadata_["actor_name"] == "Audit Admin"
+
+    detail = build_customer_detail_snapshot(db_session, str(subscriber.id))
+    reveal_activity = next(
+        item
+        for item in detail["activity_items"]
+        if item["type"] == "audit"
+        and item["title"] == "Subscriber Customer.Pppoe Password Reveal"
+    )
+    assert reveal_activity["actor_name"] == "Audit Admin"
 
 
 def test_customer_detail_rejects_reseller_users(db_session):

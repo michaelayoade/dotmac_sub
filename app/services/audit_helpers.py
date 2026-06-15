@@ -327,12 +327,15 @@ def list_audit_events_for_entities(
 
 def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]:
     """Resolve user actors referenced by the provided audit events."""
-    actor_ids = {
-        str(event.actor_id)
-        for event in events
-        if getattr(event, "actor_id", None)
-        and _is_user_actor(getattr(event, "actor_type", None))
-    }
+    actor_ids = set()
+    for event in events:
+        actor_id = getattr(event, "actor_id", None)
+        if not actor_id or not _is_user_actor(getattr(event, "actor_type", None)):
+            continue
+        try:
+            actor_ids.add(str(UUID(str(actor_id))))
+        except (TypeError, ValueError):
+            continue
     if not actor_ids:
         return {}
     actors: dict[str, object] = {
@@ -429,7 +432,11 @@ def _resolve_actor_name(event, subscribers: dict[str, object]) -> str:
             if actor_name:
                 return actor_name
         metadata = getattr(event, "metadata_", None) or {}
-        return metadata.get("actor_email") or str(actor_id)
+        return (
+            metadata.get("actor_name")
+            or metadata.get("actor_email")
+            or str(actor_id)
+        )
     metadata = getattr(event, "metadata_", None) or {}
     return (
         metadata.get("actor_name")

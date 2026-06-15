@@ -54,6 +54,12 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
+from app.schemas.subscriber import (
+    SubscriberContactCreate,
+    SubscriberContactRead,
+    SubscriberContactUpdate,
+    SubscriberContactWriteResponse,
+)
 from app.schemas.support import (
     MySupportCommentCreate,
     MySupportTicketCreate,
@@ -86,6 +92,7 @@ from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import customer_location_requests as location_service
+from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -893,6 +900,114 @@ def my_location_request_cancel(
         subscriber_id=subscriber_id,
         actor_id=subscriber_id,
     )
+
+
+# --- Subscriber contacts (self-scoped) ------------------------------------------
+#
+# Customer-facing parity with the web portal's /portal/contacts feature. The
+# mobile app manages a subscriber's additional contacts (people, not accounts).
+# All ops reuse the web service core (app/services/customer_portal_contacts.py)
+# so normalization, the "at least one contact channel" rule, duplicate
+# detection, and subscriber-id scoping are identical. Ownership is enforced by
+# the service (allowed subscriber ids only); a contact that isn't the caller's
+# returns 404 (not 403), matching the self-scoped pattern used elsewhere.
+
+
+def _contact_form(
+    payload: SubscriberContactCreate | SubscriberContactUpdate,
+) -> contacts_service.ContactForm:
+    """Normalize an API payload into the web service's ContactForm."""
+    return contacts_service.normalize_contact_form(
+        full_name=payload.full_name,
+        phone=payload.phone,
+        email=payload.email,
+        whatsapp=payload.whatsapp,
+        facebook=payload.facebook,
+        instagram=payload.instagram,
+        x_handle=payload.x_handle,
+        telegram=payload.telegram,
+        linkedin=payload.linkedin,
+        other_social=payload.other_social,
+        relationship=payload.relationship,
+        contact_type=payload.contact_type,
+        is_authorized=payload.is_authorized,
+        receives_notifications=payload.receives_notifications,
+        is_billing_contact=payload.is_billing_contact,
+        notes=payload.notes,
+    )
+
+
+@router.get("/contacts", response_model=list[SubscriberContactRead])
+def my_contacts(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's subscriber contacts, newest first."""
+    return contacts_service.list_contacts(db, _customer(db, principal))
+
+
+@router.post(
+    "/contacts", response_model=SubscriberContactWriteResponse, status_code=201
+)
+def my_create_contact(
+    payload: SubscriberContactCreate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Add a contact to the caller's account. Requires at least one contact
+    channel (phone, email, or a social handle). Returns the saved contact plus
+    any duplicate-use warnings (advisory; the save still succeeds)."""
+    try:
+        contact, warnings = contacts_service.create_contact_returning(
+            db, _customer(db, principal), _contact_form(payload)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SubscriberContactWriteResponse(
+        contact=SubscriberContactRead.model_validate(contact), warnings=warnings
+    )
+
+
+@router.patch(
+    "/contacts/{contact_id}", response_model=SubscriberContactWriteResponse
+)
+def my_update_contact(
+    contact_id: str,
+    payload: SubscriberContactUpdate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Update one of the caller's own contacts (full replace). Requires at least
+    one contact channel. 404 if the contact isn't the caller's."""
+    customer = _customer(db, principal)
+    if contacts_service.get_owned_contact(db, customer, contact_id) is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    try:
+        contact, warnings = contacts_service.update_contact_returning(
+            db, customer, contact_id, _contact_form(payload)
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == "Contact not found.":
+            raise HTTPException(status_code=404, detail="Contact not found") from exc
+        raise HTTPException(status_code=400, detail=message) from exc
+    return SubscriberContactWriteResponse(
+        contact=SubscriberContactRead.model_validate(contact), warnings=warnings
+    )
+
+
+@router.delete("/contacts/{contact_id}", status_code=204)
+def my_delete_contact(
+    contact_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Delete one of the caller's own contacts. 404 if it isn't the caller's."""
+    customer = _customer(db, principal)
+    try:
+        contacts_service.delete_contact(db, customer, contact_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Contact not found") from exc
 
 
 # --- VAS wallet (feature-flagged: 404 when vas.enabled is off) -------------------

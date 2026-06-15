@@ -249,7 +249,43 @@ def _has_contact_channel(form: ContactForm) -> bool:
     )
 
 
-def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
+def list_contacts(db: Session, customer: dict) -> list[SubscriberContact]:
+    """The caller's subscriber contacts, newest first (self/allowed scoped)."""
+    allowed_subscriber_uuids = _allowed_subscriber_uuids(customer, db)
+    return list(
+        db.scalars(
+            select(SubscriberContact)
+            .where(SubscriberContact.subscriber_id.in_(allowed_subscriber_uuids))
+            .order_by(SubscriberContact.created_at.desc())
+        ).all()
+    )
+
+
+def get_owned_contact(
+    db: Session, customer: dict, contact_id: str
+) -> SubscriberContact | None:
+    """Fetch a contact only if it belongs to the caller's allowed subscriber(s)."""
+    try:
+        contact_uuid = UUID(str(contact_id))
+    except ValueError:
+        return None
+    return db.scalar(
+        select(SubscriberContact).where(
+            SubscriberContact.id == contact_uuid,
+            SubscriberContact.subscriber_id.in_(
+                _allowed_subscriber_uuids(customer, db)
+            ),
+        )
+    )
+
+
+def create_contact_returning(
+    db: Session, customer: dict, form: ContactForm
+) -> tuple[SubscriberContact, list[str]]:
+    """Create a contact, returning the saved row plus duplicate warnings.
+
+    Shared core for both the web flow (``create_contact``) and the customer
+    self-care API. Scoping/validation are identical."""
     if not _has_contact_channel(form):
         raise ValueError("Enter at least one phone, email, or social media contact.")
     subscriber_id = _target_subscriber_id(customer, db)
@@ -282,12 +318,21 @@ def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
     db.flush()
     rebuild_identity_index_for_subscriber(db, contact.subscriber_id)
     db.commit()
+    db.refresh(contact)
+    return contact, warnings
+
+
+def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
+    _contact, warnings = create_contact_returning(db, customer, form)
     return warnings
 
 
-def update_contact(
+def update_contact_returning(
     db: Session, customer: dict, contact_id: str, form: ContactForm
-) -> list[str]:
+) -> tuple[SubscriberContact, list[str]]:
+    """Update a contact (full replace), returning the saved row plus warnings.
+
+    Shared core for both the web flow (``update_contact``) and the API."""
     if not _has_contact_channel(form):
         raise ValueError("Enter at least one phone, email, or social media contact.")
     try:
@@ -329,6 +374,14 @@ def update_contact(
     contact.notes = form.notes
     rebuild_identity_index_for_subscriber(db, contact.subscriber_id)
     db.commit()
+    db.refresh(contact)
+    return contact, warnings
+
+
+def update_contact(
+    db: Session, customer: dict, contact_id: str, form: ContactForm
+) -> list[str]:
+    _contact, warnings = update_contact_returning(db, customer, contact_id, form)
     return warnings
 
 
