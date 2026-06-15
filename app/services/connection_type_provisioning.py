@@ -482,6 +482,64 @@ def _append_option82_attributes(
         )
 
 
+def _append_additional_routes(
+    db: Session,
+    attrs: list[dict[str, str]],
+    subscription: Subscription,
+) -> None:
+    """Append one Framed-Route per active additional routed block.
+
+    Reproduces what Splynx emitted from ``services_internet.ipv4_route``: the
+    BNG installs each as a route to this session's PPP interface and tears it
+    down on disconnect. The gateway is ``0.0.0.0`` ("via this session") rather
+    than the customer's primary, because primaries are CGNAT and can't be
+    recursed through. ``+=`` so multiple blocks coexist on one Access-Accept.
+
+    Emitted only for ``active`` subscribers — blocked/disabled/suspended get a
+    captive-portal reply instead, and their routes must not leak into it. The
+    rows still exist, so re-activation releases them automatically.
+    """
+    from app.models.network import SubscriberAdditionalRoute
+    from app.models.subscriber import Subscriber, SubscriberStatus
+
+    if subscription.subscriber_id is None:
+        return
+
+    subscriber = subscription.subscriber or db.get(
+        Subscriber, subscription.subscriber_id
+    )
+    if subscriber is None or subscriber.status != SubscriberStatus.active:
+        return
+
+    primary = (subscription.ipv4_address or "").strip()
+    primary_host = f"{primary}/32" if primary else None
+
+    routes = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(
+            SubscriberAdditionalRoute.subscriber_id == subscription.subscriber_id,
+            SubscriberAdditionalRoute.is_active.is_(True),
+        )
+        .all()
+    )
+
+    seen: set[str] = set()
+    for route in routes:
+        cidr = (route.cidr or "").strip()
+        # Skip blanks, the primary /32 (defence in depth vs a mis-tagged row),
+        # and duplicates.
+        if not cidr or cidr == primary_host or cidr in seen:
+            continue
+        seen.add(cidr)
+        attrs.append(
+            {
+                "attribute": "Framed-Route",
+                "op": "+=",
+                "value": f"{cidr} 0.0.0.0 {route.metric or 1}",
+            }
+        )
+
+
 def build_radius_reply_attributes(
     db: Session,
     subscription: Subscription,
@@ -516,6 +574,9 @@ def build_radius_reply_attributes(
 
     # Append Option 82 relay agent attributes for IPoE
     _append_option82_attributes(db, attrs, subscription, connection_type)
+
+    # Append Framed-Route per additional routed IP block (Splynx ipv4_route)
+    _append_additional_routes(db, attrs, subscription)
 
     # Append any custom attributes from the profile
     if profile:

@@ -1,0 +1,219 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Payment Methods - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+            <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">Payment Methods</span>
+        </nav>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Payment Methods</h1>
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                    Manage your saved cards, autopay, and how you pay by bank transfer.
+                </p>
+            </div>
+            {% if not (customer and customer.read_only) %}
+            <a href="/portal/billing/topup?add_card=1"
+               class="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add card
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if success %}
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
+        {{ success }}
+    </div>
+    {% endif %}
+    {% if form_error %}
+    <div class="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">
+        {{ form_error }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
+        <div class="space-y-6">
+            <!-- Saved cards -->
+            <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Saved cards</h2>
+                        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                            Cards are saved securely by our payment provider. We never store your full card number.
+                        </p>
+                    </div>
+                </div>
+
+                {% if saved_cards %}
+                <ul class="mt-5 space-y-3">
+                    {% for card in saved_cards %}
+                    <li class="flex items-center gap-4 rounded-2xl border border-stone-200 p-4 dark:border-stone-700">
+                        <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
+                            <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                            </svg>
+                        </span>
+                        <div class="min-w-0 flex-1">
+                            <p class="flex items-center gap-2 text-sm font-semibold text-stone-900 dark:text-white">
+                                <span class="truncate">{{ card.label or ((card.brand or "Card") ~ (" ending in " ~ card.last4 if card.last4 else "")) }}</span>
+                                {% if card.is_default %}
+                                <span class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Default</span>
+                                {% endif %}
+                            </p>
+                            <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
+                                {% if card.expires_month and card.expires_year %}
+                                Expires {{ "%02d"|format(card.expires_month) }}/{{ card.expires_year }}
+                                {% else %}
+                                Saved card
+                                {% endif %}
+                            </p>
+                        </div>
+                        {% if not (customer and customer.read_only) %}
+                        <div class="flex flex-shrink-0 items-center gap-2">
+                            {% if not card.is_default %}
+                            <form method="post" action="/portal/billing/payment-methods/{{ card.id }}/default">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="rounded-lg border border-stone-300 px-3 py-1.5 text-xs font-semibold text-stone-700 transition-colors hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700/50">
+                                    Make default
+                                </button>
+                            </form>
+                            {% endif %}
+                            <form method="post" action="/portal/billing/payment-methods/{{ card.id }}/remove"
+                                  onsubmit="return confirm('Remove this card? Any autopay using it will be turned off.');">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-900/20">
+                                    Remove
+                                </button>
+                            </form>
+                        </div>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="mt-5 rounded-2xl border border-dashed border-stone-300 bg-stone-50/70 p-6 text-center dark:border-stone-600 dark:bg-stone-900/20">
+                    <p class="text-sm font-semibold text-stone-900 dark:text-white">No saved cards yet</p>
+                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                        Add a card to pay faster and enable autopay. We&rsquo;ll add a top-up to your balance and remember the card for next time.
+                    </p>
+                    {% if not (customer and customer.read_only) %}
+                    <a href="/portal/billing/topup?add_card=1" class="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700">
+                        Add card
+                    </a>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </section>
+
+            <!-- Autopay -->
+            <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Autopay</h2>
+                        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                            Automatically charge your default saved card when invoices fall due.
+                        </p>
+                    </div>
+                    {% if autopay and autopay.enabled %}
+                    <span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">On</span>
+                    {% else %}
+                    <span class="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-300">Off</span>
+                    {% endif %}
+                </div>
+
+                {% if autopay and autopay.enabled and autopay.suspended %}
+                <p class="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                    Autopay is paused after {{ autopay.failure_count }} failed charge attempts{% if autopay.last_failure_reason %} ({{ autopay.last_failure_reason }}){% endif %}.
+                    Set a new default card to retry.
+                </p>
+                {% endif %}
+
+                {% if not (customer and customer.read_only) %}
+                {% if autopay and autopay.enabled %}
+                <form method="post" action="/portal/billing/autopay/disable" class="mt-4">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" class="rounded-xl border border-stone-300 px-4 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700/50">
+                        Turn off autopay
+                    </button>
+                </form>
+                {% elif saved_cards %}
+                <form method="post" action="/portal/billing/autopay/enable" class="mt-4">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700">
+                        Turn on autopay
+                    </button>
+                    <p class="mt-2 text-xs text-stone-500 dark:text-stone-400">Uses your default saved card.</p>
+                </form>
+                {% else %}
+                <p class="mt-4 text-sm text-stone-500 dark:text-stone-400">
+                    Add a card first, then you can turn on autopay here.
+                </p>
+                {% endif %}
+                {% endif %}
+            </section>
+        </div>
+
+        <div class="space-y-6">
+            <!-- Bank transfer as a first-class method -->
+            {% if direct_bank_transfer_enabled %}
+            <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
+                        <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M4 10h16M5 6l7-3 7 3M6 10v8m4-8v8m4-8v8m4-8v8"/>
+                        </svg>
+                    </span>
+                    <div>
+                        <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Bank transfer</h2>
+                        <p class="text-sm text-stone-500 dark:text-stone-400">Pay by transfer and upload your receipt.</p>
+                    </div>
+                </div>
+                <dl class="mt-5 space-y-3 text-sm">
+                    {% if bank_transfer.direct_bank_transfer_bank_name %}
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="text-stone-500 dark:text-stone-400">Bank</dt>
+                        <dd class="font-semibold text-stone-900 dark:text-white">{{ bank_transfer.direct_bank_transfer_bank_name }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if bank_transfer.direct_bank_transfer_account_name %}
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="text-stone-500 dark:text-stone-400">Account name</dt>
+                        <dd class="font-semibold text-stone-900 dark:text-white">{{ bank_transfer.direct_bank_transfer_account_name }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if bank_transfer.direct_bank_transfer_account_number %}
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="text-stone-500 dark:text-stone-400">Account number</dt>
+                        <dd class="font-mono font-bold text-stone-900 dark:text-white">{{ bank_transfer.direct_bank_transfer_account_number }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+                {% if not (customer and customer.read_only) %}
+                <a href="/portal/billing/topup" class="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-stone-300 px-4 py-2.5 text-sm font-semibold text-stone-700 transition hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700/50">
+                    Pay by bank transfer
+                </a>
+                {% endif %}
+            </section>
+            {% endif %}
+
+            <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Other ways to pay</h2>
+                <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">
+                    You can also pay by card on a one-off basis without saving it — just choose your amount on the Add Funds page.
+                </p>
+                <a href="/portal/billing/topup" class="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
+                    Add Funds
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}

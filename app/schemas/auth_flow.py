@@ -95,6 +95,7 @@ class MeUpdateRequest(BaseModel):
     first_name: str | None = Field(default=None, max_length=80)
     last_name: str | None = Field(default=None, max_length=80)
     display_name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=40)
     date_of_birth: date | None = None
     gender: str | None = None
@@ -152,3 +153,15 @@ class ResetPasswordRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     reset_at: datetime
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1)
+
+
+class VerifyEmailResponse(BaseModel):
+    email_verified: bool = True
+
+
+class ResendVerificationEmailResponse(BaseModel):
+    sent: bool

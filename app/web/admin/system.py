@@ -3742,6 +3742,32 @@ def config_billing_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/config/billing", status_code=303)
 
 
+@router.get("/config/direct-bank-transfer", response_class=HTMLResponse)
+def config_direct_bank_transfer_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_direct_bank_transfer_context(db)
+    return templates.TemplateResponse(
+        "admin/system/config/direct_bank_transfer.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-direct-bank-transfer",
+                "saved": request.query_params.get("saved") == "1",
+                **data,
+            },
+        ),
+    )
+
+
+@router.post("/config/direct-bank-transfer", response_class=HTMLResponse)
+def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_direct_bank_transfer_config(db, form)
+    return RedirectResponse(
+        url="/admin/system/config/direct-bank-transfer?saved=1", status_code=303
+    )
+
+
 # --- 8.13 Payment Methods ---
 @router.get("/config/payment-methods", response_class=HTMLResponse)
 def config_payment_methods_page(request: Request, db: Session = Depends(get_db)):

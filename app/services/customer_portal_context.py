@@ -381,6 +381,11 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         "recent_activity": [],
         "billing_mode": billing_mode,
         "prepaid_balance": prepaid_balance,
+        # Outstanding invoice balance (what the customer owes right now). Drives
+        # the dashboard "Pay Now" panel's one-tap "pay what you owe" prefill.
+        "amount_due": (
+            get_total_outstanding_balance(db, account_id) if account_id else 0.0
+        ),
     }
 
 

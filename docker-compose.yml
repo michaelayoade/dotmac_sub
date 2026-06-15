@@ -116,6 +116,12 @@ services:
     - max_wal_senders=5
     - -c
     - max_replication_slots=5
+    - -c
+    - archive_mode=on
+    - -c
+    - "archive_command=test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
+    - -c
+    - archive_timeout=300
     volumes:
     - /var/lib/dotmac-pg-local:/var/lib/postgresql/data
     ports:
@@ -272,6 +278,50 @@ services:
     - --max-tasks-per-child=100
     - -Q
     - bandwidth,ingestion
+
+  # Consumer for the `billing` queue (daily invoice cycle, prepaid drawdown,
+  # dunning, autopay, payment-topup reconciliation, usage/FUP, expiry,
+  # suspension audit, billing-switch guard). Isolated from the default worker
+  # so a long billing run never starves periodic tasks. Money-moving tasks are
+  # gated by `billing_enabled` and no-op until cutover; this worker simply
+  # ensures the queue is consumed (previously it had no consumer → all dropped).
+  celery-worker-billing:
+    build: .
+    container_name: dotmac_sub_celery_worker_billing
+    restart: unless-stopped
+    mem_limit: 768m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      REDIS_URL: ${REDIS_URL}
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+    env_file:
+    - .env
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    - ./scripts:/app/scripts
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=2
+    - --max-tasks-per-child=50
+    - -Q
+    - billing
   celery-beat:
     build: .
     container_name: dotmac_sub_celery_beat
@@ -578,7 +628,7 @@ services:
     secrets:
     - zabbix_db_password
     ports:
-    - 127.0.0.1:8085:8080
+    - 8085:8080
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     container_name: dotmac_zabbix_agent

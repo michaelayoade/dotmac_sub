@@ -548,6 +548,65 @@ class IPAssignment(Base):
     ipv6_address = relationship("IPv6Address", back_populates="assignment")
 
 
+class SubscriberAdditionalRoute(Base):
+    """Extra routed IP blocks for a subscriber, emitted as RADIUS Framed-Route.
+
+    Splynx auto-attached these via the ``ipv4_route`` field on its
+    ``services_internet`` table; the BNG installed each as a route to the PPP
+    interface on session-up. After the 2026-06-11 RADIUS cutover dotmac_sub is
+    the answering server and must reproduce them, fleet-wide, automatically.
+
+    Stored per-subscriber (not via IPAM ``IPAssignment``) on purpose: a routed
+    subnet has no managed host-address row in ``ipv4_addresses`` — and the
+    ``ip_assignments`` check constraint requires one — so a routed /29 doesn't
+    fit that model without polluting host inventory. Splynx duplicate services
+    also collapse to a single dotmac_sub subscriber, so subscriber + CIDR is the
+    natural unique grain (see uq constraint below; makes backfill idempotent).
+    """
+
+    __tablename__ = "subscriber_additional_routes"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscriber_id",
+            "cidr",
+            name="uq_subscriber_additional_routes_subscriber_cidr",
+        ),
+        Index(
+            "ix_subscriber_additional_routes_subscriber_id",
+            "subscriber_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Normalised network/prefix, e.g. "160.119.125.104/29" or "102.0.2.5/32".
+    cidr: Mapped[str] = mapped_column(String(64), nullable=False)
+    prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Framed-Route metric (Splynx default was 1).
+    metric: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Provenance: "splynx_backfill" | "splynx_sync" | "manual".
+    source: Mapped[str | None] = mapped_column(String(32))
+    splynx_service_id: Mapped[int | None] = mapped_column(Integer)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    subscriber = relationship("Subscriber")
+
+
 class IpPool(Base):
     __tablename__ = "ip_pools"
     __table_args__ = (UniqueConstraint("name", name="uq_ip_pools_name"),)

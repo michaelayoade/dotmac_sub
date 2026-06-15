@@ -436,6 +436,50 @@ def _decode_password_reset_token(db: Session | None, token: str) -> dict:
     return _decode_jwt(db, token, "password_reset")
 
 
+def _email_verification_ttl_minutes(db: Session | None) -> int:
+    env_value = _env_int("EMAIL_VERIFICATION_EXPIRY_MINUTES")
+    if env_value is None:
+        env_value = _env_int("EMAIL_VERIFICATION_TTL_MINUTES")
+    if env_value is not None:
+        return env_value
+    value = _setting_value(db, "email_verification_expiry_minutes")
+    if value is None:
+        value = _setting_value(db, "email_verification_ttl_minutes")
+    if value is not None:
+        try:
+            return int(value)
+        except ValueError:
+            return 1440
+    return 1440
+
+
+def _issue_email_verification_token(
+    db: Session | None,
+    subscriber_id: str,
+    email: str,
+    *,
+    ttl_minutes: int | None = None,
+) -> str:
+    now = _now()
+    token_ttl_minutes = ttl_minutes if ttl_minutes and ttl_minutes > 0 else None
+    if token_ttl_minutes is None:
+        token_ttl_minutes = _email_verification_ttl_minutes(db)
+    payload = {
+        "sub": subscriber_id,
+        "principal_id": subscriber_id,
+        "principal_type": "subscriber",
+        "email": email,
+        "typ": "email_verification",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=token_ttl_minutes)).timestamp()),
+    }
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+
+
+def _decode_email_verification_token(db: Session | None, token: str) -> dict:
+    return _decode_jwt(db, token, "email_verification")
+
+
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
     try:
         payload = _jwt_decode_token(token, _jwt_secret(db), _jwt_algorithm(db))
@@ -1540,6 +1584,143 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
         _revoke_portal_sessions_for_subscriber(db, str(principal_uuid))
 
     return now
+
+
+def send_email_verification(db: Session, subscriber_id: str) -> bool:
+    """
+    Mint an email-verification token and send the verification email to the
+    subscriber's address. No-op (returns False) when the subscriber is missing,
+    has no email, or is already verified.
+
+    Returns True if a verification email was dispatched.
+    """
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import record_audit_event
+    from app.services.email import send_email_verification_email
+
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
+    if not subscriber or not subscriber.email:
+        return False
+    if subscriber.email_verified:
+        # Already verified: nothing to send.
+        return False
+
+    ttl_minutes = _email_verification_ttl_minutes(db)
+    token = _issue_email_verification_token(
+        db,
+        str(subscriber.id),
+        subscriber.email,
+        ttl_minutes=ttl_minutes,
+    )
+    record_audit_event(
+        db,
+        action="auth.email_verification_requested",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        actor_type=AuditActorType.user,
+        actor_id=str(subscriber.id),
+        metadata={"email": subscriber.email},
+    )
+    return send_email_verification_email(
+        db=db,
+        to_email=subscriber.email,
+        verification_token=token,
+        person_name=subscriber.display_name or subscriber.first_name,
+        expires_minutes=ttl_minutes,
+    )
+
+
+def verify_email(db: Session, token: str) -> Subscriber:
+    """
+    Verify a subscriber's email using a valid verification token.
+
+    Idempotent: an already-verified subscriber is a success no-op. Raises
+    HTTPException on an invalid/expired token or mismatched subscriber.
+    Returns the (verified) Subscriber.
+    """
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import record_audit_event
+
+    payload = _decode_email_verification_token(db, token)
+    principal_id = payload.get("principal_id") or payload.get("sub")
+    email = payload.get("email")
+    if not principal_id or not email:
+        raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(principal_id)))
+    if not subscriber or subscriber.email != email:
+        raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    if subscriber.email_verified:
+        return subscriber
+
+    subscriber.email_verified = True
+    record_audit_event(
+        db,
+        action="auth.email_verified",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        actor_type=AuditActorType.user,
+        actor_id=str(subscriber.id),
+        metadata={"email": subscriber.email},
+        defer_until_commit=True,
+    )
+    db.commit()
+    db.refresh(subscriber)
+    return subscriber
+
+
+def set_subscriber_email(
+    db: Session, subscriber_id: str, new_email: str | None
+) -> bool:
+    """Add or change a subscriber's email, re-arming verification.
+
+    Single source of truth shared by the web profile form and the mobile ``/me``
+    update so the rule "a changed/added email must be re-verified, with a fresh
+    link dispatched" lives in exactly one place. No-op (returns ``False``) when
+    the email is blank or unchanged. Raises ``HTTPException(409)`` when another
+    subscriber already uses the address (the column is unique). Returns ``True``
+    when the email changed (and a verification email was dispatched).
+    """
+    new_email = (new_email or "").strip()
+    if not new_email:
+        return False
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
+    if subscriber is None:
+        return False
+    if new_email.lower() == (subscriber.email or "").strip().lower():
+        return False
+    clash = db.scalar(
+        sa_select(Subscriber.id).where(
+            func.lower(Subscriber.email) == new_email.lower(),
+            Subscriber.id != subscriber.id,
+        )
+    )
+    if clash is not None:
+        raise HTTPException(
+            status_code=409, detail="That email address is already in use."
+        )
+
+    from app.schemas.subscriber import SubscriberUpdate
+    from app.services import subscriber as subscriber_service
+
+    # Route through the subscriber service so the unique constraint and the
+    # customer identity-resolution index are maintained the same way the web
+    # and admin edit paths do.
+    subscriber_service.subscribers.update(
+        db,
+        str(subscriber.id),
+        SubscriberUpdate(email=new_email, email_verified=False),
+    )
+    try:
+        send_email_verification(db, str(subscriber.id))
+    except Exception:
+        logger.warning(
+            "verification email after email change failed for %s",
+            subscriber_id,
+            exc_info=True,
+        )
+    return True
 
 
 def validate_active_session(

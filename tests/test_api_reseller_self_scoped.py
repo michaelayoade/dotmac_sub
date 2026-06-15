@@ -319,7 +319,7 @@ def test_billing_endpoints_scope_and_translate_errors(monkeypatch):
     assert out == {"total_outstanding": 5}
     assert captured["summary_rid"] == "res-1"
 
-    def _bad_amount(db, rid, amount):
+    def _bad_amount(db, rid, amount, **kwargs):
         raise ValueError("Payment amount must be greater than 0")
 
     monkeypatch.setattr(
