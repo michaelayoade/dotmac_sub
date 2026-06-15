@@ -341,6 +341,38 @@ def _reset_singletons():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _isolate_root_logging():
+    """Restore the root logger's handlers after each test.
+
+    Several app modules mutate the *root* logger at import time:
+    ``app.main`` calls ``configure_logging()`` and a handful of service /
+    migration modules call ``logging.basicConfig(...)`` at module scope. Each
+    of those attaches a ``StreamHandler`` bound to whatever ``sys.stdout`` /
+    ``sys.stderr`` is live *at import time* — which, under pytest, is the
+    capture stream of whichever test imported the module first. When pytest
+    tears that capture down, the still-attached handler points at a closed
+    stream, so every later test that logs through the root logger raises
+    ``ValueError: I/O operation on closed file`` ("--- Logging error ---" in
+    CI). That manifests as a broad, ordering-dependent cascade of failures in
+    otherwise-unrelated tests that all pass in isolation.
+
+    The handler itself is hardened at the source (see
+    ``app.logging.StderrStreamHandler``); this fixture is the defence in depth
+    that also neutralises the ``basicConfig`` import-time handlers, by
+    snapshotting the root logger's handler list before each test and restoring
+    it afterwards so no stale-stream handler can leak across test boundaries.
+    """
+    import logging
+
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    try:
+        yield
+    finally:
+        root.handlers[:] = saved_handlers
+
+
 @pytest.fixture()
 def pop_site(db_session):
     """Point of Presence for network tests."""
