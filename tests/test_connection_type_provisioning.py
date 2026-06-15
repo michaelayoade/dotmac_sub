@@ -13,7 +13,9 @@ from app.models.catalog import (
     RadiusProfile,
     Subscription,
 )
+from app.models.subscriber import SubscriberStatus
 from app.services.connection_type_provisioning import (
+    _append_additional_routes,
     _mikrotik_commands,
     _rule_matches,
     build_radius_reply_attributes,
@@ -237,6 +239,138 @@ class TestBuildRadiusReplyAttributes:
         attr_names = [a["attribute"] for a in attrs]
         assert "Framed-IP-Address" in attr_names
         assert "Framed-IPv6-Prefix" in attr_names
+
+
+# ---------------------------------------------------------------------------
+# _append_additional_routes
+# ---------------------------------------------------------------------------
+
+
+def _route(cidr, metric=1):
+    """A stand-in for a SubscriberAdditionalRoute row (is_active filtering
+    happens in the query, so the helper only carries what the builder reads)."""
+    r = MagicMock()
+    r.cidr = cidr
+    r.metric = metric
+    return r
+
+
+def _active_subscription(ipv4="10.0.0.100", status=SubscriberStatus.active):
+    sub = MagicMock(spec=Subscription)
+    sub.subscriber_id = uuid4()
+    sub.ipv4_address = ipv4
+    subscriber = MagicMock()
+    subscriber.status = status
+    sub.subscriber = subscriber
+    return sub
+
+
+def _db_returning_routes(routes):
+    """db.query(...).filter(...).all() -> routes (single .filter, two conditions)."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = routes
+    return db
+
+
+class TestAppendAdditionalRoutes:
+    def test_active_subscriber_emits_one_framed_route_per_block(self):
+        sub = _active_subscription()
+        db = _db_returning_routes(
+            [_route("203.0.113.8/29"), _route("198.51.100.0/30", metric=2)]
+        )
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(db, attrs, sub)
+
+        routes = [a for a in attrs if a["attribute"] == "Framed-Route"]
+        # gateway 0.0.0.0 (via session), op += so multiple blocks coexist
+        assert {r["value"] for r in routes} == {
+            "203.0.113.8/29 0.0.0.0 1",
+            "198.51.100.0/30 0.0.0.0 2",
+        }
+        assert all(r["op"] == "+=" for r in routes)
+
+    def test_blocked_subscriber_emits_nothing(self):
+        sub = _active_subscription(status=SubscriberStatus.blocked)
+        db = _db_returning_routes([_route("203.0.113.8/29")])
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(db, attrs, sub)
+        assert attrs == []
+
+    def test_disabled_subscriber_emits_nothing(self):
+        sub = _active_subscription(status=SubscriberStatus.disabled)
+        db = _db_returning_routes([_route("203.0.113.8/29")])
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(db, attrs, sub)
+        assert attrs == []
+
+    def test_primary_host_route_is_skipped(self):
+        # A row equal to the primary /32 must never become a route (defence
+        # in depth against a mis-tagged backfill row).
+        sub = _active_subscription(ipv4="203.0.113.5")
+        db = _db_returning_routes(
+            [_route("203.0.113.5/32"), _route("203.0.113.8/29")]
+        )
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(db, attrs, sub)
+        routes = [a for a in attrs if a["attribute"] == "Framed-Route"]
+        assert len(routes) == 1
+        assert routes[0]["value"] == "203.0.113.8/29 0.0.0.0 1"
+
+    def test_duplicate_cidrs_are_deduped(self):
+        sub = _active_subscription()
+        db = _db_returning_routes(
+            [_route("203.0.113.8/29"), _route("203.0.113.8/29")]
+        )
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(db, attrs, sub)
+        routes = [a for a in attrs if a["attribute"] == "Framed-Route"]
+        assert len(routes) == 1
+
+    def test_metric_defaults_to_one_when_missing(self):
+        sub = _active_subscription()
+        db = _db_returning_routes([_route("203.0.113.8/29", metric=None)])
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(db, attrs, sub)
+        assert attrs[0]["value"] == "203.0.113.8/29 0.0.0.0 1"
+
+    def test_no_subscriber_id_is_a_noop(self):
+        sub = MagicMock(spec=Subscription)
+        sub.subscriber_id = None
+        attrs: list[dict[str, str]] = []
+        _append_additional_routes(MagicMock(), attrs, sub)
+        assert attrs == []
+
+    def test_integration_route_coexists_with_primary_ip(
+        self, mock_subscription, mock_profile
+    ):
+        from app.models.network import SubscriberAdditionalRoute
+
+        def query_dispatch(model):
+            # Distinct query mock per model so the routes query and the
+            # custom-attribute query don't share a mock chain.
+            qm = MagicMock()
+            qm.filter.return_value.all.return_value = []
+            qm.filter.return_value.filter.return_value.all.return_value = []
+            qm.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
+            qm.filter.return_value.filter.return_value.first.return_value = None
+            if model is SubscriberAdditionalRoute:
+                qm.filter.return_value.all.return_value = [_route("203.0.113.8/29")]
+            return qm
+
+        db = MagicMock()
+        db.get.return_value = mock_profile
+        db.query.side_effect = query_dispatch
+        mock_subscription.radius_profile_id = mock_profile.id
+        subscriber = MagicMock()
+        subscriber.status = SubscriberStatus.active
+        mock_subscription.subscriber = subscriber
+
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
+        names = [a["attribute"] for a in attrs]
+        assert "Framed-IP-Address" in names
+        assert "Framed-Route" in names
 
 
 # ---------------------------------------------------------------------------
