@@ -103,6 +103,54 @@ class PaymentMethodsScreen extends ConsumerWidget {
     context.push('/topup', extra: true);
   }
 
+  /// Bank transfer is a first-class payment method (mirrors the web Payment
+  /// Methods page): jump to the existing proof-upload / proofs screen.
+  void _openBankTransfer(BuildContext context) {
+    context.push('/billing/transfer-proofs');
+  }
+
+  /// "Add payment method" affordance: card (via top-up) or bank transfer.
+  Future<void> _addMethod(BuildContext context) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.credit_card),
+              title: const Text('Add card'),
+              subtitle: const Text('Top up and tick "Save this card"'),
+              onTap: () => Navigator.pop(context, 'card'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.account_balance),
+              title: const Text('Bank transfer'),
+              subtitle: const Text('Upload a transfer receipt for review'),
+              onTap: () => Navigator.pop(context, 'bank'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    choice == 'bank' ? _openBankTransfer(context) : _addCard(context);
+  }
+
+  /// Bank-transfer method entry — always available, alongside saved cards.
+  Widget _bankTransferTile(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: const Icon(Icons.account_balance),
+        title: const Text('Bank transfer'),
+        subtitle: const Text('Pay by transfer and upload your receipt'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _openBankTransfer(context),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cards = ref.watch(paymentMethodsProvider);
@@ -111,9 +159,9 @@ class PaymentMethodsScreen extends ConsumerWidget {
         title: const Text('Payment methods'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add_card_outlined),
-            tooltip: 'Add card',
-            onPressed: () => _addCard(context),
+            icon: const Icon(Icons.add),
+            tooltip: 'Add payment method',
+            onPressed: () => _addMethod(context),
           ),
         ],
       ),
@@ -128,8 +176,10 @@ class PaymentMethodsScreen extends ConsumerWidget {
           data: (list) {
             if (list.isEmpty) {
               return ListView(
+                padding: const EdgeInsets.all(12),
                 children: [
-                  const SizedBox(height: 100),
+                  _bankTransferTile(context),
+                  const SizedBox(height: 24),
                   const EmptyState(
                     icon: Icons.credit_card_outlined,
                     message:
@@ -150,6 +200,8 @@ class PaymentMethodsScreen extends ConsumerWidget {
               padding: const EdgeInsets.all(12),
               children: [
                 const _AutopayTile(),
+                const SizedBox(height: 8),
+                _bankTransferTile(context),
                 const SizedBox(height: 8),
                 for (final c in list) ...[
                   Card(

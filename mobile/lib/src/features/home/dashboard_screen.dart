@@ -287,6 +287,14 @@ class DashboardScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
 
+            // --- Primary payment action ---
+            // A single, prominent "Add funds / Pay" entry (the wallet top-up
+            // flow), replacing the redundant "Pay bill" + "Top up" chips.
+            _AddFundsCard(
+              onTap: () => context.push('/topup'),
+            ),
+            const SizedBox(height: 20),
+
             // --- Quick actions ---
             Text('Quick actions',
                 style: Theme.of(context).textTheme.titleMedium),
@@ -737,6 +745,59 @@ class _StatCard extends StatelessWidget {
   }
 }
 
+/// Primary, visually-dominant payment action on the dashboard. Funds the
+/// wallet (which pays bills), folding the old "Pay bill" + "Top up" chips into
+/// one clear CTA.
+class _AddFundsCard extends StatelessWidget {
+  const _AddFundsCard({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.primary,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          child: Row(
+            children: [
+              Icon(Icons.add_card_outlined, color: scheme.onPrimary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Add funds / Pay',
+                      style: TextStyle(
+                        color: scheme.onPrimary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Top up your wallet to pay bills',
+                      style: TextStyle(
+                        color: scheme.onPrimary.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: scheme.onPrimary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _QuickActions extends StatelessWidget {
   const _QuickActions({this.buyDataService});
 
@@ -747,10 +808,9 @@ class _QuickActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final buyData = buyDataService;
+    // Payment entry points (Pay bill / Top up) are now the primary "Add funds"
+    // card above; the grid keeps only the genuinely-distinct destinations.
     final actions = <(IconData, String, VoidCallback)>[
-      (Icons.payment, 'Pay bill', () => context.go('/billing')),
-      // Wallet cash — pushed so the back gesture returns here.
-      (Icons.add_card_outlined, 'Top up', () => context.push('/topup')),
       if (buyData != null)
         (
           Icons.add_chart_outlined,
