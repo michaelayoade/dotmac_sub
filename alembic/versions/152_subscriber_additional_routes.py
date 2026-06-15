@@ -6,8 +6,13 @@ dotmac_sub answers Access-Accept and must reproduce these as Framed-Route
 attributes; this table is the source the reply builder reads from.
 
 Revision ID: 152_subscriber_additional_routes
-Revises: 151_customer_notification_read_at
+Revises: 150_splynx_incremental_sync_state
 Create Date: 2026-06-15
+
+Re-parented onto main's head (150_splynx_incremental_sync_state) instead of the
+prod-local-only 151_customer_notification_read_at: this migration only creates
+an independent table and has no real dependency on 151, so decoupling lets it
+land on main without waiting for that separate feature.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from alembic import op
 
 revision = "152_subscriber_additional_routes"
-down_revision = "151_customer_notification_read_at"
+down_revision = "150_splynx_incremental_sync_state"
 branch_labels = None
 depends_on = None
 
