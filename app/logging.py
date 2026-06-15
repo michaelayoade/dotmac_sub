@@ -1,9 +1,40 @@
 import json
 import logging
 import logging.config
+import sys
 from datetime import UTC, datetime
 
 _BASE_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys())
+
+
+class StderrStreamHandler(logging.StreamHandler):
+    """A StreamHandler that resolves ``sys.stderr`` lazily on every emit.
+
+    The default ``logging.StreamHandler`` captures whatever ``sys.stderr``
+    points at when the handler is *constructed* and holds that reference for
+    life. ``configure_logging()`` runs at import time of ``app.main``; under
+    pytest the first test that imports the app binds the root handler to that
+    test's captured stderr. When pytest later tears that capture down (closing
+    the stream), the still-bound handler raises
+    ``ValueError: I/O operation on closed file`` for every subsequent test that
+    logs through the root logger — a broad, ordering-dependent test-isolation
+    cascade ("--- Logging error ---" in CI). Resolving ``sys.stderr`` on each
+    access keeps the handler bound to the live stream, fixing the leak at its
+    source (and making the handler robust to any stderr swap at runtime).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(stream=sys.stderr)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value) -> None:
+        # logging.StreamHandler.__init__ assigns to self.stream; ignore the
+        # snapshot it tries to store so stream resolution stays dynamic.
+        pass
 
 
 def _json_safe(value):
@@ -55,7 +86,10 @@ def configure_logging() -> None:
         },
         "handlers": {
             "default": {
-                "class": "logging.StreamHandler",
+                # Lazily-resolving stderr handler (see StderrStreamHandler):
+                # avoids binding to a stale/closed stream snapshot, which under
+                # pytest caused an "I/O operation on closed file" cascade.
+                "()": StderrStreamHandler,
                 "formatter": "json",
             }
         },
