@@ -150,6 +150,22 @@ class PushService {
     final messaging = _messaging;
     if (!_available || messaging == null) return null;
     try {
+      // iOS: getToken() returns null until the APNs token is set, and after a
+      // fresh notification-permission grant the APNs token takes a moment to
+      // arrive. Wait for it (briefly) before requesting the FCM token —
+      // otherwise registration silently no-ops on iOS. Android needs no APNs.
+      if (Platform.isIOS) {
+        var apns = await messaging.getAPNSToken();
+        for (var i = 0; apns == null && i < 5; i++) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          apns = await messaging.getAPNSToken();
+        }
+        if (apns == null) {
+          Log.breadcrumb('push: APNs token unavailable; skipping getToken',
+              category: 'push');
+          return null;
+        }
+      }
       return await messaging.getToken();
     } catch (e) {
       Log.breadcrumb('push: getToken failed',
