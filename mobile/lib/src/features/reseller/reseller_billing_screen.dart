@@ -210,7 +210,8 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
               OutlinedButton.icon(
                 onPressed: _paying ? null : () => _pay(),
                 icon: const Icon(Icons.payments_outlined, size: 18),
-                label: Text(_paying ? 'Starting payment…' : 'Pay another amount'),
+                label:
+                    Text(_paying ? 'Starting payment…' : 'Pay another amount'),
               ),
               const SizedBox(height: 16),
               Text('Activity', style: Theme.of(context).textTheme.titleSmall),
@@ -230,9 +231,8 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                       dense: true,
                       leading: CircleAvatar(
                         radius: 18,
-                        backgroundColor: Theme.of(context)
-                            .colorScheme
-                            .primaryContainer,
+                        backgroundColor:
+                            Theme.of(context).colorScheme.primaryContainer,
                         child: Icon(
                           Icons.south_west,
                           size: 18,

@@ -202,8 +202,8 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
       ref.invalidate(contactsProvider);
       navigator.pop();
       if (result.warnings.isNotEmpty) {
-        messenger.showSnackBar(
-            SnackBar(content: Text(result.warnings.join('\n'))));
+        messenger
+            .showSnackBar(SnackBar(content: Text(result.warnings.join('\n'))));
       } else {
         messenger.showSnackBar(SnackBar(
             content: Text(widget.existing == null
@@ -281,8 +281,7 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
                     child: Text(t[0].toUpperCase() + t.substring(1)),
                   ),
               ],
-              onChanged: (v) =>
-                  setState(() => _contactType = v ?? 'general'),
+              onChanged: (v) => setState(() => _contactType = v ?? 'general'),
             ),
             const SizedBox(height: 8),
             SwitchListTile(

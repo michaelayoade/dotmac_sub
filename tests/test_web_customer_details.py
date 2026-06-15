@@ -28,8 +28,8 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
-from app.models.system_user import SystemUser, SystemUserType
 from app.models.subscription_engine import SettingValueType
+from app.models.system_user import SystemUser, SystemUserType
 from app.services.credential_crypto import encrypt_credential
 from app.services.web_customer_details import (
     build_business_detail_snapshot,

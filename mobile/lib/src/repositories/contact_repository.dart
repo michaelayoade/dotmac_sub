@@ -12,8 +12,8 @@ class ContactSaveResult {
 
   factory ContactSaveResult.fromJson(Map<String, dynamic> json) =>
       ContactSaveResult(
-        contact: Contact.fromJson(
-            (json['contact'] as Map).cast<String, dynamic>()),
+        contact:
+            Contact.fromJson((json['contact'] as Map).cast<String, dynamic>()),
         warnings: (json['warnings'] as List? ?? const [])
             .map((e) => e.toString())
             .toList(),
@@ -44,8 +44,7 @@ class ContactRepository {
   }
 
   /// PATCH /me/contacts/{id} — update a contact (404 if not yours).
-  Future<ContactSaveResult> update(
-      String id, Map<String, dynamic> body) async {
+  Future<ContactSaveResult> update(String id, Map<String, dynamic> body) async {
     final data = await guard(() => dio.patch('/me/contacts/$id', data: body));
     return ContactSaveResult.fromJson((data as Map).cast<String, dynamic>());
   }

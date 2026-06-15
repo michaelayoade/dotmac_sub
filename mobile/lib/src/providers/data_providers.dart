@@ -371,8 +371,7 @@ final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
 });
 
 /// The subscriber's additional contacts. Invalidate after create/update/delete.
-final contactsProvider =
-    FutureProvider.autoDispose<List<Contact>>((ref) async {
+final contactsProvider = FutureProvider.autoDispose<List<Contact>>((ref) async {
   cacheFor(ref);
   return ref.watch(contactRepositoryProvider).list();
 });

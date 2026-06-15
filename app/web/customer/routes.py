@@ -26,10 +26,10 @@ from app.db import get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import crm_portal, customer_portal
-from app.services import payment_proofs as payment_proofs_service
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
