@@ -1510,7 +1510,6 @@ def build_beat_schedule() -> dict:
             schedule["splynx_incremental_sync"] = {
                 "task": "app.tasks.splynx_sync.run_incremental_sync",
                 "schedule": timedelta(minutes=splynx_sync_interval),
-                "kwargs": {"hours_back": 2},
             }
 
         # Splynx customer accounts/details sync only. This intentionally stays
