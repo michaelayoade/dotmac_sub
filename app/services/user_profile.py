@@ -108,12 +108,26 @@ def update_me(
         disallowed_fields = set()
 
     update_data = payload.model_dump(exclude_unset=True)
+
+    # Email is identity-bearing (unique, NOT NULL) and re-arms verification, so
+    # it goes through the shared helper rather than a raw setattr. This is what
+    # lets a customer who has no email yet add one from the app and verify it.
+    email_change = None
+    if principal_type != "system_user":
+        email_change = update_data.pop("email", None)
+
     for field, value in update_data.items():
         if field in disallowed_fields:
             continue
         setattr(person, field, value)
 
     db.flush()
+
+    if email_change is not None:
+        from app.services import auth_flow
+
+        auth_flow.set_subscriber_email(db, str(person.id), email_change)
+
     db.refresh(person)
 
     return _build_me_response(person, roles, scopes)

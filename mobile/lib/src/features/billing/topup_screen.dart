@@ -13,7 +13,11 @@ import 'payment_webview_screen.dart';
 /// Prepaid account top-up: pick/enter an amount, complete the provider checkout
 /// in a WebView, then verify and credit the account.
 class TopUpScreen extends ConsumerStatefulWidget {
-  const TopUpScreen({super.key});
+  const TopUpScreen({super.key, this.saveCardInitial = false});
+
+  /// When true (e.g. launched from "Add card"), the Paystack "Save this card"
+  /// toggle starts ON so a top-up doubles as saving a card.
+  final bool saveCardInitial;
 
   @override
   ConsumerState<TopUpScreen> createState() => _TopUpScreenState();
@@ -27,7 +31,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   int? _selected;
   final _custom = TextEditingController();
   bool _busy = false;
-  bool _saveCard = false;
+  late bool _saveCard = widget.saveCardInitial;
 
   @override
   void initState() {

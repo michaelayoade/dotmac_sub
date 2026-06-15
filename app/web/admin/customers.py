@@ -654,12 +654,20 @@ def person_pppoe_password(
     equals takeover of the customer's connection.
     """
     from app.models.audit import AuditActorType
+    from app.services import web_admin as web_admin_service
     from app.services.audit_adapter import record_audit_event
     from app.services.rate_limiter_adapter import allow_operation
-    from app.web.admin import get_current_user
 
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor = web_admin_service.get_current_user(request)
+    actor_id = web_admin_service.get_actor_id(request)
+    actor_metadata = {
+        key: value
+        for key, value in {
+            "actor_name": actor.get("name") if actor else None,
+            "actor_email": actor.get("email") if actor else None,
+        }.items()
+        if value
+    }
 
     decision = allow_operation(
         f"pppoe-reveal:{actor_id or 'unknown'}",
@@ -674,7 +682,11 @@ def person_pppoe_password(
             entity_id=str(customer_id),
             actor_type=AuditActorType.user,
             actor_id=actor_id,
-            metadata={"credential_id": credential_id, "reason": "rate_limited"},
+            metadata={
+                "credential_id": credential_id,
+                "reason": "rate_limited",
+                **actor_metadata,
+            },
             status_code=429,
             is_success=False,
         )
@@ -695,7 +707,11 @@ def person_pppoe_password(
         entity_id=str(customer_id),
         actor_type=AuditActorType.user,
         actor_id=actor_id,
-        metadata={"credential_id": credential_id, "found": bool(found)},
+        metadata={
+            "credential_id": credential_id,
+            "found": bool(found),
+            **actor_metadata,
+        },
         status_code=200 if found else 404,
         is_success=bool(found),
     )

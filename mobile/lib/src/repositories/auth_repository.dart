@@ -121,6 +121,14 @@ class AuthRepository {
     await guard(() => dio.delete('/auth/me/sessions'));
   }
 
+  /// POST /auth/resend-verification-email — re-send the email-verification
+  /// link to the signed-in customer. No body; returns whether a mail was sent.
+  /// A 429 means rate-limited (3 / 15 min).
+  Future<bool> resendVerificationEmail() async {
+    final data = await guard(() => dio.post('/auth/resend-verification-email'));
+    return (data as Map)['sent'] as bool? ?? false;
+  }
+
   /// POST /auth/forgot-password
   Future<void> forgotPassword(String email) async {
     await guard(() => dio.post(

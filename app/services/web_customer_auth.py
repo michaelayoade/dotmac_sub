@@ -230,6 +230,30 @@ def customer_forgot_password_submit(request: Request, db: Session, email: str):
     )
 
 
+def customer_verify_email_page(request: Request, db: Session, token: str):
+    """Verify an email address from the link in the verification email."""
+    try:
+        auth_flow_service.verify_email(db, token)
+        return templates.TemplateResponse(
+            "customer/auth/verify-email.html",
+            {"request": request, "success": True},
+        )
+    except Exception as exc:
+        logger.info("Customer email verification failed", exc_info=True)
+        error_msg = "This verification link is invalid or has expired."
+        if (
+            isinstance(exc, HTTPException)
+            and isinstance(exc.detail, str)
+            and exc.detail
+        ):
+            error_msg = exc.detail
+        return templates.TemplateResponse(
+            "customer/auth/verify-email.html",
+            {"request": request, "success": False, "error": error_msg},
+            status_code=400,
+        )
+
+
 def customer_login_submit(
     request: Request,
     db: Session,

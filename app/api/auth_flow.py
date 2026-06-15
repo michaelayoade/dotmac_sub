@@ -31,11 +31,14 @@ from app.schemas.auth_flow import (
     PasswordChangeRequest,
     PasswordChangeResponse,
     RefreshRequest,
+    ResendVerificationEmailResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
     SessionListResponse,
     SessionRevokeResponse,
     TokenResponse,
+    VerifyEmailRequest,
+    VerifyEmailResponse,
 )
 from app.services import auth_flow as auth_flow_service
 from app.services import session_manager as session_manager_service
@@ -387,3 +390,55 @@ def reset_password_endpoint(
     """
     reset_at = auth_flow_service.reset_password(db, payload.token, payload.new_password)
     return ResetPasswordResponse(reset_at=reset_at)
+
+
+@router.post(
+    "/verify-email",
+    response_model=VerifyEmailResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorResponse},
+    },
+)
+def verify_email_endpoint(
+    payload: VerifyEmailRequest,
+    db: Session = Depends(get_db),
+) -> VerifyEmailResponse:
+    """
+    Verify the caller's email address using the token from the verification email.
+    """
+    auth_flow_service.verify_email(db, payload.token)
+    return VerifyEmailResponse(email_verified=True)
+
+
+@router.post(
+    "/resend-verification-email",
+    response_model=ResendVerificationEmailResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+    },
+)
+def resend_verification_email_endpoint(
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> ResendVerificationEmailResponse:
+    """
+    Resend the email-verification email to the authenticated caller's own address.
+    """
+    from app.services.rate_limiter_adapter import allow_operation
+
+    principal_id = auth["principal_id"]
+    decision = allow_operation(
+        f"auth:resend-verification:{principal_id}",
+        limit=3,
+        window_seconds=900,
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many verification email requests. Please try again later.",
+        )
+    sent = auth_flow_service.send_email_verification(db, principal_id)
+    return ResendVerificationEmailResponse(sent=sent)

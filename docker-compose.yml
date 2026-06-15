@@ -116,6 +116,12 @@ services:
     - max_wal_senders=5
     - -c
     - max_replication_slots=5
+    - -c
+    - archive_mode=on
+    - -c
+    - "archive_command=test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
+    - -c
+    - archive_timeout=300
     volumes:
     - /var/lib/dotmac-pg-local:/var/lib/postgresql/data
     ports:
@@ -622,7 +628,7 @@ services:
     secrets:
     - zabbix_db_password
     ports:
-    - 127.0.0.1:8085:8080
+    - 8085:8080
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     container_name: dotmac_zabbix_agent

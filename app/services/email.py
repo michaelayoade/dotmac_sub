@@ -1043,6 +1043,99 @@ This is an automated message. Please do not reply to this email.
     )
 
 
+def send_email_verification_email(
+    db: Session,
+    to_email: str,
+    verification_token: str,
+    person_name: str | None = None,
+    expires_minutes: int | None = None,
+) -> bool:
+    """
+    Send an email-address verification email.
+
+    Args:
+        db: Database session
+        to_email: Recipient email address
+        verification_token: The JWT email-verification token
+        person_name: Optional name to personalize the email
+        expires_minutes: Actual token TTL; falls back to the configured setting
+
+    Returns:
+        True if email was sent successfully, False otherwise
+    """
+    app_url = _get_app_url(db)
+    verify_url = (
+        f"{app_url}/portal/auth/verify-email?{urlencode({'token': verification_token})}"
+    )
+
+    # Prefer the actual token TTL; fall back to the configured setting
+    expiry_minutes = expires_minutes or (
+        resolve_value(db, SettingDomain.auth, "email_verification_expiry_minutes")
+        or 1440
+    )
+    expiry_duration = _format_expiry_duration(expiry_minutes)
+
+    greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
+    company_name = _get_company_name(db)
+    logo_url = _get_email_branding_logo_url(db)
+    support_email = (
+        _setting_value(db, "smtp_from_email") or get_brand()["support_email"]
+    ).strip()
+
+    subject = "Verify your email address"
+
+    accent_color = _brand_accent_color()
+    body_html = _render_action_email_html(
+        company_name=company_name,
+        logo_url=logo_url,
+        title="Verify Your Email Address",
+        accent_color=accent_color,
+        greeting=greeting,
+        intro_html="""
+<p style="margin: 0 0 12px;">Please confirm that this is the email address for your portal account.</p>
+<p style="margin: 0;">Use the secure button below to verify your email address.</p>
+""".strip(),
+        action_url=verify_url,
+        action_label="Verify Email",
+        expiry_minutes=expiry_minutes,
+        details_html=f"""
+<p style="font-size: 15px; margin: 0; line-height: 1.5;">
+  <strong style="color: {accent_color};">Action:</strong> <span style="color: #555;">Verify your email address</span><br>
+  <strong style="color: {accent_color};">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: {accent_color};">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
+</p>
+""".strip(),
+        closing_html="""
+<p style="margin: 0 0 12px;">If you did not create an account or request this, you can safely ignore this email.</p>
+<p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
+""".strip(),
+        support_email=support_email,
+    )
+
+    body_text = f"""{greeting}
+
+Please confirm that this is the email address for your {company_name} portal account.
+
+Click the link below to verify your email address:
+{verify_url}
+
+This link will expire in {expiry_duration}.
+
+If you did not create an account or request this, you can safely ignore this email.
+
+This is an automated message. Please do not reply to this email.
+"""
+
+    return send_email(
+        db,
+        to_email,
+        subject,
+        body_html,
+        body_text,
+        activity="auth_email_verification",
+    )
+
+
 def send_user_invite_email(
     db: Session,
     to_email: str,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/addon.dart';
+import '../models/contact.dart';
 import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
@@ -15,6 +16,7 @@ import '../models/ticket.dart';
 import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
 import '../repositories/catalog_repository.dart';
+import '../repositories/contact_repository.dart';
 import '../models/reseller.dart';
 import '../models/service_location.dart';
 import '../repositories/location_repository.dart';
@@ -48,6 +50,9 @@ final walletRepositoryProvider = Provider<WalletRepository>(
 
 final notificationRepositoryProvider = Provider<NotificationRepository>(
     (ref) => NotificationRepository(ref.watch(apiClientProvider).dio));
+
+final contactRepositoryProvider = Provider<ContactRepository>(
+    (ref) => ContactRepository(ref.watch(apiClientProvider).dio));
 
 final resellerRepositoryProvider = Provider<ResellerRepository>(
     (ref) => ResellerRepository(ref.watch(apiClientProvider).dio));
@@ -355,6 +360,12 @@ final vasPurchasesProvider =
 final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
   cacheFor(ref);
   return ref.watch(walletRepositoryProvider).overviewOrNull();
+});
+
+/// The subscriber's additional contacts. Invalidate after create/update/delete.
+final contactsProvider = FutureProvider.autoDispose<List<Contact>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(contactRepositoryProvider).list();
 });
 
 final ticketsProvider = FutureProvider.autoDispose<Page<Ticket>>((ref) async {

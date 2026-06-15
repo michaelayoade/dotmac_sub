@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../models/payment_method.dart';
@@ -95,11 +96,27 @@ class PaymentMethodsScreen extends ConsumerWidget {
     }
   }
 
+  /// Launch the top-up flow with "Save this card" pre-enabled so a top-up
+  /// doubles as adding a card. Paystack stays the rail; the toggle is already
+  /// Paystack-gated inside the top-up screen.
+  void _addCard(BuildContext context) {
+    context.push('/topup', extra: true);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cards = ref.watch(paymentMethodsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Payment methods')),
+      appBar: AppBar(
+        title: const Text('Payment methods'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add_card_outlined),
+            tooltip: 'Add card',
+            onPressed: () => _addCard(context),
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(paymentMethodsProvider);
@@ -111,12 +128,20 @@ class PaymentMethodsScreen extends ConsumerWidget {
           data: (list) {
             if (list.isEmpty) {
               return ListView(
-                children: const [
-                  SizedBox(height: 100),
-                  EmptyState(
+                children: [
+                  const SizedBox(height: 100),
+                  const EmptyState(
                     icon: Icons.credit_card_outlined,
                     message:
-                        'No saved cards yet.\nWhen you pay by card you can choose to save it here.',
+                        'No saved cards yet.\nAdd a card by topping up and ticking "Save this card".',
+                  ),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: FilledButton.icon(
+                      onPressed: () => _addCard(context),
+                      icon: const Icon(Icons.add_card_outlined),
+                      label: const Text('Add card'),
+                    ),
                   ),
                 ],
               );
