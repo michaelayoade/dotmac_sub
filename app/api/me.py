@@ -968,9 +968,7 @@ def my_create_contact(
     )
 
 
-@router.patch(
-    "/contacts/{contact_id}", response_model=SubscriberContactWriteResponse
-)
+@router.patch("/contacts/{contact_id}", response_model=SubscriberContactWriteResponse)
 def my_update_contact(
     contact_id: str,
     payload: SubscriberContactUpdate,

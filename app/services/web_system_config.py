@@ -287,9 +287,7 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
 
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
-    settings = _read_settings(
-        db, SettingDomain.billing, DIRECT_BANK_TRANSFER_KEYS
-    )
+    settings = _read_settings(db, SettingDomain.billing, DIRECT_BANK_TRANSFER_KEYS)
     if not settings.get("direct_bank_transfer_enabled"):
         settings["direct_bank_transfer_enabled"] = "false"
     return {
@@ -318,7 +316,9 @@ def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> No
     _save_settings(db, SettingDomain.billing, payload, DIRECT_BANK_TRANSFER_KEYS)
 
 
-def _parse_direct_transfer_accounts(settings: Mapping[str, str]) -> list[dict[str, str]]:
+def _parse_direct_transfer_accounts(
+    settings: Mapping[str, str],
+) -> list[dict[str, str]]:
     raw = settings.get("direct_bank_transfer_accounts") or ""
     accounts: list[dict[str, str]] = []
     if raw:
@@ -377,18 +377,20 @@ def _form_list(data: Mapping[str, Any], key: str) -> list[str]:
     return [str(value)]
 
 
-def _direct_transfer_accounts_from_form(data: Mapping[str, Any]) -> list[dict[str, str]]:
+def _direct_transfer_accounts_from_form(
+    data: Mapping[str, Any],
+) -> list[dict[str, str]]:
     ids = _form_list(data, "account_id")
     enabled_ids = set(_form_list(data, "account_enabled"))
     bank_names = _form_list(data, "account_bank_name")
     account_names = _form_list(data, "account_account_name")
     account_numbers = _form_list(data, "account_account_number")
     accounts: list[dict[str, str]] = []
-    row_count = max(
-        len(ids), len(bank_names), len(account_names), len(account_numbers)
-    )
+    row_count = max(len(ids), len(bank_names), len(account_names), len(account_numbers))
     for index in range(row_count):
-        account_id = (ids[index] if index < len(ids) else "").strip() or uuid.uuid4().hex
+        account_id = (
+            ids[index] if index < len(ids) else ""
+        ).strip() or uuid.uuid4().hex
         bank_name = (bank_names[index] if index < len(bank_names) else "").strip()
         account_name = (
             account_names[index] if index < len(account_names) else ""

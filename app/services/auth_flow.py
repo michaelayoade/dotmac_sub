@@ -1598,9 +1598,7 @@ def send_email_verification(db: Session, subscriber_id: str) -> bool:
     from app.services.audit_adapter import record_audit_event
     from app.services.email import send_email_verification_email
 
-    subscriber = cast(
-        Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id))
-    )
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
     if not subscriber or not subscriber.email:
         return False
     if subscriber.email_verified:
@@ -1649,9 +1647,7 @@ def verify_email(db: Session, token: str) -> Subscriber:
     if not principal_id or not email:
         raise HTTPException(status_code=401, detail="Invalid verification token")
 
-    subscriber = cast(
-        Subscriber | None, db.get(Subscriber, coerce_uuid(principal_id))
-    )
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(principal_id)))
     if not subscriber or subscriber.email != email:
         raise HTTPException(status_code=401, detail="Invalid verification token")
 
@@ -1689,9 +1685,7 @@ def set_subscriber_email(
     new_email = (new_email or "").strip()
     if not new_email:
         return False
-    subscriber = cast(
-        Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id))
-    )
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
     if subscriber is None:
         return False
     if new_email.lower() == (subscriber.email or "").strip().lower():
