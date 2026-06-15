@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_reseller_billing as web_reseller_billing_service
+from app.services import web_reseller_contacts as web_reseller_contacts_service
 from app.services import web_reseller_routes as web_reseller_routes_service
 
 
@@ -193,6 +194,13 @@ def reseller_profile_update(
     )
 
 
+@router.post("/profile/verify-email/resend")
+def reseller_resend_email_verification(
+    request: Request, db: Session = Depends(get_db)
+):
+    return web_reseller_routes_service.reseller_resend_email_verification(request, db)
+
+
 @router.post("/profile/mfa/setup", response_class=HTMLResponse)
 def reseller_mfa_setup(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_mfa_setup(request, db)
@@ -238,9 +246,17 @@ def reseller_billing(request: Request, db: Session = Depends(get_db)):
 def reseller_billing_pay_intent(
     request: Request,
     amount: str = Form(...),
+    payment_method_id: str = Form(""),
+    save_card: bool = Form(False),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_billing_service.billing_pay_intent(request, db, amount)
+    return web_reseller_billing_service.billing_pay_intent(
+        request,
+        db,
+        amount,
+        payment_method_id=payment_method_id or None,
+        save_card=save_card,
+    )
 
 
 @router.get("/billing/pay/verify", response_class=HTMLResponse)
@@ -252,4 +268,142 @@ def reseller_billing_pay_verify(
 ):
     return web_reseller_billing_service.billing_pay_verify(
         request, db, reference, provider=provider
+    )
+
+
+@router.get("/billing/payment-methods", response_class=HTMLResponse)
+def reseller_payment_methods(
+    request: Request,
+    saved: str | None = Query(None),
+    error: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.payment_methods(
+        request, db, saved=saved, error=error
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/default", response_class=HTMLResponse)
+def reseller_payment_method_default(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.payment_method_set_default(
+        request, db, method_id
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/remove", response_class=HTMLResponse)
+def reseller_payment_method_remove(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.payment_method_remove(request, db, method_id)
+
+
+@router.get("/contacts", response_class=HTMLResponse)
+def reseller_contacts(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_contacts_service.reseller_contacts(request, db)
+
+
+@router.post("/contacts", response_class=HTMLResponse)
+def reseller_contacts_create(
+    request: Request,
+    full_name: str | None = Form(None),
+    phone: str | None = Form(None),
+    email: str | None = Form(None),
+    whatsapp: str | None = Form(None),
+    facebook: str | None = Form(None),
+    instagram: str | None = Form(None),
+    x_handle: str | None = Form(None),
+    telegram: str | None = Form(None),
+    linkedin: str | None = Form(None),
+    other_social: str | None = Form(None),
+    relationship: str | None = Form(None),
+    contact_type: str | None = Form("general"),
+    is_authorized: bool = Form(False),
+    receives_notifications: bool = Form(False),
+    is_billing_contact: bool = Form(False),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_contacts_service.reseller_contacts_create(
+        request,
+        db,
+        full_name=full_name,
+        phone=phone,
+        email=email,
+        whatsapp=whatsapp,
+        facebook=facebook,
+        instagram=instagram,
+        x_handle=x_handle,
+        telegram=telegram,
+        linkedin=linkedin,
+        other_social=other_social,
+        relationship=relationship,
+        contact_type=contact_type,
+        is_authorized=is_authorized,
+        receives_notifications=receives_notifications,
+        is_billing_contact=is_billing_contact,
+        notes=notes,
+    )
+
+
+@router.post("/contacts/{contact_id}", response_class=HTMLResponse)
+def reseller_contacts_update(
+    request: Request,
+    contact_id: str,
+    intent: str | None = Form(None),
+    full_name: str | None = Form(None),
+    phone: str | None = Form(None),
+    email: str | None = Form(None),
+    whatsapp: str | None = Form(None),
+    facebook: str | None = Form(None),
+    instagram: str | None = Form(None),
+    x_handle: str | None = Form(None),
+    telegram: str | None = Form(None),
+    linkedin: str | None = Form(None),
+    other_social: str | None = Form(None),
+    relationship: str | None = Form(None),
+    contact_type: str | None = Form("general"),
+    is_authorized: bool = Form(False),
+    receives_notifications: bool = Form(False),
+    is_billing_contact: bool = Form(False),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_contacts_service.reseller_contacts_update(
+        request,
+        db,
+        contact_id,
+        intent,
+        full_name=full_name,
+        phone=phone,
+        email=email,
+        whatsapp=whatsapp,
+        facebook=facebook,
+        instagram=instagram,
+        x_handle=x_handle,
+        telegram=telegram,
+        linkedin=linkedin,
+        other_social=other_social,
+        relationship=relationship,
+        contact_type=contact_type,
+        is_authorized=is_authorized,
+        receives_notifications=receives_notifications,
+        is_billing_contact=is_billing_contact,
+        notes=notes,
+    )
+
+
+@router.post("/contacts/{contact_id}/delete", response_class=HTMLResponse)
+def reseller_contacts_delete(
+    request: Request,
+    contact_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_contacts_service.reseller_contacts_update(
+        request, db, contact_id, "delete"
     )

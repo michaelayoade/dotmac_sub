@@ -15,8 +15,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Payment, PaymentStatus, TopupIntent
+from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentCreate
 from app.services import billing as billing_service
+from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_portal_flow_payments import (
     _provider_uuid,
@@ -42,23 +44,70 @@ def get_billing_account_summary(db: Session, reseller_id: str) -> dict:
     }
 
 
+def _login_subscriber_email(db: Session, login_subscriber_id: str | None) -> str:
+    """Resolve a real email for the reseller's login subscriber (gateway charge)."""
+    if not login_subscriber_id:
+        return ""
+    coerced = coerce_uuid(login_subscriber_id)
+    if not coerced:
+        return ""
+    subscriber = db.get(Subscriber, coerced)
+    value = str(getattr(subscriber, "email", "") or "").strip() if subscriber else ""
+    return value if "@" in value else ""
+
+
 def start_consolidated_payment(
     db: Session,
     reseller_id: str,
     amount: Decimal | int | float | str,
     *,
     provider: str | None = None,
+    payment_method_id: str | None = None,
+    save_card: bool = False,
+    login_subscriber_id: str | None = None,
 ) -> dict:
-    """Build a gateway context + TopupIntent scoped to the reseller's BillingAccount."""
+    """Build a gateway context + TopupIntent scoped to the reseller's BillingAccount.
+
+    Saved cards (``payment_method_id``) and ``save_card`` are keyed on the
+    reseller's *login subscriber* (``login_subscriber_id``) — same account the
+    customer saved-card flow uses — so a reseller's stored card token is charged
+    server-to-server, and the verify path captures a new card afterwards.
+    """
     ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
     requested_amount = round_money(to_decimal(amount))
     if requested_amount <= Decimal("0.00"):
         raise ValueError("Payment amount must be greater than 0")
 
     provider_type = provider or _resolve_payment_provider(db)
+
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    selected_payment_token = None
+    if selected_payment_method_id:
+        if provider_type != "paystack":
+            raise ValueError("Saved cards can only be used with Paystack")
+        if not login_subscriber_id:
+            raise ValueError("Payment method not found")
+        method = customer_cards._owned(
+            db, str(login_subscriber_id), selected_payment_method_id
+        )
+        if method is None:
+            raise ValueError("Payment method not found")
+        selected_payment_token = billing_service.payment_methods.get_decrypted_token(
+            db, str(method.id)
+        )
+        if not selected_payment_token:
+            raise ValueError("Payment method is not chargeable")
+
     gateway_context = payment_gateway_adapter.build_context(
         db, provider_type=provider_type
     )
+
+    intent_metadata = {"payment_flow": "reseller_consolidated"}
+    if save_card and login_subscriber_id:
+        intent_metadata["save_card"] = "1"
+        intent_metadata["login_subscriber_id"] = str(login_subscriber_id)
+    if selected_payment_method_id:
+        intent_metadata["payment_method_id"] = selected_payment_method_id
 
     intent = TopupIntent(
         billing_account_id=ba.id,
@@ -68,11 +117,38 @@ def start_consolidated_payment(
         requested_amount=requested_amount,
         status="pending",
         expires_at=datetime.now(UTC) + _INTENT_TTL,
-        metadata_={"payment_flow": "reseller_consolidated"},
+        metadata_=intent_metadata,
     )
     db.add(intent)
     db.commit()
     db.refresh(intent)
+
+    checkout_metadata = {
+        "payment_flow": "reseller_consolidated",
+        "topup_intent_id": str(intent.id),
+        "billing_account_id": str(ba.id),
+        "reseller_id": str(reseller_id),
+        **(
+            {"payment_method_id": selected_payment_method_id}
+            if selected_payment_method_id
+            else {}
+        ),
+    }
+
+    charged = False
+    if selected_payment_token is not None:
+        from app.services import paystack
+
+        paystack.charge_authorization(
+            db,
+            authorization_code=selected_payment_token,
+            email=_login_subscriber_email(db, login_subscriber_id),
+            amount_kobo=paystack.amount_to_kobo(requested_amount),
+            reference=gateway_context.reference,
+            metadata=checkout_metadata,
+        )
+        charged = True
+
     return {
         "intent_id": str(intent.id),
         "provider_type": gateway_context.provider_type,
@@ -80,12 +156,8 @@ def start_consolidated_payment(
         "reference": gateway_context.reference,
         "requested_amount": requested_amount,
         "currency": intent.currency,
-        "checkout_metadata": {
-            "payment_flow": "reseller_consolidated",
-            "topup_intent_id": str(intent.id),
-            "billing_account_id": str(ba.id),
-            "reseller_id": str(reseller_id),
-        },
+        "checkout_metadata": checkout_metadata,
+        "charged": charged,
     }
 
 
@@ -157,6 +229,8 @@ def verify_and_record_consolidated_payment(
     intent.external_id = external_id
     db.commit()
 
+    _maybe_capture_card(db, intent, reference, provider_type)
+
     return {
         "payment_id": str(payment.id),
         "amount": str(payment.amount),
@@ -165,13 +239,123 @@ def verify_and_record_consolidated_payment(
     }
 
 
+def _maybe_capture_card(
+    db: Session, intent: TopupIntent, reference: str, provider_type: str | None
+) -> None:
+    """Capture the reseller's card after a save-card consolidated payment.
+
+    Best-effort and keyed on the login subscriber recorded at intent time, so a
+    captured card lands in the same saved-card store the reseller payment-methods
+    page reads. Any failure is swallowed (the payment already succeeded)."""
+    metadata = dict(intent.metadata_ or {})
+    if str(metadata.get("save_card") or "") != "1":
+        return
+    login_subscriber_id = metadata.get("login_subscriber_id")
+    if not login_subscriber_id:
+        return
+    try:
+        customer_cards.capture_card_after_payment(
+            db, str(login_subscriber_id), reference, provider_type
+        )
+    except Exception:  # noqa: BLE001 - capture is non-critical
+        logger.warning(
+            "reseller card capture skipped for %s", reference, exc_info=True
+        )
+
+
 def _coerce_uuid_str(value) -> str | None:
     coerced = coerce_uuid(value)
     return str(coerced) if coerced else None
 
 
+# --- Saved cards (keyed on the reseller's login subscriber) ---------------------
+#
+# A reseller's saved cards live in the same PaymentMethod store the customer
+# saved-card flow uses, keyed on the login Subscriber's id (not the BillingAccount).
+# These thin wrappers force that scoping so the web routes and the mobile API
+# share one self-scoped implementation.
+
+
+def list_payment_methods(db: Session, login_subscriber_id: str) -> list:
+    from app.models.billing import PaymentMethodType
+
+    cards = customer_cards.list_for_account(db, str(login_subscriber_id))
+    return [c for c in cards if c.method_type == PaymentMethodType.card]
+
+
+def payment_method_api_dict(method) -> dict:
+    return {
+        "id": str(method.id),
+        "label": method.label
+        or (
+            f"{method.brand or 'Card'}"
+            + (f" •••• {method.last4}" if method.last4 else "")
+        ),
+        "brand": method.brand,
+        "last4": method.last4,
+        "expires_month": method.expires_month,
+        "expires_year": method.expires_year,
+        "is_default": bool(method.is_default),
+    }
+
+
+def set_default_payment_method(
+    db: Session, login_subscriber_id: str, method_id: str
+) -> bool:
+    return (
+        customer_cards.set_default(db, str(login_subscriber_id), method_id) is not None
+    )
+
+
+def remove_payment_method(
+    db: Session, login_subscriber_id: str, method_id: str
+) -> bool:
+    return customer_cards.remove(db, str(login_subscriber_id), method_id)
+
+
+def get_payment_methods_page(
+    db: Session, reseller_id: str, login_subscriber_id: str
+) -> dict:
+    """Context for the reseller payment-methods management page."""
+    summary = get_billing_account_summary(db, reseller_id)
+    return {
+        "saved_cards": list_payment_methods(db, login_subscriber_id),
+        "provider_type": _resolve_payment_provider(db),
+        "total_outstanding": summary["total_outstanding"],
+        "billing_account": summary["billing_account"],
+    }
+
+
+def account_activity(summary: dict) -> list[dict]:
+    """Present the reseller's consolidated payments as an account-activity ledger.
+
+    Only consolidated payments exist at the BillingAccount level today (no
+    separate credit/adjustment ledger), so the recent-payments data is surfaced
+    as the activity feed — mirroring the customer Account Activity styling."""
+    entries: list[dict] = []
+    for payment in summary.get("recent_payments", []) or []:
+        entries.append(
+            {
+                "direction": "credit",
+                "title": "Consolidated payment",
+                "description": payment.get("memo"),
+                "occurred_at": payment.get("paid_at"),
+                "reference": None,
+                "amount": payment.get("amount"),
+                "currency": payment.get("currency"),
+            }
+        )
+    return entries
+
+
 __all__ = [
+    "account_activity",
     "get_billing_account_summary",
+    "get_payment_methods_page",
+    "list_payment_methods",
+    "payment_method_api_dict",
+    "remove_payment_method",
+    "set_default_payment_method",
     "start_consolidated_payment",
     "verify_and_record_consolidated_payment",
 ]
