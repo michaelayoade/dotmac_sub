@@ -43,7 +43,7 @@ def test_sync_new_payments_uses_existing_splynx_payment_columns(monkeypatch) -> 
         datetime(2026, 4, 18, 12, 30, tzinfo=UTC),
     )
 
-    assert result == {"created": 0, "skipped": 0}
+    assert result == {"created": 0, "skipped": 0, "resolved": 0}
     assert queries[0] == "SHOW COLUMNS FROM payments"
     assert "payments" in queries[1]
     assert "payments.date" not in queries[1]
@@ -70,7 +70,7 @@ def test_sync_new_payments_supports_legacy_splynx_date_column(monkeypatch) -> No
         datetime(2026, 4, 18, 12, 30, tzinfo=UTC),
     )
 
-    assert result == {"created": 0, "skipped": 0}
+    assert result == {"created": 0, "skipped": 0, "resolved": 0}
     assert "WHERE date >=" in queries[1]
 
 

@@ -19,13 +19,8 @@ def _reseller(db_session):
 
 
 def _context(reseller) -> dict:
-    # Mirror the real reseller context (reseller_portal builds current_user +
-    # subscriber alongside reseller); a bare {"reseller": ...} is a stale mock.
-    return {
-        "reseller": reseller,
-        "current_user": {"name": "Reseller User", "email": "reseller@example.com"},
-        "subscriber": reseller,
-    }
+    # The page handler reads context["current_user"]; the mock must provide it.
+    return {"reseller": reseller, "current_user": MagicMock()}
 
 
 class TestServiceRequestsPage:
