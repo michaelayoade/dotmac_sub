@@ -19,7 +19,8 @@ def _reseller(db_session):
 
 
 def _context(reseller) -> dict:
-    return {"reseller": reseller}
+    # The page handler reads context["current_user"]; the mock must provide it.
+    return {"reseller": reseller, "current_user": MagicMock()}
 
 
 class TestServiceRequestsPage:

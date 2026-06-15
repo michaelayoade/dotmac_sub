@@ -381,16 +381,28 @@ def main() -> None:
 
         banner("System users (admin/staff)")
         get_or_create_system_user(
-            db, email="admin@test.local", first="Admin", last="User",
-            role=roles["admin"], password=DEFAULT_PASSWORD,
+            db,
+            email="admin@test.local",
+            first="Admin",
+            last="User",
+            role=roles["admin"],
+            password=DEFAULT_PASSWORD,
         )
         get_or_create_system_user(
-            db, email="support@test.local", first="Support", last="Agent",
-            role=roles["support"], password=DEFAULT_PASSWORD,
+            db,
+            email="support@test.local",
+            first="Support",
+            last="Agent",
+            role=roles["support"],
+            password=DEFAULT_PASSWORD,
         )
         get_or_create_system_user(
-            db, email="finance@test.local", first="Finance", last="Manager",
-            role=roles["finance_manager"], password=DEFAULT_PASSWORD,
+            db,
+            email="finance@test.local",
+            first="Finance",
+            last="Manager",
+            role=roles["finance_manager"],
+            password=DEFAULT_PASSWORD,
         )
         db.commit()
         created += [
@@ -401,22 +413,41 @@ def main() -> None:
 
         banner("Catalog offers")
         offer_prepaid = get_or_create_offer(
-            db, name="Prepaid Fibre 10/2", billing_mode=BillingMode.prepaid,
-            contract_term=ContractTerm.month_to_month, plan_family="residential_prepaid",
-            code="PRE-10-2", speed_download_mbps=10, speed_upload_mbps=2,
+            db,
+            name="Prepaid Fibre 10/2",
+            billing_mode=BillingMode.prepaid,
+            contract_term=ContractTerm.month_to_month,
+            plan_family="residential_prepaid",
+            code="PRE-10-2",
+            speed_download_mbps=10,
+            speed_upload_mbps=2,
         )
         offer_postpaid = get_or_create_offer(
-            db, name="Postpaid Fibre 20/5", billing_mode=BillingMode.postpaid,
-            contract_term=ContractTerm.twelve_month, plan_family="residential_postpaid",
-            code="POST-20-5", speed_download_mbps=20, speed_upload_mbps=5,
+            db,
+            name="Postpaid Fibre 20/5",
+            billing_mode=BillingMode.postpaid,
+            contract_term=ContractTerm.twelve_month,
+            plan_family="residential_postpaid",
+            code="POST-20-5",
+            speed_download_mbps=20,
+            speed_upload_mbps=5,
         )
         get_or_create_offer(
-            db, name="Archived Legacy 5/1", status=OfferStatus.archived,
-            is_active=False, code="ARC-5-1", speed_download_mbps=5, speed_upload_mbps=1,
+            db,
+            name="Archived Legacy 5/1",
+            status=OfferStatus.archived,
+            is_active=False,
+            code="ARC-5-1",
+            speed_download_mbps=5,
+            speed_upload_mbps=1,
         )
         get_or_create_offer(
-            db, name="Inactive Draft 50/10", status=OfferStatus.inactive,
-            is_active=False, code="INA-50-10", speed_download_mbps=50,
+            db,
+            name="Inactive Draft 50/10",
+            status=OfferStatus.inactive,
+            is_active=False,
+            code="INA-50-10",
+            speed_download_mbps=50,
             speed_upload_mbps=10,
         )
         db.commit()
@@ -425,64 +456,103 @@ def main() -> None:
         banner("Customers (edge states)")
         # 1. Active postpaid customer — paid invoice + succeeded payment (House)
         c_active = get_or_create_subscriber(
-            db, email="active.customer@test.local", first="Ada", last="Active",
-            reseller=house, status=SubscriberStatus.active, password=DEFAULT_PASSWORD,
+            db,
+            email="active.customer@test.local",
+            first="Ada",
+            last="Active",
+            reseller=house,
+            status=SubscriberStatus.active,
+            password=DEFAULT_PASSWORD,
         )
         ensure_subscription(
-            db, subscriber=c_active, offer=offer_postpaid,
+            db,
+            subscriber=c_active,
+            offer=offer_postpaid,
             status=SubscriptionStatus.active,
         )
         make_invoice(
-            db, subscriber=c_active, status=InvoiceStatus.paid,
-            total=Decimal("15000.00"), balance_due=Decimal("0.00"),
+            db,
+            subscriber=c_active,
+            status=InvoiceStatus.paid,
+            total=Decimal("15000.00"),
+            balance_due=Decimal("0.00"),
         )
         make_payment(
-            db, subscriber=c_active, amount=Decimal("15000.00"),
+            db,
+            subscriber=c_active,
+            amount=Decimal("15000.00"),
             status=PaymentStatus.succeeded,
         )
 
         # 2. Overdue customer — unpaid overdue invoice (House) → dunning/arrangement
         c_overdue = get_or_create_subscriber(
-            db, email="overdue.customer@test.local", first="Obi", last="Overdue",
-            reseller=house, status=SubscriberStatus.delinquent,
+            db,
+            email="overdue.customer@test.local",
+            first="Obi",
+            last="Overdue",
+            reseller=house,
+            status=SubscriberStatus.delinquent,
             password=DEFAULT_PASSWORD,
         )
         ensure_subscription(
-            db, subscriber=c_overdue, offer=offer_postpaid,
+            db,
+            subscriber=c_overdue,
+            offer=offer_postpaid,
             status=SubscriptionStatus.active,
         )
         make_invoice(
-            db, subscriber=c_overdue, status=InvoiceStatus.overdue,
-            total=Decimal("15000.00"), balance_due=Decimal("15000.00"),
-            days_ago_issued=45, days_to_due=-30,
+            db,
+            subscriber=c_overdue,
+            status=InvoiceStatus.overdue,
+            total=Decimal("15000.00"),
+            balance_due=Decimal("15000.00"),
+            days_ago_issued=45,
+            days_to_due=-30,
         )
 
         # 3. Prepaid customer — active prepaid subscription (under E2E reseller)
         c_prepaid = get_or_create_subscriber(
-            db, email="prepaid.customer@test.local", first="Pat", last="Prepaid",
-            reseller=e2e_reseller, status=SubscriberStatus.active,
+            db,
+            email="prepaid.customer@test.local",
+            first="Pat",
+            last="Prepaid",
+            reseller=e2e_reseller,
+            status=SubscriberStatus.active,
             password=DEFAULT_PASSWORD,
         )
         ensure_subscription(
-            db, subscriber=c_prepaid, offer=offer_prepaid,
+            db,
+            subscriber=c_prepaid,
+            offer=offer_prepaid,
             status=SubscriptionStatus.active,
         )
 
         # 4. Suspended customer (under E2E reseller) — login/access edge
         c_suspended = get_or_create_subscriber(
-            db, email="suspended.customer@test.local", first="Sam",
-            last="Suspended", reseller=e2e_reseller,
-            status=SubscriberStatus.suspended, password=DEFAULT_PASSWORD,
+            db,
+            email="suspended.customer@test.local",
+            first="Sam",
+            last="Suspended",
+            reseller=e2e_reseller,
+            status=SubscriberStatus.suspended,
+            password=DEFAULT_PASSWORD,
         )
         ensure_subscription(
-            db, subscriber=c_suspended, offer=offer_postpaid,
+            db,
+            subscriber=c_suspended,
+            offer=offer_postpaid,
             status=SubscriptionStatus.suspended,
         )
 
         # 5. Brand-new customer — no subscription (onboarding edge)
         get_or_create_subscriber(
-            db, email="new.customer@test.local", first="Nia", last="New",
-            reseller=house, status=SubscriberStatus.new, password=DEFAULT_PASSWORD,
+            db,
+            email="new.customer@test.local",
+            first="Nia",
+            last="New",
+            reseller=house,
+            status=SubscriberStatus.new,
+            password=DEFAULT_PASSWORD,
         )
         db.commit()
         for email in (
@@ -496,9 +566,14 @@ def main() -> None:
 
         banner("Reseller portal user")
         reseller_su = get_or_create_subscriber(
-            db, email="reseller@test.local", first="Rita", last="Reseller",
-            reseller=e2e_reseller, status=SubscriberStatus.active,
-            user_type=UserType.reseller, password=DEFAULT_PASSWORD,
+            db,
+            email="reseller@test.local",
+            first="Rita",
+            last="Reseller",
+            reseller=e2e_reseller,
+            status=SubscriberStatus.active,
+            user_type=UserType.reseller,
+            password=DEFAULT_PASSWORD,
         )
         link = (
             db.query(ResellerUser)
