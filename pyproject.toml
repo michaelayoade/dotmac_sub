@@ -109,7 +109,7 @@ ignore = [
 # (S105/S106), bind to 0.0.0.0 to simulate listener defaults (S104), and
 # use lambdas to define inline serializers (E731).
 "tests/**" = ["S101", "S104", "S105", "S106", "E731"]
-"scripts/**" = ["S101", "S105", "S106", "S108"]
+"scripts/**" = ["S101", "S105", "S106", "S108", "S608"]
 "scripts/migration/**" = ["S608"]
 # Incremental sync builds parameterised text() SQL from internal-int cursors
 # and pre-validated clauses by design (same as scripts/migration/**).

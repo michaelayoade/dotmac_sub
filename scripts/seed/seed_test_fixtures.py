@@ -591,7 +591,7 @@ def main() -> None:
         db.commit()
         created.append(("reseller", "reseller@test.local", "/reseller/auth/login"))
 
-        banner("SUMMARY — seeded logins (password for all: %s)" % DEFAULT_PASSWORD)
+        banner(f"SUMMARY — seeded logins (password for all: {DEFAULT_PASSWORD})")
         for kind, login, url in created:
             print(f"  [{kind:9}] {login:34} -> {url}")
         print("\nDone.")
