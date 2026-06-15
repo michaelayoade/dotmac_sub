@@ -195,9 +195,7 @@ def reseller_profile_update(
 
 
 @router.post("/profile/verify-email/resend")
-def reseller_resend_email_verification(
-    request: Request, db: Session = Depends(get_db)
-):
+def reseller_resend_email_verification(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_resend_email_verification(request, db)
 
 
@@ -283,7 +281,9 @@ def reseller_payment_methods(
     )
 
 
-@router.post("/billing/payment-methods/{method_id}/default", response_class=HTMLResponse)
+@router.post(
+    "/billing/payment-methods/{method_id}/default", response_class=HTMLResponse
+)
 def reseller_payment_method_default(
     request: Request,
     method_id: str,

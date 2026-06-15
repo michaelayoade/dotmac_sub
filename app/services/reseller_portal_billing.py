@@ -258,9 +258,7 @@ def _maybe_capture_card(
             db, str(login_subscriber_id), reference, provider_type
         )
     except Exception:  # noqa: BLE001 - capture is non-critical
-        logger.warning(
-            "reseller card capture skipped for %s", reference, exc_info=True
-        )
+        logger.warning("reseller card capture skipped for %s", reference, exc_info=True)
 
 
 def _coerce_uuid_str(value) -> str | None:

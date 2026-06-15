@@ -70,9 +70,7 @@ def reseller_contacts_create(request: Request, db: Session, **form_fields):
     except ValueError as exc:
         return templates.TemplateResponse(
             "reseller/contacts/index.html",
-            _page_context(
-                request, context, db, error=str(exc), form_values=form
-            ),
+            _page_context(request, context, db, error=str(exc), form_values=form),
             status_code=400,
         )
     return templates.TemplateResponse(
