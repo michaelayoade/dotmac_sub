@@ -1,7 +1,7 @@
 """Add state tables for Splynx incremental sync.
 
 Revision ID: 150_splynx_incremental_sync_state
-Revises: 149_crm_sync_failures
+Revises: 150_splynx_billing_transactions
 Create Date: 2026-06-15
 """
 
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from alembic import op
 
 revision = "150_splynx_incremental_sync_state"
-down_revision = "149_crm_sync_failures"
+down_revision = "150_splynx_billing_transactions"
 branch_labels = None
 depends_on = None
 
