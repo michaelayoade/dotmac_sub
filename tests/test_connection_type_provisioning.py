@@ -307,9 +307,7 @@ class TestAppendAdditionalRoutes:
         # A row equal to the primary /32 must never become a route (defence
         # in depth against a mis-tagged backfill row).
         sub = _active_subscription(ipv4="203.0.113.5")
-        db = _db_returning_routes(
-            [_route("203.0.113.5/32"), _route("203.0.113.8/29")]
-        )
+        db = _db_returning_routes([_route("203.0.113.5/32"), _route("203.0.113.8/29")])
         attrs: list[dict[str, str]] = []
         _append_additional_routes(db, attrs, sub)
         routes = [a for a in attrs if a["attribute"] == "Framed-Route"]
@@ -318,9 +316,7 @@ class TestAppendAdditionalRoutes:
 
     def test_duplicate_cidrs_are_deduped(self):
         sub = _active_subscription()
-        db = _db_returning_routes(
-            [_route("203.0.113.8/29"), _route("203.0.113.8/29")]
-        )
+        db = _db_returning_routes([_route("203.0.113.8/29"), _route("203.0.113.8/29")])
         attrs: list[dict[str, str]] = []
         _append_additional_routes(db, attrs, sub)
         routes = [a for a in attrs if a["attribute"] == "Framed-Route"]

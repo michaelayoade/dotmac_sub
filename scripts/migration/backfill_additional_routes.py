@@ -91,9 +91,7 @@ def backfill(execute: bool) -> dict:
                 continue
             raw_tokens += 1
             cidr, prefix = norm
-            per_customer[svc["customer_id"]].setdefault(
-                cidr, (prefix, svc["id"])
-            )
+            per_customer[svc["customer_id"]].setdefault(cidr, (prefix, svc["id"]))
 
     distinct_blocks = sum(len(v) for v in per_customer.values())
     customer_ids = list(per_customer.keys())
@@ -205,8 +203,10 @@ def main() -> None:
     )
     print(f"  would insert (new)                   : {summary['inserted']}")
     print(f"  already present (idempotent skip)    : {summary['already_present']}")
-    print(f"  mode                                 : "
-          f"{'EXECUTE (written)' if args.execute else 'DRY-RUN'}")
+    print(
+        f"  mode                                 : "
+        f"{'EXECUTE (written)' if args.execute else 'DRY-RUN'}"
+    )
 
 
 if __name__ == "__main__":
