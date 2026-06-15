@@ -93,6 +93,16 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 Card(
                   child: ListTile(
+                    leading: const Icon(Icons.contacts_outlined),
+                    title: const Text('Additional contacts'),
+                    subtitle: const Text('People we can reach about your account'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/contacts'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
                     leading: const Icon(Icons.devices_outlined),
                     title: const Text('Active sessions'),
                     trailing: const Icon(Icons.chevron_right),
@@ -368,17 +378,51 @@ List<Widget> _withDividers(List<Widget> rows) {
 }
 
 /// Email-verification status, drawn prominently when unverified so the customer
-/// notices and knows to act. (A self-service re-send needs a backend endpoint
-/// that doesn't exist yet — see POST /auth/* — so this surfaces the state
-/// rather than triggering a resend.)
-class _EmailVerifiedTile extends StatelessWidget {
+/// notices and knows to act. When unverified it offers a self-service re-send
+/// (POST /auth/resend-verification-email).
+class _EmailVerifiedTile extends ConsumerStatefulWidget {
   const _EmailVerifiedTile({required this.verified});
   final bool verified;
 
   @override
+  ConsumerState<_EmailVerifiedTile> createState() => _EmailVerifiedTileState();
+}
+
+class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
+  bool _busy = false;
+
+  Future<void> _resend() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      final sent = await ref.read(authRepositoryProvider).resendVerificationEmail();
+      if (sent) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Verification email sent — check your inbox.')));
+        // The verified flag lives on /me; refresh in case it just flipped.
+        await ref.read(authControllerProvider.notifier).reloadProfile();
+      } else {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Already verified or no email on file.')));
+      }
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 429
+            ? 'Please wait a bit before trying again.'
+            : e.message),
+      ));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Could not send verification email. Try again.')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (verified) {
+    if (widget.verified) {
       return ListTile(
         title: const Text('Email verified'),
         trailing: Row(
@@ -399,9 +443,15 @@ class _EmailVerifiedTile extends StatelessWidget {
         children: [
           Icon(Icons.error_outline, size: 18, color: scheme.error),
           const SizedBox(width: 6),
-          Text('Not verified',
-              style:
-                  TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+          _busy
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : TextButton(
+                  onPressed: _resend,
+                  child: const Text('Resend'),
+                ),
         ],
       ),
     );
@@ -431,8 +481,9 @@ class _Tile extends StatelessWidget {
   }
 }
 
-/// Edit the customer's contact details (PATCH /auth/me). Email is read-only —
-/// it identifies the account and changing it needs verification elsewhere.
+/// Edit the customer's contact details (PATCH /auth/me). Email is editable:
+/// changing it server-side resets verified state and sends a fresh
+/// verification link; a duplicate address comes back as HTTP 409.
 class _EditProfileSheet extends ConsumerStatefulWidget {
   const _EditProfileSheet({required this.me});
   final Me me;
@@ -445,6 +496,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   late final _firstName = TextEditingController(text: widget.me.firstName);
   late final _lastName = TextEditingController(text: widget.me.lastName);
   late final _phone = TextEditingController(text: widget.me.phone ?? '');
+  late final _email = TextEditingController(text: widget.me.email);
   bool _busy = false;
   String? _error;
 
@@ -453,12 +505,29 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     _firstName.dispose();
     _lastName.dispose();
     _phone.dispose();
+    _email.dispose();
     super.dispose();
+  }
+
+  // Loose RFC-ish check: a single @ with non-empty local part and a dotted
+  // domain. Server does the authoritative validation.
+  static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  String? _validateEmail(String value) {
+    if (value.isEmpty) return 'Enter an email address';
+    if (!_emailRe.hasMatch(value)) return 'Enter a valid email address';
+    return null;
   }
 
   Future<void> _save() async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
+    final email = _email.text.trim();
+    final emailError = _validateEmail(email);
+    if (emailError != null) {
+      setState(() => _error = emailError);
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -468,12 +537,20 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
         'first_name': _firstName.text.trim(),
         'last_name': _lastName.text.trim(),
         'phone': _phone.text.trim(),
+        'email': email,
       });
+      final emailChanged = email != widget.me.email.trim();
       await ref.read(authControllerProvider.notifier).reloadProfile();
       navigator.pop();
-      messenger.showSnackBar(const SnackBar(content: Text('Profile updated')));
+      messenger.showSnackBar(SnackBar(
+        content: Text(emailChanged
+            ? 'Email updated — check your inbox to verify it.'
+            : 'Profile updated'),
+      ));
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      setState(() => _error = e.statusCode == 409
+          ? 'That email is already in use.'
+          : e.message);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -514,9 +591,16 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             keyboardType: TextInputType.phone,
             decoration: const InputDecoration(labelText: 'Phone'),
           ),
-          const SizedBox(height: 8),
-          Text('Email: ${widget.me.email}',
-              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              helperText: 'Changing this sends a new verification link.',
+            ),
+          ),
           const SizedBox(height: 20),
           FilledButton(
             onPressed: _busy ? null : _save,
