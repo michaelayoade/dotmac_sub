@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
     soft_time_limit=600,
     time_limit=900,
 )
-def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
+def run_incremental_sync(hours_back: int | None = None) -> dict[str, int]:
     """Pull recent changes from Splynx into DotMac Sub.
 
-    Syncs new invoices, payments, and status changes created within
-    the last ``hours_back`` hours.  Designed to run every 15-30 min
-    via Celery beat during the Splynx dual-run period.
+    Syncs new invoices, payments, payment allocations, credit notes, and status
+    changes. Financial rows use durable Splynx ID cursors with retryable skips;
+    ``hours_back`` is accepted for backward-compatible manual invocations only.
 
     Args:
         hours_back: How many hours of history to look back.
@@ -33,28 +33,32 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
     Returns:
         Statistics dict with counts of synced records.
     """
-    from datetime import UTC, datetime, timedelta
-
     from app.services.migrations.db_connections import (
         dotmac_session,
         splynx_connection,
     )
     from app.services.migrations.incremental_sync import (
+        sync_billing_transactions,
         sync_deleted_customers,
         sync_deleted_services,
         sync_new_credit_notes,
         sync_new_invoices,
         sync_new_payments,
+        sync_payment_allocations,
         sync_status_changes,
     )
 
-    since = datetime.now(UTC) - timedelta(hours=hours_back)
-    logger.info("Splynx incremental sync starting (since %s)", since.isoformat())
+    logger.info("Splynx incremental sync starting (cursor mode)")
 
     stats: dict[str, int] = {
         "invoices_created": 0,
         "payments_created": 0,
+        "payment_allocations_created": 0,
         "credit_notes_created": 0,
+        "billing_transactions_mirrored": 0,
+        "invoice_skips": 0,
+        "payment_skips": 0,
+        "payment_allocation_skips": 0,
         "status_updated": 0,
         "customers_deleted": 0,
         "services_canceled": 0,
@@ -64,13 +68,33 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
     try:
         with splynx_connection() as conn:
             with dotmac_session() as db:
-                inv_result = sync_new_invoices(conn, db, since)
+                inv_result = sync_new_invoices(conn, db)
                 db.commit()
                 stats["invoices_created"] = inv_result.get("created", 0)
+                stats["invoice_skips"] = inv_result.get("skipped", 0)
 
-                pay_result = sync_new_payments(conn, db, since)
+                pay_result = sync_new_payments(conn, db)
                 db.commit()
                 stats["payments_created"] = pay_result.get("created", 0)
+                stats["payment_skips"] = pay_result.get("skipped", 0)
+
+                alloc_result = sync_payment_allocations(conn, db)
+                db.commit()
+                stats["payment_allocations_created"] = alloc_result.get("created", 0)
+                stats["payment_allocation_skips"] = alloc_result.get("skipped", 0)
+
+                # Tail Splynx's raw transaction ledger into the local mirror so
+                # the deposit reconciliation stays current (the mirror would
+                # otherwise only be accurate right after a manual re-import).
+                bt_result = sync_billing_transactions(conn, db)
+                db.commit()
+                stats["billing_transactions_mirrored"] = bt_result.get("created", 0)
+
+                # Credit note support still uses source timestamps because Splynx
+                # credit note volume is low and the existing importer is timestamped.
+                from datetime import UTC, datetime, timedelta
+
+                since = datetime.now(UTC) - timedelta(hours=hours_back or 2)
 
                 cn_result = sync_new_credit_notes(conn, db, since)
                 db.commit()
@@ -96,17 +120,22 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
     total = (
         stats["invoices_created"]
         + stats["payments_created"]
+        + stats["payment_allocations_created"]
         + stats["credit_notes_created"]
+        + stats["billing_transactions_mirrored"]
         + stats["status_updated"]
         + stats["customers_deleted"]
         + stats["services_canceled"]
     )
     logger.info(
-        "Splynx incremental sync complete: %d invoices, %d payments, %d credit notes, "
-        "%d status changes, %d deleted customers, %d canceled services",
+        "Splynx incremental sync complete: %d invoices, %d payments, %d payment "
+        "allocations, %d credit notes, %d ledger txns, %d status changes, "
+        "%d deleted customers, %d canceled services",
         stats["invoices_created"],
         stats["payments_created"],
+        stats["payment_allocations_created"],
         stats["credit_notes_created"],
+        stats["billing_transactions_mirrored"],
         stats["status_updated"],
         stats["customers_deleted"],
         stats["services_canceled"],
