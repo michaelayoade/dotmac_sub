@@ -455,10 +455,14 @@ class TestResellerNavigation:
         assert 'href="/reseller/reports/revenue"' in billing
         assert 'href="/reseller/billing"' in revenue
 
-    def test_billing_does_not_show_generic_pay_now(self) -> None:
+    def test_billing_shows_consolidated_pay_form(self) -> None:
         billing = Path("templates/reseller/billing/index.html").read_text()
 
-        assert "/reseller/billing/pay/intent" not in billing
+        # Consolidated billing now offers a one-tap "Pay outstanding" affordance
+        # that prefills the amount field (free-form entry stays). There is no
+        # naive per-invoice "Pay now" button on this page.
+        assert "/reseller/billing/pay/intent" in billing
+        assert "Pay outstanding" in billing
         assert "Pay now" not in billing
 
     def test_billing_shows_view_as_customer_action(self) -> None:

@@ -30,6 +30,7 @@ import '../features/reseller/reseller_billing_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
 import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
+import '../features/reseller/reseller_payment_methods_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
 import '../features/reseller/reseller_revenue_screen.dart';
 import '../features/reseller/reseller_service_requests_screen.dart';
@@ -187,6 +188,16 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'profile',
             builder: (_, __) => const ResellerProfileScreen(),
+          ),
+          GoRoute(
+            path: 'payment-methods',
+            builder: (_, __) => const ResellerPaymentMethodsScreen(),
+          ),
+          // Reuses the customer Contacts screen: /me/contacts is self-scoped
+          // and works for reseller users (they're Subscribers too).
+          GoRoute(
+            path: 'contacts',
+            builder: (_, __) => const ContactsScreen(),
           ),
           GoRoute(
             path: 'revenue',

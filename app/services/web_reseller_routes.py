@@ -355,7 +355,30 @@ def reseller_profile(request: Request, db: Session):
     mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
     return templates.TemplateResponse(
         "reseller/profile/index.html",
-        _profile_context(request, context, mfa_methods=mfa_methods),
+        _profile_context(
+            request,
+            context,
+            mfa_methods=mfa_methods,
+            verify_sent=request.query_params.get("verify_sent"),
+        ),
+    )
+
+
+def reseller_resend_email_verification(request: Request, db: Session):
+    """Resend the email-verification link to the reseller's login subscriber."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    sent = False
+    subscriber_id = context["subscriber"].id
+    if subscriber_id:
+        try:
+            sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
+        except Exception:
+            logger.warning("reseller_resend_email_verification_failed", exc_info=True)
+    return RedirectResponse(
+        url=f"/reseller/profile?verify_sent={'1' if sent else '0'}",
+        status_code=303,
     )
 
 
