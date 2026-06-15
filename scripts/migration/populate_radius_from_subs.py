@@ -62,12 +62,18 @@ def _radreply_attrs(
     offer: CatalogOffer,
     profile: RadiusProfile | None,
     subscriber_blocked: bool = False,
+    additional_routes: list[tuple[str, int | None]] | None = None,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
     `subscriber_blocked`: customer-level block (Splynx subscribers.status=blocked).
     Customer-level block dominates: even if subscription is active, the customer
     gets walled-garden RADIUS treatment.
+
+    `additional_routes`: extra routed IP blocks (subscriber_additional_routes) as
+    (cidr, metric) tuples. Emitted as Framed-Route for non-walled-garden subs only
+    — this is the authoritative single-writer, so the routes must be emitted here
+    or the periodic sweep wipes what build_radius_reply_attributes wrote.
     """
     attrs: list[tuple[str, str, str]] = [
         ("Service-Type", ":=", "Framed-User"),
@@ -94,6 +100,18 @@ def _radreply_attrs(
         SubscriptionStatus.suspended,
     ):
         attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
+    elif additional_routes:
+        # Additional routed IP blocks -> one Framed-Route each (+= so multiple
+        # coexist; gateway 0.0.0.0 = via this session, since primaries are CGNAT).
+        # Not for walled-garden subs: a captive customer must not route extra IPs.
+        primary_host = f"{sub.ipv4_address}/32" if sub.ipv4_address else None
+        seen: set[str] = set()
+        for cidr, metric in additional_routes:
+            cidr = (cidr or "").strip()
+            if not cidr or cidr == primary_host or cidr in seen:
+                continue
+            seen.add(cidr)
+            attrs.append(("Framed-Route", "+=", f"{cidr} 0.0.0.0 {metric or 1}"))
 
     return attrs
 
@@ -174,6 +192,25 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             len(blocked_subscriber_ids),
         )
 
+        # Pre-fetch additional routed IP blocks (Splynx ipv4_route parity),
+        # keyed by subscriber_id, so each user's Framed-Routes are O(1) in the
+        # sweep loop below.
+        from app.models.network import SubscriberAdditionalRoute
+
+        routes_by_subscriber: dict = {}
+        for r in db.scalars(
+            select(SubscriberAdditionalRoute).where(
+                SubscriberAdditionalRoute.is_active.is_(True)
+            )
+        ).all():
+            routes_by_subscriber.setdefault(r.subscriber_id, []).append(
+                (r.cidr, r.metric)
+            )
+        logger.info(
+            "%d subscribers with additional routed IP blocks",
+            len(routes_by_subscriber),
+        )
+
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
@@ -198,7 +235,13 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 continue
 
             sub_blocked = sub.subscriber_id in blocked_subscriber_ids
-            attrs = _radreply_attrs(sub, sub.offer, sub.radius_profile, sub_blocked)
+            attrs = _radreply_attrs(
+                sub,
+                sub.offer,
+                sub.radius_profile,
+                sub_blocked,
+                routes_by_subscriber.get(sub.subscriber_id),
+            )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,
                 SubscriptionStatus.suspended,
