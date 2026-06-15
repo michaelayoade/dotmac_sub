@@ -26,6 +26,7 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
   static const _fallbackCenter = LatLng(6.5244, 3.3792);
 
   final _mapController = MapController();
+  final _mapKey = GlobalKey();
   final _note = TextEditingController();
   LatLng? _selected;
   String? _resolvedAddress;
@@ -46,6 +47,13 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
       _resolvedAddress = null;
     });
     if (recenter) _mapController.move(point, 17);
+    _reverseGeocode(point);
+  }
+
+  /// (Re)resolve the address label for [point] after a short debounce. Shared
+  /// by tap-to-place, GPS, and pin-drag so every interaction updates the
+  /// label the same way.
+  void _reverseGeocode(LatLng point) {
     _reverseDebounce?.cancel();
     _reverseDebounce = Timer(const Duration(milliseconds: 400), () async {
       try {
@@ -57,6 +65,24 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
         // Best-effort label; the pin itself is what gets submitted.
       }
     });
+  }
+
+  /// Live update while the pin is dragged: move it under the finger without
+  /// re-geocoding on every frame (the geocode fires once on drag end).
+  void _dragTo(LatLng point) {
+    setState(() {
+      _selected = point;
+      _resolvedAddress = null;
+    });
+  }
+
+  /// Convert a global drag position to a map coordinate via the camera, so the
+  /// dragged marker tracks the finger regardless of pan/zoom.
+  LatLng? _globalToLatLng(Offset global) {
+    final box = _mapKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return null;
+    final local = box.globalToLocal(global);
+    return _mapController.camera.screenOffsetToLatLng(local);
   }
 
   Future<void> _useMyLocation() async {
@@ -169,6 +195,7 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
             child: Stack(
               children: [
                 FlutterMap(
+                  key: _mapKey,
                   mapController: _mapController,
                   options: MapOptions(
                     initialCenter: center,
@@ -208,13 +235,30 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
                         if (_selected != null)
                           Marker(
                             point: _selected!,
-                            width: 40,
-                            height: 40,
+                            width: 48,
+                            height: 48,
                             alignment: Alignment.topCenter,
-                            child: const Icon(
-                              Icons.place,
-                              color: Colors.red,
-                              size: 40,
+                            // Draggable pin: pan to fine-tune the position the
+                            // GPS/tap dropped, then geocode once on release.
+                            child: GestureDetector(
+                              onPanUpdate: canEdit
+                                  ? (d) {
+                                      final p =
+                                          _globalToLatLng(d.globalPosition);
+                                      if (p != null) _dragTo(p);
+                                    }
+                                  : null,
+                              onPanEnd: canEdit
+                                  ? (_) {
+                                      final p = _selected;
+                                      if (p != null) _reverseGeocode(p);
+                                    }
+                                  : null,
+                              child: const Icon(
+                                Icons.place,
+                                color: Colors.red,
+                                size: 40,
+                              ),
                             ),
                           ),
                       ],
@@ -245,8 +289,8 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
         const SizedBox(height: 8),
         Text(
           canEdit
-              ? 'Tap the map (or use the GPS button) to place the pin where '
-                  'your service is actually installed.'
+              ? 'Tap the map or use the GPS button to drop the pin, then drag '
+                  'it to where your service is actually installed.'
               : pending != null
                   ? 'A correction is waiting for review. Cancel it to '
                       'submit a different one.'
