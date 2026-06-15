@@ -78,8 +78,7 @@ class Contact {
         contactType: json['contact_type'] as String? ?? 'general',
         isBillingContact: json['is_billing_contact'] as bool? ?? false,
         isAuthorized: json['is_authorized'] as bool? ?? false,
-        receivesNotifications:
-            json['receives_notifications'] as bool? ?? false,
+        receivesNotifications: json['receives_notifications'] as bool? ?? false,
         notes: json['notes'] as String?,
         createdAt: _date(json['created_at']),
         updatedAt: _date(json['updated_at']),

@@ -95,7 +95,8 @@ class ProfileScreen extends ConsumerWidget {
                   child: ListTile(
                     leading: const Icon(Icons.contacts_outlined),
                     title: const Text('Additional contacts'),
-                    subtitle: const Text('People we can reach about your account'),
+                    subtitle:
+                        const Text('People we can reach about your account'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => context.push('/profile/contacts'),
                   ),
@@ -395,7 +396,8 @@ class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
-      final sent = await ref.read(authRepositoryProvider).resendVerificationEmail();
+      final sent =
+          await ref.read(authRepositoryProvider).resendVerificationEmail();
       if (sent) {
         messenger.showSnackBar(const SnackBar(
             content: Text('Verification email sent — check your inbox.')));
@@ -548,9 +550,8 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             : 'Profile updated'),
       ));
     } on ApiException catch (e) {
-      setState(() => _error = e.statusCode == 409
-          ? 'That email is already in use.'
-          : e.message);
+      setState(() => _error =
+          e.statusCode == 409 ? 'That email is already in use.' : e.message);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
