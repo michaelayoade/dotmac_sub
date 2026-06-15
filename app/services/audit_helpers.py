@@ -433,9 +433,7 @@ def _resolve_actor_name(event, subscribers: dict[str, object]) -> str:
                 return actor_name
         metadata = getattr(event, "metadata_", None) or {}
         return (
-            metadata.get("actor_name")
-            or metadata.get("actor_email")
-            or str(actor_id)
+            metadata.get("actor_name") or metadata.get("actor_email") or str(actor_id)
         )
     metadata = getattr(event, "metadata_", None) or {}
     return (

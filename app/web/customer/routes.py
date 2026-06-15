@@ -1702,10 +1702,7 @@ def customer_direct_transfer_topup_submitted(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     proof = payment_proofs_service.get_proof(db, proof_id)
-    if (
-        proof is None
-        or str(proof.account_id) != str(customer.get("account_id") or "")
-    ):
+    if proof is None or str(proof.account_id) != str(customer.get("account_id") or ""):
         return RedirectResponse(
             url="/portal/billing/topup?autopay_error="
             + quote_plus("Submitted transfer receipt was not found."),

@@ -1064,7 +1064,9 @@ def send_email_verification_email(
         True if email was sent successfully, False otherwise
     """
     app_url = _get_app_url(db)
-    verify_url = f"{app_url}/portal/auth/verify-email?{urlencode({'token': verification_token})}"
+    verify_url = (
+        f"{app_url}/portal/auth/verify-email?{urlencode({'token': verification_token})}"
+    )
 
     # Prefer the actual token TTL; fall back to the configured setting
     expiry_minutes = expires_minutes or (

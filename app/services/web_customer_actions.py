@@ -1977,13 +1977,13 @@ def update_customer_profile(
     # fresh verification link so the verified state can never lag the address.
     email_changed = new_email.lower() != (subscriber.email or "").strip().lower()
 
-    update_fields = dict(
-        first_name=name_parts[0] if name_parts else name.strip(),
-        last_name=name_parts[1] if len(name_parts) > 1 else "",
-        email=new_email,
-        phone=phone.strip() if phone else None,
-        metadata_=metadata,
-    )
+    update_fields: dict[str, Any] = {
+        "first_name": name_parts[0] if name_parts else name.strip(),
+        "last_name": name_parts[1] if len(name_parts) > 1 else "",
+        "email": new_email,
+        "phone": phone.strip() if phone else None,
+        "metadata_": metadata,
+    }
     # Set in the constructor so exclude_unset keeps it (post-init assignment
     # would be dropped by model_dump(exclude_unset=True)).
     if email_changed:

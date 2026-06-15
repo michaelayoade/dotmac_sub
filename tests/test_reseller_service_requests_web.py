@@ -19,7 +19,13 @@ def _reseller(db_session):
 
 
 def _context(reseller) -> dict:
-    return {"reseller": reseller}
+    # Mirror the real reseller context (reseller_portal builds current_user +
+    # subscriber alongside reseller); a bare {"reseller": ...} is a stale mock.
+    return {
+        "reseller": reseller,
+        "current_user": {"name": "Reseller User", "email": "reseller@example.com"},
+        "subscriber": reseller,
+    }
 
 
 class TestServiceRequestsPage:

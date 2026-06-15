@@ -33,8 +33,9 @@ def _capture_email(monkeypatch):
     """Replace the SMTP sender with a capture so no mail is actually sent."""
     sent: list[dict] = []
 
-    def _fake_send(*, db, to_email, verification_token, person_name=None,
-                   expires_minutes=None):
+    def _fake_send(
+        *, db, to_email, verification_token, person_name=None, expires_minutes=None
+    ):
         sent.append({"to_email": to_email, "token": verification_token})
         return True
 
@@ -78,16 +79,18 @@ def test_verify_email_rejects_wrong_email(db_session, subscriber, _no_audit):
     assert subscriber.email_verified is False
 
 
-def test_send_dispatches_when_unverified(db_session, subscriber, _no_audit,
-                                         _capture_email):
+def test_send_dispatches_when_unverified(
+    db_session, subscriber, _no_audit, _capture_email
+):
     sent = auth_flow_service.send_email_verification(db_session, str(subscriber.id))
     assert sent is True
     assert len(_capture_email) == 1
     assert _capture_email[0]["to_email"] == subscriber.email
 
 
-def test_send_skips_when_already_verified(db_session, subscriber, _no_audit,
-                                          _capture_email):
+def test_send_skips_when_already_verified(
+    db_session, subscriber, _no_audit, _capture_email
+):
     subscriber.email_verified = True
     db_session.commit()
     sent = auth_flow_service.send_email_verification(db_session, str(subscriber.id))
@@ -101,8 +104,9 @@ def test_send_noop_for_missing_subscriber(db_session, _no_audit, _capture_email)
     assert _capture_email == []
 
 
-def test_profile_email_change_rearms_verification(db_session, subscriber, _no_audit,
-                                                  _capture_email):
+def test_profile_email_change_rearms_verification(
+    db_session, subscriber, _no_audit, _capture_email
+):
     """Changing the email resets verified=False AND re-dispatches a link."""
     subscriber.email_verified = True
     db_session.commit()
@@ -126,8 +130,9 @@ def test_profile_email_change_rearms_verification(db_session, subscriber, _no_au
     assert _capture_email[0]["to_email"] == new_email
 
 
-def test_profile_same_email_does_not_resend(db_session, subscriber, _no_audit,
-                                            _capture_email):
+def test_profile_same_email_does_not_resend(
+    db_session, subscriber, _no_audit, _capture_email
+):
     """No email change → verified state preserved, no new mail."""
     subscriber.email_verified = True
     db_session.commit()
@@ -146,8 +151,9 @@ def test_profile_same_email_does_not_resend(db_session, subscriber, _no_audit,
     assert _capture_email == []
 
 
-def test_set_subscriber_email_adds_and_sends(db_session, subscriber, _no_audit,
-                                             _capture_email):
+def test_set_subscriber_email_adds_and_sends(
+    db_session, subscriber, _no_audit, _capture_email
+):
     """Shared helper: changing/adding an email re-arms verification + sends."""
     subscriber.email_verified = True
     db_session.commit()
@@ -163,8 +169,9 @@ def test_set_subscriber_email_adds_and_sends(db_session, subscriber, _no_audit,
     assert _capture_email and _capture_email[-1]["to_email"] == new_email
 
 
-def test_set_subscriber_email_unchanged_is_noop(db_session, subscriber, _no_audit,
-                                                _capture_email):
+def test_set_subscriber_email_unchanged_is_noop(
+    db_session, subscriber, _no_audit, _capture_email
+):
     changed = auth_flow_service.set_subscriber_email(
         db_session, str(subscriber.id), subscriber.email
     )
@@ -172,8 +179,9 @@ def test_set_subscriber_email_unchanged_is_noop(db_session, subscriber, _no_audi
     assert _capture_email == []
 
 
-def test_set_subscriber_email_rejects_duplicate(db_session, subscriber, _no_audit,
-                                                _capture_email):
+def test_set_subscriber_email_rejects_duplicate(
+    db_session, subscriber, _no_audit, _capture_email
+):
     """The email column is unique — a clash with another subscriber is a 409."""
     from app.models.subscriber import Subscriber
 
@@ -193,8 +201,9 @@ def test_set_subscriber_email_rejects_duplicate(db_session, subscriber, _no_audi
     assert _capture_email == []
 
 
-def test_me_update_can_add_email_and_verify(db_session, subscriber, _no_audit,
-                                            _capture_email):
+def test_me_update_can_add_email_and_verify(
+    db_session, subscriber, _no_audit, _capture_email
+):
     """The mobile /me update path can add/change email and re-arm verification."""
     from app.schemas.auth_flow import MeUpdateRequest
     from app.services import user_profile
