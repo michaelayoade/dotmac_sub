@@ -48,8 +48,12 @@ ERROR_MARKERS = re.compile(
 )
 
 LAUNCH_ARGS = [
-    "--headless=new", "--no-sandbox", "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage", "--disable-gpu", "--disable-crash-reporter",
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-crash-reporter",
 ]
 
 
@@ -79,7 +83,7 @@ def discover_links(page, prefix):
         if not h:
             continue
         if h.startswith(BASE):
-            h = h[len(BASE):]
+            h = h[len(BASE) :]
         if not h.startswith("/"):
             continue
         if "logout" in h or "impersonate" in h or "/auth/" in h:
@@ -111,8 +115,9 @@ def visit(page, path):
 def run_role(browser, role):
     print(f"\n########## ROLE: {role} ##########", flush=True)
     _, _, prefix = ROLES[role]
-    context = browser.new_context(viewport={"width": 1366, "height": 900},
-                                  ignore_https_errors=True)
+    context = browser.new_context(
+        viewport={"width": 1366, "height": 900}, ignore_https_errors=True
+    )
     context.set_default_timeout(20000)
     results = {"role": role, "login_ok": False, "landed": None, "pages": []}
     shotdir = SHOTS / role
@@ -193,7 +198,9 @@ def main():
             (OUT / f"{role}.json").write_text(json.dumps(res, indent=2))
             n = len(res["pages"])
             errs = sum(1 for p in res["pages"] if p["error"])
-            print(f"  == {role}: {n} pages, {errs} errors, {res['seconds']}s", flush=True)
+            print(
+                f"  == {role}: {n} pages, {errs} errors, {res['seconds']}s", flush=True
+            )
         browser.close()
     # summary
     summary = {
@@ -207,8 +214,11 @@ def main():
     (OUT / "summary.json").write_text(json.dumps(summary, indent=2))
     print("\n===== SUMMARY =====", flush=True)
     for r, d in summary.items():
-        print(f"{r:10} login={d['login_ok']} pages={d['pages']} "
-              f"errors={len(d['errors'])}", flush=True)
+        print(
+            f"{r:10} login={d['login_ok']} pages={d['pages']} "
+            f"errors={len(d['errors'])}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

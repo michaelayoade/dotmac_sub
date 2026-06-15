@@ -30,11 +30,21 @@ results = []
 
 
 def rec(cid, desc, expected, actual, ok, notes=""):
-    results.append({"id": cid, "desc": desc, "expected": expected,
-                    "actual": actual, "pass": ok, "notes": notes})
+    results.append(
+        {
+            "id": cid,
+            "desc": desc,
+            "expected": expected,
+            "actual": actual,
+            "pass": ok,
+            "notes": notes,
+        }
+    )
     flag = "PASS" if ok else "FAIL"
-    print(f"[{flag}] {cid}: {desc} | expected={expected} actual={actual} {notes}",
-          flush=True)
+    print(
+        f"[{flag}] {cid}: {desc} | expected={expected} actual={actual} {notes}",
+        flush=True,
+    )
 
 
 def portal_login(context, username, login_path="/portal/auth/login"):
@@ -80,63 +90,124 @@ def main():
         st_own_sub, _ = status_of(page, f"/portal/services/{OVERDUE_SUBSCRIPTION}")
         # other customer's resources should be 403/404
         st_inv, _ = status_of(page, f"/portal/billing/invoices/{ACTIVE_INV}")
-        rec("1.14a", "IDOR other customer's invoice", "403/404 (not 200)",
+        rec(
+            "1.14a",
+            "IDOR other customer's invoice",
+            "403/404 (not 200)",
             f"login_ok={login_ok} own={st_own_inv} other={st_inv}",
-            login_ok and st_own_inv == 200 and st_inv in (403, 404))
+            login_ok and st_own_inv == 200 and st_inv in (403, 404),
+        )
         st_sub, _ = status_of(page, f"/portal/services/{ACTIVE_SUB}")
-        rec("1.14b", "IDOR other customer's subscription", "403/404",
+        rec(
+            "1.14b",
+            "IDOR other customer's subscription",
+            "403/404",
             f"own={st_own_sub} other={st_sub}",
-            st_own_sub == 200 and st_sub in (403, 404))
+            st_own_sub == 200 and st_sub in (403, 404),
+        )
         ctx.close()
 
         # ---- E. RBAC 403 (staff least-privilege) -------------------------
-        for role_user, cid in [("support@test.local", "4.5"),
-                               ("finance@test.local", "2.14")]:
+        for role_user, cid in [
+            ("support@test.local", "4.5"),
+            ("finance@test.local", "2.14"),
+        ]:
             ctx = b.new_context()
             page = portal_login(ctx, role_user, "/auth/login")
             checks = {}
-            for p in ["/admin/system/roles", "/admin/system/settings",
-                      "/admin/network/core-devices", "/admin/billing/invoices",
-                      "/admin/customers"]:
+            for p in [
+                "/admin/system/roles",
+                "/admin/system/settings",
+                "/admin/network/core-devices",
+                "/admin/billing/invoices",
+                "/admin/customers",
+            ]:
                 s, _ = status_of(page, p)
                 checks[p] = s
             # system + network should be forbidden for both support & finance
-            blocked = all(checks[p] in (403, 302, 303)
-                          for p in ["/admin/system/roles", "/admin/network/core-devices"])
-            rec(cid, f"least-privilege 403 ({role_user.split('@')[0]})",
-                "403 on system/network", json.dumps(checks), blocked)
+            blocked = all(
+                checks[p] in (403, 302, 303)
+                for p in ["/admin/system/roles", "/admin/network/core-devices"]
+            )
+            rec(
+                cid,
+                f"least-privilege 403 ({role_user.split('@')[0]})",
+                "403 on system/network",
+                json.dumps(checks),
+                blocked,
+            )
             ctx.close()
 
         # ---- F. Payment guards via API (admin bearer) --------------------
         api = b.new_context(base_url=BASE)
-        login = api.request.post("/api/v1/auth/login",
-                                 data={"username": "admin@test.local", "password": PW})
+        login = api.request.post(
+            "/api/v1/auth/login", data={"username": "admin@test.local", "password": PW}
+        )
         token = login.json().get("access_token") if login.ok else None
         hdr = {"Authorization": f"Bearer {token}"}
         if token:
             PAY = "/api/v1/payments"
             # F1 valid payment
-            p1 = api.request.post(PAY, headers=hdr, data={
-                "account_id": ACTIVE_SUB, "amount": 1234.0,
-                "status": "succeeded", "currency": "NGN"})
+            p1 = api.request.post(
+                PAY,
+                headers=hdr,
+                data={
+                    "account_id": ACTIVE_SUB,
+                    "amount": 1234.0,
+                    "status": "succeeded",
+                    "currency": "NGN",
+                },
+            )
             # F2 duplicate within 1 min -> guard should reject
-            p2 = api.request.post(PAY, headers=hdr, data={
-                "account_id": ACTIVE_SUB, "amount": 1234.0,
-                "status": "succeeded", "currency": "NGN"})
-            rec("2.5", "duplicate-payment guard (<1min)", "2nd rejected (4xx)",
-                f"first={p1.status} dup={p2.status}", p2.status >= 400 or not p2.ok,
-                "" if p1.ok else f"first-failed-body={p1.text()[:140]}")
+            p2 = api.request.post(
+                PAY,
+                headers=hdr,
+                data={
+                    "account_id": ACTIVE_SUB,
+                    "amount": 1234.0,
+                    "status": "succeeded",
+                    "currency": "NGN",
+                },
+            )
+            rec(
+                "2.5",
+                "duplicate-payment guard (<1min)",
+                "2nd rejected (4xx)",
+                f"first={p1.status} dup={p2.status}",
+                p2.status >= 400 or not p2.ok,
+                "" if p1.ok else f"first-failed-body={p1.text()[:140]}",
+            )
             # F3 neither scope -> exactly-one-scope validator
-            p3 = api.request.post(PAY, headers=hdr, data={
-                "amount": 10.0, "currency": "NGN", "status": "succeeded"})
-            rec("2.6", "payment w/ no account scope", "422/400",
-                str(p3.status), p3.status in (400, 422))
+            p3 = api.request.post(
+                PAY,
+                headers=hdr,
+                data={"amount": 10.0, "currency": "NGN", "status": "succeeded"},
+            )
+            rec(
+                "2.6",
+                "payment w/ no account scope",
+                "422/400",
+                str(p3.status),
+                p3.status in (400, 422),
+            )
             # F4 negative amount -> amount gt=0
-            p4 = api.request.post(PAY, headers=hdr, data={
-                "account_id": ACTIVE_SUB, "amount": -5.0, "currency": "NGN",
-                "status": "succeeded"})
-            rec("2.12", "negative payment amount", "422/400",
-                str(p4.status), p4.status in (400, 422))
+            p4 = api.request.post(
+                PAY,
+                headers=hdr,
+                data={
+                    "account_id": ACTIVE_SUB,
+                    "amount": -5.0,
+                    "currency": "NGN",
+                    "status": "succeeded",
+                },
+            )
+            rec(
+                "2.12",
+                "negative payment amount",
+                "422/400",
+                str(p4.status),
+                p4.status in (400, 422),
+            )
         else:
             rec("2.5", "duplicate-payment guard", "n/a", "admin-token-failed", False)
         api.close()
@@ -154,8 +225,13 @@ def main():
             page.wait_for_timeout(700)
             last = page.inner_text("body")[:4000].lower()
         locked = any(w in last for w in ("lock", "too many", "try again", "attempt"))
-        rec("1.3", "wrong password x6 (customer)", "lockout/rate-limit msg",
-            "locked-msg" if locked else "no-lock-msg", locked)
+        rec(
+            "1.3",
+            "wrong password x6 (customer)",
+            "lockout/rate-limit msg",
+            "locked-msg" if locked else "no-lock-msg",
+            locked,
+        )
         page.goto(BASE + "/portal/auth/login", wait_until="domcontentloaded")
         page.fill('input[name="username"]', "nobody@nowhere.test")
         page.fill('input[name="password"]', "whatever123")
@@ -163,8 +239,13 @@ def main():
         page.wait_for_timeout(700)
         txt = page.inner_text("body").lower()
         leaks = "no such user" in txt or "no account" in txt or "doesn't exist" in txt
-        rec("1.4", "unknown-user login enumeration", "generic error",
-            "leak" if leaks else "generic", not leaks)
+        rec(
+            "1.4",
+            "unknown-user login enumeration",
+            "generic error",
+            "leak" if leaks else "generic",
+            not leaks,
+        )
         ctx.close()
 
         b.close()
