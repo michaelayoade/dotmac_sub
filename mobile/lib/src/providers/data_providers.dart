@@ -100,6 +100,14 @@ final resellerBillingProvider =
   return ref.watch(resellerRepositoryProvider).billing();
 });
 
+/// The reseller's saved cards (GET /reseller/payment-methods). Invalidate after
+/// set-default / remove / a save-card payment.
+final resellerPaymentMethodsProvider =
+    FutureProvider.autoDispose<List<SavedCard>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).paymentMethods();
+});
+
 /// Fiber-plant map for the reseller coverage screen.
 final resellerFiberMapProvider =
     FutureProvider.autoDispose<ResellerFiberMap>((ref) async {

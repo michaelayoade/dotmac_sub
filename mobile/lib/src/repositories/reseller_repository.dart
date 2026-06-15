@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../core/api_exception.dart';
 import '../core/http.dart';
+import '../models/payment_method.dart';
 import '../models/vas.dart';
 import '../models/page.dart';
 import '../models/reseller.dart';
@@ -99,9 +100,19 @@ class ResellerRepository {
   }
 
   /// POST /reseller/billing/pay/intent — start a consolidated payment.
-  Future<ResellerPayIntent> payIntent(String amount) async {
-    final data = await guard(() =>
-        dio.post('/reseller/billing/pay/intent', data: {'amount': amount}));
+  /// Optionally charge a saved card ([paymentMethodId]) and/or save the card
+  /// used for this charge ([saveCard]) for future payments.
+  Future<ResellerPayIntent> payIntent(
+    String amount, {
+    String? paymentMethodId,
+    bool saveCard = false,
+  }) async {
+    final data =
+        await guard(() => dio.post('/reseller/billing/pay/intent', data: {
+              'amount': amount,
+              if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
+              if (saveCard) 'save_card': true,
+            }));
     return ResellerPayIntent.fromJson(data as Map<String, dynamic>);
   }
 
@@ -109,6 +120,25 @@ class ResellerRepository {
   Future<void> payVerify(String reference) async {
     await guard(() => dio
         .post('/reseller/billing/pay/verify', data: {'reference': reference}));
+  }
+
+  /// GET /reseller/payment-methods — the reseller's saved cards.
+  Future<List<SavedCard>> paymentMethods() async {
+    final data = await guard(() => dio.get('/reseller/payment-methods'));
+    return (data as List)
+        .cast<Map<String, dynamic>>()
+        .map(SavedCard.fromJson)
+        .toList();
+  }
+
+  /// POST /reseller/payment-methods/{id}/default — make a card the default.
+  Future<void> setDefaultCard(String id) async {
+    await guard(() => dio.post('/reseller/payment-methods/$id/default'));
+  }
+
+  /// DELETE /reseller/payment-methods/{id} — remove a saved card.
+  Future<void> removeCard(String id) async {
+    await guard(() => dio.delete('/reseller/payment-methods/$id'));
   }
 
   /// GET /reseller/fiber-map — fiber plant GeoJSON for the coverage map.

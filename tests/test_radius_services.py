@@ -1045,3 +1045,58 @@ class TestExternalSyncUsersStatusAware:
 
         assert _read_radcheck(radius_db) == []
         assert _read_radreply(radius_db) == []
+
+
+class TestRadiusSyncSubscriptionSelection:
+    """_radius_sync_subscription_for_subscriber must prefer an active
+    subscription when a subscriber has several eligible ones (Splynx
+    duplicate-service customers carry active + canceled/suspended rows)."""
+
+    def test_prefers_active_over_later_dated_canceled(
+        self, db_session, subscriber, catalog_offer
+    ):
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        # Canceled row with the LATER start_at — would win by date alone.
+        canceled = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            login="canceled-login",
+            start_at=now,
+        )
+        # Active row with an EARLIER start_at.
+        active = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+            login="active-login",
+            start_at=now - timedelta(days=30),
+        )
+        db_session.add_all([canceled, active])
+        db_session.commit()
+
+        picked = radius_service._radius_sync_subscription_for_subscriber(
+            db_session, subscriber.id
+        )
+        assert picked is not None
+        assert picked.id == active.id  # active wins despite the earlier date
+
+    def test_falls_back_to_eligible_when_no_active(
+        self, db_session, subscriber, catalog_offer
+    ):
+        canceled = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            login="only-canceled",
+        )
+        db_session.add(canceled)
+        db_session.commit()
+
+        picked = radius_service._radius_sync_subscription_for_subscriber(
+            db_session, subscriber.id
+        )
+        assert picked is not None
+        assert picked.id == canceled.id  # unchanged behaviour when no active
