@@ -63,20 +63,8 @@
                 </div>
             </div>
 
-            <div class="mt-6 grid gap-3 sm:grid-cols-3">
-                {% for amount in preset_amounts %}
-                <button
-                    type="button"
-                    @click="setAmount({{ amount }})"
-                    :class="currentAmount() === {{ amount }} ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700/50'"
-                    class="rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-all">
-                    &#8358;{{ "{:,.0f}".format(amount) }}
-                </button>
-                {% endfor %}
-            </div>
-
             <div class="mt-6 rounded-2xl border border-dashed border-stone-300 bg-stone-50/70 p-5 dark:border-stone-600 dark:bg-stone-900/20">
-                <label for="custom_amount" class="block text-sm font-semibold text-stone-900 dark:text-white">Custom amount</label>
+                <label for="custom_amount" class="block text-sm font-semibold text-stone-900 dark:text-white">Amount</label>
                 <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Enter any amount within the configured limits.</p>
                 <div class="mt-4 flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 dark:border-stone-700 dark:bg-stone-800">
                     <span class="text-lg font-semibold text-stone-500 dark:text-stone-400">&#8358;</span>
@@ -320,10 +308,6 @@ function topupPage() {
         selectedPaymentChoice: 'provider:{{ provider_type }}',
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
-        setAmount(amount) {
-            this.customAmount = String(amount);
-            this.validationError = '';
-        },
         syncCustomAmount() {
             this.validationError = '';
         },
