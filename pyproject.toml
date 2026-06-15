@@ -111,6 +111,9 @@ ignore = [
 "tests/**" = ["S101", "S104", "S105", "S106", "E731"]
 "scripts/**" = ["S101", "S105", "S106", "S108"]
 "scripts/migration/**" = ["S608"]
+# Incremental sync builds parameterised text() SQL from internal-int cursors
+# and pre-validated clauses by design (same as scripts/migration/**).
+"app/services/migrations/incremental_sync.py" = ["S608"]
 # Alembic migrations: data-shape SQL is by design ``text()``-built and
 # imports often sit below module-level helpers, so the standard ruff
 # rules don't apply cleanly.
@@ -287,6 +290,8 @@ skips = [
     "B404",  # import_subprocess: subprocess is used deliberately with fixed argv
     "B603",  # subprocess_without_shell_equals_true: fixed argv, no shell
     "B508",  # snmp_insecure_version: network estate still uses SNMPv2c
+    "B608",  # hardcoded_sql: redundant with ruff S608 (the active gate); the
+             # migration/sync layer builds parameterised text() SQL by design
 ]
 
 [build-system]
