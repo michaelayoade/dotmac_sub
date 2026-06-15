@@ -654,9 +654,9 @@ def person_pppoe_password(
     equals takeover of the customer's connection.
     """
     from app.models.audit import AuditActorType
+    from app.services import web_admin as web_admin_service
     from app.services.audit_adapter import record_audit_event
     from app.services.rate_limiter_adapter import allow_operation
-    from app.services import web_admin as web_admin_service
 
     actor = web_admin_service.get_current_user(request)
     actor_id = web_admin_service.get_actor_id(request)

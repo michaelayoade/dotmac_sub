@@ -1,7 +1,7 @@
 """Online payment provider flows for customer portal."""
 
-import logging
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -22,8 +22,7 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
-from app.models.domain_settings import DomainSetting
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -126,7 +125,7 @@ def direct_bank_transfer_settings(db: Session) -> dict[str, str]:
         "direct_bank_transfer_instructions",
         "direct_bank_transfer_accounts",
     ]
-    settings = {key: "" for key in keys}
+    settings = dict.fromkeys(keys, "")
     rows = db.scalars(
         select(DomainSetting)
         .where(DomainSetting.domain == SettingDomain.billing)
