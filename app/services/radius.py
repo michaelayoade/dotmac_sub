@@ -14,6 +14,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    case,
     create_engine,
     delete,
     insert,
@@ -159,6 +160,12 @@ def _radius_sync_subscription_for_subscriber(
         .where(Subscription.subscriber_id == subscriber_id)
         .where(Subscription.status.in_(RADIUS_SYNC_ELIGIBLE_STATUSES))
         .order_by(
+            # Prefer an active subscription when the subscriber has more than
+            # one eligible (Splynx duplicate-service customers carry active +
+            # canceled/suspended rows). Without this, the latest-by-date pick
+            # could be a canceled subscription, so RADIUS state — including
+            # additional-IP Framed-Routes — gets synced from the wrong service.
+            case((Subscription.status == SubscriptionStatus.active, 0), else_=1),
             Subscription.start_at.desc().nullslast(),
             Subscription.created_at.desc(),
         )
