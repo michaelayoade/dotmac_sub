@@ -270,7 +270,9 @@ def reseller_billing(
     )
 
 
-@router.post("/billing/subscribers/{subscriber_id}/allocate", response_class=HTMLResponse)
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocate", response_class=HTMLResponse
+)
 def reseller_billing_allocate_subscriber(
     request: Request,
     subscriber_id: str,

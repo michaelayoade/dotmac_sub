@@ -520,7 +520,9 @@ def get_remember_max_age(db: Session | None = None) -> int:
 
 
 ACCOUNT_ORDER_FIELDS = ("created_at", "balance", "overdue", "name")
-ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(status.value for status in SubscriberStatus)
+ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
+    status.value for status in SubscriberStatus
+)
 ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
 RESELLER_ACCOUNT_STATUS_ACTIONS = ("deactivate", "restore", "disable")
 

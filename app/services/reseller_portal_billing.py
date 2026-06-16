@@ -384,7 +384,9 @@ def account_activity(
                 payment_allocated_sq.c.allocated_total, Decimal("0.00")
             ).label("allocated_total"),
         )
-        .outerjoin(payment_allocated_sq, payment_allocated_sq.c.payment_id == Payment.id)
+        .outerjoin(
+            payment_allocated_sq, payment_allocated_sq.c.payment_id == Payment.id
+        )
         .filter(Payment.billing_account_id == ba.id)
         .filter(Payment.is_active.is_(True))
         .order_by(Payment.created_at.desc())
@@ -392,10 +394,14 @@ def account_activity(
         .all()
     )
     for payment, allocated_total in payments:
-        unallocated = round_money(to_decimal(payment.amount) - to_decimal(allocated_total))
+        unallocated = round_money(
+            to_decimal(payment.amount) - to_decimal(allocated_total)
+        )
         description = payment.memo or "Payment added to reseller unallocated credit"
         if unallocated > 0:
-            description = f"{description} · {payment.currency} {unallocated:,.2f} unallocated"
+            description = (
+                f"{description} · {payment.currency} {unallocated:,.2f} unallocated"
+            )
         entries.append(
             {
                 "direction": "credit",
@@ -436,7 +442,9 @@ def account_activity(
                 "currency": payment.currency or invoice.currency,
             }
         )
-    entries.sort(key=lambda entry: entry.get("occurred_at") or datetime.min, reverse=True)
+    entries.sort(
+        key=lambda entry: entry.get("occurred_at") or datetime.min, reverse=True
+    )
     return entries[:limit]
 
 

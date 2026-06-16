@@ -247,8 +247,7 @@ class BillingAccounts(ListResponseMixin):
 
         # Per-subscriber open balance (paginated page)
         rows = (
-            subscriber_rows_query
-            .group_by(
+            subscriber_rows_query.group_by(
                 Subscriber.id,
                 Subscriber.first_name,
                 Subscriber.last_name,

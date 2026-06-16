@@ -884,9 +884,9 @@ class Payments(ListResponseMixin):
         allocated_sq = (
             db.query(
                 PaymentAllocation.payment_id.label("payment_id"),
-                func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")).label(
-                    "allocated"
-                ),
+                func.coalesce(
+                    func.sum(PaymentAllocation.amount), Decimal("0.00")
+                ).label("allocated"),
             )
             .group_by(PaymentAllocation.payment_id)
             .subquery()

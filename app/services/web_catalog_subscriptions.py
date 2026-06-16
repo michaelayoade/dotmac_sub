@@ -2426,14 +2426,11 @@ def _subscription_connection_status(
     else:
         query = query.filter(RadiusAccountingSession.subscription_id == subscription.id)
 
-    session = (
-        query.order_by(
-            RadiusAccountingSession.last_update_at.desc().nullslast(),
-            RadiusAccountingSession.session_start.desc().nullslast(),
-            RadiusAccountingSession.created_at.desc(),
-        )
-        .first()
-    )
+    session = query.order_by(
+        RadiusAccountingSession.last_update_at.desc().nullslast(),
+        RadiusAccountingSession.session_start.desc().nullslast(),
+        RadiusAccountingSession.created_at.desc(),
+    ).first()
     if not session:
         return {
             "state": "offline",
