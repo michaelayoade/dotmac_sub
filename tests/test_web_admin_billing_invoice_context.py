@@ -21,6 +21,7 @@ def test_handle_subscription_update_form_resolves_account_from_subscriber(
         addresses,
         request,
         actor_id,
+        **kwargs,
     ):
         captured["payload"] = payload
         return subscription
