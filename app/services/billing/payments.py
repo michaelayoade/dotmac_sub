@@ -3,6 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -826,6 +827,198 @@ class Payments(ListResponseMixin):
             )
 
         return payment
+
+    @staticmethod
+    def allocate_consolidated_balance_to_subscriber(
+        db: Session, billing_account_id: str, subscriber_id: str
+    ) -> dict:
+        """Allocate a reseller billing account's unallocated balance to one subscriber.
+
+        The credit is consumed from the billing account's existing unallocated
+        consolidated payments, oldest first, and applied to the selected
+        subscriber's oldest open invoices.
+        """
+        from app.models.billing import BillingAccount
+        from app.models.subscriber import Subscriber
+        from app.services.billing.billing_accounts import BillingAccounts
+
+        ba = (
+            db.query(BillingAccount)
+            .filter(BillingAccount.id == billing_account_id)
+            .with_for_update()
+            .first()
+        )
+        if not ba:
+            raise HTTPException(status_code=404, detail="Billing account not found")
+        available_balance = round_money(to_decimal(ba.balance))
+        if available_balance <= 0:
+            raise HTTPException(
+                status_code=400, detail="No unallocated reseller funds available"
+            )
+
+        subscriber = get_by_id(db, Subscriber, subscriber_id)
+        if subscriber is None or str(subscriber.reseller_id) != str(ba.reseller_id):
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+
+        invoices = (
+            db.query(Invoice)
+            .filter(Invoice.account_id == subscriber.id)
+            .filter(Invoice.is_active.is_(True))
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
+            .filter(Invoice.balance_due > 0)
+            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
+            .all()
+        )
+        if not invoices:
+            raise HTTPException(
+                status_code=400, detail="Subscriber has no open invoices"
+            )
+
+        allocated_sq = (
+            db.query(
+                PaymentAllocation.payment_id.label("payment_id"),
+                func.coalesce(
+                    func.sum(PaymentAllocation.amount), Decimal("0.00")
+                ).label("allocated"),
+            )
+            .group_by(PaymentAllocation.payment_id)
+            .subquery()
+        )
+        payment_result_rows = (
+            db.query(
+                Payment,
+                func.coalesce(allocated_sq.c.allocated, Decimal("0.00")).label(
+                    "allocated"
+                ),
+            )
+            .outerjoin(allocated_sq, allocated_sq.c.payment_id == Payment.id)
+            .filter(Payment.billing_account_id == ba.id)
+            .filter(Payment.is_active.is_(True))
+            .filter(Payment.status == PaymentStatus.succeeded)
+            .order_by(Payment.paid_at.asc().nulls_last(), Payment.created_at.asc())
+            .all()
+        )
+        payment_rows: list[tuple[Payment, Decimal]] = [
+            (payment, cast(Decimal, allocated))
+            for payment, allocated in payment_result_rows
+        ]
+        payment_backing_available = round_money(
+            sum(
+                (
+                    round_money(to_decimal(payment.amount) - to_decimal(allocated))
+                    for payment, allocated in payment_rows
+                    if payment.currency == ba.currency
+                ),
+                Decimal("0.00"),
+            )
+        )
+        if payment_backing_available < available_balance:
+            backing_amount = round_money(available_balance - payment_backing_available)
+            backing_payment = Payment(
+                billing_account_id=ba.id,
+                amount=backing_amount,
+                currency=ba.currency,
+                status=PaymentStatus.succeeded,
+                memo="Reseller unallocated balance credit",
+                paid_at=datetime.now(UTC),
+            )
+            db.add(backing_payment)
+            db.flush()
+            payment_rows.append((backing_payment, Decimal("0.00")))
+
+        remaining_balance = available_balance
+        total_allocated = Decimal("0.00")
+        invoice_ids: set = set()
+        allocations_by_payment: dict[Payment, list[PaymentAllocation]] = {}
+        payment_remaining_by_id = {
+            payment.id: round_money(to_decimal(payment.amount) - to_decimal(allocated))
+            for payment, allocated in payment_rows
+        }
+
+        for invoice in invoices:
+            invoice_remaining = round_money(to_decimal(invoice.balance_due))
+            if invoice_remaining <= 0:
+                continue
+
+            for payment, _already_allocated in payment_rows:
+                if remaining_balance <= 0 or invoice_remaining <= 0:
+                    break
+                if payment.currency != invoice.currency:
+                    continue
+
+                payment_available = payment_remaining_by_id.get(
+                    payment.id, Decimal("0.00")
+                )
+                if payment_available <= 0:
+                    continue
+
+                amount = min(remaining_balance, invoice_remaining, payment_available)
+                allocation, applied_amount = _apply_payment_allocation(
+                    db,
+                    payment,
+                    invoice,
+                    amount,
+                    memo="Allocated from reseller unallocated funds",
+                )
+                allocations_by_payment.setdefault(payment, []).append(allocation)
+                total_allocated = round_money(total_allocated + applied_amount)
+                remaining_balance = round_money(remaining_balance - applied_amount)
+                invoice_remaining = round_money(invoice_remaining - applied_amount)
+                payment_remaining_by_id[payment.id] = round_money(
+                    payment_available - applied_amount
+                )
+                invoice_ids.add(invoice.id)
+
+            if remaining_balance <= 0:
+                break
+
+        if total_allocated <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No eligible unallocated reseller funds could be applied",
+            )
+        if total_allocated > available_balance:
+            raise HTTPException(
+                status_code=400, detail="Allocation exceeds unallocated reseller funds"
+            )
+
+        db.flush()
+        for invoice_id in invoice_ids:
+            recalculated_invoice = get_by_id(db, Invoice, invoice_id)
+            if recalculated_invoice:
+                _recalculate_invoice_totals(db, recalculated_invoice)
+                if recalculated_invoice.status == InvoiceStatus.paid:
+                    from app.services import collections as collections_service
+
+                    collections_service.restore_account_services(
+                        db,
+                        str(recalculated_invoice.account_id),
+                        invoice_id=str(recalculated_invoice.id),
+                    )
+
+        BillingAccounts.debit_balance(db, str(ba.id), total_allocated)
+        db.commit()
+
+        for payment, allocations in allocations_by_payment.items():
+            _emit_consolidated_payment_events(db, payment, allocations)
+
+        return {
+            "subscriber_id": str(subscriber.id),
+            "allocated_total": total_allocated,
+            "currency": ba.currency,
+            "remaining_unallocated_balance": round_money(
+                available_balance - total_allocated
+            ),
+            "invoice_count": len(invoice_ids),
+        }
 
     @staticmethod
     def get(db: Session, payment_id: str):

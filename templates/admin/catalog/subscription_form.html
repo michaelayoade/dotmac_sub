@@ -503,7 +503,7 @@
                         <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
                             <div>
                                 <label for="ip_addon_id" class="block text-xs font-medium text-slate-600 dark:text-slate-300">Public IP add-on</label>
-                                <select name="ip_addon_id" id="ip_addon_id"
+                                <select name="ip_addon_id" id="ip_addon_id" x-model="selectedAddonId" @change="syncRoutesForAddon()"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <option value="">No additional IP add-on</option>
                                     {% for add_on in ip_addon_options %}
@@ -533,22 +533,33 @@
                         </button>
                     </div>
                     <template x-for="(route, idx) in routeRows" :key="idx">
-                        <div class="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem_auto]">
+                        <div class="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(12rem,0.8fr)_8rem_auto]">
                             <div>
-                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IP Range</label>
-                                <select x-model="route.rangeId" @change="populateRouteFromRange(route)"
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Parent /24 Range</label>
+                                <select x-model="route.parentId" @change="populateRouteChildren(route)"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="" x-text="routeRanges.length ? 'Select range or enter CIDR' : 'No IPv4 ranges configured'"></option>
+                                    <option value="" x-text="routeRanges.length ? 'Select /24 range' : 'No IPv4 ranges configured'"></option>
                                     <template x-for="range in routeRanges" :key="range.id">
                                         <option :value="range.id" x-text="range.display"></option>
                                     </template>
                                 </select>
                             </div>
                             <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Assignable Subnet</label>
+                                <select x-model="route.childId" @change="populateRouteFromChild(route)"
+                                    :disabled="!selectedAddonPrefix || !route.parentId"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:disabled:bg-slate-800">
+                                    <option value="" x-text="childOptionsForRoute(route).length ? 'Select subnet' : childEmptyLabel(route)"></option>
+                                    <template x-for="child in childOptionsForRoute(route)" :key="child.id">
+                                        <option :value="child.id" x-text="child.display"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">CIDR</label>
                                 <input type="text" name="additional_route_cidrs" x-model="route.cidr"
-                                    placeholder="203.0.113.8/29"
-                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    readonly placeholder="Select range and subnet"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Metric</label>
@@ -648,6 +659,8 @@
 function subscriptionProvisioning() {
     const blocks = {{ ipv4_blocks_json | safe }};
     const routeRanges = {{ route_range_options_json | safe }};
+    const ipAddonOptions = {{ ip_addon_options_json | safe }};
+    const initialAddonId = {{ (subscription.ip_addon_id or '') | tojson }};
     const initialAddresses = {{ initial_ipv4_addresses | tojson }};
     const initialBlocks = {{ initial_ipv4_block_ids | tojson }};
     const initialRouteCidrs = {{ initial_additional_route_cidrs | tojson }};
@@ -656,18 +669,45 @@ function subscriptionProvisioning() {
         blockId: initialBlocks[idx] || "",
         ip: ip || "",
     }));
-    const routeRows = initialRouteCidrs.map((cidr, idx) => ({
-        cidr: cidr || "",
-        metric: initialRouteMetrics[idx] || "1",
-        rangeId: (routeRanges.find((range) => range.cidr === cidr) || {}).id || "",
-    }));
+    const routeRows = initialRouteCidrs.map((cidr, idx) => {
+        const parent = routeRanges.find((range) => {
+            if (!cidr) {
+                return false;
+            }
+            if (range.cidr === cidr) {
+                return true;
+            }
+            return Object.values(range.children_by_prefix || {})
+                .flat()
+                .some((child) => child.cidr === cidr);
+        }) || {};
+        const child = Object.values(parent.children_by_prefix || {})
+            .flat()
+            .find((item) => item.cidr === cidr) || {};
+        return {
+            parentId: parent.id || "",
+            childId: child.id || "",
+            cidr: cidr || "",
+            metric: initialRouteMetrics[idx] || "1",
+        };
+    });
+    const initialRows = routeRows.length ? routeRows : [{
+        parentId: "",
+        childId: "",
+        cidr: "",
+        metric: "1",
+    }];
     return {
         blocks,
         routeRanges,
+        ipAddonOptions,
+        selectedAddonId: initialAddonId,
         rows: rows.length ? rows : [{ blockId: "", ip: "" }],
-        routeRows: routeRows.length
-            ? routeRows
-            : [{ rangeId: "", cidr: "", metric: "1" }],
+        routeRows: initialRows,
+        get selectedAddonPrefix() {
+            const option = this.ipAddonOptions.find((item) => item.id === this.selectedAddonId);
+            return option && option.prefix ? String(option.prefix) : "";
+        },
         addIpv4Row() {
             this.rows.push({ blockId: "", ip: "" });
         },
@@ -700,19 +740,60 @@ function subscriptionProvisioning() {
             row.ip = candidate || availableIps[0];
         },
         addRouteRow() {
-            this.routeRows.push({ rangeId: "", cidr: "", metric: "1" });
+            this.routeRows.push({ parentId: "", childId: "", cidr: "", metric: "1" });
         },
         removeRouteRow(index) {
             this.routeRows.splice(index, 1);
             if (!this.routeRows.length) {
-                this.routeRows.push({ rangeId: "", cidr: "", metric: "1" });
+                this.routeRows.push({ parentId: "", childId: "", cidr: "", metric: "1" });
             }
         },
-        populateRouteFromRange(route) {
-            const range = this.routeRanges.find((item) => item.id === route.rangeId);
-            if (range && range.cidr) {
-                route.cidr = range.cidr;
+        childOptionsForRoute(route) {
+            const range = this.routeRanges.find((item) => item.id === route.parentId);
+            if (!range || !this.selectedAddonPrefix) {
+                return [];
             }
+            return (range.children_by_prefix || {})[this.selectedAddonPrefix] || [];
+        },
+        childEmptyLabel(route) {
+            if (!this.selectedAddonPrefix) {
+                return 'Choose add-on first';
+            }
+            if (!route.parentId) {
+                return 'Choose /24 first';
+            }
+            return `No available /${this.selectedAddonPrefix}`;
+        },
+        populateRouteChildren(route) {
+            const children = this.childOptionsForRoute(route);
+            if (!children.length) {
+                route.childId = "";
+                route.cidr = "";
+                return;
+            }
+            if (route.childId && children.some((child) => child.id === route.childId)) {
+                this.populateRouteFromChild(route);
+                return;
+            }
+            route.childId = children[0].id;
+            route.cidr = children[0].cidr;
+        },
+        populateRouteFromChild(route) {
+            const child = this.childOptionsForRoute(route).find((item) => item.id === route.childId);
+            route.cidr = child ? child.cidr : "";
+        },
+        syncRoutesForAddon() {
+            this.routeRows.forEach((route) => {
+                if (!route.parentId) {
+                    route.childId = "";
+                    route.cidr = "";
+                    return;
+                }
+                this.populateRouteChildren(route);
+            });
+        },
+        init() {
+            this.syncRoutesForAddon();
         },
     };
 }

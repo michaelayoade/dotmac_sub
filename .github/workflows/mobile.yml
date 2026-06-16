@@ -6,9 +6,10 @@ name: Mobile CI
 # backend-only PRs still don't pay for a Flutter/iOS run.
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, dev]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: mobile-${{ github.ref }}

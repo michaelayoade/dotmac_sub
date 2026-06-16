@@ -1,8 +1,8 @@
 """Reseller portal consolidated-billing flows.
 
 Reuses the customer-portal gateway integration (Paystack/Flutterwave) so a
-reseller can pay one lump sum that auto-allocates across their subscribers'
-open invoices.
+reseller can pay one lump sum into unallocated credit, then choose which
+subscribers receive allocations.
 """
 
 from __future__ import annotations
@@ -11,11 +11,17 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentStatus, TopupIntent
-from app.models.subscriber import Subscriber
+from app.models.billing import (
+    Invoice,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
+    TopupIntent,
+)
+from app.models.subscriber import Reseller, Subscriber
 from app.schemas.billing import PaymentCreate
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -31,16 +37,21 @@ logger = logging.getLogger(__name__)
 _INTENT_TTL = timedelta(minutes=30)
 
 
-def get_billing_account_summary(db: Session, reseller_id: str) -> dict:
+def get_billing_account_summary(
+    db: Session, reseller_id: str, subscriber_search: str | None = None
+) -> dict:
     """Return the consolidated-billing statement for a reseller."""
     ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
-    statement = billing_service.billing_accounts.statement(db, str(ba.id))
+    statement = billing_service.billing_accounts.statement(
+        db, str(ba.id), subscriber_search=subscriber_search
+    )
     return {
         "billing_account": statement.billing_account,
         "subscribers": [s.model_dump() for s in statement.subscribers],
         "recent_payments": [p.model_dump() for p in statement.recent_payments],
         "total_outstanding": statement.total_outstanding,
         "unallocated_balance": statement.unallocated_balance,
+        "subscriber_search": (subscriber_search or "").strip(),
     }
 
 
@@ -220,7 +231,7 @@ def verify_and_record_consolidated_payment(
         paid_at=datetime.now(UTC),
         allocations=None,
     )
-    payment = billing_service.payments.create(db, payment_create)
+    payment = billing_service.payments.create(db, payment_create, auto_allocate=False)
 
     intent.completed_payment_id = payment.id
     intent.completed_at = datetime.now(UTC)
@@ -237,6 +248,22 @@ def verify_and_record_consolidated_payment(
         "currency": payment.currency,
         "already_recorded": False,
     }
+
+
+def allocate_unallocated_to_subscriber(
+    db: Session, reseller_id: str, subscriber_id: str
+) -> dict:
+    """Apply reseller unallocated credit to one selected subscriber."""
+    from fastapi import HTTPException
+
+    ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    try:
+        return billing_service.payments.allocate_consolidated_balance_to_subscriber(
+            db, str(ba.id), subscriber_id
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else "Allocation failed"
+        raise ValueError(detail) from exc
 
 
 def _maybe_capture_card(
@@ -324,26 +351,101 @@ def get_payment_methods_page(
     }
 
 
-def account_activity(summary: dict) -> list[dict]:
-    """Present the reseller's consolidated payments as an account-activity ledger.
+def _activity_subscriber_name(subscriber: Subscriber) -> str:
+    return (
+        subscriber.display_name
+        or subscriber.company_name
+        or f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
+        or subscriber.email
+        or str(subscriber.id)
+    )
 
-    Only consolidated payments exist at the BillingAccount level today (no
-    separate credit/adjustment ledger), so the recent-payments data is surfaced
-    as the activity feed — mirroring the customer Account Activity styling."""
+
+def account_activity(
+    db: Session, reseller_id: str, summary: dict | None = None, *, limit: int = 50
+) -> list[dict]:
+    """Return consolidated payment and allocation activity for a reseller."""
+    ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
     entries: list[dict] = []
-    for payment in summary.get("recent_payments", []) or []:
+    payment_allocated_sq = (
+        db.query(
+            PaymentAllocation.payment_id.label("payment_id"),
+            func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")).label(
+                "allocated_total"
+            ),
+        )
+        .group_by(PaymentAllocation.payment_id)
+        .subquery()
+    )
+    payments = (
+        db.query(
+            Payment,
+            func.coalesce(
+                payment_allocated_sq.c.allocated_total, Decimal("0.00")
+            ).label("allocated_total"),
+        )
+        .outerjoin(
+            payment_allocated_sq, payment_allocated_sq.c.payment_id == Payment.id
+        )
+        .filter(Payment.billing_account_id == ba.id)
+        .filter(Payment.is_active.is_(True))
+        .order_by(Payment.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for payment, allocated_total in payments:
+        unallocated = round_money(
+            to_decimal(payment.amount) - to_decimal(allocated_total)
+        )
+        description = payment.memo or "Payment added to reseller unallocated credit"
+        if unallocated > 0:
+            description = (
+                f"{description} · {payment.currency} {unallocated:,.2f} unallocated"
+            )
         entries.append(
             {
                 "direction": "credit",
                 "title": "Consolidated payment",
-                "description": payment.get("memo"),
-                "occurred_at": payment.get("paid_at"),
+                "description": description,
+                "occurred_at": payment.paid_at or payment.created_at,
                 "reference": None,
-                "amount": payment.get("amount"),
-                "currency": payment.get("currency"),
+                "amount": payment.amount,
+                "currency": payment.currency,
             }
         )
-    return entries
+
+    allocations = (
+        db.query(PaymentAllocation, Payment, Invoice, Subscriber)
+        .join(Payment, PaymentAllocation.payment_id == Payment.id)
+        .join(Invoice, PaymentAllocation.invoice_id == Invoice.id)
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .join(Reseller, Subscriber.reseller_id == Reseller.id)
+        .filter(Payment.billing_account_id == ba.id)
+        .filter(Payment.is_active.is_(True))
+        .filter(PaymentAllocation.is_active.is_(True))
+        .filter(Subscriber.reseller_id == ba.reseller_id)
+        .order_by(PaymentAllocation.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for allocation, payment, invoice, subscriber in allocations:
+        subscriber_name = _activity_subscriber_name(subscriber)
+        invoice_label = invoice.invoice_number or str(invoice.id)
+        entries.append(
+            {
+                "direction": "debit",
+                "title": "Funds allocated",
+                "description": f"{subscriber_name} · Invoice {invoice_label}",
+                "occurred_at": allocation.created_at,
+                "reference": str(invoice.id),
+                "amount": allocation.amount,
+                "currency": payment.currency or invoice.currency,
+            }
+        )
+    entries.sort(
+        key=lambda entry: entry.get("occurred_at") or datetime.min, reverse=True
+    )
+    return entries[:limit]
 
 
 __all__ = [
@@ -352,6 +454,7 @@ __all__ = [
     "get_payment_methods_page",
     "list_payment_methods",
     "payment_method_api_dict",
+    "allocate_unallocated_to_subscriber",
     "remove_payment_method",
     "set_default_payment_method",
     "start_consolidated_payment",

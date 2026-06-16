@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="/static/js/charts.js?v=20260603a"></script>
-<script src="/static/js/bandwidth-chart.js?v=20260607b"></script>
+<script src="/static/js/bandwidth-chart.js?v=20260616a"></script>
 {% endblock %}
 
 {% block content %}
@@ -138,11 +138,47 @@
                 {% else %}
                     {% set invoice_link = "/admin/billing/invoices/new?customer_id=" ~ customer.id ~ "&customer_type=" ~ customer_type %}
                 {% endif %}
-                <a href="{{ subscription_link }}"
-                   class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                    New Subscription
-                </a>
+                <div class="flex flex-col items-stretch gap-2" x-data="{ openQuickActions: false }" @keydown.escape.window="openQuickActions = false">
+                    <a href="{{ subscription_link }}"
+                       class="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        New Subscription
+                    </a>
+                    <div class="relative">
+                        <button type="button" @click="openQuickActions = !openQuickActions"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                            Quick Actions
+                            <svg class="h-4 w-4 transition" :class="openQuickActions ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="openQuickActions" x-cloak @click.outside="openQuickActions = false"
+                             class="absolute left-0 z-20 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                            <a href="{{ invoice_link }}"
+                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                Create Invoice
+                            </a>
+                            <a href="/admin/billing/payments/new?account={{ customer.id }}"
+                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                                Record Payment
+                            </a>
+                            <a href="/admin/provisioning/orders/new?subscriber={{ customer.id }}"
+                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                                Create Service Order
+                            </a>
+                            {% if customer.is_active %}
+                            <button hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/deactivate"
+                                    hx-confirm="Deactivate this customer?"
+                                    @click="openQuickActions = false"
+                                    class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                                Deactivate customer
+                            </button>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit"
                    class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
@@ -166,39 +202,6 @@
                         Verify NIN
                     </button>
                 </form>
-
-                <!-- More Actions Dropdown -->
-                <div x-data="{ open: false }" class="relative">
-                    <button @click="open = !open"
-                            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
-                    </button>
-                    <div x-show="open" @click.away="open = false" x-transition x-cloak
-                         class="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white py-2 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-                        <a href="{{ invoice_link }}" class="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
-                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                            Create Invoice
-                        </a>
-                        <div class="my-2 border-t border-slate-100 dark:border-slate-700"></div>
-                        {% if customer.is_active %}
-                        <button hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/deactivate"
-                                hx-confirm="Deactivate this customer?"
-                                @click="open = false"
-                                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                            Deactivate Customer
-                        </button>
-                        {% elif not has_any_subscribers %}
-                        <button hx-delete="/admin/customers/{{ customer_type }}/{{ customer.id }}"
-                                hx-confirm="Delete this customer permanently? This action cannot be undone."
-                                @click="open = false"
-                                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                            Delete Customer
-                        </button>
-                        {% endif %}
-                    </div>
-                </div>
             </div>
         </div>
     </header>
@@ -812,11 +815,34 @@
                         <div class="px-5 py-4">
                             <div class="mb-3 flex items-center justify-between">
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
-                                {% set na_status = card.status %}
-                                {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
-                                {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                                <div class="flex flex-wrap items-center justify-end gap-2">
+                                    {% set card_conn = card.connection_status or {} %}
+                                    {% set card_conn_state = card_conn.state | default('offline') %}
+                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium
+                                        {% if card_conn_state == 'connected' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
+                                        {% elif card_conn_state == 'stale' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
+                                        {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                        <span class="h-1.5 w-1.5 rounded-full
+                                            {% if card_conn_state == 'connected' %}bg-emerald-500
+                                            {% elif card_conn_state == 'stale' %}bg-amber-500
+                                            {% else %}bg-slate-400{% endif %}"></span>
+                                        {{ card_conn.label | default('Not connected') }}
+                                    </span>
+                                    {% set na_status = card.status %}
+                                    {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
+                                    {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                                </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3 text-sm">
+                                {% set card_conn = card.connection_status or {} %}
+                                {% if card_conn.identifier or card_conn.last_seen_at %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Connection</p>
+                                    <p class="font-mono font-medium text-slate-900 dark:text-white">
+                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at.strftime('%b %d, %H:%M')) }}
+                                    </p>
+                                </div>
+                                {% endif %}
                                 {% if card.login %}
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">PPPoE Username</p>
@@ -1414,7 +1440,7 @@
                 {% endif %}
                 <a href="{{ subscription_link }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                    Add Subscription
+                    New Subscription
                 </a>
             </div>
             {% if subscriptions %}
@@ -1490,17 +1516,31 @@
                                 {% endif %}
                                 <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="mt-2 inline-flex text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">View details</a>
                             </div>
-                            {% if sub_status == 'active' %}
-                            <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
-                                {% include "components/forms/csrf_input.html" %}
-                                <input type="hidden" name="subscriber_id" value="{{ customer.id }}">
-                                <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-                                <button type="submit" title="Generate Invoice" class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-                                    <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                    Invoice
-                                </button>
-                            </form>
-                            {% endif %}
+                            <div class="flex flex-col items-end gap-2">
+                                {% if sub_status == 'active' %}
+                                <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="subscriber_id" value="{{ customer.id }}">
+                                    <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
+                                    <button type="submit" title="Generate Invoice" class="w-24 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                                        <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                        Invoice
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
+                                {% set sub_conn_state = sub_conn.state | default('offline') %}
+                                <p class="flex w-24 items-center justify-center gap-1 whitespace-nowrap text-[10px] font-medium
+                                    {% if sub_conn_state == 'connected' %}text-emerald-600 dark:text-emerald-400
+                                    {% elif sub_conn_state == 'stale' %}text-amber-600 dark:text-amber-400
+                                    {% else %}text-slate-500 dark:text-slate-400{% endif %}">
+                                    <span class="h-1.5 w-1.5 rounded-full
+                                        {% if sub_conn_state == 'connected' %}bg-emerald-500
+                                        {% elif sub_conn_state == 'stale' %}bg-amber-500
+                                        {% else %}bg-slate-400{% endif %}"></span>
+                                    {{ sub_conn.label | default('Not connected') }}
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2305,9 +2345,6 @@ function customerDetail(config = {}) {
                     return;
                 }
                 if (event.type === 'htmx:afterSwap') {
-                    if (window.Alpine && typeof window.Alpine.initTree === 'function') {
-                        window.Alpine.initTree(target);
-                    }
                     this.statsLoaded = true;
                     this.statsLoading = false;
                     return;

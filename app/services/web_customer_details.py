@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any, cast
@@ -41,6 +41,7 @@ from app.models.subscriber import (
     UserType,
 )
 from app.models.support import Ticket
+from app.models.usage import RadiusAccountingSession
 from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
@@ -60,6 +61,8 @@ from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
+
+_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
 
 RESOLVED_TICKET_STATUSES = {
     "resolved",
@@ -978,19 +981,129 @@ def _build_map_payload(primary_address, customer_name: str):
     return map_data, geocode_target
 
 
-def _build_network_access_cards(subscriptions: list) -> list[dict]:
+def _connection_status_for_session(
+    subscription: Subscription,
+    session: RadiusAccountingSession | None,
+) -> dict[str, object]:
+    if subscription.status != SubscriptionStatus.active:
+        return {
+            "state": "inactive",
+            "label": "Not connected",
+            "detail": "Service is not active",
+            "last_seen_at": None,
+            "identifier": None,
+        }
+    if not session:
+        return {
+            "state": "offline",
+            "label": "Not connected",
+            "detail": "No open RADIUS accounting session",
+            "last_seen_at": None,
+            "identifier": None,
+        }
+
+    last_seen_at = session.last_update_at or session.session_start or session.created_at
+    last_seen_utc = last_seen_at
+    if last_seen_utc and last_seen_utc.tzinfo is None:
+        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
+    is_fresh = bool(
+        last_seen_utc
+        and last_seen_utc
+        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
+    )
+    return {
+        "state": "connected" if is_fresh else "stale",
+        "label": "Connected" if is_fresh else "Last seen",
+        "detail": "Open RADIUS accounting session"
+        if is_fresh
+        else "Open session has stale accounting updates",
+        "last_seen_at": last_seen_at,
+        "identifier": session.framed_ip_address or session.session_id,
+    }
+
+
+def _build_network_connection_snapshot(
+    db: Session, subscriptions: list[Subscription]
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    sub_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
+    sessions_by_sub: dict[UUID, RadiusAccountingSession] = {}
+    if sub_ids:
+        rows = (
+            db.query(RadiusAccountingSession)
+            .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
+            .filter(RadiusAccountingSession.session_end.is_(None))
+            .order_by(
+                RadiusAccountingSession.subscription_id.asc(),
+                RadiusAccountingSession.last_update_at.desc().nullslast(),
+                RadiusAccountingSession.session_start.desc().nullslast(),
+                RadiusAccountingSession.created_at.desc(),
+            )
+            .all()
+        )
+        for row in rows:
+            if row.subscription_id and row.subscription_id not in sessions_by_sub:
+                sessions_by_sub[row.subscription_id] = row
+
+    by_subscription: dict[str, dict[str, object]] = {}
+    for sub in subscriptions:
+        by_subscription[str(sub.id)] = _connection_status_for_session(
+            sub,
+            sessions_by_sub.get(sub.id),
+        )
+
+    connected = [
+        status for status in by_subscription.values() if status["state"] == "connected"
+    ]
+    stale = [
+        status for status in by_subscription.values() if status["state"] == "stale"
+    ]
+    active_count = sum(
+        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+    )
+    if connected:
+        label = "Connected"
+        state = "connected"
+        detail = f"{len(connected)} active service session"
+        if len(connected) != 1:
+            detail += "s"
+    elif stale:
+        label = "Last seen"
+        state = "stale"
+        detail = "Open session has stale accounting updates"
+    else:
+        label = "Not connected"
+        state = "offline"
+        detail = "No open RADIUS accounting session"
+
+    return (
+        {
+            "state": state,
+            "label": label,
+            "detail": detail,
+            "connected_count": len(connected),
+            "active_count": active_count,
+        },
+        by_subscription,
+    )
+
+
+def _build_network_access_cards(
+    subscriptions: list, connection_by_subscription: dict[str, dict[str, object]]
+) -> list[dict]:
     """Build network access info cards from active subscriptions."""
     cards = []
     for sub in subscriptions:
         if not sub.login and not sub.ipv4_address:
             continue
+        sub_id = str(sub.id)
         nas = getattr(sub, "provisioning_nas_device", None)
         pop_site = getattr(nas, "pop_site", None) if nas else None
         cards.append(
             {
-                "subscription_id": str(sub.id),
+                "subscription_id": sub_id,
                 "offer_name": sub.offer.name if sub.offer else "Subscription",
                 "status": sub.status.value if sub.status else "unknown",
+                "connection_status": connection_by_subscription.get(sub_id, {}),
                 "login": sub.login,
                 "ipv4_address": sub.ipv4_address,
                 "ipv6_address": getattr(sub, "ipv6_address", None),
@@ -1239,7 +1352,13 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         customer_user_access = {"error": str(exc)}
 
     pppoe_access = _build_pppoe_access_snapshot(db, account_ids)
-    network_access_cards = _build_network_access_cards(subscriptions)
+    network_connection_status, connection_by_subscription = (
+        _build_network_connection_snapshot(db, subscriptions)
+    )
+    network_access_cards = _build_network_access_cards(
+        subscriptions,
+        connection_by_subscription,
+    )
     nin_verification = (
         db.query(SubscriberNINVerification)
         .filter(SubscriberNINVerification.subscriber_id == customer.id)
@@ -1282,6 +1401,8 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "customer_user_access": customer_user_access,
         "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
+        "network_connection_status": network_connection_status,
+        "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
         "nin_verification": nin_verification,
         "pending_location_request": pending_location_request,

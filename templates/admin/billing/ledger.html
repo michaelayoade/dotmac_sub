@@ -43,7 +43,8 @@
     </div>
 
     {# ── Customer Filter ── #}
-    {% call card(color="emerald") %}
+    <div class="relative z-[80]">
+    {% call card(color="emerald", allow_overflow=True) %}
         <form method="get" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="w-full sm:w-72">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Customer</label>
@@ -106,6 +107,7 @@
             </div>
         </form>
     {% endcall %}
+    </div>
 
     {# ── Summary Stats ── #}
     {% set total_credits = entries | selectattr('entry_type', 'defined') | selectattr('entry_type.value', 'equalto', 'credit') | sum(attribute='amount') if entries else 0 %}
@@ -129,25 +131,39 @@
     {# ── Ledger Table ── #}
     {% call card(color="emerald", padding=False) %}
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                {{ table_head([
-                    {"label": "Entry"},
-                    {"label": "Account"},
-                    {"label": "Type"},
-                    {"label": "Source"},
-                    {"label": "Debit"},
-                    {"label": "Credit"},
-                    {"label": "Description"},
-                    {"label": "Created"}
-                ]) }}
+            <table class="w-full table-fixed divide-y divide-slate-200 dark:divide-slate-700">
+                <colgroup>
+                    <col class="w-[17%]">
+                    <col class="w-[13%]">
+                    <col class="w-[9%]">
+                    <col class="w-[10%]">
+                    <col class="w-[11%]">
+                    <col class="w-[11%]">
+                    <col class="w-[16%]">
+                    <col class="w-[13%]">
+                </colgroup>
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Entry</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Account</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Type</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Source</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Debit</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Credit</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Description</th>
+                        <th scope="col" class="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Created</th>
+                    </tr>
+                </thead>
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if entries %}
                     {% for entry in entries %}
                     {% set et = entry.entry_type.value if entry.entry_type else 'unknown' %}
+                    {% set source = entry.source.value if entry.source else 'N/A' %}
+                    {% set entry_label = entry.memo or (source | title | replace('_', ' ')) %}
                     {% call table_row(color="emerald") %}
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br {% if et == 'credit' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif et == 'debit' %}from-amber-100 to-orange-100 text-amber-600 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
+                        <td class="min-w-0 px-3 py-4">
+                            <div class="flex min-w-0 items-center gap-3">
+                                <div class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br {% if et == 'credit' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif et == 'debit' %}from-amber-100 to-orange-100 text-amber-600 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
                                     {% if et == 'credit' %}
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                                     {% elif et == 'debit' %}
@@ -156,65 +172,66 @@
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                                     {% endif %}
                                 </div>
-                                <div>
-                                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ entry.memo or (source | title | replace('_', ' ')) }}</p>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ entry.id | string | truncate(12, True, '') }}</p>
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-semibold text-slate-900 dark:text-white" title="{{ entry_label }}">{{ entry_label }}</p>
+                                    <p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ entry.id | string | truncate(12, True, '') }}</p>
                                 </div>
                             </div>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td class="min-w-0 px-3 py-4">
                             {% if entry.account_id %}
-                            <a href="/admin/billing/accounts/{{ entry.account_id }}" class="text-sm text-slate-600 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 transition-colors">
-                                {{ entry.account.name if entry.account else 'Account' }}
+                            {% set account_label = entry.account.name if entry.account else 'Account' %}
+                            <a href="/admin/billing/accounts/{{ entry.account_id }}" class="block truncate text-sm text-slate-600 transition-colors hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400" title="{{ account_label }}">
+                                {{ account_label }}
                             </a>
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">&mdash;</span>
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td class="px-3 py-4">
                             {% if et == 'credit' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                            <span class="inline-flex max-w-full items-center gap-1.5 rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
                                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                                Credit
+                                <span class="truncate">Credit</span>
                             </span>
                             {% elif et == 'debit' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            <span class="inline-flex max-w-full items-center gap-1.5 rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
-                                Debit
+                                <span class="truncate">Debit</span>
                             </span>
                             {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                {{ et | title }}
+                            <span class="inline-flex max-w-full items-center gap-1.5 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                                <span class="truncate">{{ et | title }}</span>
                             </span>
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            {% set source = entry.source.value if entry.source else 'N/A' %}
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ source | title | replace('_', ' ') }}</span>
+                        <td class="min-w-0 px-3 py-4">
+                            {% set source_label = source | title | replace('_', ' ') %}
+                            <span class="block truncate text-sm text-slate-600 dark:text-slate-400" title="{{ source_label }}">{{ source_label }}</span>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">
+                        <td class="truncate px-3 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">
                             {% if et == 'debit' %}
                             ₦{{ "{:,.2f}".format(entry.amount or 0) }}
                             {% else %}
                             &mdash;
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                        <td class="truncate px-3 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
                             {% if et == 'credit' %}
                             ₦{{ "{:,.2f}".format(entry.amount or 0) }}
                             {% else %}
                             &mdash;
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
-                            <span class="block max-w-xs truncate" title="{{ entry.memo or '' }}">
+                        <td class="min-w-0 px-3 py-4 text-sm text-slate-600 dark:text-slate-400">
+                            <span class="block truncate" title="{{ entry.memo or '' }}">
                                 {{ entry.memo or "—" }}
                             </span>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at.strftime('%b %d, %Y') if entry.created_at else '—' }}</span>
+                        <td class="min-w-0 px-3 py-4">
+                            <span class="block truncate text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at.strftime('%b %d, %Y') if entry.created_at else '—' }}</span>
                             {% if entry.created_at %}
-                            <p class="text-xs text-slate-400 dark:text-slate-500">{{ entry.created_at.strftime('%I:%M %p') }}</p>
+                            <p class="truncate text-xs text-slate-400 dark:text-slate-500">{{ entry.created_at.strftime('%I:%M %p') }}</p>
                             {% endif %}
                         </td>
                     {% endcall %}

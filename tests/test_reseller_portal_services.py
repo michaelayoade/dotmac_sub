@@ -938,6 +938,36 @@ def test_get_dashboard_summary_with_data(db_session, reseller_account, reseller)
     assert result["totals"]["open_invoices"] == 1
 
 
+def test_overdue_dashboard_alert_links_to_billing(
+    db_session, reseller_account, reseller
+):
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus
+
+    db_session.add(
+        Invoice(
+            account_id=reseller_account.id,
+            total=Decimal("200.00"),
+            balance_due=Decimal("150.00"),
+            status=InvoiceStatus.overdue,
+        )
+    )
+    db_session.commit()
+
+    result = reseller_portal.get_dashboard_summary(
+        db_session,
+        reseller_id=str(reseller.id),
+        limit=10,
+        offset=0,
+    )
+
+    overdue_alert = next(
+        alert for alert in result["alerts"] if "overdue invoice" in alert["message"]
+    )
+    assert overdue_alert["action_url"] == "/reseller/billing"
+
+
 # =============================================================================
 # Create Customer Impersonation Session Tests
 # =============================================================================
@@ -986,9 +1016,10 @@ def test_create_impersonation_session_success_no_subscriptions(
     assert len(token) > 20
 
 
-def test_impersonation_session_is_read_only(db_session, reseller_account, reseller):
-    """Reseller 'view as customer' sessions are read-only (#17): the session
-    carries read_only=True, which the portal write-guard enforces."""
+def test_impersonation_session_allows_customer_actions(
+    db_session, reseller_account, reseller
+):
+    """Reseller 'view as customer' sessions have normal customer capabilities."""
     from app.services import customer_portal
 
     token = reseller_portal.create_customer_impersonation_session(
@@ -1000,7 +1031,7 @@ def test_impersonation_session_is_read_only(db_session, reseller_account, resell
     session = customer_portal.get_customer_session(token)
     assert session is not None
     assert session.get("is_impersonation") is True
-    assert session.get("read_only") is True
+    assert session.get("read_only") is False
 
 
 def test_create_impersonation_session_with_active_subscription(
@@ -1022,7 +1053,12 @@ def test_create_impersonation_session_with_active_subscription(
     db_session.commit()
 
     # Create an offer
-    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.models.catalog import (
+        AccessType,
+        PriceBasis,
+        ServiceType,
+        SubscriptionStatus,
+    )
     from app.schemas.catalog import CatalogOfferCreate
 
     offer = catalog_service.offers.create(
@@ -1046,8 +1082,6 @@ def test_create_impersonation_session_with_active_subscription(
     )
 
     # Set status to active to hit the active subscription path
-    from app.models.catalog import SubscriptionStatus
-
     subscription.status = SubscriptionStatus.active
     db_session.commit()
 
@@ -1089,7 +1123,11 @@ def test_create_impersonation_session_with_pending_subscription(
     db_session.commit()
 
     # Create an offer
-    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.models.catalog import (
+        AccessType,
+        PriceBasis,
+        ServiceType,
+    )
     from app.schemas.catalog import CatalogOfferCreate
 
     offer = catalog_service.offers.create(
@@ -1178,3 +1216,199 @@ def test_list_accounts_filters_and_sorts(db_session, reseller, subscriber):
     )
     assert by_balance[0]["id"] == str(subscriber.id)
     assert by_balance[0]["open_balance"] == 500
+
+
+def test_reseller_can_deactivate_own_customer_account(db_session, reseller):
+    """Deactivation is scoped to the reseller and does not mark payment-suspended."""
+    from app.models.catalog import (
+        AccessType,
+        PriceBasis,
+        ServiceType,
+        SubscriptionStatus,
+    )
+    from app.models.subscriber import Subscriber, SubscriberStatus
+    from app.schemas.catalog import CatalogOfferCreate, SubscriptionCreate
+    from app.services import catalog as catalog_service
+
+    account = Subscriber(
+        first_name="Deactivate",
+        last_name="Customer",
+        email=f"deactivate-{uuid.uuid4().hex}@example.com",
+        reseller_id=reseller.id,
+        status=SubscriberStatus.active,
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    offer = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Deactivate Plan",
+            code=f"DEACT-{uuid.uuid4().hex[:8]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        ),
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(account_id=account.id, offer_id=offer.id),
+    )
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    result = reseller_portal.update_customer_account_status(
+        db_session,
+        reseller_id=str(reseller.id),
+        account_id=str(account.id),
+        action="deactivate",
+        actor_id=str(account.id),
+    )
+
+    db_session.refresh(account)
+    db_session.refresh(subscription)
+    assert result["status"] == "blocked"
+    assert account.status == SubscriberStatus.blocked
+    assert account.is_active is True
+    assert subscription.status == SubscriptionStatus.stopped
+
+
+def test_reseller_can_restore_own_deactivated_customer_account(db_session, reseller):
+    """Restoring reactivates a reseller-deactivated service."""
+    from app.models.catalog import (
+        AccessType,
+        PriceBasis,
+        ServiceType,
+        SubscriptionStatus,
+    )
+    from app.models.subscriber import Subscriber, SubscriberStatus
+    from app.schemas.catalog import CatalogOfferCreate, SubscriptionCreate
+    from app.services import catalog as catalog_service
+
+    account = Subscriber(
+        first_name="Restore",
+        last_name="Customer",
+        email=f"restore-{uuid.uuid4().hex}@example.com",
+        reseller_id=reseller.id,
+        status=SubscriberStatus.active,
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    offer = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Restore Plan",
+            code=f"REST-{uuid.uuid4().hex[:8]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        ),
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(account_id=account.id, offer_id=offer.id),
+    )
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    reseller_portal.update_customer_account_status(
+        db_session,
+        reseller_id=str(reseller.id),
+        account_id=str(account.id),
+        action="deactivate",
+        actor_id=str(account.id),
+    )
+    result = reseller_portal.update_customer_account_status(
+        db_session,
+        reseller_id=str(reseller.id),
+        account_id=str(account.id),
+        action="restore",
+        actor_id=str(account.id),
+    )
+
+    db_session.refresh(account)
+    db_session.refresh(subscription)
+    assert result["status"] == "active"
+    assert account.status == SubscriberStatus.active
+    assert account.is_active is True
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_reseller_can_disable_own_customer_account(db_session, reseller):
+    """Disabling an account disables active services and deactivates the account."""
+    from app.models.catalog import (
+        AccessType,
+        PriceBasis,
+        ServiceType,
+        SubscriptionStatus,
+    )
+    from app.models.subscriber import Subscriber, SubscriberStatus
+    from app.schemas.catalog import CatalogOfferCreate, SubscriptionCreate
+    from app.services import catalog as catalog_service
+
+    account = Subscriber(
+        first_name="Disable",
+        last_name="Customer",
+        email=f"disable-{uuid.uuid4().hex}@example.com",
+        reseller_id=reseller.id,
+        status=SubscriberStatus.active,
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    offer = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Disable Plan",
+            code=f"DIS-{uuid.uuid4().hex[:8]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        ),
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(account_id=account.id, offer_id=offer.id),
+    )
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    result = reseller_portal.update_customer_account_status(
+        db_session,
+        reseller_id=str(reseller.id),
+        account_id=str(account.id),
+        action="disable",
+        actor_id=str(account.id),
+    )
+
+    db_session.refresh(account)
+    db_session.refresh(subscription)
+    assert result["status"] == "disabled"
+    assert account.status == SubscriberStatus.disabled
+    assert account.is_active is False
+    assert subscription.status == SubscriptionStatus.disabled
+
+
+def test_reseller_cannot_update_foreign_customer_account(
+    db_session, reseller, subscriber
+):
+    """Status updates cannot cross reseller ownership boundaries."""
+    from app.models.subscriber import Reseller
+
+    other_reseller = Reseller(
+        name="Other Reseller", code=f"OTHER-{uuid.uuid4().hex[:8]}"
+    )
+    db_session.add(other_reseller)
+    db_session.flush()
+    subscriber.reseller_id = other_reseller.id
+    db_session.commit()
+
+    result = reseller_portal.update_customer_account_status(
+        db_session,
+        reseller_id=str(reseller.id),
+        account_id=str(subscriber.id),
+        action="disable",
+    )
+
+    assert result is None

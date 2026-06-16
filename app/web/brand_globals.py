@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from fastapi.templating import Jinja2Templates
 
 from app.services.branding_config import get_brand
+from app.version import get_app_version
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ def install_brand_jinja_global() -> None:
         try:
             self.env.globals.setdefault("brand", get_brand())
             self.env.globals.setdefault("current_year", _current_year)
+            self.env.globals.setdefault("app_version", get_app_version)
         except Exception:  # pragma: no cover - never break template setup
             logger.debug("Could not attach brand Jinja global", exc_info=True)
 
@@ -56,5 +58,6 @@ def install_brand_jinja_global() -> None:
 
         _shared.env.globals.setdefault("brand", get_brand())
         _shared.env.globals.setdefault("current_year", _current_year)
+        _shared.env.globals.setdefault("app_version", get_app_version)
     except Exception:  # pragma: no cover
         logger.debug("Could not backfill shared templates brand global", exc_info=True)

@@ -19,6 +19,8 @@
     {% endif %}
 {% endfor %}
 {% set display_ipv4 = subscription.ipv4_address or (assigned_ipv4_list | join(', ')) %}
+{% set conn = connection_status or {} %}
+{% set conn_state = conn.state | default('offline') %}
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -207,6 +209,28 @@
                 </div>
                 <div class="mt-6 grid gap-4 sm:grid-cols-2">
                     <div>
+                        <div class="flex items-center gap-2">
+                            <span class="inline-flex h-2.5 w-2.5 rounded-full
+                                {% if conn_state == 'connected' %}bg-emerald-500
+                                {% elif conn_state == 'stale' %}bg-amber-500
+                                {% else %}bg-slate-300 dark:bg-slate-600{% endif %}"></span>
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Connection</p>
+                        </div>
+                        <p class="mt-1 text-sm font-semibold
+                            {% if conn_state == 'connected' %}text-emerald-700 dark:text-emerald-300
+                            {% elif conn_state == 'stale' %}text-amber-700 dark:text-amber-300
+                            {% else %}text-slate-700 dark:text-slate-300{% endif %}">{{ conn.label | default('Not connected') }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {% if conn.identifier %}
+                                {{ conn.identifier }}
+                            {% elif conn.last_seen_at %}
+                                Updated {{ conn.last_seen_at.strftime('%b %d, %Y %H:%M') }}
+                            {% else %}
+                                {{ conn.detail | default('No open RADIUS accounting session') }}
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Plan</p>
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ offer_label }}</p>
                     </div>
@@ -392,17 +416,36 @@
                         </p>
                         {% endif %}
                     </div>
-                    <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Live Session</p>
-                        {% if active_session %}
-                        <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ active_session.framed_ip_address or active_session.username }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Online since {{ active_session.session_start.strftime('%b %d, %Y %H:%M') if active_session.session_start else '—' }}
-                        </p>
-                        {% else %}
-                        <p class="mt-1 text-sm text-slate-900 dark:text-white">No active session</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscriber is not currently online in RADIUS accounting.</p>
+                    {% set conn = connection_status or {} %}
+                    {% set conn_state = conn.state | default('offline') %}
+                    <div class="rounded-lg p-4
+                        {% if conn_state == 'connected' %}bg-emerald-50 dark:bg-emerald-900/20
+                        {% elif conn_state == 'stale' %}bg-amber-50 dark:bg-amber-900/20
+                        {% else %}bg-slate-50 dark:bg-slate-900/40{% endif %}">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-xs font-semibold uppercase tracking-wide
+                                {% if conn_state == 'connected' %}text-emerald-700 dark:text-emerald-300
+                                {% elif conn_state == 'stale' %}text-amber-700 dark:text-amber-300
+                                {% else %}text-slate-500 dark:text-slate-400{% endif %}">Connection</p>
+                            <span class="inline-flex h-2.5 w-2.5 rounded-full
+                                {% if conn_state == 'connected' %}bg-emerald-500
+                                {% elif conn_state == 'stale' %}bg-amber-500
+                                {% else %}bg-slate-300 dark:bg-slate-600{% endif %}"></span>
+                        </div>
+                        <p class="mt-1 text-sm font-semibold
+                            {% if conn_state == 'connected' %}text-emerald-900 dark:text-emerald-100
+                            {% elif conn_state == 'stale' %}text-amber-900 dark:text-amber-100
+                            {% else %}text-slate-900 dark:text-white{% endif %}">{{ conn.label | default('Not connected') }}</p>
+                        {% if conn.identifier %}
+                        <p class="mt-1 truncate font-mono text-xs text-slate-600 dark:text-slate-300">{{ conn.identifier }}</p>
                         {% endif %}
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {% if conn.last_seen_at %}
+                                Updated {{ conn.last_seen_at.strftime('%b %d, %Y %H:%M') }}
+                            {% else %}
+                                {{ conn.detail | default('No open RADIUS accounting session') }}
+                            {% endif %}
+                        </p>
                     </div>
                 </div>
 
@@ -791,32 +834,6 @@
                 </div>
             </div>
             {% endif %}
-
-            <!-- Quick Actions -->
-            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Quick Actions</h3>
-                <div class="mt-4 space-y-2">
-                    {% if subscription.subscriber_id %}
-                    <a href="/admin/billing/invoices/new?account={{ subscription.subscriber_id }}"
-                       class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">
-                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                        Create Invoice
-                    </a>
-                    <a href="/admin/billing/payments/new?account={{ subscription.subscriber_id }}"
-                       class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">
-                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                        Record Payment
-                    </a>
-                    {% endif %}
-                    {% if subscription.subscriber %}
-                    <a href="/admin/provisioning/orders/new?subscriber={{ subscription.subscriber.id }}"
-                       class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">
-                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-                        Create Service Order
-                    </a>
-                    {% endif %}
-                </div>
-            </div>
 
             <!-- Related Links -->
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">

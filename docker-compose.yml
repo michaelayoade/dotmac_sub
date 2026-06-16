@@ -60,6 +60,7 @@ services:
     volumes:
     - /etc/wireguard:/etc/wireguard
     - ./app:/app/app
+    - ./VERSION:/app/VERSION:ro
     - ./templates:/app/templates
     - ./static:/app/static
     - ./alembic:/app/alembic

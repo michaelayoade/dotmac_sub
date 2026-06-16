@@ -9,6 +9,8 @@ import sys
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.version import get_app_version
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,7 +101,7 @@ def get_system_info(db: Session) -> dict:
         health = {}
 
     return {
-        "app_version": "1.0.0",
+        "app_version": get_app_version(),
         "python_version": sys.version.split()[0],
         "platform": platform.platform(),
         "fastapi_version": fastapi_version,

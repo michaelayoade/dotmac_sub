@@ -31,12 +31,20 @@ def _require_reseller_context(request: Request, db: Session):
     return context
 
 
-def billing_overview(request: Request, db: Session):
+def billing_overview(
+    request: Request,
+    db: Session,
+    allocated: str | None = None,
+    error: str | None = None,
+    subscriber_search: str | None = None,
+):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     reseller_id = str(context["reseller"].id)
-    summary = reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+    summary = reseller_portal_billing.get_billing_account_summary(
+        db, reseller_id, subscriber_search=subscriber_search
+    )
     return templates.TemplateResponse(
         "reseller/billing/index.html",
         {
@@ -47,7 +55,11 @@ def billing_overview(request: Request, db: Session):
             "saved_cards": reseller_portal_billing.list_payment_methods(
                 db, str(context["subscriber"].id)
             ),
-            "billing_activity": reseller_portal_billing.account_activity(summary),
+            "billing_activity": reseller_portal_billing.account_activity(
+                db, reseller_id, summary
+            ),
+            "allocation_success": allocated,
+            "allocation_error": error,
             **summary,
         },
     )
@@ -110,6 +122,30 @@ def payment_method_remove(request: Request, db: Session, method_id: str):
         )
     return RedirectResponse(
         url="/reseller/billing/payment-methods?saved=" + quote_plus("Card removed."),
+        status_code=303,
+    )
+
+
+def allocate_subscriber_funds(request: Request, db: Session, subscriber_id: str):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    reseller_id = str(context["reseller"].id)
+    try:
+        result = reseller_portal_billing.allocate_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            url="/reseller/billing?error=" + quote_plus(str(exc)),
+            status_code=303,
+        )
+    message = (
+        f"Allocated {result['currency']} {result['allocated_total']:,.2f} "
+        f"to {result['invoice_count']} invoice(s)."
+    )
+    return RedirectResponse(
+        url="/reseller/billing?allocated=" + quote_plus(message),
         status_code=303,
     )
 
