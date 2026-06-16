@@ -32,7 +32,6 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   Object? _loadError;
   bool _loadingPage = true;
 
-  int? _selected;
   final _custom = TextEditingController();
   bool _busy = false;
   late bool _saveCard = widget.saveCardInitial;
@@ -68,8 +67,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
   }
 
-  int? get _amount =>
-      _selected ?? int.tryParse(_custom.text.trim().replaceAll(',', ''));
+  int? get _amount => int.tryParse(_custom.text.trim().replaceAll(',', ''));
 
   Future<void> _submit() async {
     final page = _page!;
@@ -200,32 +198,17 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
               ),
             ),
           ),
-        const SizedBox(height: 16),
-        Text('Choose an amount', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 24),
+        Text('Enter an amount', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final amt in page.presetAmounts)
-              ChoiceChip(
-                label: Text(Fmt.money(amt, page.currency)),
-                selected: _selected == amt,
-                onSelected: (_) => setState(() {
-                  _selected = amt;
-                  _custom.clear();
-                }),
-              ),
-          ],
-        ),
-        const SizedBox(height: 16),
         TextField(
           controller: _custom,
+          autofocus: true,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          onChanged: (_) => setState(() => _selected = null),
+          onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
-            labelText: 'Or enter an amount',
+            labelText: 'Amount',
             prefixText: '${page.currency} ',
             helperText:
                 '${Fmt.money(page.minAmount, page.currency)} – ${Fmt.money(page.maxAmount, page.currency)}',
