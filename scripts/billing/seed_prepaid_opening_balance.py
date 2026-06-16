@@ -87,9 +87,7 @@ def main(execute: bool) -> None:
         }
         open_inv = {
             aid: Decimal(str(bal or 0))
-            for aid, bal in db.query(
-                Invoice.account_id, func.sum(Invoice.balance_due)
-            )
+            for aid, bal in db.query(Invoice.account_id, func.sum(Invoice.balance_due))
             .filter(Invoice.is_active.is_(True))
             .filter(
                 Invoice.status.in_(

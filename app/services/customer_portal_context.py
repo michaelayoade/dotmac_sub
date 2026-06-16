@@ -31,8 +31,8 @@ from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services.bandwidth import bandwidth_samples
-from app.services.common import coerce_uuid
 from app.services.collections import get_available_balance
+from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 

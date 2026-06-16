@@ -70,7 +70,9 @@ def _fleet_framed_route_count(db) -> tuple[int, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--execute", action="store_true", help="Write (default: dry-run)")
+    parser.add_argument(
+        "--execute", action="store_true", help="Write (default: dry-run)"
+    )
     parser.add_argument(
         "--exclude",
         action="append",
@@ -82,7 +84,9 @@ def main() -> None:
     db = SessionLocal()
     try:
         # Active subscribers that have at least one additional route.
-        route_subs = {s for (s,) in db.query(SubscriberAdditionalRoute.subscriber_id).distinct()}
+        route_subs = {
+            s for (s,) in db.query(SubscriberAdditionalRoute.subscriber_id).distinct()
+        }
         active = list(
             db.scalars(
                 select(Subscriber).where(
@@ -95,22 +99,30 @@ def main() -> None:
 
         before_total, before_users = _fleet_framed_route_count(db)
         print("\n=== additional-route radreply reconcile ===")
-        print(f"  fleet Framed-Route BEFORE: {before_total} rows / {before_users} users")
+        print(
+            f"  fleet Framed-Route BEFORE: {before_total} rows / {before_users} users"
+        )
         print(f"  mode: {'EXECUTE' if args.execute else 'DRY-RUN'}")
         print(f"  exclude logins: {args.exclude or '(none)'}\n")
 
         planned = skipped = done = failed = 0
         for sub in active:
             subscription = _radius_sync_subscription_for_subscriber(db, sub.id)
-            n_routes = db.query(func.count(SubscriberAdditionalRoute.id)).filter(
-                SubscriberAdditionalRoute.subscriber_id == sub.id,
-                SubscriberAdditionalRoute.is_active.is_(True),
-            ).scalar()
+            n_routes = (
+                db.query(func.count(SubscriberAdditionalRoute.id))
+                .filter(
+                    SubscriberAdditionalRoute.subscriber_id == sub.id,
+                    SubscriberAdditionalRoute.is_active.is_(True),
+                )
+                .scalar()
+            )
 
             login = getattr(subscription, "login", None) or str(sub.splynx_customer_id)
             if subscription is None:
                 skipped += 1
-                print(f"  SKIP cust={sub.splynx_customer_id}: no sync-eligible subscription")
+                print(
+                    f"  SKIP cust={sub.splynx_customer_id}: no sync-eligible subscription"
+                )
                 continue
             if login in args.exclude:
                 skipped += 1
@@ -119,23 +131,31 @@ def main() -> None:
 
             planned += 1
             if not args.execute:
-                print(f"  PLAN cust={sub.splynx_customer_id} sub={subscription.id} "
-                      f"routes={n_routes}")
+                print(
+                    f"  PLAN cust={sub.splynx_customer_id} sub={subscription.id} "
+                    f"routes={n_routes}"
+                )
                 continue
 
             try:
                 res = reconcile_subscription_connectivity(db, str(subscription.id))
                 db.commit()
                 done += 1
-                print(f"  OK   cust={sub.splynx_customer_id} sub={subscription.id} "
-                      f"routes={n_routes} synced={res.get('external_credentials_synced')}")
+                print(
+                    f"  OK   cust={sub.splynx_customer_id} sub={subscription.id} "
+                    f"routes={n_routes} synced={res.get('external_credentials_synced')}"
+                )
             except Exception as e:  # noqa: BLE001
                 db.rollback()
                 failed += 1
-                print(f"  FAIL cust={sub.splynx_customer_id} sub={subscription.id}: {e}")
+                print(
+                    f"  FAIL cust={sub.splynx_customer_id} sub={subscription.id}: {e}"
+                )
 
         after_total, after_users = _fleet_framed_route_count(db)
-        print(f"\n  planned: {planned} | done: {done} | skipped: {skipped} | failed: {failed}")
+        print(
+            f"\n  planned: {planned} | done: {done} | skipped: {skipped} | failed: {failed}"
+        )
         print(f"  fleet Framed-Route AFTER: {after_total} rows / {after_users} users")
         if not args.execute:
             print("  (dry-run — no writes; re-run with --execute)")
