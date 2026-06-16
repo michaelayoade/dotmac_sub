@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/payment_errors.dart';
 import '../../models/wallet.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -23,16 +24,19 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
   bool _busy = false;
 
   Future<void> _fund(WalletOverview wallet) async {
+    if (_busy) return;
     final messenger = ScaffoldMessenger.of(context);
     final router = GoRouter.of(context);
-    final amount = await _promptAmount(
-      title: 'Fund wallet',
-      hint:
-          '${Fmt.money(wallet.minTopup, wallet.currency)} – ${Fmt.money(wallet.maxTopup, wallet.currency)}',
-    );
-    if (amount == null) return;
+    // Guard the whole flow (including the amount dialog) so a double-tap can't
+    // open two dialogs / fire two charges.
     setState(() => _busy = true);
     try {
+      final amount = await _promptAmount(
+        title: 'Fund wallet',
+        hint:
+            '${Fmt.money(wallet.minTopup, wallet.currency)} – ${Fmt.money(wallet.maxTopup, wallet.currency)}',
+      );
+      if (amount == null) return;
       final initiation =
           await ref.read(walletRepositoryProvider).initiateTopup(amount);
       if (!mounted) return;
@@ -56,21 +60,22 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
           content: Text(
               'Wallet funded — balance ${Fmt.money(balance, wallet.currency)}')));
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) showPaymentError(context, e, onRetry: () => _fund(wallet));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _payBill(WalletOverview wallet) async {
+    if (_busy) return;
     final messenger = ScaffoldMessenger.of(context);
-    final amount = await _promptAmount(
-      title: 'Pay DotMac bill',
-      hint: 'Up to ${Fmt.money(wallet.balance, wallet.currency)}',
-    );
-    if (amount == null) return;
     setState(() => _busy = true);
     try {
+      final amount = await _promptAmount(
+        title: 'Pay DotMac bill',
+        hint: 'Up to ${Fmt.money(wallet.balance, wallet.currency)}',
+      );
+      if (amount == null) return;
       final balance = await ref.read(walletRepositoryProvider).payBill(amount);
       ref.invalidate(walletProvider);
       ref.invalidate(invoicesProvider);
@@ -79,7 +84,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
           content: Text(
               'Bill paid — wallet balance ${Fmt.money(balance, wallet.currency)}')));
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) showPaymentError(context, e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -118,8 +123,15 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
           ),
           FilledButton(
             onPressed: () {
-              final value =
-                  double.tryParse(controller.text.trim().replaceAll(',', ''));
+              final raw = controller.text.trim().replaceAll(',', '');
+              final value = double.tryParse(raw);
+              // Reject ≤0 and more than 2 decimal places (kobo precision).
+              if (value == null || value <= 0 || !_validMoney(raw)) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text(
+                        'Enter an amount greater than 0 with at most 2 decimals.')));
+                return;
+              }
               Navigator.of(context).pop(value);
             },
             child: const Text('Continue'),
@@ -132,6 +144,10 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
     return result;
   }
 
+  /// True when [raw] has at most 2 decimal places.
+  static bool _validMoney(String raw) =>
+      RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(raw);
+
   @override
   Widget build(BuildContext context) {
     final wallet = ref.watch(walletProvider);
@@ -140,6 +156,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
         title: const Text('Wallet'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
           onPressed: () =>
               context.canPop() ? context.pop() : context.go('/dashboard'),
         ),

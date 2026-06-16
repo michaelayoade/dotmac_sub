@@ -9,6 +9,7 @@ import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 
@@ -89,17 +90,6 @@ class DashboardScreen extends ConsumerWidget {
       }
     }
 
-    // Plans that sell data bundles get a "Buy data" quick action, distinct
-    // from the wallet "Top up". Gated on the current service actually having
-    // buyable data add-ons — uncapped plans never see it.
-    Subscription? buyDataService;
-    if (currentService != null) {
-      final addons = ref.watch(addonsProvider(currentService.id)).asData?.value;
-      if (addons?.available.any((o) => o.isDataTopup) ?? false) {
-        buyDataService = currentService;
-      }
-    }
-
     // Expiry urgency: lift a renew prompt to the banner area when the current
     // service is within 3 days of lapsing (the payment banner takes priority).
     final daysLeft = currentService?.daysUntilExpiry;
@@ -177,6 +167,7 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const OfflineBanner(),
             _ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
@@ -208,7 +199,9 @@ class DashboardScreen extends ConsumerWidget {
               _RenewBanner(
                 message: renewMessage,
                 expired: (daysLeft ?? 0) < 0,
-                onTap: () => context.go('/billing'),
+                // Straight to the pay/add-funds flow (renewal = top-up in the
+                // prepaid model), not the invoices list.
+                onTap: () => context.push('/topup'),
               ),
             ],
             Consumer(builder: (context, ref, _) {
@@ -293,13 +286,6 @@ class DashboardScreen extends ConsumerWidget {
             _AddFundsCard(
               onTap: () => context.push('/topup'),
             ),
-            const SizedBox(height: 20),
-
-            // --- Quick actions ---
-            Text('Quick actions',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 10),
-            _QuickActions(buyDataService: buyDataService),
             const SizedBox(height: 20),
 
             // --- Current service (with a switcher when there are several) ---
@@ -792,77 +778,6 @@ class _AddFundsCard extends StatelessWidget {
               Icon(Icons.chevron_right, color: scheme.onPrimary),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _QuickActions extends StatelessWidget {
-  const _QuickActions({this.buyDataService});
-
-  /// When set, the plan sells data bundles — show "Buy data" (GB for this
-  /// service) distinct from "Top up" (wallet cash).
-  final Subscription? buyDataService;
-
-  @override
-  Widget build(BuildContext context) {
-    final buyData = buyDataService;
-    // Payment entry points (Pay bill / Top up) are now the primary "Add funds"
-    // card above; the grid keeps only the genuinely-distinct destinations.
-    final actions = <(IconData, String, VoidCallback)>[
-      if (buyData != null)
-        (
-          Icons.add_chart_outlined,
-          'Buy data',
-          () => context.push('/service/${buyData.id}/buy-data', extra: buyData),
-        )
-      else
-        (Icons.wifi_outlined, 'Service', () => context.go('/usage')),
-      (Icons.receipt_long_outlined, 'Invoices', () => context.go('/billing')),
-      (Icons.support_agent_outlined, 'Support', () => context.go('/support')),
-      (Icons.person_outline, 'Profile', () => context.go('/profile')),
-    ];
-
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 10,
-      crossAxisSpacing: 10,
-      childAspectRatio: 1.4,
-      children: [
-        for (final (icon, label, onTap) in actions)
-          _ActionTile(icon: icon, label: label, onTap: onTap),
-      ],
-    );
-  }
-}
-
-class _ActionTile extends StatelessWidget {
-  const _ActionTile(
-      {required this.icon, required this.label, required this.onTap});
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: theme.colorScheme.primary),
-            const SizedBox(height: 6),
-            Text(label,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelMedium),
-          ],
         ),
       ),
     );

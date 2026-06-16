@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/payment_errors.dart';
 import '../../models/vas.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
@@ -30,6 +31,7 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
         title: const Text('Pay bills'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
           onPressed: () =>
               context.canPop() ? context.pop() : context.go('/dashboard'),
         ),
@@ -234,6 +236,14 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
     return double.tryParse(_amount.text.trim().replaceAll(',', ''));
   }
 
+  /// True when the typed amount has at most 2 decimal places (only checked for
+  /// free-form entry; fixed-price variations are already exact).
+  bool get _amountWellFormed {
+    if (_variation?.amount != null) return true;
+    final raw = _amount.text.trim().replaceAll(',', '');
+    return RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(raw);
+  }
+
   Future<void> _verify() async {
     setState(() {
       _verifying = true;
@@ -260,14 +270,23 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
       return;
     }
     if (amount == null || amount <= 0) {
-      setState(() => _error = 'Enter an amount.');
+      setState(() => _error = 'Enter an amount greater than 0.');
+      return;
+    }
+    if (!_amountWellFormed) {
+      setState(() => _error = 'Amount can have at most 2 decimal places.');
+      return;
+    }
+    final wallet = ref.read(walletProvider).asData?.value;
+    if (wallet != null && amount > wallet.balance) {
+      setState(() => _error =
+          'Amount exceeds your wallet balance (${Fmt.money(wallet.balance, wallet.currency)}). Fund your wallet first.');
       return;
     }
     if (widget.service.requiresVerify && _verifiedName == null) {
       setState(() => _error = 'Check the customer name before paying.');
       return;
     }
-    final wallet = ref.read(walletProvider).asData?.value;
     final threshold = wallet?.authThreshold ?? 5000;
     if (amount >= threshold) {
       final approved = await ref.read(biometricServiceProvider).authenticate(
@@ -291,7 +310,7 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e.message;
+          _error = PaymentError.from(e).message;
         });
       }
     }
@@ -313,6 +332,17 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(service.name, style: Theme.of(context).textTheme.titleMedium),
+            Builder(builder: (context) {
+              final wallet = ref.watch(walletProvider).asData?.value;
+              if (wallet == null) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Wallet balance: ${Fmt.money(wallet.balance, wallet.currency)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              );
+            }),
             const SizedBox(height: 12),
             TextField(
               controller: _identifier,

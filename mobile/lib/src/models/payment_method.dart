@@ -49,6 +49,26 @@ class SavedCard {
     return '$mm/$yy';
   }
 
+  /// First instant after the card's expiry month, or null when unknown. A card
+  /// expiring 08/30 is valid through the end of August 2030.
+  DateTime? get _expiresAfter {
+    if (expiresMonth == null || expiresYear == null) return null;
+    final m = expiresMonth!, y = expiresYear!;
+    return m >= 12 ? DateTime(y + 1, 1, 1) : DateTime(y, m + 1, 1);
+  }
+
+  bool get isExpired {
+    final after = _expiresAfter;
+    return after != null && !DateTime.now().isBefore(after);
+  }
+
+  /// True when the card expires within the next 30 days (but isn't expired yet).
+  bool get expiresSoon {
+    final after = _expiresAfter;
+    if (after == null || isExpired) return false;
+    return after.difference(DateTime.now()).inDays <= 30;
+  }
+
   factory SavedCard.fromJson(Map<String, dynamic> json) => SavedCard(
         id: json['id'].toString(),
         methodType: json['method_type'] as String? ?? 'card',
