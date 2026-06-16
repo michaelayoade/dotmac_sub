@@ -1378,7 +1378,7 @@ def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, obj
         options,
         key=lambda item: (
             str(item["pool_name"]),
-            int(item["prefix"]),
+            int(str(item["prefix"])),
             ipaddress.ip_network(str(item["cidr"]), strict=False).network_address,
         ),
     )
