@@ -24,6 +24,10 @@ from app.models.catalog import (
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.gis import (
+    CustomerLocationChangeRequest,
+    CustomerLocationChangeRequestStatus,
+)
 from app.models.network import CPEDevice, IPAssignment, OntAssignment
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import (
@@ -1242,6 +1246,16 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         .order_by(SubscriberNINVerification.created_at.desc())
         .first()
     )
+    pending_location_request = (
+        db.query(CustomerLocationChangeRequest)
+        .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)
+        .filter(
+            CustomerLocationChangeRequest.status
+            == CustomerLocationChangeRequestStatus.pending
+        )
+        .order_by(CustomerLocationChangeRequest.created_at.desc())
+        .first()
+    )
 
     return {
         "customer": customer,
@@ -1270,6 +1284,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "billing_policy": _billing_policy_snapshot(db, accounts),
         "network_access_cards": network_access_cards,
         "nin_verification": nin_verification,
+        "pending_location_request": pending_location_request,
         "nin_verified": bool((customer.metadata_ or {}).get("nin_verified")),
         "nin_verification_statuses": NINVerificationStatus,
         **relationship_data,

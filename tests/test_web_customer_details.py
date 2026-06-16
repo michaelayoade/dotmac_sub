@@ -373,3 +373,52 @@ def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
     assert captured["context"]["bandwidth_chart_initial_stats"] == {
         "current_rx_formatted": "1.20 Mbps"
     }
+
+
+def test_customer_detail_snapshot_includes_pending_location_request(
+    db_session, subscriber
+):
+    from app.models.gis import (
+        CustomerLocationChangeRequest,
+        CustomerLocationChangeRequestStatus,
+    )
+
+    subscriber.user_type = UserType.customer
+    db_session.add(
+        Address(
+            subscriber_id=subscriber.id,
+            address_line1="12 Service Lane",
+            city="Abuja",
+            is_primary=True,
+        )
+    )
+    db_session.add(
+        CustomerLocationChangeRequest(
+            subscriber_id=subscriber.id,
+            status=CustomerLocationChangeRequestStatus.pending,
+            current_latitude=9.0501,
+            current_longitude=7.4902,
+            requested_latitude=9.0512,
+            requested_longitude=7.4923,
+            customer_note="Pin is one compound away.",
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    pending = context["pending_location_request"]
+    assert pending is not None
+    assert pending.status == CustomerLocationChangeRequestStatus.pending
+    assert pending.customer_note == "Pin is one compound away."
+
+
+def test_customer_detail_snapshot_pending_location_request_none_when_absent(
+    db_session, subscriber
+):
+    subscriber.user_type = UserType.customer
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["pending_location_request"] is None
