@@ -67,3 +67,64 @@ def test_get_sidebar_stats_uses_short_ttl_cache(db_session, monkeypatch):
     assert first["service_orders"] == 7
     assert second["service_orders"] == 7
     assert calls["count"] == 1
+
+
+def test_count_pending_location_requests_counts_only_pending(db_session, subscriber):
+    from app.models.gis import (
+        CustomerLocationChangeRequest,
+        CustomerLocationChangeRequestStatus,
+    )
+
+    db_session.add_all(
+        [
+            CustomerLocationChangeRequest(
+                subscriber_id=subscriber.id,
+                status=CustomerLocationChangeRequestStatus.pending,
+                requested_latitude=9.05,
+                requested_longitude=7.49,
+            ),
+            CustomerLocationChangeRequest(
+                subscriber_id=subscriber.id,
+                status=CustomerLocationChangeRequestStatus.pending,
+                requested_latitude=9.06,
+                requested_longitude=7.50,
+            ),
+            CustomerLocationChangeRequest(
+                subscriber_id=subscriber.id,
+                status=CustomerLocationChangeRequestStatus.approved,
+                requested_latitude=9.07,
+                requested_longitude=7.51,
+            ),
+            CustomerLocationChangeRequest(
+                subscriber_id=subscriber.id,
+                status=CustomerLocationChangeRequestStatus.rejected,
+                requested_latitude=9.08,
+                requested_longitude=7.52,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assert web_admin_service._count_pending_location_requests(db_session) == 2
+
+
+def test_get_sidebar_stats_exposes_pending_location_requests(db_session, subscriber):
+    from app.models.gis import (
+        CustomerLocationChangeRequest,
+        CustomerLocationChangeRequestStatus,
+    )
+
+    _reset_sidebar_cache()
+    db_session.add(
+        CustomerLocationChangeRequest(
+            subscriber_id=subscriber.id,
+            status=CustomerLocationChangeRequestStatus.pending,
+            requested_latitude=9.05,
+            requested_longitude=7.49,
+        )
+    )
+    db_session.commit()
+
+    stats = web_admin_service.get_sidebar_stats(db_session)
+
+    assert stats["pending_location_requests"] == 1

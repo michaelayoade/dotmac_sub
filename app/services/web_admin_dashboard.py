@@ -715,6 +715,28 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             }
         )
 
+    try:
+        pending_location_requests = web_admin_service._count_pending_location_requests(
+            db
+        )
+    except Exception:
+        logger.error(
+            "Failed to load pending location requests for dashboard", exc_info=True
+        )
+        _rollback_after_failed_query(db)
+        pending_location_requests = 0
+    if pending_location_requests > 0:
+        attention_items.append(
+            {
+                "label": (
+                    f"{pending_location_requests} pending pin "
+                    f"correction{'s' if pending_location_requests != 1 else ''}"
+                ),
+                "href": "/admin/gis?tab=customer-requests&status=pending",
+                "severity": "info",
+            }
+        )
+
     whats_new_items = admin_whats_new_service.serialize_for_dashboard(
         admin_whats_new_service.get_visible_items(db, limit=4)
     )

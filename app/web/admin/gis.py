@@ -15,6 +15,23 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/gis", tags=["web-admin-gis"])
 
 
+_DEFAULT_REQUEST_REDIRECT = "/admin/gis?tab=customer-requests"
+
+
+def _safe_return_url(next_value: str | None) -> str:
+    """Return a safe same-site redirect target.
+
+    Honors an optional ``next`` form field so an action triggered from a
+    customer detail page can return there, but only accepts internal
+    ``/admin/...`` paths to avoid open redirects. Falls back to the GIS
+    customer-requests tab.
+    """
+    candidate = (next_value or "").strip()
+    if candidate.startswith("/admin/") and not candidate.startswith("//"):
+        return candidate
+    return _DEFAULT_REQUEST_REDIRECT
+
+
 def _gis_context(request: Request, db: Session, **extra) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -64,6 +81,7 @@ def gis_location_request_approve(
     request: Request,
     request_id: str,
     review_note: str = Form(""),
+    next: str = Form(None),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user
@@ -76,7 +94,7 @@ def gis_location_request_approve(
         actor_name=str(current_user.get("name") or "") or None,
         review_note=review_note,
     )
-    return RedirectResponse(url="/admin/gis?tab=customer-requests", status_code=303)
+    return RedirectResponse(url=_safe_return_url(next), status_code=303)
 
 
 @router.post(
@@ -87,6 +105,7 @@ def gis_location_request_reject(
     request: Request,
     request_id: str,
     review_note: str = Form(""),
+    next: str = Form(None),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user
@@ -99,7 +118,7 @@ def gis_location_request_reject(
         actor_name=str(current_user.get("name") or "") or None,
         review_note=review_note,
     )
-    return RedirectResponse(url="/admin/gis?tab=customer-requests", status_code=303)
+    return RedirectResponse(url=_safe_return_url(next), status_code=303)
 
 
 @router.get("/locations/new", response_class=HTMLResponse)
