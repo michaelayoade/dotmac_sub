@@ -471,6 +471,27 @@ def _igd_wan_container_is_blank(
     return not any(details.get(key) not in (None, "") for key in observed)
 
 
+def _igd_wan_container_allows_ppp_add(
+    *,
+    details: dict[str, Any],
+    ip_count: int,
+    ppp_count: int,
+    wan_vlan: int | None,
+) -> bool:
+    """Allow PPP creation in an IP-only WCD when no service/VLAN conflict exists."""
+    if wan_vlan is None or ppp_count > 0 or ip_count < 1:
+        return False
+    ppp_observed = (
+        "detected_ppp_name",
+        "detected_ppp_status",
+        "detected_ppp_ip",
+        "detected_ppp_service",
+        "detected_ppp_vlan",
+        "detected_ppp_username",
+    )
+    return not any(details.get(key) not in (None, "") for key in ppp_observed)
+
+
 def _ensure_igd_ppp_wan_service(
     client: Any,
     device_id: str,
@@ -520,11 +541,17 @@ def _ensure_igd_ppp_wan_service(
             ),
         )
     conflict = _igd_ppp_container_conflict(details=details, wan_vlan=wan_vlan)
-    if conflict or not _igd_wan_container_is_blank(
+    container_safe = _igd_wan_container_is_blank(
         details=details,
         ip_count=ip_count,
         ppp_count=ppp_count,
-    ):
+    ) or _igd_wan_container_allows_ppp_add(
+        details=details,
+        ip_count=ip_count,
+        ppp_count=ppp_count,
+        wan_vlan=wan_vlan,
+    )
+    if conflict or not container_safe:
         reason = conflict or "the selected WANConnectionDevice is not empty"
         return _missing_igd_ppp_service_result(
             client=client,

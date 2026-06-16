@@ -380,6 +380,33 @@ def _igd_wan_container_is_blank(
     return not any(details.get(key) not in (None, "") for key in observed)
 
 
+def _igd_wan_container_allows_ppp_add(
+    details: dict[str, Any],
+    *,
+    ip_count: int,
+    ppp_count: int,
+    wan_vlan: int | None,
+) -> bool:
+    """Allow creating PPP next to an existing IP WAN when no conflict is known.
+
+    Some Huawei TR-098 layouts expose the management IP WAN and subscriber PPP
+    WAN as siblings under the same WANConnectionDevice. The conflict check
+    above still blocks known TR-069 or wrong-VLAN targets; this only relaxes
+    the old blanket "not empty" refusal for an IP-only container.
+    """
+    if wan_vlan is None or ppp_count > 0 or ip_count < 1:
+        return False
+    ppp_observed = (
+        "ppp_name",
+        "ppp_status",
+        "ppp_ip",
+        "ppp_username",
+        "ppp_service",
+        "ppp_vlan",
+    )
+    return not any(details.get(key) not in (None, "") for key in ppp_observed)
+
+
 def _get_igd_ppp_instance_indexes(
     device: dict[str, Any],
     root: str,
@@ -491,11 +518,17 @@ def _ensure_igd_ppp_wan_service(
         )
 
     conflict = _igd_ppp_container_conflict(details=details, wan_vlan=wan_vlan)
-    if conflict or not _igd_wan_container_is_blank(
+    container_safe = _igd_wan_container_is_blank(
         details,
         ip_count=ip_count,
         ppp_count=ppp_count,
-    ):
+    ) or _igd_wan_container_allows_ppp_add(
+        details,
+        ip_count=ip_count,
+        ppp_count=ppp_count,
+        wan_vlan=wan_vlan,
+    )
+    if conflict or not container_safe:
         reason = conflict or "the selected WANConnectionDevice is not empty"
         return None, ActionResult(
             success=False,
