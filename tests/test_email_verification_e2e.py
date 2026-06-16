@@ -115,7 +115,8 @@ def test_profile_email_change_rearms_verification(
     updated = web_customer_actions.update_customer_profile(
         db_session,
         subscriber_id=str(subscriber.id),
-        name="Test User",
+        first_name="Test",
+        last_name="User",
         email=new_email,
         phone=None,
         billing_notifications=False,
@@ -140,7 +141,8 @@ def test_profile_same_email_does_not_resend(
     updated = web_customer_actions.update_customer_profile(
         db_session,
         subscriber_id=str(subscriber.id),
-        name="Test User",
+        first_name="Test",
+        last_name="User",
         email=subscriber.email,
         phone=None,
         billing_notifications=False,
