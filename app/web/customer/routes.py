@@ -168,6 +168,7 @@ def customer_support_create(
     title: str = Form(...),
     description: str = Form(""),
     priority: str = Form("normal"),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -185,6 +186,7 @@ def customer_support_create(
         title,
         description,
         priority,
+        attachments=attachments,
     )
     if result["success"]:
         ticket = result["ticket"]
@@ -238,6 +240,7 @@ def customer_support_add_comment(
     request: Request,
     ticket_id: str,
     body: str = Form(...),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -246,7 +249,7 @@ def customer_support_add_comment(
 
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     result = crm_portal.handle_ticket_comment(
-        db, customer, subscriber_ids, ticket_id, body
+        db, customer, subscriber_ids, ticket_id, body, attachments=attachments
     )
     if not result.get("success"):
         context = crm_portal.ticket_detail_context(
@@ -1598,6 +1601,11 @@ def customer_create_topup_intent(
     amount_value = payload.get("amount")
     if amount_value is None:
         return JSONResponse({"detail": "amount is required"}, status_code=400)
+    # An Idempotency-Key header (or body token) makes saved-card charges safe
+    # against double-submit; gateway-redirect flows ignore it.
+    idempotency_key = request.headers.get("Idempotency-Key") or payload.get(
+        "idempotency_key"
+    )
     try:
         result = customer_portal.create_topup_intent(
             db,
@@ -1606,6 +1614,7 @@ def customer_create_topup_intent(
             provider=payload.get("provider"),
             payment_method_id=payload.get("payment_method_id"),
             redirect_url=str(request.url_for("customer_verify_topup")),
+            idempotency_key=idempotency_key,
         )
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -2529,5 +2538,7 @@ def customer_payment_arrangement_detail(
             "customer": customer,
             **detail,
             "active_page": "billing",
+            # Drives the overdue-installment highlight in the template.
+            "today": datetime.now(UTC).date(),
         },
     )

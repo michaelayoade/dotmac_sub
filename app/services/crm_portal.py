@@ -311,8 +311,13 @@ def handle_ticket_create(
     title: str,
     description: str,
     priority: str,
+    attachments: list | None = None,
 ) -> dict[str, Any]:
     """Create a ticket in the internal (local) ticket module.
+
+    ``attachments`` (UploadFile list) are stored locally on the ticket via
+    ``upload_ticket_attachments``. NOTE: the CRM push (``crm_ticket_push``) does
+    not carry attachments, so attached files stay local and may not sync to CRM.
 
     Returns:
         Dict with 'success' bool and 'ticket' or 'error' key.
@@ -320,6 +325,7 @@ def handle_ticket_create(
     from app.models.support import TicketChannel
     from app.schemas.support import TicketCreate
     from app.services import support as support_service
+    from app.services import web_support_tickets
 
     try:
         sid = coerce_uuid(str(subscriber_id or "").strip() or None)
@@ -330,6 +336,7 @@ def handle_ticket_create(
             "success": False,
             "error": "Unable to link your account to the support system.",
         }
+    files = [a for a in (attachments or []) if getattr(a, "filename", "")]
     try:
         ticket = support_service.Tickets.create(
             db,
@@ -342,11 +349,25 @@ def handle_ticket_create(
             ),
             actor_id=None,
         )
+        if files:
+            uploaded = web_support_tickets.upload_ticket_attachments(
+                db,
+                ticket_id=str(ticket.id),
+                attachments=files,
+                entity_type="support_ticket_attachment",
+                actor_id=str(sid),
+            )
+            support_service.Tickets.add_attachments(db, str(ticket.id), uploaded)
         from app.services.crm_ticket_push import enqueue_crm_ticket_push
 
         if getattr(ticket, "id", None):
             enqueue_crm_ticket_push(ticket.id, source="portal_ticket_create")
         return {"success": True, "ticket": _ticket_to_dict(ticket)}
+    except ValueError as e:
+        # Attachment validation (type/size) — surface the specific reason.
+        logger.info("Rejected portal ticket attachment: %s", e)
+        db.rollback()
+        return {"success": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to create portal ticket: %s", e)
         db.rollback()
@@ -362,14 +383,20 @@ def handle_ticket_comment(
     subscriber_ids: list[str],
     ticket_id: str,
     body: str,
+    attachments: list | None = None,
 ) -> dict[str, Any]:
     """Add a customer comment to a local support ticket.
+
+    ``attachments`` (UploadFile list) are stored locally on the comment via
+    ``upload_ticket_attachments``. NOTE: the CRM push (``crm_ticket_push``) does
+    not carry attachments, so attached files stay local and may not sync to CRM.
 
     Returns:
         Dict with 'success' bool.
     """
-    from app.schemas.support import TicketCommentCreate
+    from app.schemas.support import AttachmentMeta, TicketCommentCreate
     from app.services import support as support_service
+    from app.services import web_support_tickets
 
     allowed = {str(s or "").strip() for s in subscriber_ids if str(s or "").strip()}
     try:
@@ -378,11 +405,21 @@ def handle_ticket_comment(
         return {"success": False, "error": "Ticket not found."}
     if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
         return {"success": False, "error": "Ticket not found."}
+    files = [a for a in (attachments or []) if getattr(a, "filename", "")]
     try:
         try:
             author_person_id = coerce_uuid(ticket.subscriber_id)
         except (TypeError, ValueError):
             author_person_id = None
+        uploaded: list[dict] = []
+        if files:
+            uploaded = web_support_tickets.upload_ticket_attachments(
+                db,
+                ticket_id=str(ticket.id),
+                attachments=files,
+                entity_type="support_ticket_comment_attachment",
+                actor_id=str(ticket.subscriber_id),
+            )
         comment = support_service.TicketComments.create(
             db,
             ticket=ticket,
@@ -391,6 +428,7 @@ def handle_ticket_comment(
                 is_internal=False,
                 author_type=TicketCommentAuthorType.customer,
                 author_person_id=author_person_id,
+                attachments=[AttachmentMeta(**item) for item in uploaded],
             ),
             actor_id=None,
         )
@@ -400,6 +438,11 @@ def handle_ticket_comment(
         if getattr(comment, "id", None):
             enqueue_crm_comment_push(comment.id, source="portal_ticket_comment")
         return {"success": True}
+    except ValueError as e:
+        # Attachment validation (type/size) — surface the specific reason.
+        logger.info("Rejected portal ticket comment attachment: %s", e)
+        db.rollback()
+        return {"success": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to add portal ticket comment: %s", e)
         db.rollback()

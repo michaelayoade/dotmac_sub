@@ -16,6 +16,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -130,7 +131,13 @@ def _write_entry(
     memo: str | None = None,
 ) -> VasWalletEntry:
     if amount <= 0:
-        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_amount",
+                "message": "Amount must be greater than 0",
+            },
+        )
     entry = VasWalletEntry(
         wallet_id=wallet.id,
         entry_type=entry_type,
@@ -182,7 +189,13 @@ def debit_wallet(
     _lock_wallet_owner(db, wallet)
     balance = wallet_balance(db, wallet.id)
     if amount > balance:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "insufficient_balance",
+                "message": "Insufficient wallet balance",
+            },
+        )
     return _write_entry(
         db,
         wallet,
@@ -337,19 +350,102 @@ def _verify_topup_for_wallet(
 # --- DotMac-as-biller -------------------------------------------------------
 
 
-def pay_bill(db: Session, subscriber_id: str, amount: Decimal) -> dict:
+_PAY_BILL_IDEMPOTENCY_SCOPE = "wallet_pay_bill"
+
+
+def _pay_bill_replay(db: Session, wallet: VasWallet, ref_id: str | None) -> dict | None:
+    """Return the prior pay_bill result for a replayed idempotency key."""
+    from app.models.billing import Payment
+
+    payment = db.get(Payment, coerce_uuid(ref_id)) if ref_id else None
+    if payment is None:
+        return None
+    return {
+        "payment_id": str(payment.id),
+        "amount": Decimal(str(payment.amount)).quantize(Decimal("0.01")),
+        "balance": wallet_balance(db, wallet.id),
+        "replayed": True,
+    }
+
+
+def pay_bill(
+    db: Session,
+    subscriber_id: str,
+    amount: Decimal,
+    *,
+    idempotency_key: str | None = None,
+) -> dict:
     """Pay the DotMac bill from the wallet.
 
     The ONLY bridge between the wallet and billing: debits the wallet and
     creates an ordinary Payment (auto-allocated to oldest unpaid invoices,
     remainder to service credit) — identical in effect to a gateway payment.
+
+    Idempotent on ``idempotency_key`` (e.g. an ``Idempotency-Key`` header): a
+    replay returns the original payment instead of debiting the wallet again.
     """
     require_enabled(db)
+    from app.models.idempotency import IdempotencyKey
     from app.schemas.billing import PaymentCreate
     from app.services.billing.payments import Payments
 
     wallet = get_or_create_wallet(db, subscriber_id)
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+
+    idem_key = (idempotency_key or "").strip() or None
+    reservation: IdempotencyKey | None = None
+    if idem_key:
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _PAY_BILL_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == idem_key,
+            )
+        ).first()
+        if prior is not None:
+            if str(prior.account_id) != str(wallet.subscriber_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "idempotency_key_conflict",
+                        "message": "Idempotency key already used.",
+                    },
+                )
+            replayed = _pay_bill_replay(db, wallet, prior.ref_id)
+            if replayed is not None:
+                return replayed
+            # Key reserved but never linked to a payment (a prior attempt died
+            # mid-flight) — drop the orphan and retry below.
+            db.delete(prior)
+            db.commit()
+        # Reserve the key BEFORE any money moves so a concurrent same-key
+        # request fails the unique constraint here and never double-debits.
+        reservation = IdempotencyKey(
+            scope=_PAY_BILL_IDEMPOTENCY_SCOPE,
+            key=idem_key,
+            account_id=wallet.subscriber_id,
+            ref_id=None,
+        )
+        db.add(reservation)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            prior = db.scalars(
+                select(IdempotencyKey).where(
+                    IdempotencyKey.scope == _PAY_BILL_IDEMPOTENCY_SCOPE,
+                    IdempotencyKey.key == idem_key,
+                )
+            ).first()
+            replayed = _pay_bill_replay(db, wallet, prior.ref_id) if prior else None
+            if replayed is not None:
+                return replayed
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_payment",
+                    "message": "A payment with this key is already in progress.",
+                },
+            )
 
     # Double-submit guard: an identical bill payment within the last minute
     # is almost certainly a double-click, not intent.
@@ -367,19 +463,33 @@ def pay_bill(db: Session, subscriber_id: str, amount: Decimal) -> dict:
         .first()
     )
     if recent:
+        if reservation is not None:
+            db.delete(reservation)
+            db.commit()
         raise HTTPException(
             status_code=409,
-            detail="An identical bill payment was made moments ago — wait a "
-            "minute if you really mean to pay again.",
+            detail={
+                "code": "duplicate_payment",
+                "message": "An identical bill payment was made moments ago — wait "
+                "a minute if you really mean to pay again.",
+            },
         )
 
-    entry = debit_wallet(
-        db,
-        wallet,
-        amount=amount,
-        category=VasEntryCategory.bill_payment,
-        memo="DotMac bill payment from wallet",
-    )
+    try:
+        entry = debit_wallet(
+            db,
+            wallet,
+            amount=amount,
+            category=VasEntryCategory.bill_payment,
+            memo="DotMac bill payment from wallet",
+        )
+    except Exception:
+        # Insufficient funds (or any debit failure) must release the key so the
+        # customer can retry once they top up.
+        if reservation is not None:
+            db.delete(reservation)
+            db.commit()
+        raise
     try:
         payment = Payments.create(
             db,
@@ -402,8 +512,14 @@ def pay_bill(db: Session, subscriber_id: str, amount: Decimal) -> dict:
             reference=f"reversal-{entry.id}",
             memo="Reversal: bill payment failed",
         )
+        if reservation is not None:
+            db.delete(reservation)
+            db.commit()
         raise
     entry.payment_id = payment.id
+    if reservation is not None:
+        reservation.ref_id = str(payment.id)
+        db.add(reservation)
     db.commit()
     return {
         "payment_id": str(payment.id),

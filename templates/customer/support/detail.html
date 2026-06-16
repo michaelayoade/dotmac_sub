@@ -68,10 +68,17 @@
     {% if t_status not in ('closed', 'resolved') %}
     <section class="rounded-2xl border border-stone-200/60 bg-white p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800">
         <h2 class="mb-4 text-sm font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Add a Comment</h2>
-        <form action="/portal/support/{{ ticket.get('id') }}/comment" method="POST" class="space-y-4">
+        <form action="/portal/support/{{ ticket.get('id') }}/comment" method="POST" enctype="multipart/form-data" class="space-y-4">
             {% include "components/forms/csrf_input.html" %}
             <textarea name="body" required rows="3" placeholder="Type your reply..."
                       class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:placeholder-stone-400"></textarea>
+            <div>
+                <label for="comment-attachments" class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Attachments <span class="font-normal text-stone-400">(optional)</span></label>
+                <input id="comment-attachments" name="attachments" type="file" multiple
+                       accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                       class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 file:mr-4 file:rounded-lg file:border-0 file:bg-stone-100 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:file:bg-stone-600 dark:file:text-stone-200">
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Images or PDF, up to 5 MB each.</p>
+            </div>
             <div class="flex justify-end">
                 <button type="submit"
                         class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition-all hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5">

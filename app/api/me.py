@@ -12,7 +12,17 @@ Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -61,6 +71,7 @@ from app.schemas.subscriber import (
     SubscriberContactWriteResponse,
 )
 from app.schemas.support import (
+    AttachmentMeta,
     MySupportCommentCreate,
     MySupportTicketCreate,
     TicketCommentCreate,
@@ -105,6 +116,7 @@ from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
 from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
+from app.services import web_support_tickets
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -560,7 +572,15 @@ def my_topup_initiate(
     """Create a top-up checkout intent for the caller's prepaid account."""
     customer = _customer(db, principal)
     try:
-        result = customer_payments.create_topup_intent(db, customer, payload.amount)
+        result = customer_payments.create_topup_intent(
+            db,
+            customer,
+            payload.amount,
+            payment_method_id=(
+                str(payload.payment_method_id) if payload.payment_method_id else None
+            ),
+            idempotency_key=payload.idempotency_key,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TopupInitiateResponse(
@@ -571,6 +591,8 @@ def my_topup_initiate(
         amount=result["requested_amount"],
         currency=result.get("currency", "NGN"),
         customer_email=customer["username"] or None,
+        charged=result.get("charged", False),
+        checkout_url=result.get("checkout_url"),
     )
 
 
@@ -733,15 +755,47 @@ def my_ticket(
     return _owned_ticket(db, _subscriber_id(principal), ticket_id)
 
 
+MAX_TICKET_ATTACHMENTS = 5
+
+
+def _validate_attachment_count(attachments: list[UploadFile]) -> list[UploadFile]:
+    files = [a for a in (attachments or []) if getattr(a, "filename", "")]
+    if len(files) > MAX_TICKET_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "too_many_attachments",
+                "message": f"At most {MAX_TICKET_ATTACHMENTS} files may be attached.",
+            },
+        )
+    return files
+
+
 @router.post("/support/tickets", response_model=TicketRead, status_code=201)
 def my_create_ticket(
-    payload: MySupportTicketCreate,
     request: Request,
+    title: str = Form(..., min_length=1, max_length=255),
+    description: str | None = Form(default=None),
+    priority: str = Form(default="normal"),
+    ticket_type: str | None = Form(default=None),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
     """Raise a ticket on the caller's own account. Identity/assignment fields
-    are not accepted from the client — subscriber_id is forced to the caller."""
+    are not accepted from the client — subscriber_id is forced to the caller.
+
+    Accepts multipart/form-data: the JSON-equivalent fields (title, description,
+    priority, ticket_type) as form fields plus a repeatable ``attachments`` file
+    field (images + PDF, <=5 MB each, <=5 files). Attachments are stored locally
+    on the ticket and may not sync to the CRM (the CRM push omits them)."""
+    payload = MySupportTicketCreate(
+        title=title,
+        description=description,
+        priority=priority,
+        ticket_type=ticket_type,
+    )
+    files = _validate_attachment_count(attachments)
     subscriber_id = _subscriber_id(principal)
     ticket_payload = TicketCreate(
         title=payload.title,
@@ -754,6 +808,22 @@ def my_create_ticket(
     ticket = support_service.tickets.create(
         db, ticket_payload, actor_id=subscriber_id, request=request
     )
+    if files:
+        try:
+            uploaded = web_support_tickets.upload_ticket_attachments(
+                db,
+                ticket_id=str(ticket.id),
+                attachments=files,
+                entity_type="support_ticket_attachment",
+                actor_id=subscriber_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_attachment", "message": str(exc)},
+            ) from exc
+        support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
+        db.refresh(ticket)
     from app.services.crm_ticket_push import enqueue_crm_ticket_push
 
     if getattr(ticket, "id", None):
@@ -791,19 +861,46 @@ def my_ticket_comments(
 )
 def my_add_ticket_comment(
     ticket_id: str,
-    payload: MySupportCommentCreate,
     request: Request,
+    body: str = Form(..., min_length=1),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
     """Reply to the caller's own ticket. is_internal is forced False so a
-    customer can never create a staff-only note."""
+    customer can never create a staff-only note.
+
+    Accepts multipart/form-data: the ``body`` form field plus a repeatable
+    ``attachments`` file field (images + PDF, <=5 MB each, <=5 files).
+    Attachments are stored locally on the comment and may not sync to the CRM
+    (the CRM push omits them)."""
+    payload = MySupportCommentCreate(body=body)
+    files = _validate_attachment_count(attachments)
     subscriber_id = _subscriber_id(principal)
     _owned_ticket(db, subscriber_id, ticket_id)
+    uploaded: list[dict] = []
+    if files:
+        try:
+            uploaded = web_support_tickets.upload_ticket_attachments(
+                db,
+                ticket_id=ticket_id,
+                attachments=files,
+                entity_type="support_ticket_comment_attachment",
+                actor_id=subscriber_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_attachment", "message": str(exc)},
+            ) from exc
     comment = support_service.tickets.create_comment(
         db,
         ticket_id,
-        TicketCommentCreate(body=payload.body, is_internal=False),
+        TicketCommentCreate(
+            body=payload.body,
+            is_internal=False,
+            attachments=[AttachmentMeta(**item) for item in uploaded],
+        ),
         actor_id=subscriber_id,
         request=request,
     )
@@ -1057,11 +1154,18 @@ def my_wallet_pay_bill(
     payload: VasPayBillRequest,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     """Pay the caller's DotMac bill from their wallet (the only wallet→billing
-    bridge; allocation matches an ordinary gateway payment)."""
+    bridge; allocation matches an ordinary gateway payment).
+
+    Pass an ``Idempotency-Key`` header to make the debit safe against
+    double-submit: a replay returns the original payment, never a second
+    wallet debit."""
     subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.pay_bill(db, subscriber_id, payload.amount)
+    result = vas_wallet_service.pay_bill(
+        db, subscriber_id, payload.amount, idempotency_key=idempotency_key
+    )
     return VasPayBillResponse(**result)
 
 
