@@ -1064,7 +1064,8 @@ class TestCustomerProfileNotifications:
             updated = update_customer_profile(
                 db_session,
                 subscriber_id=str(subscriber.id),
-                name="Updated Customer",
+                first_name="Updated",
+                last_name="Customer",
                 email="updated@example.com",
                 phone="+2348000000012",
                 billing_notifications=False,

@@ -395,6 +395,11 @@ class TopupPageResponse(BaseModel):
 
 class TopupInitiateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
+    # When set, charge this saved card server-side (one-tap repeat pay) instead
+    # of opening the gateway checkout. idempotency_key makes that charge safe
+    # against a double-tap (a replay returns the original intent).
+    payment_method_id: UUID | None = None
+    idempotency_key: str | None = None
 
 
 class TopupInitiateResponse(BaseModel):
@@ -405,6 +410,10 @@ class TopupInitiateResponse(BaseModel):
     amount: Decimal
     currency: str = "NGN"
     customer_email: str | None = None
+    # True when a saved card was charged server-side — the client should skip
+    # the gateway webview and go straight to verify.
+    charged: bool = False
+    checkout_url: str | None = None
 
 
 class TopupVerifyRequest(BaseModel):

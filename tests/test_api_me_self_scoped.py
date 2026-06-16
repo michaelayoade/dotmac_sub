@@ -164,7 +164,7 @@ def test_topup_initiate_translates_value_error(monkeypatch):
         lambda db, principal: {"account_id": "x", "subscriber_id": "x"},
     )
 
-    def _boom(db, customer, amount):
+    def _boom(db, customer, amount, **kwargs):
         raise ValueError("Top-up amount must be at least ₦1,000.00")
 
     monkeypatch.setattr(me_api.customer_payments, "create_topup_intent", _boom)

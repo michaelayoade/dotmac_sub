@@ -202,11 +202,27 @@ document.addEventListener('DOMContentLoaded', function() {
     const coordinatesLabel = document.getElementById('selected-coordinates');
     const submitButton = document.getElementById('submit-location-request');
 
-    const map = L.map('customer-location-map').setView(center, 16);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    let map;
+    try {
+        map = L.map('customer-location-map').setView(center, 16);
+    } catch (mapError) {
+        if (fallback) fallback.classList.remove('hidden');
+        return;
+    }
+    const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap',
         maxZoom: 20
-    }).addTo(map);
+    });
+    let tileErrorReported = false;
+    tileLayer.on('tileerror', function() {
+        // Surface a single warning when map tiles can't be reached rather than
+        // leaving the customer staring at a blank grey map.
+        if (!tileErrorReported && fallback) {
+            tileErrorReported = true;
+            fallback.classList.remove('hidden');
+        }
+    });
+    tileLayer.addTo(map);
 
     if (currentLat !== null && currentLon !== null) {
         L.circleMarker([currentLat, currentLon], {

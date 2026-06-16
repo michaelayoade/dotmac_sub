@@ -137,6 +137,76 @@ class PaymentMethodsScreen extends ConsumerWidget {
     choice == 'bank' ? _openBankTransfer(context) : _addCard(context);
   }
 
+  /// A saved-card tile with an "Expired"/"Expires soon" badge and, when the
+  /// card needs replacing, a Renew action that runs the add-card flow (top-up
+  /// with "Save this card" pre-enabled).
+  Widget _cardTile(BuildContext context, WidgetRef ref, SavedCard c) {
+    final scheme = Theme.of(context).colorScheme;
+    final needsRenew = c.isExpired || c.expiresSoon;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          Icons.credit_card,
+          color: c.isExpired ? scheme.error : null,
+        ),
+        title: Row(
+          children: [
+            Flexible(child: Text(c.title)),
+            if (c.isExpired)
+              _badge(context, 'Expired', scheme.error)
+            else if (c.expiresSoon)
+              _badge(context, 'Expires soon', scheme.error),
+          ],
+        ),
+        subtitle: Text([
+          if (c.expiry != null) 'Expires ${c.expiry}',
+          if (c.isDefault) 'Default',
+        ].join(' · ')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (needsRenew)
+              TextButton(
+                onPressed: () => _addCard(context),
+                child: const Text('Renew'),
+              ),
+            PopupMenuButton<String>(
+              tooltip: 'Card options',
+              onSelected: (v) => v == 'default'
+                  ? _setDefault(context, ref, c.id)
+                  : _remove(context, ref, c),
+              itemBuilder: (_) => [
+                if (!c.isDefault)
+                  const PopupMenuItem(
+                      value: 'default', child: Text('Set as default')),
+                const PopupMenuItem(value: 'remove', child: Text('Remove')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _badge(BuildContext context, String text, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+              color: color, fontSize: 11, fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+
   /// Bank-transfer method entry — always available, alongside saved cards.
   Widget _bankTransferTile(BuildContext context) {
     return Card(
@@ -204,30 +274,7 @@ class PaymentMethodsScreen extends ConsumerWidget {
                 _bankTransferTile(context),
                 const SizedBox(height: 8),
                 for (final c in list) ...[
-                  Card(
-                    margin: EdgeInsets.zero,
-                    child: ListTile(
-                      leading: const Icon(Icons.credit_card),
-                      title: Text(c.title),
-                      subtitle: Text([
-                        if (c.expiry != null) 'Expires ${c.expiry}',
-                        if (c.isDefault) 'Default',
-                      ].join(' · ')),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (v) => v == 'default'
-                            ? _setDefault(context, ref, c.id)
-                            : _remove(context, ref, c),
-                        itemBuilder: (_) => [
-                          if (!c.isDefault)
-                            const PopupMenuItem(
-                                value: 'default',
-                                child: Text('Set as default')),
-                          const PopupMenuItem(
-                              value: 'remove', child: Text('Remove')),
-                        ],
-                      ),
-                    ),
-                  ),
+                  _cardTile(context, ref, c),
                   const SizedBox(height: 8),
                 ],
               ],

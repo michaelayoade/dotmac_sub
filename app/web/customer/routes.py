@@ -168,6 +168,7 @@ def customer_support_create(
     title: str = Form(...),
     description: str = Form(""),
     priority: str = Form("normal"),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -185,6 +186,7 @@ def customer_support_create(
         title,
         description,
         priority,
+        attachments=attachments,
     )
     if result["success"]:
         ticket = result["ticket"]
@@ -238,6 +240,7 @@ def customer_support_add_comment(
     request: Request,
     ticket_id: str,
     body: str = Form(...),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -246,7 +249,7 @@ def customer_support_add_comment(
 
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     result = crm_portal.handle_ticket_comment(
-        db, customer, subscriber_ids, ticket_id, body
+        db, customer, subscriber_ids, ticket_id, body, attachments=attachments
     )
     if not result.get("success"):
         context = crm_portal.ticket_detail_context(
@@ -1120,9 +1123,20 @@ def customer_profile(
 @router.post("/profile", response_class=HTMLResponse)
 def customer_update_profile(
     request: Request,
-    name: str = Form(...),
+    first_name: str = Form(...),
+    last_name: str = Form(...),
     email: str = Form(...),
+    display_name: str = Form(None),
     phone: str = Form(None),
+    date_of_birth: str = Form(None),
+    gender: str = Form(None),
+    preferred_contact_method: str = Form(None),
+    address_line1: str = Form(None),
+    address_line2: str = Form(None),
+    city: str = Form(None),
+    region: str = Form(None),
+    postal_code: str = Form(None),
+    country_code: str = Form(None),
     billing_notifications: bool = Form(False),
     sms_updates: bool = Form(False),
     db: Session = Depends(get_db),
@@ -1138,9 +1152,20 @@ def customer_update_profile(
         update_customer_profile(
             db,
             subscriber_id=subscriber_id,
-            name=name,
+            first_name=first_name,
+            last_name=last_name,
+            display_name=display_name,
             email=email,
             phone=phone,
+            date_of_birth=date_of_birth,
+            gender=gender,
+            preferred_contact_method=preferred_contact_method,
+            address_line1=address_line1,
+            address_line2=address_line2,
+            city=city,
+            region=region,
+            postal_code=postal_code,
+            country_code=country_code,
             billing_notifications=billing_notifications,
             sms_updates=sms_updates,
         )
@@ -1598,6 +1623,11 @@ def customer_create_topup_intent(
     amount_value = payload.get("amount")
     if amount_value is None:
         return JSONResponse({"detail": "amount is required"}, status_code=400)
+    # An Idempotency-Key header (or body token) makes saved-card charges safe
+    # against double-submit; gateway-redirect flows ignore it.
+    idempotency_key = request.headers.get("Idempotency-Key") or payload.get(
+        "idempotency_key"
+    )
     try:
         result = customer_portal.create_topup_intent(
             db,
@@ -1606,6 +1636,7 @@ def customer_create_topup_intent(
             provider=payload.get("provider"),
             payment_method_id=payload.get("payment_method_id"),
             redirect_url=str(request.url_for("customer_verify_topup")),
+            idempotency_key=idempotency_key,
         )
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -2529,5 +2560,7 @@ def customer_payment_arrangement_detail(
             "customer": customer,
             **detail,
             "active_page": "billing",
+            # Drives the overdue-installment highlight in the template.
+            "today": datetime.now(UTC).date(),
         },
     )

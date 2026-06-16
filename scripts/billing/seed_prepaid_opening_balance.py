@@ -1,12 +1,18 @@
 """Seed prepaid opening balances into the AR ledger at cutover.
 
 The prepaid drawdown engine makes the local AR ledger authoritative. This
-one-time step posts, per prepaid Splynx-linked subscriber, a credit
-``LedgerEntry`` equal to the subscriber's synced ``deposit`` (the
-Splynx-authoritative balance at the cutover instant). After it runs, the
-ledger balance equals the deposit and ``_resolve_prepaid_available_balance``
-switches that account from the deposit to the ledger (the seed's memo is the
-switch — see PREPAID_OPENING_BALANCE_MEMO).
+one-time step makes each prepaid Splynx-linked subscriber's ledger balance
+equal its synced ``deposit`` (the Splynx-authoritative balance at the cutover
+instant), then flips ``_resolve_prepaid_available_balance`` from the deposit
+to the ledger (the seed's memo is the switch — see PREPAID_OPENING_BALANCE_MEMO).
+
+IMPORTANT — the seed posts the **true-up delta**, not the full deposit. The
+migrated ledger already carries each account's transaction history, and for
+~83% of accounts its net (unallocated credits − debits − open invoices) already
+equals the deposit; posting the full deposit on top would DOUBLE those. So per
+account we post ``delta = deposit − existing_ledger_net``: ~0 markers for the
+already-correct accounts, and the corrective delta for the rest, landing every
+account's resolved balance exactly on the deposit.
 
 Run AFTER a final ``resync_prepaid_deposits.py --execute`` and BEFORE enabling
 ``billing_enabled`` (see docs/designs/PREPAID_DRAWDOWN_ENGINE.md). Idempotent:

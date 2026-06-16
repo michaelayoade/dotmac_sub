@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../config/env.dart';
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../models/ticket.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/attachment_picker.dart';
 import '../../widgets/status_chip.dart';
 
 class TicketDetailScreen extends ConsumerStatefulWidget {
@@ -19,6 +22,7 @@ class TicketDetailScreen extends ConsumerStatefulWidget {
 class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
   final _reply = TextEditingController();
   bool _sending = false;
+  List<PickedAttachment> _attachments = [];
 
   @override
   void dispose() {
@@ -28,14 +32,21 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
 
   Future<void> _send() async {
     final body = _reply.text.trim();
-    if (body.isEmpty) return;
+    // A reply needs either text or at least one attachment.
+    if (body.isEmpty && _attachments.isEmpty) return;
     setState(() => _sending = true);
     try {
-      await ref
-          .read(supportRepositoryProvider)
-          .addComment(widget.ticketId, body);
+      await ref.read(supportRepositoryProvider).addComment(
+            widget.ticketId,
+            body,
+            attachmentPaths: _attachments.isEmpty
+                ? null
+                : [for (final a in _attachments) a.path],
+          );
       _reply.clear();
+      setState(() => _attachments = []);
       ref.invalidate(ticketCommentsProvider(widget.ticketId));
+      ref.invalidate(ticketProvider(widget.ticketId));
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -44,6 +55,14 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Compact "attach" entry for the composer (the inline strip only renders once
+  /// something is picked). Delegates to [AttachmentPicker.pickInto] so the
+  /// camera/gallery sheet and the ≤5 files / ≤5 MB validation live in one place.
+  Future<void> _openAttachSheet() async {
+    final next = await AttachmentPicker.pickInto(context, _attachments);
+    if (next != null && mounted) setState(() => _attachments = next);
   }
 
   @override
@@ -81,7 +100,16 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(16),
-                        child: Text(t.description!),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(t.description!),
+                            if (t.attachments.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              _AttachmentStrip(attachments: t.attachments),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   const SizedBox(height: 16),
@@ -107,9 +135,26 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                         children: [
                           for (final c in visible)
                             Card(
-                              child: ListTile(
-                                title: Text(c.body),
-                                subtitle: Text(Fmt.dateTime(c.createdAt)),
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (c.body.isNotEmpty) Text(c.body),
+                                    if (c.attachments.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      _AttachmentStrip(
+                                          attachments: c.attachments),
+                                    ],
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      Fmt.dateTime(c.createdAt),
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                         ],
@@ -124,28 +169,49 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _reply,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        hintText: 'Write a reply…',
-                        isDense: true,
-                      ),
+                  if (_attachments.isNotEmpty) ...[
+                    AttachmentPicker(
+                      attachments: _attachments,
+                      enabled: !_sending,
+                      onChanged: (a) => setState(() => _attachments = a),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _sending ? null : _send,
-                    icon: _sending
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.send),
+                    const SizedBox(height: 8),
+                  ],
+                  Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Attach photo',
+                        onPressed: _sending ? null : _openAttachSheet,
+                        icon: const Icon(Icons.attach_file),
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: _reply,
+                          minLines: 1,
+                          maxLines: 4,
+                          decoration: const InputDecoration(
+                            hintText: 'Write a reply…',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        tooltip: 'Send reply',
+                        onPressed: _sending ? null : _send,
+                        icon: _sending
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.send),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -153,6 +219,90 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Renders uploaded attachments as a horizontal row of thumbnails (images) /
+/// file chips (PDFs). Tapping an image opens it full-screen; tapping a PDF chip
+/// is a no-op placeholder (no in-app document viewer wired).
+class _AttachmentStrip extends StatelessWidget {
+  const _AttachmentStrip({required this.attachments});
+
+  final List<TicketAttachment> attachments;
+
+  void _openImage(BuildContext context, TicketAttachment a) {
+    final url = a.url;
+    if (url == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            title: Text(a.filename, overflow: TextOverflow.ellipsis),
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              child: Image.network(
+                Env.resolveUrl(url),
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.broken_image_outlined,
+                  color: Colors.white54,
+                  size: 48,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final a in attachments)
+          if (a.isImage && a.url != null)
+            InkWell(
+              onTap: () => _openImage(context, a),
+              borderRadius: BorderRadius.circular(8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  Env.resolveUrl(a.url!),
+                  width: 72,
+                  height: 72,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    width: 72,
+                    height: 72,
+                    color: scheme.surfaceContainerHighest,
+                    child: const Icon(Icons.broken_image_outlined),
+                  ),
+                ),
+              ),
+            )
+          else
+            Chip(
+              avatar: Icon(
+                a.isPdf
+                    ? Icons.picture_as_pdf_outlined
+                    : Icons.insert_drive_file_outlined,
+                size: 18,
+              ),
+              label: Text(
+                a.filename,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+      ],
     );
   }
 }

@@ -113,6 +113,7 @@ def customer_wallet_topup_verify(
 def customer_wallet_pay_bill(
     request: Request,
     amount: str = Form(...),
+    idempotency_key: str = Form(default=""),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -125,11 +126,17 @@ def customer_wallet_pay_bill(
             url="/portal/wallet?error=Invalid amount", status_code=303
         )
     try:
-        vas_wallet_service.pay_bill(db, str(customer.get("subscriber_id") or ""), value)
-    except HTTPException as exc:
-        return RedirectResponse(
-            url=f"/portal/wallet?error={exc.detail}", status_code=303
+        vas_wallet_service.pay_bill(
+            db,
+            str(customer.get("subscriber_id") or ""),
+            value,
+            idempotency_key=(idempotency_key or "").strip() or None,
         )
+    except HTTPException as exc:
+        # ``detail`` may be a structured ``{code, message}`` dict now.
+        detail = exc.detail
+        message = detail.get("message") if isinstance(detail, dict) else str(detail)
+        return RedirectResponse(url=f"/portal/wallet?error={message}", status_code=303)
     return RedirectResponse(url="/portal/wallet?paid=1", status_code=303)
 
 

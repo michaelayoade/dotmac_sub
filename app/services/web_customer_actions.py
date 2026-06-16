@@ -6,7 +6,7 @@ import csv
 import io
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -1957,17 +1957,27 @@ def update_customer_profile(
     db: Session,
     *,
     subscriber_id: str,
-    name: str,
+    first_name: str,
+    last_name: str,
     email: str,
-    phone: str | None,
+    display_name: str | None = None,
+    phone: str | None = None,
+    date_of_birth: str | None = None,
+    gender: str | None = None,
+    preferred_contact_method: str | None = None,
+    address_line1: str | None = None,
+    address_line2: str | None = None,
+    city: str | None = None,
+    region: str | None = None,
+    postal_code: str | None = None,
+    country_code: str | None = None,
     billing_notifications: bool,
     sms_updates: bool,
 ) -> Subscriber | None:
-    """Update a customer's basic profile fields."""
+    """Update a customer's profile fields."""
     subscriber = db.get(Subscriber, subscriber_id)
     if not subscriber:
         return None
-    name_parts = name.strip().split(None, 1)
     metadata = dict(subscriber.metadata_ or {})
     metadata["billing_notifications"] = bool(billing_notifications)
     metadata["sms_updates"] = bool(sms_updates)
@@ -1977,13 +1987,43 @@ def update_customer_profile(
     # fresh verification link so the verified state can never lag the address.
     email_changed = new_email.lower() != (subscriber.email or "").strip().lower()
 
+    display = (display_name or "").strip()
     update_fields: dict[str, Any] = {
-        "first_name": name_parts[0] if name_parts else name.strip(),
-        "last_name": name_parts[1] if len(name_parts) > 1 else "",
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "display_name": display or None,
         "email": new_email,
         "phone": phone.strip() if phone else None,
         "metadata_": metadata,
     }
+
+    # Date of birth: blank clears it; a malformed value is ignored (keep prior).
+    dob = (date_of_birth or "").strip()
+    if not dob:
+        update_fields["date_of_birth"] = None
+    else:
+        try:
+            update_fields["date_of_birth"] = date.fromisoformat(dob)
+        except ValueError:
+            pass
+
+    # gender always carries a value from the form (defaults to "unknown");
+    # contact method is optional ("" → no preference). Pydantic coerces the
+    # string to the enum on the SubscriberUpdate model.
+    gender_value = (gender or "").strip()
+    if gender_value:
+        update_fields["gender"] = gender_value
+    contact_value = (preferred_contact_method or "").strip()
+    update_fields["preferred_contact_method"] = contact_value or None
+
+    # Contact address: each blank field clears it; country is stored uppercase.
+    update_fields["address_line1"] = (address_line1 or "").strip() or None
+    update_fields["address_line2"] = (address_line2 or "").strip() or None
+    update_fields["city"] = (city or "").strip() or None
+    update_fields["region"] = (region or "").strip() or None
+    update_fields["postal_code"] = (postal_code or "").strip() or None
+    update_fields["country_code"] = (country_code or "").strip().upper() or None
+
     # Set in the constructor so exclude_unset keeps it (post-init assignment
     # would be dropped by model_dump(exclude_unset=True)).
     if email_changed:

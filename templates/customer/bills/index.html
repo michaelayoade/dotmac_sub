@@ -86,10 +86,15 @@
                 <div>
                     <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" x-text="selected ? selected.identifier_label : 'Number'"></label>
                     <input type="text" name="identifier" x-model="identifier" required
-                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                           :disabled="verifying"
+                           x-on:input="verifiedName = ''; verifyError = ''"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                     <template x-if="selected && selected.requires_verify">
                         <div class="mt-2">
-                            <button type="button" x-on:click="verify()" class="text-sm font-semibold text-[var(--color-brand-600)] hover:underline" x-text="verifying ? 'Checking…' : 'Check name'"></button>
+                            <button type="button" x-on:click="verify()" :disabled="verifying" class="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--color-brand-600)] hover:underline disabled:opacity-60">
+                                <svg x-show="verifying" class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                <span x-text="verifying ? 'Checking…' : 'Check name'"></span>
+                            </button>
                             <p class="mt-1 text-sm" :class="verifyError ? 'text-rose-600' : 'text-emerald-700 dark:text-emerald-400'" x-text="verifyError || verifiedName"></p>
                         </div>
                     </template>
@@ -108,12 +113,14 @@
                 </template>
                 <div x-show="!variationHasPrice()">
                     <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Amount (₦)</label>
-                    <input type="number" name="amount" x-model="amount" min="1" step="0.01"
+                    <input type="number" name="amount" x-model="amount" min="0.01" step="0.01"
+                           oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
                            class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                 </div>
-                <button type="submit"
-                        class="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:-translate-y-0.5">
-                    Pay from wallet
+                <button type="submit" :disabled="submitting"
+                        class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60">
+                    <svg x-show="submitting" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span x-text="submitting ? 'Processing…' : 'Pay from wallet'"></span>
                 </button>
                 <p class="text-xs text-stone-500 dark:text-stone-400">If delivery fails, the money returns to your wallet instantly.</p>
             </form>
@@ -129,6 +136,7 @@ function billsPage() {
         variation: '',
         amount: '',
         verifying: false,
+        submitting: false,
         verifiedName: '',
         verifyError: '',
         selectService(service) {
@@ -150,6 +158,20 @@ function billsPage() {
                 this.verifyError = 'Check the customer name before paying.';
                 return false;
             }
+            if (!this.variationHasPrice()) {
+                const value = parseFloat(this.amount);
+                if (!value || value <= 0) {
+                    event.preventDefault();
+                    this.verifyError = 'Enter an amount greater than ₦0.';
+                    return false;
+                }
+                if (Math.round(value * 100) !== value * 100) {
+                    event.preventDefault();
+                    this.verifyError = 'Amount can have at most 2 decimal places.';
+                    return false;
+                }
+            }
+            this.submitting = true;
             return true;
         },
         async verify() {

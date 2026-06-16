@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/payment_errors.dart';
+import '../../models/payment_method.dart';
 import '../../models/topup.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -28,10 +32,13 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   Object? _loadError;
   bool _loadingPage = true;
 
-  int? _selected;
   final _custom = TextEditingController();
   bool _busy = false;
   late bool _saveCard = widget.saveCardInitial;
+
+  /// When set, charge this saved card directly (one-tap) instead of opening the
+  /// gateway checkout. Null = pay with a new card via the provider webview.
+  String? _selectedCardId;
 
   @override
   void initState() {
@@ -60,8 +67,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
   }
 
-  int? get _amount =>
-      _selected ?? int.tryParse(_custom.text.trim().replaceAll(',', ''));
+  int? get _amount => int.tryParse(_custom.text.trim().replaceAll(',', ''));
 
   Future<void> _submit() async {
     final page = _page!;
@@ -78,22 +84,43 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
     setState(() => _busy = true);
     try {
+      final cardId = _selectedCardId;
       final initiation =
-          await ref.read(billingRepositoryProvider).initiateTopup(amount);
+          await ref.read(billingRepositoryProvider).initiateTopup(
+                amount,
+                paymentMethodId: cardId,
+                // One key per attempt makes a saved-card charge safe against a
+                // Dio retry; the button busy-guard covers double-taps.
+                idempotencyKey: cardId == null
+                    ? null
+                    : 'topup-${DateTime.now().microsecondsSinceEpoch}-'
+                        '${Random().nextInt(0x7fffffff)}',
+              );
       if (!mounted) return;
-      final reference = await router.push<String>(
-        '/pay',
-        extra: CheckoutArgs.topup(initiation),
-      );
-      if (reference == null) return; // cancelled
 
-      final result = await ref
-          .read(billingRepositoryProvider)
-          .verifyTopup(reference, saveCard: _saveCard);
+      String reference;
+      if (initiation.charged) {
+        // Saved card was charged server-side — skip the gateway webview.
+        reference = initiation.paymentReference;
+      } else {
+        final ref0 = await router.push<String>(
+          '/pay',
+          extra: CheckoutArgs.topup(initiation),
+        );
+        if (ref0 == null) return; // cancelled
+        reference = ref0;
+      }
+
+      final result = await ref.read(billingRepositoryProvider).verifyTopup(
+            reference,
+            // "Save this card" only applies to a brand-new card.
+            saveCard: cardId == null && _saveCard,
+          );
       // Top-up credits the wallet — refresh balance + ledger + invoices.
       ref.invalidate(invoicesProvider);
       ref.invalidate(balanceProvider);
       ref.invalidate(ledgerProvider);
+      ref.invalidate(paymentMethodsProvider);
       messenger.showSnackBar(SnackBar(
         content: Text(result.availableBalance != null
             ? 'Topped up — balance ${Fmt.money(result.availableBalance!, page.currency)}'
@@ -101,9 +128,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       ));
       await _loadPage();
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) showPaymentError(context, e, onRetry: _submit);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Top-up failed: $e')));
+      if (mounted) showPaymentError(context, e, onRetry: _submit);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -118,6 +145,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
         // has no stack, so fall back to the dashboard instead of a dead end.
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
           onPressed: () =>
               context.canPop() ? context.pop() : context.go('/dashboard'),
         ),
@@ -135,8 +163,17 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     );
   }
 
+  String _payLabel(TopupPage page) {
+    final verb = _selectedCardId == null ? 'Top up' : 'Pay';
+    return _amount == null
+        ? verb
+        : '$verb ${Fmt.money(_amount!, page.currency)}';
+  }
+
   Widget _form(TopupPage page) {
     final theme = Theme.of(context);
+    final savedCards =
+        ref.watch(paymentMethodsProvider).asData?.value ?? const <SavedCard>[];
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -161,40 +198,56 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
               ),
             ),
           ),
-        const SizedBox(height: 16),
-        Text('Choose an amount', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 24),
+        Text('Enter an amount', style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final amt in page.presetAmounts)
-              ChoiceChip(
-                label: Text(Fmt.money(amt, page.currency)),
-                selected: _selected == amt,
-                onSelected: (_) => setState(() {
-                  _selected = amt;
-                  _custom.clear();
-                }),
-              ),
-          ],
-        ),
-        const SizedBox(height: 16),
         TextField(
           controller: _custom,
+          autofocus: true,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          onChanged: (_) => setState(() => _selected = null),
+          onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
-            labelText: 'Or enter an amount',
+            labelText: 'Amount',
             prefixText: '${page.currency} ',
             helperText:
                 '${Fmt.money(page.minAmount, page.currency)} – ${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
-        // Saved cards are Paystack-only — the reusable authorization captured
-        // on a successful charge is what powers saved cards and autopay.
-        if (page.providerType == 'paystack')
+        // --- Pay with: one-tap saved card, or a new card via the gateway ---
+        if (savedCards.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text('Pay with', style: theme.textTheme.titleSmall),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.add_card_outlined),
+            title: const Text('New card'),
+            trailing: _selectedCardId == null
+                ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
+                : null,
+            selected: _selectedCardId == null,
+            onTap: _busy ? null : () => setState(() => _selectedCardId = null),
+          ),
+          for (final c in savedCards)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.credit_card),
+              title:
+                  Text(c.label ?? '${c.brand ?? 'Card'} •••• ${c.last4 ?? ''}'),
+              subtitle: (c.expiresMonth != null && c.expiresYear != null)
+                  ? Text('Expires '
+                      '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}')
+                  : null,
+              trailing: _selectedCardId == c.id
+                  ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
+                  : null,
+              selected: _selectedCardId == c.id,
+              onTap:
+                  _busy ? null : () => setState(() => _selectedCardId = c.id),
+            ),
+        ],
+        // "Save this card" only matters when paying with a brand-new card.
+        if (page.providerType == 'paystack' && _selectedCardId == null)
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Save this card'),
@@ -210,10 +263,10 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                   height: 18,
                   width: 18,
                   child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.add_card_outlined),
-          label: Text(_amount == null
-              ? 'Top up'
-              : 'Top up ${Fmt.money(_amount!, page.currency)}'),
+              : Icon(_selectedCardId == null
+                  ? Icons.add_card_outlined
+                  : Icons.bolt_outlined),
+          label: Text(_payLabel(page)),
         ),
       ],
     );
