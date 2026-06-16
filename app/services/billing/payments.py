@@ -3,6 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -891,7 +892,7 @@ class Payments(ListResponseMixin):
             .group_by(PaymentAllocation.payment_id)
             .subquery()
         )
-        payment_rows = (
+        payment_result_rows = (
             db.query(
                 Payment,
                 func.coalesce(allocated_sq.c.allocated, Decimal("0.00")).label(
@@ -905,6 +906,10 @@ class Payments(ListResponseMixin):
             .order_by(Payment.paid_at.asc().nulls_last(), Payment.created_at.asc())
             .all()
         )
+        payment_rows: list[tuple[Payment, Decimal]] = [
+            (payment, cast(Decimal, allocated))
+            for payment, allocated in payment_result_rows
+        ]
         payment_backing_available = round_money(
             sum(
                 (
@@ -987,14 +992,16 @@ class Payments(ListResponseMixin):
 
         db.flush()
         for invoice_id in invoice_ids:
-            invoice = get_by_id(db, Invoice, invoice_id)
-            if invoice:
-                _recalculate_invoice_totals(db, invoice)
-                if invoice.status == InvoiceStatus.paid:
+            recalculated_invoice = get_by_id(db, Invoice, invoice_id)
+            if recalculated_invoice:
+                _recalculate_invoice_totals(db, recalculated_invoice)
+                if recalculated_invoice.status == InvoiceStatus.paid:
                     from app.services import collections as collections_service
 
                     collections_service.restore_account_services(
-                        db, str(invoice.account_id), invoice_id=str(invoice.id)
+                        db,
+                        str(recalculated_invoice.account_id),
+                        invoice_id=str(recalculated_invoice.id),
                     )
 
         BillingAccounts.debit_balance(db, str(ba.id), total_allocated)

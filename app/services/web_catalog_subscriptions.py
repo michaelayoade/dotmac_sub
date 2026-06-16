@@ -8,7 +8,7 @@ import logging
 from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
@@ -1260,9 +1260,11 @@ def _validate_additional_routes_available(
     if not desired_cidrs or not subscription_obj.subscriber_id:
         return
 
-    desired_networks: list[ipaddress.IPv4Network] = [
-        ipaddress.ip_network(cidr, strict=False) for cidr in desired_cidrs
-    ]
+    desired_networks: list[ipaddress.IPv4Network] = []
+    for cidr in desired_cidrs:
+        network = ipaddress.ip_network(cidr, strict=False)
+        if network.version == 4:
+            desired_networks.append(cast(ipaddress.IPv4Network, network))
     for desired in desired_networks:
         if _subnet_starts_at_zero_address(desired):
             raise ValueError(
@@ -1555,13 +1557,15 @@ def _route_parent_networks_for_ipam(
             continue
         if network.version != 4:
             continue
+        network = cast(ipaddress.IPv4Network, network)
         parent_networks = (
             [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
         )
         for parent in parent_networks:
             if parent.prefixlen > 24:
-                parent = ipaddress.ip_network(
-                    f"{parent.network_address}/24", strict=False
+                parent = cast(
+                    ipaddress.IPv4Network,
+                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
                 )
             key = str(parent)
             ranges.setdefault(
@@ -1590,13 +1594,15 @@ def _route_parent_networks_for_ipam(
             continue
         if network.version != 4:
             continue
+        network = cast(ipaddress.IPv4Network, network)
         parent_networks = (
             [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
         )
         for parent in parent_networks:
             if parent.prefixlen > 24:
-                parent = ipaddress.ip_network(
-                    f"{parent.network_address}/24", strict=False
+                parent = cast(
+                    ipaddress.IPv4Network,
+                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
                 )
             key = str(parent)
             ranges[key] = (
@@ -1704,7 +1710,10 @@ def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, obj
     return sorted(
         options,
         key=lambda item: _network_priority_key(
-            ipaddress.ip_network(str(item["cidr"]), strict=False)
+            cast(
+                ipaddress.IPv4Network,
+                ipaddress.ip_network(str(item["cidr"]), strict=False),
+            )
         ),
     )
 
