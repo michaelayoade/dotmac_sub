@@ -37,15 +37,16 @@ def run_incremental_sync(hours_back: int | None = None) -> dict[str, int]:
         dotmac_session,
         splynx_connection,
     )
+    # Post-cutover (Phase 5, 2026-06-16): sub is the SOLE writer of subscription
+    # lifecycle. Splynx must NOT push status changes / cancellations / invoices
+    # into sub (that's the split-brain). The only Splynx→sub bridge still needed
+    # is PAYMENTS — .ng customers still pay on the Splynx portal until
+    # selfcare.dotmac.ng is re-pointed to dotmac; this rescues those payments
+    # into sub. Disable this whole task once .ng is re-pointed.
     from app.services.migrations.incremental_sync import (
         sync_billing_transactions,
-        sync_deleted_customers,
-        sync_deleted_services,
-        sync_new_credit_notes,
-        sync_new_invoices,
         sync_new_payments,
         sync_payment_allocations,
-        sync_status_changes,
     )
 
     logger.info("Splynx incremental sync starting (cursor mode)")
@@ -68,11 +69,10 @@ def run_incremental_sync(hours_back: int | None = None) -> dict[str, int]:
     try:
         with splynx_connection() as conn:
             with dotmac_session() as db:
-                inv_result = sync_new_invoices(conn, db)
-                db.commit()
-                stats["invoices_created"] = inv_result.get("created", 0)
-                stats["invoice_skips"] = inv_result.get("skipped", 0)
-
+                # PAYMENTS ONLY (the .ng rescue). Invoice/credit-note/status/
+                # cancellation pulls are deliberately removed post-cutover — sub
+                # is the sole lifecycle writer; pulling those from Splynx would be
+                # split-brain. (Stats keys for the removed syncs stay 0.)
                 pay_result = sync_new_payments(conn, db)
                 db.commit()
                 stats["payments_created"] = pay_result.get("created", 0)
@@ -83,34 +83,10 @@ def run_incremental_sync(hours_back: int | None = None) -> dict[str, int]:
                 stats["payment_allocations_created"] = alloc_result.get("created", 0)
                 stats["payment_allocation_skips"] = alloc_result.get("skipped", 0)
 
-                # Tail Splynx's raw transaction ledger into the local mirror so
-                # the deposit reconciliation stays current (the mirror would
-                # otherwise only be accurate right after a manual re-import).
+                # Read-only mirror of Splynx's raw ledger (no lifecycle write).
                 bt_result = sync_billing_transactions(conn, db)
                 db.commit()
                 stats["billing_transactions_mirrored"] = bt_result.get("created", 0)
-
-                # Credit note support still uses source timestamps because Splynx
-                # credit note volume is low and the existing importer is timestamped.
-                from datetime import UTC, datetime, timedelta
-
-                since = datetime.now(UTC) - timedelta(hours=hours_back or 2)
-
-                cn_result = sync_new_credit_notes(conn, db, since)
-                db.commit()
-                stats["credit_notes_created"] = cn_result.get("created", 0)
-
-                status_result = sync_status_changes(conn, db)
-                db.commit()
-                stats["status_updated"] = status_result.get("updated", 0)
-
-                del_cust_result = sync_deleted_customers(conn, db)
-                db.commit()
-                stats["customers_deleted"] = del_cust_result.get("soft_deleted", 0)
-
-                del_svc_result = sync_deleted_services(conn, db)
-                db.commit()
-                stats["services_canceled"] = del_svc_result.get("canceled", 0)
 
     except Exception as exc:
         logger.error("Splynx incremental sync failed: %s", exc)
