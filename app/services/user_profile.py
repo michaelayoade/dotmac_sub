@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Subscriber
+from app.models.subscriber import ContactMethod, Gender, Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.auth_flow import AvatarUploadResponse, MeResponse, MeUpdateRequest
 from app.services import avatar as avatar_service
@@ -44,6 +44,12 @@ def _build_me_response(
         preferred_contact_method=preferred_contact_method,
         locale=getattr(person, "locale", None),
         timezone=getattr(person, "timezone", None),
+        address_line1=getattr(person, "address_line1", None),
+        address_line2=getattr(person, "address_line2", None),
+        city=getattr(person, "city", None),
+        region=getattr(person, "region", None),
+        postal_code=getattr(person, "postal_code", None),
+        country_code=getattr(person, "country_code", None),
         user_type=getattr(getattr(person, "user_type", None), "value", None)
         or "customer",
         roles=roles,
@@ -102,6 +108,12 @@ def update_me(
             "preferred_contact_method",
             "locale",
             "timezone",
+            "address_line1",
+            "address_line2",
+            "city",
+            "region",
+            "postal_code",
+            "country_code",
         }
     else:
         person = _get_subscriber_or_404(db, principal_id)
@@ -119,6 +131,14 @@ def update_me(
     for field, value in update_data.items():
         if field in disallowed_fields:
             continue
+        # The DB columns are native enums / a normalised country code, but the
+        # request carries plain strings — coerce so a raw setattr is valid.
+        if field == "gender" and isinstance(value, str):
+            value = Gender(value)
+        elif field == "preferred_contact_method":
+            value = ContactMethod(value) if value else None
+        elif field == "country_code" and isinstance(value, str):
+            value = value.strip().upper() or None
         setattr(person, field, value)
 
     db.flush()

@@ -497,18 +497,71 @@ class _EditProfileSheet extends ConsumerStatefulWidget {
 class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   late final _firstName = TextEditingController(text: widget.me.firstName);
   late final _lastName = TextEditingController(text: widget.me.lastName);
+  late final _displayName =
+      TextEditingController(text: widget.me.displayName ?? '');
   late final _phone = TextEditingController(text: widget.me.phone ?? '');
   late final _email = TextEditingController(text: widget.me.email);
+  late final _addr1 = TextEditingController(text: widget.me.addressLine1 ?? '');
+  late final _addr2 = TextEditingController(text: widget.me.addressLine2 ?? '');
+  late final _city = TextEditingController(text: widget.me.city ?? '');
+  late final _region = TextEditingController(text: widget.me.region ?? '');
+  late final _postal = TextEditingController(text: widget.me.postalCode ?? '');
+  late final _country =
+      TextEditingController(text: widget.me.countryCode ?? '');
+  late String _gender = widget.me.gender ?? 'unknown';
+  late String? _contactMethod = widget.me.preferredContactMethod;
+  late String? _dob = widget.me.dateOfBirth; // ISO yyyy-MM-dd
   bool _busy = false;
   String? _error;
+
+  static const _genders = <String, String>{
+    'unknown': 'Prefer not to say',
+    'female': 'Female',
+    'male': 'Male',
+    'non_binary': 'Non-binary',
+    'other': 'Other',
+  };
+  static const _contactMethods = <String, String>{
+    'email': 'Email',
+    'phone': 'Phone',
+    'sms': 'SMS',
+    'push': 'Push notification',
+  };
 
   @override
   void dispose() {
     _firstName.dispose();
     _lastName.dispose();
+    _displayName.dispose();
     _phone.dispose();
     _email.dispose();
+    _addr1.dispose();
+    _addr2.dispose();
+    _city.dispose();
+    _region.dispose();
+    _postal.dispose();
+    _country.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDob() async {
+    final now = DateTime.now();
+    DateTime initial = DateTime(now.year - 25);
+    if (_dob != null) {
+      final parsed = DateTime.tryParse(_dob!);
+      if (parsed != null) initial = parsed;
+    }
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(1900),
+      lastDate: now,
+    );
+    if (picked != null) {
+      setState(() => _dob = '${picked.year.toString().padLeft(4, '0')}-'
+          '${picked.month.toString().padLeft(2, '0')}-'
+          '${picked.day.toString().padLeft(2, '0')}');
+    }
   }
 
   // Loose RFC-ish check: a single @ with non-empty local part and a dotted
@@ -538,8 +591,18 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       await ref.read(authRepositoryProvider).updateProfile({
         'first_name': _firstName.text.trim(),
         'last_name': _lastName.text.trim(),
+        'display_name': _displayName.text.trim(),
         'phone': _phone.text.trim(),
         'email': email,
+        'date_of_birth': _dob,
+        'gender': _gender,
+        'preferred_contact_method': _contactMethod ?? '',
+        'address_line1': _addr1.text.trim(),
+        'address_line2': _addr2.text.trim(),
+        'city': _city.text.trim(),
+        'region': _region.text.trim(),
+        'postal_code': _postal.text.trim(),
+        'country_code': _country.text.trim(),
       });
       final emailChanged = email != widget.me.email.trim();
       await ref.read(authControllerProvider.notifier).reloadProfile();
@@ -564,55 +627,143 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     final insets = MediaQuery.of(context).viewInsets.bottom;
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, insets + 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 16),
-          if (_error != null) ...[
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-            const SizedBox(height: 8),
-          ],
-          TextField(
-            controller: _firstName,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(labelText: 'First name'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _lastName,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(labelText: 'Last name'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _phone,
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(labelText: 'Phone'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _email,
-            keyboardType: TextInputType.emailAddress,
-            autocorrect: false,
-            decoration: const InputDecoration(
-              labelText: 'Email',
-              helperText: 'Changing this sends a new verification link.',
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            if (_error != null) ...[
+              Text(_error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: _firstName,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'First name'),
             ),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: _busy ? null : _save,
-            child: _busy
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('Save'),
-          ),
-        ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: _lastName,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Last name'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _displayName,
+              textCapitalization: TextCapitalization.words,
+              decoration:
+                  const InputDecoration(labelText: 'Display name (optional)'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phone,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _email,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                helperText: 'Changing this sends a new verification link.',
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: _busy ? null : _pickDob,
+              child: InputDecorator(
+                decoration: const InputDecoration(labelText: 'Date of birth'),
+                child: Text(_dob ?? 'Not set'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _gender,
+              decoration: const InputDecoration(labelText: 'Gender'),
+              items: [
+                for (final e in _genders.entries)
+                  DropdownMenuItem(value: e.key, child: Text(e.value)),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (v) => setState(() => _gender = v ?? 'unknown'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              initialValue: _contactMethod,
+              decoration:
+                  const InputDecoration(labelText: 'Preferred contact method'),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('No preference'),
+                ),
+                for (final e in _contactMethods.entries)
+                  DropdownMenuItem<String?>(value: e.key, child: Text(e.value)),
+              ],
+              onChanged:
+                  _busy ? null : (v) => setState(() => _contactMethod = v),
+            ),
+            const SizedBox(height: 20),
+            Text('Contact address',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addr1,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Address line 1'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addr2,
+              textCapitalization: TextCapitalization.words,
+              decoration:
+                  const InputDecoration(labelText: 'Address line 2 (optional)'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _city,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'City'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _region,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'State / Region'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _postal,
+              decoration: const InputDecoration(labelText: 'Postal code'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _country,
+              textCapitalization: TextCapitalization.characters,
+              maxLength: 2,
+              decoration: const InputDecoration(
+                labelText: 'Country',
+                helperText: '2-letter code, e.g. NG',
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: _busy ? null : _save,
+              child: _busy
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Save'),
+            ),
+          ],
+        ),
       ),
     );
   }
