@@ -51,6 +51,7 @@ function bandwidthChart(config = {}) {
         chart: null,
         eventSource: null,
         reconnectTimer: null,
+        statsPollTimer: null,
         isDestroyed: false,
         loading: true,
         error: null,
@@ -104,6 +105,7 @@ function bandwidthChart(config = {}) {
                 clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = null;
             }
+            this.stopCurrentStatsPolling();
             if (this.eventSource) {
                 this.eventSource.close();
                 this.eventSource = null;
@@ -137,6 +139,48 @@ function bandwidthChart(config = {}) {
                 return `${this.apiBasePath}/my/live`;
             }
             return `${this.apiBasePath}/live/${this.subscriptionId}`;
+        },
+
+        async loadCurrentStats() {
+            try {
+                const statsUrl = new URL(this.getStatsEndpoint(), window.location.origin);
+                statsUrl.searchParams.set('period', this.timeRange);
+
+                const statsResponse = await fetch(statsUrl);
+                if (!statsResponse.ok) {
+                    return;
+                }
+                const stats = await statsResponse.json();
+                this.currentDownload = stats.download_bps || 0;
+                this.currentUpload = stats.upload_bps || 0;
+                this.peakDownload = stats.peak_download_bps || 0;
+                this.peakUpload = stats.peak_upload_bps || 0;
+                this.totalDownload = stats.total_download_bytes || 0;
+                this.totalUpload = stats.total_upload_bytes || 0;
+            } catch (e) {
+                console.warn('Bandwidth current stats refresh skipped:', e);
+            }
+        },
+
+        startCurrentStatsPolling() {
+            this.stopCurrentStatsPolling();
+            if (this.isDestroyed || this.timeRange !== '1h') {
+                return;
+            }
+            this.statsPollTimer = setInterval(() => {
+                if (this.isDestroyed || this.timeRange !== '1h') {
+                    this.stopCurrentStatsPolling();
+                    return;
+                }
+                this.loadCurrentStats();
+            }, 30000);
+        },
+
+        stopCurrentStatsPolling() {
+            if (this.statsPollTimer) {
+                clearInterval(this.statsPollTimer);
+                this.statsPollTimer = null;
+            }
         },
 
         // Load historical data
@@ -285,11 +329,13 @@ function bandwidthChart(config = {}) {
                 this.eventSource.close();
                 this.eventSource = null;
             }
+            this.stopCurrentStatsPolling();
 
             // Keep live streaming only for 1h to avoid excessive chart updates.
             if (this.timeRange !== '1h') {
                 return;
             }
+            this.startCurrentStatsPolling();
 
             try {
                 const source = new EventSource(this.getLiveEndpoint());

@@ -18,7 +18,12 @@ from app.models.catalog import (
 from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.event_store import EventStatus, EventStore
-from app.models.network import IPAssignment, SubscriberAdditionalRoute
+from app.models.network import (
+    IPAssignment,
+    IPv4Address,
+    IPVersion,
+    SubscriberAdditionalRoute,
+)
 from app.models.notification import (
     Notification,
     NotificationChannel,
@@ -34,7 +39,7 @@ from app.models.radius import (
     RadiusUser,
 )
 from app.models.sequence import DocumentSequence
-from app.models.subscriber import Address, ChannelType, SubscriberChannel
+from app.models.subscriber import Address, ChannelType, Subscriber, SubscriberChannel
 from app.models.subscription_engine import SettingValueType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
@@ -49,13 +54,14 @@ def _public_ip_addon(
     name="/29 IP",
     ip_is_public=True,
     addon_type=AddOnType.custom,
+    ip_prefix_length=29,
 ) -> AddOn:
     add_on = AddOn(
         name=name,
         addon_type=addon_type,
         is_active=True,
         ip_is_public=ip_is_public,
-        ip_prefix_length=29,
+        ip_prefix_length=ip_prefix_length,
     )
     db_session.add(add_on)
     db_session.commit()
@@ -963,10 +969,115 @@ def test_subscription_form_context_bootstraps_ip_addons_from_ipv4_blocks(
     assert by_name["/29 IP"].addon_type == AddOnType.extra_ip
     assert by_name["/32 IP"].addon_type == AddOnType.static_ip
 
-    route_cidrs = {option["cidr"] for option in context["route_range_options"]}
-    assert "203.0.113.8/29" in route_cidrs
-    assert "203.0.113.0/24" in route_cidrs
-    assert "203.0.113.8/30" in route_cidrs
+    route_ranges = context["route_range_options"]
+    route_by_cidr = {option["cidr"]: option for option in route_ranges}
+    assert "203.0.113.0/24" in route_by_cidr
+    children = route_by_cidr["203.0.113.0/24"]["children_by_prefix"]
+    assert "203.0.113.8/29" in {child["cidr"] for child in children["29"]}
+    assert "203.0.113.8/30" in {child["cidr"] for child in children["30"]}
+
+
+def test_subscription_form_context_prioritizes_160_and_102_ipam_parents(
+    db_session,
+    subscriber,
+):
+    for name, cidr in [
+        ("Other Public", "203.0.113.0/24"),
+        ("Range 160", "160.119.127.0/24"),
+        ("Range 102", "102.220.188.0/24"),
+    ]:
+        pool, pool_error = web_network_ip_service.create_ip_pool(
+            db_session,
+            {
+                "name": name,
+                "ip_version": "ipv4",
+                "cidr": cidr,
+                "is_active": True,
+            },
+        )
+        assert pool_error is None
+        assert pool is not None
+
+    form = web_catalog_subscriptions_service.default_subscription_form(
+        str(subscriber.id), str(subscriber.id)
+    )
+
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session, form
+    )
+
+    route_cidrs = [option["cidr"] for option in context["route_range_options"]]
+    assert route_cidrs[:2] == ["102.220.188.0/24", "160.119.127.0/24"]
+    assert route_cidrs.index("203.0.113.0/24") > 1
+
+
+def test_subscription_form_context_hides_child_routes_assigned_to_other_subscriber(
+    db_session,
+    subscriber,
+):
+    other = Subscriber(
+        first_name="Other",
+        last_name="Subscriber",
+        email="other-route@example.com",
+    )
+    db_session.add(other)
+    db_session.flush()
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Range 160",
+            "ip_version": "ipv4",
+            "cidr": "160.119.127.0/24",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assigned_ip = IPv4Address(
+        address="160.119.127.9",
+        pool_id=pool.id,
+        is_reserved=False,
+    )
+    db_session.add(assigned_ip)
+    db_session.flush()
+    db_session.add(
+        IPAssignment(
+            subscriber_id=other.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=assigned_ip.id,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=other.id,
+            cidr="160.119.127.4/30",
+            prefix_length=30,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.commit()
+    form = web_catalog_subscriptions_service.default_subscription_form(
+        str(subscriber.id), str(subscriber.id)
+    )
+
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session, form
+    )
+
+    parent = next(
+        option
+        for option in context["route_range_options"]
+        if option["cidr"] == "160.119.127.0/24"
+    )
+    child_cidrs = {
+        child["cidr"] for child in parent["children_by_prefix"]["30"]
+    }
+    assert "160.119.127.0/30" not in child_cidrs
+    assert "160.119.127.4/30" not in child_cidrs
+    assert "160.119.127.8/30" not in child_cidrs
+    assert "160.119.127.12/30" in child_cidrs
 
 
 def test_update_subscription_with_audit_syncs_additional_routes(
@@ -1001,7 +1112,7 @@ def test_update_subscription_with_audit_syncs_additional_routes(
         [],
         None,
         None,
-        additional_route_cidrs=["198.51.100.0/30"],
+        additional_route_cidrs=["198.51.100.4/30"],
         additional_route_metrics=["3"],
     )
 
@@ -1013,7 +1124,7 @@ def test_update_subscription_with_audit_syncs_additional_routes(
         .one()
     )
     assert existing.is_active is False
-    assert active.cidr == "198.51.100.0/30"
+    assert active.cidr == "198.51.100.4/30"
     assert active.prefix_length == 30
     assert active.metric == 3
 
@@ -1053,6 +1164,209 @@ def test_update_subscription_with_audit_syncs_public_ip_addon(
     assert sub_addon.add_on_id == add_on.id
     assert sub_addon.quantity == 3
     assert sub_addon.end_at is None
+
+
+def test_update_subscription_rejects_additional_route_assigned_to_other_subscriber(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    other = Subscriber(
+        first_name="Other",
+        last_name="Subscriber",
+        email="other-overlap@example.com",
+    )
+    db_session.add(other)
+    db_session.flush()
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=other.id,
+            cidr="160.119.127.4/30",
+            prefix_length=30,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.commit()
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="already assigned"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.4/30"],
+            additional_route_metrics=["1"],
+        )
+
+
+def test_update_subscription_rejects_additional_route_with_assigned_ipam_address(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    other = Subscriber(
+        first_name="Other",
+        last_name="Subscriber",
+        email="other-ipam-route@example.com",
+    )
+    db_session.add(other)
+    db_session.flush()
+    assigned_ip = IPv4Address(
+        address="160.119.127.9",
+        is_reserved=False,
+    )
+    db_session.add(assigned_ip)
+    db_session.flush()
+    db_session.add(
+        IPAssignment(
+            subscriber_id=other.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=assigned_ip.id,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="reserved or assigned in IPAM"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.8/30"],
+            additional_route_metrics=["1"],
+        )
+
+
+def test_update_subscription_rejects_additional_route_starting_at_dot_zero(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cannot start at .0"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.0/30"],
+            additional_route_metrics=["1"],
+        )
+
+
+def test_update_subscription_requires_routes_to_match_public_ip_addon_prefix(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    add_on = _public_ip_addon(
+        db_session,
+        name="/30 IP",
+        ip_prefix_length=30,
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="/30 add-on"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.0/29"],
+            additional_route_metrics=["1"],
+            ip_addon_id=str(add_on.id),
+            ip_addon_quantity="1",
+        )
+
+
+def test_update_subscription_refreshes_radius_session_for_additional_ip_change(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    add_on = _public_ip_addon(
+        db_session,
+        name="/30 IP",
+        ip_prefix_length=30,
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with patch.object(
+        web_catalog_subscriptions_service,
+        "_refresh_subscription_radius_session",
+    ) as refresh:
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.4/30"],
+            additional_route_metrics=["1"],
+            ip_addon_id=str(add_on.id),
+            ip_addon_quantity="1",
+        )
+
+    refresh.assert_called_once_with(
+        db_session,
+        str(subscription.id),
+        reason="additional_ip_update",
+    )
 
 
 def test_update_subscription_with_audit_preserves_routes_when_not_supplied(

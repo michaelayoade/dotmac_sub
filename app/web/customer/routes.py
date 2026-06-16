@@ -653,7 +653,11 @@ def customer_bandwidth_live(
         customer_portal_bandwidth_service.live_bandwidth_events(
             subscription_id=subscription.id,
             is_disconnected=request.is_disconnected,
-        )
+        ),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

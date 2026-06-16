@@ -87,6 +87,14 @@
     </main>
     {% endblock %}
 
+    {% set resolved_app_version = app_version() if app_version is defined else "unknown" %}
+    {% if resolved_app_version and resolved_app_version != "unknown" %}
+    <div class="pointer-events-none fixed bottom-2 right-2 z-40 rounded-md border border-slate-200/80 bg-white/85 px-2 py-1 font-mono text-[11px] font-semibold leading-none text-slate-500 shadow-sm backdrop-blur dark:border-slate-700/80 dark:bg-slate-900/85 dark:text-slate-400"
+         aria-label="Application version">
+        v{{ resolved_app_version }}
+    </div>
+    {% endif %}
+
     <!-- Toast Notification Container -->
     <div id="toast-container"
          x-data="toastStore()"
@@ -401,7 +409,7 @@
     <script src="/static/js/vendor/alpine-focus.min.js"></script>
     <script src="/static/js/vendor/alpine-collapse.min.js"></script>
     <script src="/static/js/vendor/alpine.min.js"></script>
-    <script src="/static/js/typeahead.js?v=20260503b"></script>
+    <script src="/static/js/typeahead.js?v=20260616a"></script>
 
     <!-- Initialize Operation Tracker for real-time notifications -->
     <script>

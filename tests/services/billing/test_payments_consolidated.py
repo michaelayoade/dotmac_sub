@@ -12,6 +12,7 @@ from app.models.billing import (
     InvoiceStatus,
     LedgerEntry,
     PaymentAllocation,
+    PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
 from app.schemas.billing import PaymentCreate
@@ -118,6 +119,194 @@ def test_consolidated_payment_remainder_credits_billing_account_balance(db_sessi
     db_session.refresh(ba)
     # 100 allocated, 150 surplus on the billing account.
     assert ba.balance == Decimal("150.00")
+
+
+def test_consolidated_payment_can_remain_unallocated(db_session):
+    reseller = _make_reseller(db_session, name="ManualOnly")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="MANUAL")
+    inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("100.00"))
+
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+        auto_allocate=False,
+    )
+
+    db_session.refresh(inv)
+    db_session.refresh(ba)
+    allocations = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .all()
+    )
+    assert allocations == []
+    assert inv.balance_due == Decimal("100.00")
+    assert ba.balance == Decimal("100.00")
+
+
+def test_allocate_consolidated_balance_to_selected_subscriber(db_session):
+    reseller = _make_reseller(db_session, name="ManualAllocate")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub_a = _make_subscriber(db_session, reseller_id=reseller.id, suffix="MA")
+    sub_b = _make_subscriber(db_session, reseller_id=reseller.id, suffix="MB")
+    inv_a = _make_invoice(db_session, account_id=sub_a.id, balance=Decimal("80.00"))
+    inv_b = _make_invoice(db_session, account_id=sub_b.id, balance=Decimal("80.00"))
+
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+        auto_allocate=False,
+    )
+
+    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
+        db_session, str(ba.id), str(sub_b.id)
+    )
+
+    db_session.refresh(inv_a)
+    db_session.refresh(inv_b)
+    db_session.refresh(ba)
+    allocations = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .all()
+    )
+    assert result["allocated_total"] == Decimal("80.00")
+    assert result["subscriber_id"] == str(sub_b.id)
+    assert len(allocations) == 1
+    assert allocations[0].invoice_id == inv_b.id
+    assert inv_a.balance_due == Decimal("80.00")
+    assert inv_b.balance_due == Decimal("0.00")
+    assert ba.balance == Decimal("20.00")
+
+
+def test_allocate_consolidated_balance_never_exceeds_unallocated_credit(db_session):
+    reseller = _make_reseller(db_session, name="ManualCap")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="CAP")
+    inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("250.00"))
+
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+        auto_allocate=False,
+    )
+
+    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
+        db_session, str(ba.id), str(sub.id)
+    )
+
+    db_session.refresh(inv)
+    db_session.refresh(ba)
+    allocation = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .one()
+    )
+    assert result["allocated_total"] == Decimal("100.00")
+    assert allocation.amount == Decimal("100.00")
+    assert inv.balance_due == Decimal("150.00")
+    assert ba.balance == Decimal("0.00")
+
+
+def test_allocate_consolidated_balance_with_balance_only_credit(db_session):
+    reseller = _make_reseller(db_session, name="BalanceOnly")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="ONLY")
+    inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("30000.00"))
+    billing_service.billing_accounts.credit_balance(
+        db_session, str(ba.id), Decimal("30000.00")
+    )
+    db_session.commit()
+
+    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
+        db_session, str(ba.id), str(sub.id)
+    )
+
+    db_session.refresh(inv)
+    db_session.refresh(ba)
+    allocation = db_session.query(PaymentAllocation).one()
+    assert result["allocated_total"] == Decimal("30000.00")
+    assert allocation.amount == Decimal("30000.00")
+    assert inv.balance_due == Decimal("0.00")
+    assert ba.balance == Decimal("0.00")
+
+
+def test_reseller_account_activity_includes_subscriber_allocations(db_session):
+    from app.services import reseller_portal_billing
+
+    reseller = _make_reseller(db_session, name="Activity")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="ACT")
+    inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("100.00"))
+
+    billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+        auto_allocate=False,
+    )
+    billing_service.payments.allocate_consolidated_balance_to_subscriber(
+        db_session, str(ba.id), str(sub.id)
+    )
+
+    activity = reseller_portal_billing.account_activity(db_session, str(reseller.id))
+
+    allocation_entries = [
+        entry for entry in activity if entry["title"] == "Funds allocated"
+    ]
+    assert allocation_entries
+    assert allocation_entries[0]["amount"] == Decimal("100.00")
+    assert "Sub ACT" in allocation_entries[0]["description"]
+    assert str(inv.id) in allocation_entries[0]["description"]
+
+
+def test_billing_account_statement_filters_open_invoice_subscribers(db_session):
+    reseller = _make_reseller(db_session, name="SearchStatement")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    alpha = _make_subscriber(db_session, reseller_id=reseller.id, suffix="Alpha")
+    beta = _make_subscriber(db_session, reseller_id=reseller.id, suffix="Beta")
+    _make_invoice(db_session, account_id=alpha.id, balance=Decimal("50.00"))
+    _make_invoice(db_session, account_id=beta.id, balance=Decimal("75.00"))
+
+    statement = billing_service.billing_accounts.statement(
+        db_session, str(ba.id), subscriber_search="beta"
+    )
+
+    assert statement.total_outstanding == Decimal("125.00")
+    assert statement.subscribers_total == 2
+    assert [str(row.subscriber_id) for row in statement.subscribers] == [str(beta.id)]
 
 
 def test_consolidated_payment_ledger_entries_are_per_subscriber(db_session):

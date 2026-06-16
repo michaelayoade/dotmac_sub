@@ -82,8 +82,20 @@ def test_canceled_accounts_and_inactive_invoices_excluded(db_session, reseller):
     assert Decimal(str(revenue["total_outstanding"])) == Decimal("100.00")
 
 
-def test_disabled_accounts_still_visible(db_session, reseller):
-    # 'disabled' is deactivated-but-real (not soft-deleted) — must still show.
-    _account(db_session, reseller, SubscriberStatus.active)
-    _account(db_session, reseller, SubscriberStatus.disabled)
-    assert reseller_portal.count_accounts(db_session, str(reseller.id)) == 2
+def test_disabled_accounts_hidden_by_default_but_filterable(db_session, reseller):
+    # Disabled accounts are deactivated-but-real records. The normal reseller
+    # list hides them, but the status filter can still find them.
+    active = _account(db_session, reseller, SubscriberStatus.active)
+    disabled = _account(db_session, reseller, SubscriberStatus.disabled)
+    rid = str(reseller.id)
+
+    assert reseller_portal.count_accounts(db_session, rid) == 1
+    assert [row["id"] for row in reseller_portal.list_accounts(db_session, rid, 50, 0)] == [
+        str(active.id)
+    ]
+
+    disabled_rows = reseller_portal.list_accounts(
+        db_session, rid, 50, 0, status_filter="disabled"
+    )
+    assert reseller_portal.count_accounts(db_session, rid, status_filter="disabled") == 1
+    assert [row["id"] for row in disabled_rows] == [str(disabled.id)]

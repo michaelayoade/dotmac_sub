@@ -117,10 +117,16 @@ def reseller_accounts(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=5, le=100),
     search: str = Query(""),
+    status_filter: str = Query(""),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_accounts(
-        request, db, page, per_page, search=search or None
+        request,
+        db,
+        page,
+        per_page,
+        search=search or None,
+        status_filter=status_filter or None,
     )
 
 
@@ -143,6 +149,18 @@ def reseller_account_invoices(
 ):
     return web_reseller_routes_service.reseller_account_invoices(
         request, db, account_id, page, per_page
+    )
+
+
+@router.post("/accounts/{account_id}/status", response_class=HTMLResponse)
+def reseller_account_status_update(
+    request: Request,
+    account_id: str,
+    action: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_account_status_update(
+        request, db, account_id, action
     )
 
 
@@ -236,8 +254,31 @@ def reseller_fiber_map(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/billing", response_class=HTMLResponse)
-def reseller_billing(request: Request, db: Session = Depends(get_db)):
-    return web_reseller_billing_service.billing_overview(request, db)
+def reseller_billing(
+    request: Request,
+    allocated: str | None = Query(None),
+    error: str | None = Query(None),
+    subscriber_search: str = Query(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.billing_overview(
+        request,
+        db,
+        allocated=allocated,
+        error=error,
+        subscriber_search=subscriber_search or None,
+    )
+
+
+@router.post("/billing/subscribers/{subscriber_id}/allocate", response_class=HTMLResponse)
+def reseller_billing_allocate_subscriber(
+    request: Request,
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.allocate_subscriber_funds(
+        request, db, subscriber_id
+    )
 
 
 @router.post("/billing/pay/intent", response_class=HTMLResponse)

@@ -5,7 +5,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
-from datetime import UTC, datetime
+from bisect import bisect_left
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
@@ -47,9 +48,9 @@ from app.models.radius import (
     RadiusSyncRun,
     RadiusUser,
 )
-from app.models.radius_active_session import RadiusActiveSession
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
+from app.models.usage import RadiusAccountingSession
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
@@ -77,8 +78,9 @@ from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
 
-PUBLIC_IP_ADDON_PREFIXES = (32, 30, 29)
+PUBLIC_IP_ADDON_PREFIXES = (24, 29, 30, 32)
 MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK = 512
+PUBLIC_IP_PRIORITY_PREFIXES = ("160.", "102.")
 
 
 def _format_offer_price_summary(amount: object | None) -> str:
@@ -990,6 +992,41 @@ def _reconcile_active_subscription_after_credential_sync(
         )
 
 
+def _refresh_subscription_radius_session(
+    db: Session,
+    subscription_id: str | None,
+    *,
+    reason: str,
+) -> None:
+    """Push updated RADIUS replies and force a fresh Access-Accept."""
+    if not subscription_id:
+        return
+    _reconcile_active_subscription_after_credential_sync(db, subscription_id)
+    try:
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=str(subscription_id)
+        )
+    except Exception:
+        logger.warning(
+            "Subscription lookup failed during session refresh for %s",
+            subscription_id,
+            exc_info=True,
+        )
+        return
+    if subscription.status != SubscriptionStatus.active:
+        return
+    try:
+        from app.services.enforcement import disconnect_subscription_sessions
+
+        disconnect_subscription_sessions(db, str(subscription.id), reason=reason)
+    except Exception:
+        logger.warning(
+            "Session disconnect failed during subscription refresh for %s",
+            subscription.id,
+            exc_info=True,
+        )
+
+
 def _resolve_ipv4_for_block(
     db: Session,
     *,
@@ -1214,20 +1251,114 @@ def normalize_additional_routes(
     return routes
 
 
+def _validate_additional_routes_available(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    desired_cidrs: list[str],
+) -> None:
+    if not desired_cidrs or not subscription_obj.subscriber_id:
+        return
+
+    desired_networks: list[ipaddress.IPv4Network] = [
+        ipaddress.ip_network(cidr, strict=False) for cidr in desired_cidrs
+    ]
+    for desired in desired_networks:
+        if _subnet_starts_at_zero_address(desired):
+            raise ValueError(
+                f"Additional routed IP block {desired} cannot start at .0."
+            )
+
+    assigned_networks = _active_route_networks(
+        db,
+        current_subscriber_id=subscription_obj.subscriber_id,
+    )
+    used_ip_ints = _used_ipam_address_ints(db)
+    for desired in desired_networks:
+        for assigned in assigned_networks:
+            if desired.overlaps(assigned):
+                raise ValueError(
+                    f"Additional routed IP block {desired} is already assigned."
+                )
+        if _subnet_contains_used_ipam_address(desired, used_ip_ints):
+            raise ValueError(
+                f"Additional routed IP block {desired} contains an IP already "
+                "reserved or assigned in IPAM."
+            )
+
+
+def _public_ip_addon_prefix(db: Session, add_on_id: str | None) -> int | None:
+    selected = str(add_on_id or "").strip()
+    if not selected:
+        return None
+    try:
+        selected_uuid = UUID(selected)
+    except ValueError as exc:
+        raise ValueError("Selected additional IP add-on is invalid.") from exc
+    add_on = db.get(AddOn, selected_uuid)
+    if not add_on or not add_on.is_active:
+        raise ValueError("Selected additional IP add-on is not available.")
+    if add_on.ip_prefix_length is None:
+        return None
+    return int(add_on.ip_prefix_length)
+
+
+def _validate_additional_routes_match_addon(
+    db: Session,
+    *,
+    desired: list[tuple[str, int, int]],
+    add_on_id: str | None = None,
+    quantity: str | int | None = None,
+) -> None:
+    if not desired:
+        return
+    expected_prefix = _public_ip_addon_prefix(db, add_on_id)
+    if expected_prefix is None:
+        return
+    for cidr, prefix_length, _metric in desired:
+        if prefix_length != expected_prefix:
+            raise ValueError(
+                f"Additional routed IP block {cidr} must match the selected "
+                f"/{expected_prefix} add-on."
+            )
+    try:
+        qty = int(str(quantity or "1").strip() or "1")
+    except ValueError as exc:
+        raise ValueError("Additional IP add-on quantity must be a number.") from exc
+    if len(desired) > qty:
+        raise ValueError(
+            "Additional routed IP block count cannot exceed the selected add-on "
+            "quantity."
+        )
+
+
 def sync_additional_routes_for_subscription(
     db: Session,
     *,
     subscription_obj: Subscription,
     cidrs: list[str] | None,
     metrics: list[str] | None = None,
+    add_on_id: str | None = None,
+    quantity: str | int | None = None,
 ) -> list[str]:
     """Upsert active subscriber additional routes and deactivate removed ones."""
     if not subscription_obj.subscriber_id:
         return []
     desired = normalize_additional_routes(cidrs, metrics)
+    _validate_additional_routes_match_addon(
+        db,
+        desired=desired,
+        add_on_id=add_on_id,
+        quantity=quantity,
+    )
     desired_map = {
         cidr: (prefix_length, metric) for cidr, prefix_length, metric in desired
     }
+    _validate_additional_routes_available(
+        db,
+        subscription_obj=subscription_obj,
+        desired_cidrs=list(desired_map),
+    )
     existing = (
         db.query(SubscriberAdditionalRoute)
         .filter(
@@ -1328,9 +1459,211 @@ def _public_ip_addon_options(db: Session) -> list[AddOn]:
     return sorted(options, key=lambda add_on: str(add_on.name or ""))
 
 
-def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, object]]:
+def _network_priority_key(network: ipaddress.IPv4Network) -> tuple[int, int]:
+    network_text = str(network.network_address)
+    priority = 0 if network_text.startswith(PUBLIC_IP_PRIORITY_PREFIXES) else 1
+    return priority, int(network.network_address)
+
+
+def _active_route_networks(
+    db: Session,
+    *,
+    current_subscriber_id: object | None = None,
+) -> list[ipaddress.IPv4Network]:
+    query = db.query(SubscriberAdditionalRoute).filter(
+        SubscriberAdditionalRoute.is_active.is_(True)
+    )
+    if current_subscriber_id:
+        query = query.filter(
+            SubscriberAdditionalRoute.subscriber_id != current_subscriber_id
+        )
+    networks: list[ipaddress.IPv4Network] = []
+    for route in query.all():
+        try:
+            network = ipaddress.ip_network(str(route.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            networks.append(network)
+    return networks
+
+
+def _used_ipam_address_ints(db: Session) -> list[int]:
+    """Return IPv4 addresses already unavailable in IPAM host inventory."""
+    rows = (
+        db.query(IPv4Address, IPAssignment)
+        .outerjoin(
+            IPAssignment,
+            and_(
+                IPAssignment.ipv4_address_id == IPv4Address.id,
+                IPAssignment.is_active.is_(True),
+            ),
+        )
+        .all()
+    )
+    used: set[int] = set()
+    for address, assignment in rows:
+        if (
+            assignment is None
+            and not bool(address.is_reserved)
+            and not str(address.allocation_type or "").strip()
+            and address.ont_unit_id is None
+        ):
+            continue
+        try:
+            used.add(int(ipaddress.ip_address(str(address.address))))
+        except ValueError:
+            continue
+    return sorted(used)
+
+
+def _subnet_contains_used_ipam_address(
+    subnet: ipaddress.IPv4Network,
+    used_ip_ints: list[int],
+) -> bool:
+    if not used_ip_ints:
+        return False
+    first = int(subnet.network_address)
+    last = int(subnet.broadcast_address)
+    index = bisect_left(used_ip_ints, first)
+    return index < len(used_ip_ints) and used_ip_ints[index] <= last
+
+
+def _subnet_starts_at_zero_address(subnet: ipaddress.IPv4Network) -> bool:
+    if subnet.prefixlen <= 24:
+        return False
+    return int(str(subnet.network_address).rsplit(".", 1)[-1]) == 0
+
+
+def _route_parent_networks_for_ipam(
+    db: Session,
+) -> list[tuple[ipaddress.IPv4Network, str, str, str]]:
+    """Return active IPv4 IPAM ranges collapsed to /24 parent options."""
+    ranges: dict[str, tuple[ipaddress.IPv4Network, str, str, str]] = {}
+
+    pools = (
+        db.query(IpPool)
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .order_by(IpPool.name.asc())
+        .all()
+    )
+    for pool in pools:
+        try:
+            network = ipaddress.ip_network(str(pool.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        parent_networks = (
+            [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
+        )
+        for parent in parent_networks:
+            if parent.prefixlen > 24:
+                parent = ipaddress.ip_network(
+                    f"{parent.network_address}/24", strict=False
+                )
+            key = str(parent)
+            ranges.setdefault(
+                key,
+                (
+                    parent,
+                    str(getattr(pool, "name", "Pool") or "Pool"),
+                    str(pool.id),
+                    "",
+                ),
+            )
+
+    blocks = (
+        db.query(IpBlock)
+        .join(IpPool, IpPool.id == IpBlock.pool_id)
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .filter(IpBlock.is_active.is_(True))
+        .order_by(IpPool.name.asc(), IpBlock.cidr.asc())
+        .all()
+    )
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        parent_networks = (
+            [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
+        )
+        for parent in parent_networks:
+            if parent.prefixlen > 24:
+                parent = ipaddress.ip_network(
+                    f"{parent.network_address}/24", strict=False
+                )
+            key = str(parent)
+            ranges[key] = (
+                parent,
+                str(getattr(block.pool, "name", "Pool") or "Pool"),
+                str(block.pool_id),
+                str(block.id),
+            )
+
+    return sorted(ranges.values(), key=lambda item: _network_priority_key(item[0]))
+
+
+def _route_range_options_for_ipam(
+    db: Session,
+    *,
+    current_subscriber_id: object | None = None,
+) -> list[dict[str, object]]:
+    assigned_networks = _active_route_networks(
+        db, current_subscriber_id=current_subscriber_id
+    )
+    used_ip_ints = _used_ipam_address_ints(db)
     options: list[dict[str, object]] = []
-    seen: set[str] = set()
+    for network, pool_name, pool_id, block_id in _route_parent_networks_for_ipam(db):
+        children_by_prefix: dict[str, list[dict[str, object]]] = {}
+        for prefix in PUBLIC_IP_ADDON_PREFIXES:
+            if network.prefixlen > prefix:
+                continue
+            subnet_count = 2 ** (prefix - network.prefixlen)
+            if subnet_count > MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK:
+                continue
+            children: list[dict[str, object]] = []
+            for subnet in network.subnets(new_prefix=prefix):
+                if _subnet_starts_at_zero_address(subnet):
+                    continue
+                if any(subnet.overlaps(assigned) for assigned in assigned_networks):
+                    continue
+                if _subnet_contains_used_ipam_address(subnet, used_ip_ints):
+                    continue
+                children.append(
+                    {
+                        "id": str(subnet),
+                        "cidr": str(subnet),
+                        "prefix": prefix,
+                        "parent_cidr": str(network),
+                        "pool_name": pool_name,
+                        "display": str(subnet),
+                    }
+                )
+            children_by_prefix[str(prefix)] = children
+        options.append(
+            {
+                "id": str(network),
+                "cidr": str(network),
+                "prefix": network.prefixlen,
+                "pool_id": pool_id,
+                "block_id": block_id,
+                "pool_name": pool_name,
+                "display": f"{pool_name} - {network}",
+                "children_by_prefix": children_by_prefix,
+            }
+        )
+    return options
+
+
+def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, object]]:
+    """Compatibility wrapper for tests/older callers."""
+    options: list[dict[str, object]] = []
     for block in blocks:
         try:
             network = ipaddress.ip_network(str(block.cidr), strict=False)
@@ -1339,47 +1672,39 @@ def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, obj
         if network.version != 4:
             continue
         pool_name = getattr(block.pool, "name", "Pool")
-        parent_label = f"{pool_name} - {network}"
-        if str(network) not in seen:
-            seen.add(str(network))
-            options.append(
-                {
-                    "id": str(network),
-                    "cidr": str(network),
-                    "prefix": network.prefixlen,
-                    "parent_cidr": str(network),
-                    "pool_name": pool_name,
-                    "display": f"{parent_label} (entire range)",
-                }
-            )
-
+        children_by_prefix: dict[str, list[dict[str, object]]] = {}
         for prefix in PUBLIC_IP_ADDON_PREFIXES:
             if network.prefixlen > prefix:
                 continue
             subnet_count = 2 ** (prefix - network.prefixlen)
             if subnet_count > MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK:
                 continue
-            for subnet in network.subnets(new_prefix=prefix):
-                cidr = str(subnet)
-                if cidr in seen:
-                    continue
-                seen.add(cidr)
-                options.append(
-                    {
-                        "id": cidr,
-                        "cidr": cidr,
-                        "prefix": prefix,
-                        "parent_cidr": str(network),
-                        "pool_name": pool_name,
-                        "display": f"{pool_name} - {cidr}",
-                    }
-                )
+            children_by_prefix[str(prefix)] = [
+                {
+                    "id": str(subnet),
+                    "cidr": str(subnet),
+                    "prefix": prefix,
+                    "parent_cidr": str(network),
+                    "pool_name": pool_name,
+                    "display": str(subnet),
+                }
+                for subnet in network.subnets(new_prefix=prefix)
+            ]
+        options.append(
+            {
+                "id": str(network),
+                "cidr": str(network),
+                "prefix": network.prefixlen,
+                "parent_cidr": str(network),
+                "pool_name": pool_name,
+                "display": f"{pool_name} - {network}",
+                "children_by_prefix": children_by_prefix,
+            }
+        )
     return sorted(
         options,
-        key=lambda item: (
-            str(item["pool_name"]),
-            int(item["prefix"]),
-            ipaddress.ip_network(str(item["cidr"]), strict=False).network_address,
+        key=lambda item: _network_priority_key(
+            ipaddress.ip_network(str(item["cidr"]), strict=False)
         ),
     )
 
@@ -2069,6 +2394,79 @@ def _subscription_external_radius_rows(
     )
 
 
+_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
+
+
+def _subscription_connection_status(
+    db: Session,
+    subscription: Subscription,
+    credential: AccessCredential | None,
+) -> dict[str, object]:
+    if subscription.status != SubscriptionStatus.active:
+        return {
+            "state": "inactive",
+            "label": "Not connected",
+            "detail": "Service is not active",
+            "session": None,
+            "last_seen_at": None,
+            "framed_ip_address": None,
+            "identifier": None,
+        }
+
+    query = db.query(RadiusAccountingSession).filter(
+        RadiusAccountingSession.session_end.is_(None)
+    )
+    if credential:
+        query = query.filter(
+            or_(
+                RadiusAccountingSession.subscription_id == subscription.id,
+                RadiusAccountingSession.access_credential_id == credential.id,
+            )
+        )
+    else:
+        query = query.filter(RadiusAccountingSession.subscription_id == subscription.id)
+
+    session = (
+        query.order_by(
+            RadiusAccountingSession.last_update_at.desc().nullslast(),
+            RadiusAccountingSession.session_start.desc().nullslast(),
+            RadiusAccountingSession.created_at.desc(),
+        )
+        .first()
+    )
+    if not session:
+        return {
+            "state": "offline",
+            "label": "Not connected",
+            "detail": "No open RADIUS accounting session",
+            "session": None,
+            "last_seen_at": None,
+            "framed_ip_address": None,
+            "identifier": None,
+        }
+
+    last_seen_at = session.last_update_at or session.session_start or session.created_at
+    last_seen_utc = last_seen_at
+    if last_seen_utc and last_seen_utc.tzinfo is None:
+        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
+    is_fresh = bool(
+        last_seen_utc
+        and last_seen_utc
+        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
+    )
+    return {
+        "state": "connected" if is_fresh else "stale",
+        "label": "Connected" if is_fresh else "Last seen",
+        "detail": "Open RADIUS accounting session"
+        if is_fresh
+        else "Open session has stale accounting updates",
+        "session": session,
+        "last_seen_at": last_seen_at,
+        "framed_ip_address": session.framed_ip_address,
+        "identifier": session.framed_ip_address or session.session_id,
+    }
+
+
 def subscription_detail_context(
     db: Session, subscription: Subscription
 ) -> dict[str, object]:
@@ -2083,15 +2481,7 @@ def subscription_detail_context(
         profile=subscription.radius_profile,
         nas_device=subscription.provisioning_nas_device,
     )
-    active_session = (
-        db.query(RadiusActiveSession)
-        .filter(
-            (RadiusActiveSession.subscription_id == subscription.id)
-            | (RadiusActiveSession.subscriber_id == subscription.subscriber_id)
-        )
-        .order_by(RadiusActiveSession.session_start.desc())
-        .first()
-    )
+    connection_status = _subscription_connection_status(db, subscription, credential)
     recent_auth_errors = (
         db.query(RadiusAuthError)
         .filter(
@@ -2122,7 +2512,8 @@ def subscription_detail_context(
         "access_credential": credential,
         "password_sync": password_sync,
         "radius_reply_attributes": reply_attributes,
-        "active_session": active_session,
+        "connection_status": connection_status,
+        "active_session": connection_status.get("session"),
         "recent_auth_errors": recent_auth_errors,
         "lifecycle_events": lifecycle_events,
         "ip_assignment_mode": ip_assignment_mode,
@@ -2236,8 +2627,6 @@ def subscription_form_context(
                 "display": f"{pool_name} - {block.cidr} ({len(in_block)} free)",
             }
         )
-    route_range_options = _route_range_options_for_blocks(ipv4_blocks)
-
     rp_stmt = (
         select(RadiusProfile)
         .where(RadiusProfile.is_active.is_(True))
@@ -2247,6 +2636,10 @@ def subscription_form_context(
 
     subscriber_id = (
         subscription.get("subscriber_id") if isinstance(subscription, dict) else None
+    )
+    route_range_options = _route_range_options_for_ipam(
+        db,
+        current_subscriber_id=subscriber_id,
     )
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
     current_password = _current_service_password(db, str(subscriber_id or ""))
@@ -2328,6 +2721,20 @@ def subscription_form_context(
     if not isinstance(subscription.get("additional_route_metrics"), list):
         subscription["additional_route_metrics"] = [""]
 
+    ip_addon_options = _public_ip_addon_options(db)
+    ip_addon_options_json = json.dumps(
+        [
+            {
+                "id": str(add_on.id),
+                "name": str(add_on.name or ""),
+                "prefix": int(add_on.ip_prefix_length)
+                if add_on.ip_prefix_length is not None
+                else None,
+            }
+            for add_on in ip_addon_options
+        ]
+    )
+
     context: dict[str, object] = {
         "subscription": subscription,
         "accounts": accounts,
@@ -2340,7 +2747,8 @@ def subscription_form_context(
         "ipv4_blocks_json": json.dumps(block_options),
         "route_range_options": route_range_options,
         "route_range_options_json": json.dumps(route_range_options),
-        "ip_addon_options": _public_ip_addon_options(db),
+        "ip_addon_options": ip_addon_options,
+        "ip_addon_options_json": ip_addon_options_json,
         "radius_profiles": radius_profiles,
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],
@@ -2641,6 +3049,8 @@ def create_subscription_with_audit(
         subscription_obj=created,
         cidrs=additional_route_cidrs,
         metrics=additional_route_metrics,
+        add_on_id=str(form.get("ip_addon_id") or ""),
+        quantity=str(form.get("ip_addon_quantity") or "1"),
     )
     public_ip_addon_id = sync_public_ip_addon_for_subscription(
         db,
@@ -2735,14 +3145,18 @@ def update_subscription_with_audit(
         db.commit()
         db.refresh(after)
     additional_routes: list[str] = []
+    additional_routes_supplied = additional_route_cidrs is not None
     if additional_route_cidrs is not None:
         additional_routes = sync_additional_routes_for_subscription(
             db,
             subscription_obj=after,
             cidrs=additional_route_cidrs,
             metrics=additional_route_metrics,
+            add_on_id=ip_addon_id,
+            quantity=ip_addon_quantity,
         )
     public_ip_addon_id: str | None = None
+    public_ip_addon_supplied = ip_addon_id is not None
     if ip_addon_id is not None:
         public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
@@ -2769,6 +3183,12 @@ def update_subscription_with_audit(
         )
     else:
         _reconcile_active_subscription_after_credential_sync(db, subscription_id)
+    if additional_routes_supplied or public_ip_addon_supplied:
+        _refresh_subscription_radius_session(
+            db,
+            subscription_id,
+            reason="additional_ip_update",
+        )
     metadata_payload = build_changes_metadata(before, after) or {}
     metadata_payload["service_password_changed"] = bool(entered_password)
     if allocated_ips:

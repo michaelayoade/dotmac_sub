@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-up prod-down prod-logs prod-restart prod-migrate prod-check
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
 
 PROD_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.prod.yml
 
@@ -34,6 +34,15 @@ type-check-file: ## Type-check a single file (usage: make type-check-file FILE=a
 	poetry run mypy $(FILE) --ignore-missing-imports
 
 check-file: lint-file type-check-file ## Lint + type-check a single file (usage: make check-file FILE=app/services/nas.py)
+
+# ─── Release ──────────────────────────────────────────────
+
+bump-version: ## Bump app version (usage: make bump-version BUMP=patch or VERSION=1.2.3)
+	@if [ -n "$(VERSION)" ]; then \
+		python3 scripts/bump_version.py --set "$(VERSION)"; \
+	else \
+		python3 scripts/bump_version.py "$(BUMP)"; \
+	fi
 
 # ─── Testing ──────────────────────────────────────────────
 

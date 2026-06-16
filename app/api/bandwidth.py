@@ -239,7 +239,13 @@ def get_live_bandwidth(
                 except Exception as exc:
                     logger.debug("active viewer cleanup failed: %s", exc)
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/top-users", response_model=list[TopUserEntry])

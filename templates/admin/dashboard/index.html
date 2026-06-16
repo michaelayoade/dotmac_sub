@@ -411,11 +411,6 @@
             window.history.replaceState({}, '', nextUrl);
         }
 
-        if (!forceTourFromQuery && !dashboardTour.isCompleted()) {
-            window.setTimeout(function() {
-                startDashboardTips(false);
-            }, 1200);
-        }
     });
 </script>
 {% endblock %}

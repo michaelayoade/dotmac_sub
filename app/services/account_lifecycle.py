@@ -519,9 +519,11 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     Priority order:
       1. Any subscription active → active
       2. Any subscription pending → new
-      3. Any subscription suspended/blocked/stopped → suspended
-      4. All terminal (canceled/expired/disabled/hidden/archived) → canceled
-      5. No subscriptions → new
+      3. Any subscription suspended → suspended
+      4. Any subscription blocked/stopped → blocked
+      5. All remaining subscriptions disabled → disabled
+      6. All terminal (canceled/expired/disabled/hidden/archived) → canceled
+      7. No subscriptions → new
 
     Updates ``subscriber.status`` and flushes.
     """
@@ -539,10 +541,17 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
         new_status = SubscriberStatus.new
     elif any(s.status == SubscriptionStatus.active for s in subs):
         new_status = SubscriberStatus.active
-    elif any(s.status in SUSPENDED_EQUIVALENT for s in subs):
+    elif any(s.status == SubscriptionStatus.suspended for s in subs):
         new_status = SubscriberStatus.suspended
+    elif any(
+        s.status in {SubscriptionStatus.blocked, SubscriptionStatus.stopped}
+        for s in subs
+    ):
+        new_status = SubscriberStatus.blocked
     elif any(s.status == SubscriptionStatus.pending for s in subs):
         new_status = SubscriberStatus.new
+    elif all(s.status == SubscriptionStatus.disabled for s in subs):
+        new_status = SubscriberStatus.disabled
     else:
         # All terminal (canceled, expired, disabled, hidden, archived)
         new_status = SubscriberStatus.canceled
@@ -562,6 +571,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     should_be_active = new_status in {
         SubscriberStatus.active,
         SubscriberStatus.new,
+        SubscriberStatus.blocked,
         SubscriberStatus.suspended,
     }
     if subscriber.is_active != should_be_active:

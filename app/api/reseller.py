@@ -329,6 +329,24 @@ def my_reseller_pay_verify(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/billing/subscribers/{subscriber_id}/allocate")
+def my_reseller_allocate_subscriber(
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Allocate unallocated reseller funds to one managed subscriber."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    try:
+        return reseller_portal_billing.allocate_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/fiber-map")
 def my_reseller_fiber_map(
     db: Session = Depends(get_db),

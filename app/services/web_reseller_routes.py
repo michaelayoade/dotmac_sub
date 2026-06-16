@@ -138,6 +138,7 @@ def reseller_accounts(
     page: int,
     per_page: int,
     search: str | None = None,
+    status_filter: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
@@ -147,6 +148,7 @@ def reseller_accounts(
         db,
         reseller_id=str(context["reseller"].id),
         search=search,
+        status_filter=status_filter,
     )
     total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
     page = min(page, total_pages)
@@ -157,6 +159,7 @@ def reseller_accounts(
         limit=per_page,
         offset=offset,
         search=search,
+        status_filter=status_filter,
     )
     return templates.TemplateResponse(
         "reseller/accounts/index.html",
@@ -169,6 +172,8 @@ def reseller_accounts(
             "page": page,
             "per_page": per_page,
             "search": search or "",
+            "status_filter": status_filter or "",
+            "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
             "total_pages": total_pages,
             "has_prev": page > 1,
@@ -237,7 +242,61 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
+            "status_success": request.query_params.get("status_success"),
+            "status_error": request.query_params.get("status_error"),
         },
+    )
+
+
+def reseller_account_status_update(
+    request: Request,
+    db: Session,
+    account_id: str,
+    action: str,
+):
+    from urllib.parse import quote_plus
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    try:
+        result = reseller_portal.update_customer_account_status(
+            db,
+            reseller_id=str(context["reseller"].id),
+            account_id=account_id,
+            action=action,
+            actor_id=str(context["subscriber"].id),
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unsupported status action')}",
+            status_code=303,
+        )
+    except Exception:
+        logger.warning("reseller_account_status_update_failed", exc_info=True)
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unable to update account status')}",
+            status_code=303,
+        )
+
+    if not result:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+
+    status_label = str(result.get("status") or "updated").replace("_", " ").title()
+    if action.strip().lower() == "deactivate":
+        status_label = "Deactivated"
+    return RedirectResponse(
+        url=f"/reseller/accounts/{account_id}?status_success={quote_plus(f'Account status changed to {status_label}')}",
+        status_code=303,
     )
 
 

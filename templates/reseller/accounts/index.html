@@ -11,6 +11,18 @@
             <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             <input type="text" name="search" value="{{ search }}" placeholder="Search accounts..." class="w-48 border-0 bg-transparent text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-0 dark:text-white dark:placeholder-slate-500">
             <input type="hidden" name="per_page" value="{{ per_page }}">
+            <input type="hidden" name="status_filter" value="{{ status_filter }}">
+        </form>
+        <form method="get" action="/reseller/accounts" class="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 transition-colors hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50">
+            <svg class="h-4 w-4 text-indigo-500 dark:text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 12h12M10 20h4"/></svg>
+            <input type="hidden" name="search" value="{{ search }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
+            <select name="status_filter" onchange="this.form.submit()" class="rounded-lg border-0 bg-indigo-50 py-0 pl-0 pr-7 text-sm font-semibold text-indigo-700 focus:outline-none focus:ring-0 dark:bg-indigo-900/30 dark:text-indigo-300">
+                <option class="bg-indigo-50 text-indigo-700 dark:bg-slate-800 dark:text-indigo-300" value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+                {% for option in status_options %}
+                <option class="bg-indigo-50 text-indigo-700 dark:bg-slate-800 dark:text-indigo-300" value="{{ option }}" {% if status_filter == option %}selected{% endif %}>{{ 'Deactivated' if option == 'blocked' else option | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
         </form>
     </div>
 </div>
@@ -19,6 +31,7 @@
 {% block content %}
 <div class="mt-6 space-y-6 lg:space-y-8 stagger-children">
     {% set search_param = '&search=' ~ (search | urlencode) if search else '' %}
+    {% set status_param = '&status_filter=' ~ (status_filter | urlencode) if status_filter else '' %}
     <!-- Accounts Table -->
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
         {% if total_pages and total_pages > 1 %}
@@ -34,7 +47,7 @@
             </p>
             <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                 <span>Show</span>
-                <select onchange="window.location.href='/reseller/accounts?page=1&per_page=' + this.value + '{{ search_param }}'"
+                <select onchange="window.location.href='/reseller/accounts?page=1&per_page=' + this.value + '{{ search_param }}{{ status_param }}'"
                         class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 dark:bg-slate-700 dark:text-slate-300">
                     {% for size in [10, 20, 50, 100] %}
                     <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
@@ -80,6 +93,7 @@
                             <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold
                                 {% if status_lower == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
                                 {% elif status_lower == 'suspended' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                                {% elif status_lower == 'blocked' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
                                 {% elif status_lower == 'pending' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
                                 {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
                                 {% if status_lower == 'active' %}
@@ -87,10 +101,10 @@
                                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
                                     <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
                                 </span>
-                                {% elif status_lower == 'pending' %}
+                                {% elif status_lower in ['pending', 'blocked'] %}
                                 <span class="h-2 w-2 rounded-full bg-amber-500"></span>
                                 {% endif %}
-                                {{ account.status }}
+                                {{ 'Deactivated' if status_lower == 'blocked' else account.status }}
                             </span>
                         </td>
                         <td class="px-6 py-4">
@@ -151,7 +165,7 @@
         <div class="flex items-center justify-center border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
             <div class="flex items-center gap-2">
                     {% if has_prev %}
-                    <a href="/reseller/accounts?page={{ page - 1 }}&per_page={{ per_page }}{{ search_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                    <a href="/reseller/accounts?page={{ page - 1 }}&per_page={{ per_page }}{{ search_param }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
                         </svg>
@@ -162,7 +176,7 @@
                         Page <span class="font-semibold text-slate-700 dark:text-slate-300">{{ page }}</span> of <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total_pages }}</span>
                     </span>
                     {% if has_next %}
-                    <a href="/reseller/accounts?page={{ page + 1 }}&per_page={{ per_page }}{{ search_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                    <a href="/reseller/accounts?page={{ page + 1 }}&per_page={{ per_page }}{{ search_param }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
