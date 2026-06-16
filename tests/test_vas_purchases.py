@@ -533,7 +533,10 @@ class TestReviewFixes:
                 identifier="08039999999",
                 amount=Decimal("500"),
             )
-        assert "Insufficient" in exc_info.value.detail
+        # Insufficient-balance now surfaces a structured {code, message} detail.
+        detail = exc_info.value.detail
+        assert detail["code"] == "insufficient_balance"
+        assert "Insufficient" in detail["message"]
         from app.models.vas import VasTransaction
 
         orphan = db_session.query(VasTransaction).one()
