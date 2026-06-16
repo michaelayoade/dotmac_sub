@@ -82,7 +82,9 @@ def main() -> int:
 
         vendor_serial = (ont.vendor_serial_number or "").strip().upper()
         if vendor_serial and vendor_serial != (ont.serial_number or "").strip().upper():
-            lookup_ok2, lookup_msg2, lookup_entry2 = find_ont_by_serial(olt, vendor_serial)
+            lookup_ok2, lookup_msg2, lookup_entry2 = find_ont_by_serial(
+                olt, vendor_serial
+            )
             print(
                 {
                     "step": "vendor_serial_lookup",

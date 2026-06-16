@@ -1396,7 +1396,9 @@ def test_reseller_cannot_update_foreign_customer_account(
     """Status updates cannot cross reseller ownership boundaries."""
     from app.models.subscriber import Reseller
 
-    other_reseller = Reseller(name="Other Reseller", code=f"OTHER-{uuid.uuid4().hex[:8]}")
+    other_reseller = Reseller(
+        name="Other Reseller", code=f"OTHER-{uuid.uuid4().hex[:8]}"
+    )
     db_session.add(other_reseller)
     db_session.flush()
     subscriber.reseller_id = other_reseller.id

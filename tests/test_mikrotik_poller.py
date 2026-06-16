@@ -16,18 +16,21 @@ class _FakeDevicePool:
         self.subscription_id = subscription_id
 
     async def poll_all(self, active_devices=None):
-        yield self.device_id, [
-            QueueStats(
-                name="<pppoe-100024890>",
-                target="",
-                rate_rx=6_000_000,
-                rate_tx=6_000_000,
-                bytes_rx=0,
-                bytes_tx=0,
-                packets_rx=0,
-                packets_tx=0,
-            )
-        ]
+        yield (
+            self.device_id,
+            [
+                QueueStats(
+                    name="<pppoe-100024890>",
+                    target="",
+                    rate_rx=6_000_000,
+                    rate_tx=6_000_000,
+                    bytes_rx=0,
+                    bytes_tx=0,
+                    packets_rx=0,
+                    packets_tx=0,
+                )
+            ],
+        )
 
     def resolve_subscription(self, device_id, queue_name):
         return self.subscription_id

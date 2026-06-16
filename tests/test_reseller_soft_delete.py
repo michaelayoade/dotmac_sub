@@ -90,12 +90,14 @@ def test_disabled_accounts_hidden_by_default_but_filterable(db_session, reseller
     rid = str(reseller.id)
 
     assert reseller_portal.count_accounts(db_session, rid) == 1
-    assert [row["id"] for row in reseller_portal.list_accounts(db_session, rid, 50, 0)] == [
-        str(active.id)
-    ]
+    assert [
+        row["id"] for row in reseller_portal.list_accounts(db_session, rid, 50, 0)
+    ] == [str(active.id)]
 
     disabled_rows = reseller_portal.list_accounts(
         db_session, rid, 50, 0, status_filter="disabled"
     )
-    assert reseller_portal.count_accounts(db_session, rid, status_filter="disabled") == 1
+    assert (
+        reseller_portal.count_accounts(db_session, rid, status_filter="disabled") == 1
+    )
     assert [row["id"] for row in disabled_rows] == [str(disabled.id)]

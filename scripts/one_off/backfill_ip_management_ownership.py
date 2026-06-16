@@ -69,7 +69,9 @@ def _normalize_ipv4(value: object) -> str | None:
     return str(parsed)
 
 
-def _collect_expected_assignments(db) -> tuple[dict[str, ExpectedAssignment], dict[str, int]]:
+def _collect_expected_assignments(
+    db,
+) -> tuple[dict[str, ExpectedAssignment], dict[str, int]]:
     expected: dict[str, ExpectedAssignment] = {}
     stats = {
         "subscriptions_seen": 0,
@@ -109,10 +111,9 @@ def _collect_expected_assignments(db) -> tuple[dict[str, ExpectedAssignment], di
         if existing is None:
             expected[ip_address] = candidate
             continue
-        if (
-            str(existing.subscriber_id) == str(candidate.subscriber_id)
-            and str(existing.service_address_id) == str(candidate.service_address_id)
-        ):
+        if str(existing.subscriber_id) == str(candidate.subscriber_id) and str(
+            existing.service_address_id
+        ) == str(candidate.service_address_id):
             continue
         stats["subscription_conflicts"] += 1
 
@@ -145,17 +146,18 @@ def _collect_expected_assignments(db) -> tuple[dict[str, ExpectedAssignment], di
         if existing is None:
             expected[ip_address] = candidate
             continue
-        if (
-            str(existing.subscriber_id) == str(candidate.subscriber_id)
-            and str(existing.service_address_id) == str(candidate.service_address_id)
-        ):
+        if str(existing.subscriber_id) == str(candidate.subscriber_id) and str(
+            existing.service_address_id
+        ) == str(candidate.service_address_id):
             continue
         stats["ont_wan_conflicts"] += 1
 
     return expected, stats
 
 
-def _collect_expected_management(db) -> tuple[dict[str, ExpectedManagement], dict[str, int]]:
+def _collect_expected_management(
+    db,
+) -> tuple[dict[str, ExpectedManagement], dict[str, int]]:
     expected: dict[str, ExpectedManagement] = {}
     stats = {
         "ont_mgmt_seen": 0,
@@ -196,11 +198,7 @@ def _collect_expected_management(db) -> tuple[dict[str, ExpectedManagement], dic
 
 
 def _address_rows_by_ip(db) -> dict[str, IPv4Address]:
-    rows = (
-        db.query(IPv4Address)
-        .options(joinedload(IPv4Address.assignment))
-        .all()
-    )
+    rows = db.query(IPv4Address).options(joinedload(IPv4Address.assignment)).all()
     return {
         str(row.address).strip(): row
         for row in rows
@@ -229,10 +227,14 @@ def _sync_assignment(
         stats["assignments_created"] += 1
     else:
         changed = False
-        if str(getattr(assignment, "subscriber_id", "") or "") != str(expected.subscriber_id):
+        if str(getattr(assignment, "subscriber_id", "") or "") != str(
+            expected.subscriber_id
+        ):
             assignment.subscriber_id = expected.subscriber_id
             changed = True
-        if str(getattr(assignment, "service_address_id", "") or "") != str(expected.service_address_id):
+        if str(getattr(assignment, "service_address_id", "") or "") != str(
+            expected.service_address_id
+        ):
             assignment.service_address_id = expected.service_address_id
             changed = True
         if getattr(assignment, "ip_version", None) != IPVersion.ipv4:
@@ -250,7 +252,10 @@ def _sync_assignment(
             stats["assignments_reactivated"] += 1
         if changed:
             stats["assignments_updated"] += 1
-    if str(getattr(row, "allocation_type", "") or "").strip() != MANAGEMENT_ALLOCATION_TYPE:
+    if (
+        str(getattr(row, "allocation_type", "") or "").strip()
+        != MANAGEMENT_ALLOCATION_TYPE
+    ):
         row.allocation_type = WAN_ALLOCATION_TYPE
 
 
@@ -271,7 +276,10 @@ def _sync_management(
     if str(getattr(row, "ont_unit_id", "") or "") != str(expected.ont_id):
         row.ont_unit_id = expected.ont_id
         changed = True
-    if str(getattr(row, "allocation_type", "") or "").strip() != MANAGEMENT_ALLOCATION_TYPE:
+    if (
+        str(getattr(row, "allocation_type", "") or "").strip()
+        != MANAGEMENT_ALLOCATION_TYPE
+    ):
         row.allocation_type = MANAGEMENT_ALLOCATION_TYPE
         changed = True
     if changed:
@@ -286,7 +294,10 @@ def _clear_stale_management_rows(
 ) -> None:
     for ip_address, row in rows_by_ip.items():
         allocation_type = str(getattr(row, "allocation_type", "") or "").strip()
-        if allocation_type != MANAGEMENT_ALLOCATION_TYPE and getattr(row, "ont_unit_id", None) is None:
+        if (
+            allocation_type != MANAGEMENT_ALLOCATION_TYPE
+            and getattr(row, "ont_unit_id", None) is None
+        ):
             continue
         if ip_address in expected_management_ips:
             continue
@@ -352,7 +363,9 @@ def _reconcile_pool_memberships(db, *, commit: bool) -> dict[str, int]:
             invalid += 1
             continue
         matches = [
-            pool for pool, network in pool_networks if network is not None and address in network
+            pool
+            for pool, network in pool_networks
+            if network is not None and address in network
         ]
         if not matches:
             unmatched += 1
@@ -401,12 +414,17 @@ def run_backfill(*, execute: bool, deactivate_stale: bool) -> dict[str, int]:
         for ip_address, expected in expected_assignments.items():
             row = rows_by_ip.get(ip_address)
             if row is None:
-                row = IPv4Address(address=ip_address, allocation_type=WAN_ALLOCATION_TYPE)
+                row = IPv4Address(
+                    address=ip_address, allocation_type=WAN_ALLOCATION_TYPE
+                )
                 db.add(row)
                 db.flush()
                 rows_by_ip[ip_address] = row
                 stats["addresses_created"] += 1
-            if str(getattr(row, "allocation_type", "") or "").strip() == MANAGEMENT_ALLOCATION_TYPE:
+            if (
+                str(getattr(row, "allocation_type", "") or "").strip()
+                == MANAGEMENT_ALLOCATION_TYPE
+            ):
                 if str(getattr(row, "ont_unit_id", "") or "") != "":
                     stats["assignment_conflicts_with_mgmt"] += 1
                     continue

@@ -98,8 +98,11 @@ def main() -> int:
     print(f"env var present       : {'yes' if env_key else 'no'}")
     print(f"env var fingerprint   : {_fingerprint(env_key)}")
     print(f"active key fingerprint: {_fingerprint(active_key)}")
-    if env_key and active_key and env_key.encode("ascii", errors="replace") != (
-        active_key if isinstance(active_key, bytes) else active_key.encode("ascii")
+    if (
+        env_key
+        and active_key
+        and env_key.encode("ascii", errors="replace")
+        != (active_key if isinstance(active_key, bytes) else active_key.encode("ascii"))
     ):
         print("WARNING: active key does NOT match env var — falling back to DB/OpenBao")
     print()

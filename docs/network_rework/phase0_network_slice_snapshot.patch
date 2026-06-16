@@ -3,30 +3,30 @@ index fe7c5f09..008d61a2 100644
 --- a/app/services/network/olt_dependency_preflight.py
 +++ b/app/services/network/olt_dependency_preflight.py
 @@ -2,13 +2,20 @@
- 
+
  from __future__ import annotations
- 
+
 +from copy import deepcopy
  from dataclasses import dataclass, field
 +from threading import Lock
 +from time import monotonic
  from typing import Any
- 
+
  from sqlalchemy.orm import Session
- 
+
  from app.services.network.olt_config_pack_live_audit import audit_olt_config_pack_live
- 
+
 +_SUCCESS_CACHE_TTL_SECONDS = 5 * 60
 +_success_cache_lock = Lock()
 +_success_cache: dict[str, tuple[float, "OltDependencyPreflightResult"]] = {}
 +
- 
+
  @dataclass
  class OltDependencyPreflightResult:
 @@ -20,6 +27,35 @@ class OltDependencyPreflightResult:
      errors: list[str] = field(default_factory=list)
- 
- 
+
+
 +def _clone_result(
 +    result: OltDependencyPreflightResult,
 +) -> OltDependencyPreflightResult:
@@ -79,7 +79,7 @@ index fe7c5f09..008d61a2 100644
 +        with _success_cache_lock:
 +            _success_cache[cache_key] = (monotonic(), _clone_result(result))
 +        return result
- 
+
      errors = audit.errors or ["OLT profile dependency audit failed"]
      return OltDependencyPreflightResult(
 diff --git a/app/services/network/olt_ssh_ont/tr069.py b/app/services/network/olt_ssh_ont/tr069.py
@@ -88,7 +88,7 @@ index e51ee581..9ba65958 100644
 +++ b/app/services/network/olt_ssh_ont/tr069.py
 @@ -8,30 +8,102 @@ import re
  from paramiko.ssh_exception import SSHException
- 
+
  from app.models.network import OLTDevice
 +from app.services.network.huawei_command_profiles import get_huawei_command_profile
  from app.services.network.olt_ssh_ont._common import (
@@ -96,9 +96,9 @@ index e51ee581..9ba65958 100644
      _run_ont_config_command,
  )
 +from app.services.network.parsers import parse_ont_info_detail
- 
+
  logger = logging.getLogger(__name__)
- 
+
 -_TR069_BIND_RE = re.compile(
 +_TR069_BIND_WITH_PORT_RE = re.compile(
      r"\bont\s+tr069-server-config\s+"
@@ -110,8 +110,8 @@ index e51ee581..9ba65958 100644
 +    r"(?P<ont_id>\d+)\s+profile-id\s+(?P<profile_id>\d+)",
 +    re.IGNORECASE,
 +)
- 
- 
+
+
  def parse_tr069_binding(output: str, *, port: int, ont_id: int) -> int | None:
 -    """Return the bound TR-069 profile ID for one ONT from Huawei config text."""
 -    for match in _TR069_BIND_RE.finditer(output or ""):
@@ -133,8 +133,8 @@ index e51ee581..9ba65958 100644
 +        if int(match.group("ont_id")) == int(ont_id):
 +            return int(match.group("profile_id"))
      return None
- 
- 
+
+
 +def _read_tr069_binding_from_ont_info(
 +    core,
 +    *,
@@ -241,16 +241,16 @@ index d6213142..028d29ba 100644
 +++ b/app/services/network/ont_action_wan.py
 @@ -27,6 +27,7 @@ Usage::
  from __future__ import annotations
- 
+
  import logging
 +import time
  from datetime import UTC, datetime, timedelta
  from typing import Any
- 
+
 @@ -354,6 +355,232 @@ def _igd_ppp_container_conflict(
      return None
- 
- 
+
+
 +def _igd_wan_container_is_blank(
 +    details: dict[str, Any],
 +    *,
@@ -483,7 +483,7 @@ index d6213142..028d29ba 100644
 @@ -397,35 +624,48 @@ def set_pppoe_credentials(
      root = detect_data_model_root(db, ont, client, device_id)
      persist_data_model_root(ont, root)
- 
+
 -    # Build parameter paths
 -    username_path = _resolve_wan_path(root, "ppp.username", instance_index)
 -    password_path = _resolve_wan_path(root, "ppp.password", instance_index)
@@ -495,7 +495,7 @@ index d6213142..028d29ba 100644
 -        enable_path: "true",
 -    }
 +    params: dict[str, str] = {}
- 
+
 -    # For TR-098, also set NAT and connection type
      if root == "InternetGatewayDevice":
 -        nat_path = _resolve_wan_path(root, "ppp.nat_enabled", instance_index)
@@ -524,7 +524,7 @@ index d6213142..028d29ba 100644
 +            f"{ppp_base}.NATEnabled": "true",
 +            f"{ppp_base}.ConnectionType": "IP_Routed",
 +        }
- 
+
 -        # Set VLAN if provided
          if wan_vlan is not None:
 -            vlan_path = _resolve_wan_path(root, "ppp.vlan", instance_index)
@@ -534,7 +534,7 @@ index d6213142..028d29ba 100644
 -            params[service_path] = "INTERNET"
 +            params[f"{ppp_base}.X_HW_VLAN"] = str(wan_vlan)
 +            params[f"{ppp_base}.X_HW_SERVICELIST"] = "INTERNET"
- 
+
          if connection_name:
 -            name_path = _resolve_wan_path(root, "ppp.name", instance_index)
 -            params[name_path] = connection_name
@@ -549,7 +549,7 @@ index d6213142..028d29ba 100644
 +            password_path: password,
 +            enable_path: "true",
 +        }
- 
+
      # Expected values for verification (exclude password - it's write-only)
      expected = {
 diff --git a/app/services/network/ont_crud.py b/app/services/network/ont_crud.py
@@ -558,17 +558,17 @@ index 9c300ef1..8896dd04 100644
 +++ b/app/services/network/ont_crud.py
 @@ -6,7 +6,7 @@ from collections.abc import Sequence
  from typing import Any
- 
+
  from sqlalchemy import and_, exists, func, or_, select
 -from sqlalchemy.orm import Session, aliased, joinedload
 +from sqlalchemy.orm import Session, aliased, defer, joinedload
- 
+
  from app.models.network import (
      OLTDevice,
 @@ -32,6 +32,18 @@ _ONT_STATUS_LOADS = (
      joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
  )
- 
+
 +# Wide JSON/TEXT columns on ont_units that the inventory list view never
 +# renders. Deferring them shrinks each row from ~5KB to a few hundred bytes,
 +# which dominates list-page load time over a WAN database.
@@ -581,19 +581,19 @@ index 9c300ef1..8896dd04 100644
 +    OntUnit.address_or_comment,
 +)
 +
- 
+
  class OntUnits(CRUDManager[OntUnit]):
      model = OntUnit
 @@ -87,7 +99,10 @@ class OntUnits(CRUDManager[OntUnit]):
          """
          from app.services.network.signal_thresholds import get_signal_thresholds
- 
+
 -        stmt = select(OntUnit).options(*_ONT_STATUS_LOADS)
 +        stmt = select(OntUnit).options(
 +            *_ONT_STATUS_LOADS,
 +            *(defer(col) for col in _ONT_LIST_DEFERRED_COLUMNS),
 +        )
- 
+
          if pon_port_id:
              pon_uuid = coerce_uuid(pon_port_id)
 diff --git a/app/services/network/ont_olt_context.py b/app/services/network/ont_olt_context.py
@@ -602,8 +602,8 @@ index 91d586fa..1d27a92f 100644
 +++ b/app/services/network/ont_olt_context.py
 @@ -36,12 +36,17 @@ def _scanned_fsp_from_ont(ont: OntUnit) -> str | None:
      return fsp if _FSP_RE.fullmatch(fsp) else None
- 
- 
+
+
 -def _load_active_assignment_for_update(
 +def _load_active_assignment(
      db: Session,
@@ -627,11 +627,11 @@ index 91d586fa..1d27a92f 100644
 -        .with_for_update()
      )
      return db.scalars(stmt).first()
- 
+
 @@ -70,7 +74,7 @@ def resolve_ont_olt_write_context(
      if ont is None:
          return None, "ONT not found."
- 
+
 -    assignment = _load_active_assignment_for_update(db, ont_id=ont.id)
 +    assignment = _load_active_assignment(db, ont_id=ont.id)
      if assignment is None:
@@ -646,8 +646,8 @@ index d4cbe765..09db76f9 100644
      _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
  )
 +_TR069_BINDING_READBACK_RETRY_DELAY_SEC = 2.0
- 
- 
+
+
  def _validate_olt_profile_dependencies(
 @@ -1856,6 +1857,52 @@ def provision_with_reconciliation(
              if tr069_binding_result is not None
@@ -708,8 +708,8 @@ index 7a590a80..04cd80a3 100644
 +++ b/app/services/network/ont_provisioning/context.py
 @@ -22,12 +22,17 @@ class OltContext:
      assignment: OntAssignment | None = None
- 
- 
+
+
 -def _load_active_assignment_for_update(
 +def _load_active_assignment(
      db: Session,
@@ -733,11 +733,11 @@ index 7a590a80..04cd80a3 100644
 -        .with_for_update()
      )
      return db.scalars(stmt).first()
- 
+
 @@ -49,7 +53,7 @@ def resolve_olt_context(db: Session, ont_id: str) -> tuple[OltContext | None, st
      if not ont:
          return None, "ONT not found"
- 
+
 -    assignment = _load_active_assignment_for_update(db, ont_id=ont.id)
 +    assignment = _load_active_assignment(db, ont_id=ont.id)
      if not assignment:
@@ -754,11 +754,11 @@ index 65ecc926..29f29749 100644
 +from app.services.network.serial_utils import canonical as canonical_serial
  from app.services.network.serial_utils import normalize as normalize_serial
  from app.services.network.serial_utils import search_candidates
- 
+
 @@ -221,8 +222,8 @@ def submitted_authorization_ont_matches_scope(
      if direct_ont is None:
          return False
- 
+
 -    submitted_serial = normalize_serial(serial_number)
 -    direct_serial = normalize_serial(getattr(direct_ont, "serial_number", None))
 +    submitted_serial = canonical_serial(serial_number)
@@ -769,15 +769,15 @@ index 65ecc926..29f29749 100644
 @@ -230,7 +231,7 @@ def submitted_authorization_ont_matches_scope(
      if direct_match:
          return True
- 
+
 -    if direct_olt_id is not None or direct_serial != submitted_serial:
 +    if direct_olt_id is not None:
          return False
- 
+
      candidate = db.scalars(
 @@ -245,9 +246,9 @@ def submitted_authorization_ont_matches_scope(
          return False
- 
+
      candidate_serials = {
 -        normalize_serial(getattr(candidate, "serial_number", None)),
 -        normalize_serial(getattr(candidate, "serial_hex", None)),
@@ -787,13 +787,13 @@ index 65ecc926..29f29749 100644
 +        canonical_serial(getattr(candidate, "equipment_sn", None)),
      }
      return submitted_serial in candidate_serials
- 
+
 diff --git a/app/services/network/reconcile/__init__.py b/app/services/network/reconcile/__init__.py
 index 60c75ab7..21969387 100644
 --- a/app/services/network/reconcile/__init__.py
 +++ b/app/services/network/reconcile/__init__.py
 @@ -26,6 +26,7 @@ of the reconciler and consumed only within this package.
- 
+
  from .actions import (
      AcsAddObject,
 +    AcsDeleteObject,
@@ -801,7 +801,7 @@ index 60c75ab7..21969387 100644
      AcsSetManagementServer,
      AcsSetNatEnabled,
 @@ -86,6 +87,7 @@ from .validator import Validation, validate_desired
- 
+
  __all__ = (
      "AcsAddObject",
 +    "AcsDeleteObject",
@@ -814,8 +814,8 @@ index 45e84ae7..d1f7dff0 100644
 +++ b/app/services/network/reconcile/actions.py
 @@ -276,6 +276,21 @@ class AcsAddObject:
      object_path: str  # e.g. "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection"
- 
- 
+
+
 +@dataclass(frozen=True)
 +class AcsDeleteObject:
 +    """``POST /devices/<id>/tasks {deleteObject: path}``.
@@ -835,7 +835,7 @@ index 45e84ae7..d1f7dff0 100644
  class AcsSetPppoe:
      """``setParameterValues`` for WANPPPConnection.{Username, Password, Enable, X_HW_VLAN, ConnectionType, X_HW_SERVICELIST}``.
 @@ -408,6 +423,7 @@ OltAction = (
- 
+
  AcsAction = (
      AcsAddObject
 +    | AcsDeleteObject
@@ -866,13 +866,13 @@ index 66c931a1..6405784d 100644
 +            acs_observed_wan_ppp_locations=(),
          ),
      )
- 
+
 diff --git a/app/services/network/reconcile/applier.py b/app/services/network/reconcile/applier.py
 index f82210aa..ea5b4268 100644
 --- a/app/services/network/reconcile/applier.py
 +++ b/app/services/network/reconcile/applier.py
 @@ -25,6 +25,7 @@ Action → adapter call mapping:
- 
+
      ACS actions
        AcsAddObject              → client.add_object
 +      AcsDeleteObject           → client.delete_object
@@ -890,7 +890,7 @@ index f82210aa..ea5b4268 100644
 @@ -440,6 +442,23 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                  started,
              )
- 
+
 +        case AcsDeleteObject():
 +            try:
 +                ctx.acs_client.delete_object(action.device_id, action.object_path)
@@ -926,14 +926,14 @@ index 2345f7b1..0cacaf20 100644
          acs_observed_wan_instance_index=None,
 +        acs_observed_wan_ppp_locations=(),
      )
- 
- 
+
+
 diff --git a/app/services/network/reconcile/planner.py b/app/services/network/reconcile/planner.py
 index e45a5466..e346f4a7 100644
 --- a/app/services/network/reconcile/planner.py
 +++ b/app/services/network/reconcile/planner.py
 @@ -44,6 +44,7 @@ from dataclasses import dataclass
- 
+
  from .actions import (
      AcsAddObject,
 +    AcsDeleteObject,
@@ -941,7 +941,7 @@ index e45a5466..e346f4a7 100644
      AcsSetManagementServer,
      AcsSetNatEnabled,
 @@ -444,12 +445,12 @@ def _plan_acs_side(
- 
+
      # Defensive NAT on routed mode (Fix #4 follow-up).
      if desired.wan_mode == "pppoe" and not omci_wan_planned:
 -        wcd = observed.acs.acs_observed_wan_wcd_index or desired.wan_pppoe_wcd_index
@@ -959,7 +959,7 @@ index e45a5466..e346f4a7 100644
 @@ -470,6 +471,18 @@ def _plan_acs_side(
                  )
              )
- 
+
 +        for stale_wcd, stale_inst in _stale_wan_ppp_locations(desired, observed):
 +            actions.append(
 +                AcsDeleteObject(
@@ -991,7 +991,7 @@ index e45a5466..e346f4a7 100644
              )
          )
 +        target_inst = desired.wan_pppoe_instance_index
- 
+
      # PPPoE params — diff or set.
 -    if _wan_ppp_differs(desired, observed):
 -        wcd = observed.acs.acs_observed_wan_wcd_index or desired.wan_pppoe_wcd_index
@@ -1012,8 +1012,8 @@ index e45a5466..e346f4a7 100644
                  vlan=desired.wan_vlan or 0,
 @@ -608,6 +618,89 @@ def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bo
      return False
- 
- 
+
+
 +def _observed_wan_ppp_locations(observed: OntObservedState) -> tuple[tuple[int, int], ...]:
 +    acs = observed.acs
 +    if acs.acs_observed_wan_ppp_locations:
@@ -1126,13 +1126,13 @@ index ec93e539..9a3f9840 100644
 +++ b/app/services/network/reconcile/readers/acs_reader.py
 @@ -207,7 +207,9 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
      dev_info = _path(dev_root, "DeviceInfo")
- 
+
      wan_root = _path(igd, "WANDevice", "1", "WANConnectionDevice") or {}
 -    wcd_index, instance_index, wan_ppp = _resolve_wan_ppp(wan_root)
 +    wcd_index, instance_index, wan_ppp, wan_ppp_locations = _resolve_wan_ppp(
 +        wan_root
 +    )
- 
+
      return AcsObservedFields(
          acs_present=True,
 @@ -236,6 +238,10 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
@@ -1152,8 +1152,8 @@ index ec93e539..9a3f9840 100644
          acs_observed_wan_instance_index=instance_index,
 +        acs_observed_wan_ppp_locations=wan_ppp_locations,
      )
- 
- 
+
+
 @@ -265,24 +272,51 @@ def _absent_fields() -> AcsObservedFields:
          acs_observed_dhcp_enabled=None,
          acs_observed_ssid=None,
@@ -1165,8 +1165,8 @@ index ec93e539..9a3f9840 100644
          acs_observed_wan_instance_index=None,
 +        acs_observed_wan_ppp_locations=(),
      )
- 
- 
+
+
  def _resolve_wan_ppp(
      wan_connection_device: dict[str, Any],
 -) -> tuple[int | None, int | None, dict[str, Any] | None]:
@@ -1177,7 +1177,7 @@ index ec93e539..9a3f9840 100644
 +    tuple[tuple[int, int], ...],
 +]:
      """Locate the first WANPPPConnection instance under any WCD slot.
- 
+
 -    Returns ``(wcd_index, instance_index, wan_ppp_dict)``. The fleet's
 +    Returns ``(wcd_index, instance_index, wan_ppp_dict, locations)``. The fleet's
      HG8546M devices typically expose ``WANConnectionDevice.1.WANPPPConnection.1``
@@ -1216,8 +1216,8 @@ index ec93e539..9a3f9840 100644
 -    return None, None, None
 +            locations.append((int(wcd_key), int(ppp_key)))
 +    return tuple(sorted(locations))
- 
- 
+
+
  def _first_not_none(*values):
 diff --git a/app/services/network/reconcile/state.py b/app/services/network/reconcile/state.py
 index 3a2a5965..0da847d5 100644
@@ -1226,7 +1226,7 @@ index 3a2a5965..0da847d5 100644
 @@ -163,8 +163,10 @@ class AcsObservedFields:
      forcing a ``refreshObject``; ``VERIFICATION_MISMATCH`` catches the rare
      stale case post-write.
- 
+
 -    ``acs_observed_cr_username_set`` / ``acs_observed_cr_password_set`` track
 -    presence only — the values themselves are never read back.
 +    ``acs_observed_cr_username`` and
@@ -1234,7 +1234,7 @@ index 3a2a5965..0da847d5 100644
 +    CWMP cache. ``acs_observed_cr_password_set`` remains presence-only because
 +    the password itself is not safely readable.
      """
- 
+
      acs_present: bool
 @@ -181,10 +183,12 @@ class AcsObservedFields:
      acs_observed_dhcp_enabled: bool | None
@@ -1246,15 +1246,15 @@ index 3a2a5965..0da847d5 100644
      acs_observed_wan_wcd_index: int | None
      acs_observed_wan_instance_index: int | None
 +    acs_observed_wan_ppp_locations: tuple[tuple[int, int], ...]
- 
- 
+
+
  @dataclass(frozen=True)
 diff --git a/templates/admin/network/olts/detail.html b/templates/admin/network/olts/detail.html
 index 1d76c053..bf9067cd 100644
 --- a/templates/admin/network/olts/detail.html
 +++ b/templates/admin/network/olts/detail.html
 @@ -119,10 +119,20 @@
- 
+
      {# PON Port Grid #}
      {% if pon_ports %}
 -    {% call card("PON Ports", color="blue") %}
@@ -1330,7 +1330,7 @@ index 1d76c053..bf9067cd 100644
 +        {% include "components/overlays/modal.html" %}
 +    {% endwith %}
      {% endif %}
- 
+
      {# Quick Links #}
 diff --git a/templates/admin/network/onts/index.html b/templates/admin/network/onts/index.html
 index 46c1afc7..e5a96304 100644
@@ -1383,7 +1383,7 @@ index 46c1afc7..e5a96304 100644
 +                        </div>
 +                    </div>
                  </div>
- 
+
                  {# OLT filter #}
 @@ -208,16 +234,17 @@
                  <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</h2>
@@ -1421,8 +1421,8 @@ index b13cd85e..bb152c45 100644
  from app.services.auth_dependencies import require_audit_auth, require_user_auth
 @@ -198,6 +199,82 @@ def test_validate_session_token_accepts_system_user_cookie(db_session, monkeypat
      assert auth["principal_id"] == str(user.id)
- 
- 
+
+
 +def test_validate_session_token_ignores_stale_cached_session(monkeypatch, db_session):
 +    monkeypatch.setenv("JWT_SECRET", "test-secret")
 +    session_id = str(uuid.uuid4())
@@ -1509,7 +1509,7 @@ index 217dfdd0..6b038d36 100644
 @@ -74,6 +74,16 @@ class TestOltProfileSyncTask:
              "app.tasks.profile_sync.execute_due_profile_sync_tasks"
          ] == {"queue": "tr069"}
- 
+
 +    def test_app_cache_refresh_tasks_are_registered(self):
 +        """Beat-scheduled cache refresh tasks must be in the worker registry."""
 +        from app.celery_app import celery_app
@@ -1530,7 +1530,7 @@ index b3652247..73047f04 100644
 @@ -148,6 +148,36 @@ class TestCustomerRouteRegistration:
          }
          assert ("/portal/services/{subscription_id}/wifi", "POST") in routes
- 
+
 +    def test_topup_get_route_exists(self) -> None:
 +        from app.web.customer.routes import router
 +
@@ -1561,13 +1561,13 @@ index b3652247..73047f04 100644
 +        }
 +        assert ("/portal/billing/topup/intent", "POST") in routes
 +
- 
+
  # ---------------------------------------------------------------------------
  # 3. Ticket creation schema
 @@ -650,6 +680,145 @@ class TestPaymentSuccessBanner:
          assert context["service_restored"] is False
- 
- 
+
+
 +class TestCustomerTopupRoutes:
 +    def test_topup_page_renders_dedicated_template(self) -> None:
 +        from unittest.mock import patch
@@ -1723,13 +1723,13 @@ index 0be87c80..19049ada 100644
 +        "_ensure_igd_ppp_wan_service",
 +        lambda **kwargs: (1, None),
 +    )
- 
+
      def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
          calls["params"] = params
 @@ -158,6 +163,213 @@ def test_set_pppoe_credentials_names_internet_ppp_slot(monkeypatch) -> None:
      assert calls["expected"][name_path] == ont_action_wan.INTERNET_PPP_CONNECTION_NAME
- 
- 
+
+
 +def test_set_pppoe_credentials_creates_missing_igd_ppp_object(monkeypatch) -> None:
 +    from app.services.network import ont_action_wan
 +
@@ -1946,8 +1946,8 @@ index 5e227d49..14047302 100644
 +++ b/tests/test_log_regressions.py
 @@ -232,6 +232,58 @@ def test_olt_detail_template_uses_imported_state_sections() -> None:
      assert "Runtime and hardware state" not in template
- 
- 
+
+
 +def test_olt_detail_template_exposes_pon_port_identifier_editor() -> None:
 +    template = Path("templates/admin/network/olts/detail.html").read_text()
 +
@@ -2002,7 +2002,7 @@ index 5e227d49..14047302 100644
 +
  def test_ont_operations_tab_lazy_loads_only_when_selected() -> None:
      template = Path("templates/admin/network/onts/detail.html").read_text()
- 
+
 diff --git a/tests/test_network_monitoring_services.py b/tests/test_network_monitoring_services.py
 index efa1f4ca..93638558 100644
 --- a/tests/test_network_monitoring_services.py
@@ -2010,7 +2010,7 @@ index efa1f4ca..93638558 100644
 @@ -295,7 +295,7 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monke
      )
      db_session.commit()
- 
+
 -    def _fake_snapshots(db, onts):
 +    def _fake_snapshots(db, onts, **_):
          return {
@@ -2022,8 +2022,8 @@ index 3b95a393..1bd31ae0 100644
 +++ b/tests/test_network_olts_inventory_scope.py
 @@ -116,6 +116,67 @@ def test_returned_inventory_ont_authorize_allows_active_candidate(
      assert captured["scoped_ont_id"] == str(ont.id)
- 
- 
+
+
 +def test_returned_inventory_hex_ont_authorize_allows_ascii_candidate(
 +    db_session, monkeypatch
 +) -> None:
@@ -2087,7 +2087,7 @@ index 3b95a393..1bd31ae0 100644
 +
  def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
      from app.web.admin import network_olts_inventory
- 
+
 diff --git a/tests/test_olt_dependency_preflight.py b/tests/test_olt_dependency_preflight.py
 index cc073b2e..58c168ea 100644
 --- a/tests/test_olt_dependency_preflight.py
@@ -2095,7 +2095,7 @@ index cc073b2e..58c168ea 100644
 @@ -6,6 +6,7 @@ from types import SimpleNamespace
  def test_validate_olt_profile_dependencies_passes_with_valid_audit(monkeypatch) -> None:
      from app.services.network import olt_dependency_preflight
- 
+
 +    olt_dependency_preflight._success_cache.clear()
      monkeypatch.setattr(
          olt_dependency_preflight,
@@ -2103,7 +2103,7 @@ index cc073b2e..58c168ea 100644
 @@ -32,6 +33,7 @@ def test_validate_olt_profile_dependencies_fails_with_compact_errors(
  ) -> None:
      from app.services.network import olt_dependency_preflight
- 
+
 +    olt_dependency_preflight._success_cache.clear()
      monkeypatch.setattr(
          olt_dependency_preflight,
@@ -2200,14 +2200,14 @@ index f5cee904..4e3efe26 100644
 +++ b/tests/test_ont_status_service.py
 @@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
  from types import SimpleNamespace
- 
+
  from app.models.network import OntStatusSource, OntUnit, OnuOnlineStatus
 +from app.models.network import OLTDevice
  from app.services import network as network_service
  from app.services import zabbix_ont_status
  from app.services.network.ont_status import (
 @@ -183,3 +184,58 @@ def test_list_advanced_filters_by_zabbix_status(db_session, monkeypatch) -> None
- 
+
      assert total == 1
      assert [item.serial_number for item in rows] == ["ONT-ZABBIX-ONLINE"]
 +
@@ -2294,13 +2294,13 @@ index 26199f72..cebe9184 100644
 +            acs_observed_wan_ppp_locations=(),
          ),
      )
- 
+
 diff --git a/tests/test_reconcile_applier.py b/tests/test_reconcile_applier.py
 index 4d253959..52e6ec92 100644
 --- a/tests/test_reconcile_applier.py
 +++ b/tests/test_reconcile_applier.py
 @@ -13,6 +13,7 @@ from types import SimpleNamespace
- 
+
  from app.services.network.reconcile import (
      AcsAddObject,
 +    AcsDeleteObject,
@@ -2310,7 +2310,7 @@ index 4d253959..52e6ec92 100644
 @@ -129,6 +130,12 @@ class _StubAcsClient:
              raise RuntimeError("addObject blew up")
          return {"_id": "task-123"}
- 
+
 +    def delete_object(self, device_id, path):
 +        self.calls.append(("delete_object", (device_id, path), {}))
 +        if self._raise_on == "delete_object":
@@ -2322,8 +2322,8 @@ index 4d253959..52e6ec92 100644
          if self._raise_on == "set_parameter_values":
 @@ -173,6 +180,27 @@ def test_empty_plan_returns_success_with_no_actions():
      assert result.halted_by is None
- 
- 
+
+
 +def test_acs_delete_object_dispatches_to_client():
 +    acs = _StubAcsClient()
 +    ctx = _ctx(acs_client=acs)
@@ -2346,14 +2346,14 @@ index 4d253959..52e6ec92 100644
 +
 +
  # ── OLT action dispatch (happy path) ────────────────────────────────────────
- 
- 
+
+
 diff --git a/tests/test_reconcile_planner.py b/tests/test_reconcile_planner.py
 index 6488c5d0..8eb8fac9 100644
 --- a/tests/test_reconcile_planner.py
 +++ b/tests/test_reconcile_planner.py
 @@ -14,6 +14,7 @@ from datetime import UTC, datetime
- 
+
  from app.services.network.reconcile import (
      AcsAddObject,
 +    AcsDeleteObject,
@@ -2387,11 +2387,11 @@ index 6488c5d0..8eb8fac9 100644
 +            ),
          ),
      )
- 
+
 @@ -402,6 +409,54 @@ def test_omci_wan_skipped_when_method_is_tr069():
      assert AcsSetPppoe in _types(plan)
- 
- 
+
+
 +def test_tr069_wan_wrong_wcd_is_healed_on_desired_wcd_and_stale_child_deleted():
 +    desired = _desired(wan_pppoe_wcd_index=2, wan_pppoe_instance_index=1)
 +    observed = _synced_observed(desired)
@@ -2441,8 +2441,8 @@ index 6488c5d0..8eb8fac9 100644
 +
 +
  # ── Service-port repair ─────────────────────────────────────────────────────
- 
- 
+
+
 @@ -479,6 +534,7 @@ def test_missing_cr_credentials_trigger_management_server_push():
          observed,
          acs=dataclasses.replace(
@@ -2453,8 +2453,8 @@ index 6488c5d0..8eb8fac9 100644
          ),
 @@ -487,6 +543,31 @@ def test_missing_cr_credentials_trigger_management_server_push():
      assert AcsSetManagementServer in _types(plan)
- 
- 
+
+
 +def test_mismatched_cr_username_triggers_management_server_push():
 +    desired = _desired()
 +    observed = _synced_observed(desired)
@@ -2497,8 +2497,8 @@ index 2f76f2de..12c12900 100644
      assert obs.acs_observed_wan_wcd_index == 1
      assert obs.acs_observed_wan_instance_index == 1
 +    assert obs.acs_observed_wan_ppp_locations == ((1, 1),)
- 
- 
+
+
  def test_acs_reader_locates_wan_ppp_on_alternate_wcd_slot():
 @@ -840,6 +842,7 @@ def test_acs_reader_locates_wan_ppp_on_alternate_wcd_slot():
      result = read_acs_state(client, _desired())
@@ -2506,12 +2506,12 @@ index 2f76f2de..12c12900 100644
      assert result.observed.acs_observed_wan_instance_index == 1
 +    assert result.observed.acs_observed_wan_ppp_locations == ((2, 1),)
      assert result.observed.acs_observed_pppoe_username == "100099999"
- 
- 
+
+
 @@ -856,17 +859,16 @@ def test_acs_reader_handles_device_with_no_wan_ppp_instance():
      assert result.observed.acs_observed_wan_instance_index is None
- 
- 
+
+
 -def test_acs_reader_handles_empty_cr_credentials_as_set_false():
 -    """Empty string for CR username is 'set but blank' — equivalent to unset
 -    for the precondition layer's purposes. acs_observed_cr_username_set is
@@ -2528,16 +2528,16 @@ index 2f76f2de..12c12900 100644
 -    # Empty value → present check returns False
 +    assert result.observed.acs_observed_cr_username == ""
      assert result.observed.acs_observed_cr_username_set is False
- 
- 
+
+
 @@ -958,6 +960,7 @@ def test_acs_reader_refreshes_and_reparses_when_wan_ppp_looks_ghosted():
      # Post-refresh: ghost is gone, planner will now correctly schedule addObject.
      assert result.observed.acs_observed_wan_instance_index is None
      assert result.observed.acs_observed_wan_wcd_index is None
 +    assert result.observed.acs_observed_wan_ppp_locations == ()
      assert result.observed.acs_observed_pppoe_username is None
- 
- 
+
+
 diff --git a/tests/test_reconcile_state.py b/tests/test_reconcile_state.py
 index debfab12..0b2de6a2 100644
 --- a/tests/test_reconcile_state.py
@@ -2554,15 +2554,15 @@ index debfab12..0b2de6a2 100644
 +            acs_observed_wan_ppp_locations=((1, 1),),
          ),
      )
- 
+
 diff --git a/tests/test_tr069_binding_readback.py b/tests/test_tr069_binding_readback.py
 index 3b2b6f28..0147e4f2 100644
 --- a/tests/test_tr069_binding_readback.py
 +++ b/tests/test_tr069_binding_readback.py
 @@ -16,6 +16,172 @@ def test_parse_tr069_binding_for_target_ont() -> None:
      assert parse_tr069_binding(output, port=1, ont_id=14) is None
- 
- 
+
+
 +def test_parse_tr069_binding_for_target_ont_without_port() -> None:
 +    from app.services.network.olt_ssh_ont.tr069 import parse_tr069_binding
 +
@@ -2851,7 +2851,7 @@ index b55056a2..e34b309b 100644
 @@ -241,6 +241,45 @@ class TestInformWebhook:
          assert ont.acs_last_inform_at == device.last_inform_at
          assert ont.last_seen_at == device.last_inform_at
- 
+
 +    def test_receive_inform_links_existing_unassigned_device_to_matching_ont(
 +        self, db_session
 +    ) -> None:
@@ -2897,7 +2897,7 @@ index b55056a2..e34b309b 100644
 @@ -545,6 +584,62 @@ class TestAutoLinkOnts:
          assert linked.ont_unit_id == ont.id
          assert linked.acs_server_id == server.id
- 
+
 +    def test_sync_links_existing_unassigned_device_by_serial(self, db_session) -> None:
 +        from app.models.network import OntUnit
 +        from app.services.tr069 import CpeDevices, acs_servers
@@ -2971,7 +2971,7 @@ index e46ae24b..a278e045 100644
 --- a/tests/test_web_system_settings_hub.py
 +++ b/tests/test_web_system_settings_hub.py
 @@ -36,3 +36,16 @@ def test_settings_hub_categories_can_build_query_links(db_session):
- 
+
      assert category_ids
      assert all(category_id.strip() for category_id in category_ids)
 +

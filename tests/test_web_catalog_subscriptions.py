@@ -1071,9 +1071,7 @@ def test_subscription_form_context_hides_child_routes_assigned_to_other_subscrib
         for option in context["route_range_options"]
         if option["cidr"] == "160.119.127.0/24"
     )
-    child_cidrs = {
-        child["cidr"] for child in parent["children_by_prefix"]["30"]
-    }
+    child_cidrs = {child["cidr"] for child in parent["children_by_prefix"]["30"]}
     assert "160.119.127.0/30" not in child_cidrs
     assert "160.119.127.4/30" not in child_cidrs
     assert "160.119.127.8/30" not in child_cidrs

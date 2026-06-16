@@ -82,9 +82,7 @@ def update_mobile_pubspec(version: str) -> None:
         build += 1
 
     new_text = (
-        text[: match.start()]
-        + f"version: {version}+{build}"
-        + text[match.end() :]
+        text[: match.start()] + f"version: {version}+{build}" + text[match.end() :]
     )
     path.write_text(new_text, encoding="utf-8")
 
@@ -97,10 +95,7 @@ def update_changelog(version: str) -> None:
     if heading in text:
         return
 
-    insert = (
-        f"## {version} - {today}\n\n"
-        "- Version bump.\n\n"
-    )
+    insert = f"## {version} - {today}\n\n- Version bump.\n\n"
     marker = "\n## "
     index = text.find(marker)
     if index == -1:
