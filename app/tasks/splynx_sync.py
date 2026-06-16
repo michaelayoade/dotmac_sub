@@ -37,6 +37,7 @@ def run_incremental_sync(hours_back: int | None = None) -> dict[str, int]:
         dotmac_session,
         splynx_connection,
     )
+
     # Post-cutover (Phase 5, 2026-06-16): sub is the SOLE writer of subscription
     # lifecycle. Splynx must NOT push status changes / cancellations / invoices
     # into sub (that's the split-brain). The only Splynx→sub bridge still needed
