@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/payment_errors.dart';
 import '../../models/invoice.dart';
 import '../../providers/data_providers.dart';
 import 'payment_webview_screen.dart';
@@ -68,9 +69,9 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
         ),
       );
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) showPaymentError(context, e, onRetry: _pay);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Payment failed: $e')));
+      if (mounted) showPaymentError(context, e, onRetry: _pay);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -8,6 +8,7 @@ import '../config/env.dart';
 import '../core/api_client.dart';
 import '../core/api_exception.dart';
 import '../core/biometric_service.dart';
+import '../core/messenger.dart';
 import '../core/observability.dart';
 import '../core/push_service.dart';
 import '../core/response_cache.dart';
@@ -15,6 +16,7 @@ import '../core/token_storage.dart';
 import '../models/auth.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/push_repository.dart';
+import 'impersonation.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
@@ -67,6 +69,16 @@ final apiClientProvider = Provider<ApiClient>((ref) {
       // Refresh failed irrecoverably: drop to the signed-out state so the
       // router redirects to /login.
       ref.read(authControllerProvider.notifier).onSessionExpired();
+    },
+    onImpersonationExpired: () {
+      // A "view as" request 401'd: the short-lived grant lapsed. Clear it,
+      // route back to the reseller area, and tell the user.
+      ref.read(impersonationProvider.notifier).expire();
+    },
+    onCacheState: (fromCache) {
+      // Drive the offline banner: a stale-cache fallback flags offline; a fresh
+      // network response clears it.
+      ref.read(offlineProvider.notifier).set(fromCache);
     },
   );
   return client;

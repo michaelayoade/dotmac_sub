@@ -115,15 +115,48 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
     return NavigationDecision.navigate;
   }
 
+  Future<bool> _confirmLeave() async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave payment?'),
+        content: const Text(
+          'Your payment is not finished. Leaving now will cancel it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Stay'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    return leave ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Complete payment')),
-      body: Stack(
-        children: [
-          WebViewWidget(controller: _controller),
-          if (_loading) const Center(child: CircularProgressIndicator()),
-        ],
+    // Guard the system/back-button: while the checkout is active, confirm
+    // before popping (and pop `null` = cancelled, matching the cancel sentinel).
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final navigator = Navigator.of(context);
+        if (await _confirmLeave()) navigator.pop();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Complete payment')),
+        body: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
+            if (_loading) const Center(child: CircularProgressIndicator()),
+          ],
+        ),
       ),
     );
   }

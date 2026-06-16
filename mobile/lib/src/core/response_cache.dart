@@ -99,9 +99,14 @@ class ResponseCache {
 /// rejected as a [DioException], which lands here and is served from cache when
 /// available — so a transient overload no longer wipes a card.
 class CacheInterceptor extends Interceptor {
-  CacheInterceptor(this._cache);
+  CacheInterceptor(this._cache, {this.onCacheState});
 
   final ResponseCache _cache;
+
+  /// Notified with `true` when a GET is served from the stale cache (the
+  /// network failed) and `false` when a GET completes fresh from the network.
+  /// Lets the UI show a subtle "offline — showing last saved data" banner.
+  final void Function(bool fromCache)? onCacheState;
 
   bool _cacheable(RequestOptions o) =>
       o.method.toUpperCase() == 'GET' &&
@@ -125,6 +130,8 @@ class CacheInterceptor extends Interceptor {
     if (_cacheable(o) && status >= 200 && status < 300) {
       // Fire-and-forget: never block delivery on a disk write.
       unawaited(_cache.write(_key(o), response.data));
+      // A fresh network response clears any "offline" state.
+      if (response.extra['fromCache'] != true) onCacheState?.call(false);
     }
     handler.next(response);
   }
@@ -139,6 +146,7 @@ class CacheInterceptor extends Interceptor {
       final cached = await _cache.read(_key(o));
       if (cached != null) {
         Log.breadcrumb('served from cache ${o.path}', category: 'cache');
+        onCacheState?.call(true);
         handler.resolve(
           Response(
             requestOptions: o,

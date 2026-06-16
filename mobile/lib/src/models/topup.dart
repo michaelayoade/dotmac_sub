@@ -46,6 +46,8 @@ class TopupInitiation {
     required this.currency,
     this.providerPublicKey,
     this.customerEmail,
+    this.charged = false,
+    this.checkoutUrl,
   });
 
   final String intentId;
@@ -56,6 +58,11 @@ class TopupInitiation {
   final String? providerPublicKey;
   final String? customerEmail;
 
+  /// True when a saved card was charged server-side — skip the gateway webview
+  /// and go straight to verify.
+  final bool charged;
+  final String? checkoutUrl;
+
   factory TopupInitiation.fromJson(Map<String, dynamic> json) =>
       TopupInitiation(
         intentId: json['intent_id'].toString(),
@@ -65,6 +72,8 @@ class TopupInitiation {
         currency: json['currency'] as String? ?? 'NGN',
         providerPublicKey: json['provider_public_key'] as String?,
         customerEmail: json['customer_email'] as String?,
+        charged: json['charged'] as bool? ?? false,
+        checkoutUrl: json['checkout_url'] as String?,
       );
 }
 

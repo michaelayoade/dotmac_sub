@@ -84,6 +84,12 @@ class MeResponse(BaseModel):
     preferred_contact_method: str | None = None
     locale: str | None = None
     timezone: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
     # Principal kind, so the client can route to the right portal after login
     # (e.g. "customer" vs "reseller"). Defaults to "customer".
     user_type: str = "customer"
@@ -102,6 +108,12 @@ class MeUpdateRequest(BaseModel):
     preferred_contact_method: str | None = None
     locale: str | None = Field(default=None, max_length=16)
     timezone: str | None = Field(default=None, max_length=64)
+    address_line1: str | None = Field(default=None, max_length=120)
+    address_line2: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, max_length=80)
+    region: str | None = Field(default=None, max_length=80)
+    postal_code: str | None = Field(default=None, max_length=20)
+    country_code: str | None = Field(default=None, max_length=2)
 
 
 class AvatarUploadResponse(BaseModel):

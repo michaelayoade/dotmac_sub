@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/payment_errors.dart';
 import '../../models/reseller.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -48,6 +50,16 @@ Future<bool> runResellerPay(
     ),
   );
   if (amount == null || amount.isEmpty) return false;
+  // Block ≤0 and >2-decimal amounts before starting a checkout.
+  final parsed = double.tryParse(amount.replaceAll(',', ''));
+  if (parsed == null ||
+      parsed <= 0 ||
+      !RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(amount.replaceAll(',', ''))) {
+    messenger.showSnackBar(const SnackBar(
+        content:
+            Text('Enter an amount greater than 0 with at most 2 decimals.')));
+    return false;
+  }
 
   try {
     final repo = ref.read(resellerRepositoryProvider);
@@ -69,12 +81,14 @@ Future<bool> runResellerPay(
     messenger.showSnackBar(
         const SnackBar(content: Text('Payment recorded — thank you.')));
     return true;
-  } catch (e) {
-    messenger.showSnackBar(SnackBar(
-        content: Text(e.toString().contains('400')
-            ? 'Payment could not be completed.'
-            : 'Something went wrong — if you were charged, the payment '
-                'will be reconciled automatically.')));
+  } on ApiException catch (e) {
+    messenger
+        .showSnackBar(SnackBar(content: Text(PaymentError.from(e).message)));
+    return false;
+  } catch (_) {
+    messenger.showSnackBar(const SnackBar(
+        content: Text('Something went wrong — if you were charged, the payment '
+            'will be reconciled automatically.')));
     return false;
   }
 }

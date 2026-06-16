@@ -23,6 +23,7 @@ from app.models.billing import (
     TopupIntent,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -708,6 +709,38 @@ def get_payment_methods_page(
     }
 
 
+_TOPUP_CHARGE_IDEMPOTENCY_SCOPE = "topup_saved_card_charge"
+
+
+def _topup_intent_replay(db: Session, ref_id: str | None) -> dict | None:
+    """Return the prior saved-card top-up intent for a replayed idempotency key.
+
+    The card was already charged on the original request, so the replay points
+    the client straight at verification rather than charging again."""
+    intent = db.get(TopupIntent, _coerce_uuid_or_none(ref_id)) if ref_id else None
+    if intent is None:
+        return None
+    return {
+        "intent_id": str(intent.id),
+        "provider_type": intent.provider_type,
+        "provider_public_key": None,
+        "reference": intent.reference,
+        "requested_amount": intent.requested_amount,
+        "currency": intent.currency,
+        "checkout_metadata": dict(intent.metadata_ or {}),
+        "charged": True,
+        "checkout_url": None,
+        "replayed": True,
+    }
+
+
+def _coerce_uuid_or_none(value):
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 def create_topup_intent(
     db: Session,
     customer: dict,
@@ -716,8 +749,14 @@ def create_topup_intent(
     provider: str | None = None,
     payment_method_id: str | None = None,
     redirect_url: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
-    """Create a server-owned top-up intent for checkout."""
+    """Create a server-owned top-up intent for checkout.
+
+    When ``payment_method_id`` selects a saved card the customer's card is
+    charged server-side; passing ``idempotency_key`` makes that charge safe
+    against double-submit (a replay returns the original intent rather than
+    charging the card a second time)."""
     account_id = _customer_account_uuid(customer)
     requested_amount = round_money(to_decimal(amount))
     if requested_amount <= Decimal("0.00"):
@@ -759,6 +798,49 @@ def create_topup_intent(
         provider_type=provider_type,
     )
 
+    # Saved-card charges hit the card server-side, so they need double-submit
+    # protection. Gateway-redirect flows are already deduped by the unique
+    # gateway reference and need no key. Reserve the key BEFORE charging so a
+    # concurrent same-key request fails the unique constraint here.
+    idem_key = (idempotency_key or "").strip() or None
+    reservation: IdempotencyKey | None = None
+    if idem_key and selected_payment_method is not None:
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _TOPUP_CHARGE_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == idem_key,
+            )
+        ).first()
+        if prior is not None:
+            if str(prior.account_id) != str(account_id):
+                raise ValueError("Idempotency key already used")
+            replayed = _topup_intent_replay(db, prior.ref_id)
+            if replayed is not None:
+                return replayed
+            db.delete(prior)
+            db.commit()
+        reservation = IdempotencyKey(
+            scope=_TOPUP_CHARGE_IDEMPOTENCY_SCOPE,
+            key=idem_key,
+            account_id=account_id,
+            ref_id=None,
+        )
+        db.add(reservation)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            prior = db.scalars(
+                select(IdempotencyKey).where(
+                    IdempotencyKey.scope == _TOPUP_CHARGE_IDEMPOTENCY_SCOPE,
+                    IdempotencyKey.key == idem_key,
+                )
+            ).first()
+            replayed = _topup_intent_replay(db, prior.ref_id) if prior else None
+            if replayed is not None:
+                return replayed
+            raise ValueError("A payment with this key is already in progress.")
+
     intent_metadata = {"payment_flow": "account_topup"}
     if selected_payment_method_id:
         intent_metadata["payment_method_id"] = selected_payment_method_id
@@ -791,15 +873,26 @@ def create_topup_intent(
     if selected_payment_method is not None:
         from app.services import paystack
 
-        paystack.charge_authorization(
-            db,
-            authorization_code=selected_payment_token,
-            email=_resolve_customer_email(db, customer),
-            amount_kobo=paystack.amount_to_kobo(requested_amount),
-            reference=gateway_context.reference,
-            metadata=checkout_metadata,
-        )
+        try:
+            paystack.charge_authorization(
+                db,
+                authorization_code=selected_payment_token,
+                email=_resolve_customer_email(db, customer),
+                amount_kobo=paystack.amount_to_kobo(requested_amount),
+                reference=gateway_context.reference,
+                metadata=checkout_metadata,
+            )
+        except Exception:
+            # Release the key so the customer can retry with a different card.
+            if reservation is not None:
+                db.delete(reservation)
+                db.commit()
+            raise
         charged = True
+        if reservation is not None:
+            reservation.ref_id = str(intent.id)
+            db.add(reservation)
+            db.commit()
 
     checkout_url = None
     if gateway_context.provider_type == "flutterwave":

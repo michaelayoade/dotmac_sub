@@ -97,7 +97,7 @@ class TestWalletLedger:
                 category=VasEntryCategory.purchase,
             )
         assert exc_info.value.status_code == 400
-        assert "Insufficient" in exc_info.value.detail
+        assert exc_info.value.detail["code"] == "insufficient_balance"
 
     def test_amount_must_be_positive(self, db_session):
         subscriber = _subscriber(db_session)

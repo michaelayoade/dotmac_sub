@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../providers/data_providers.dart';
+import '../../widgets/attachment_picker.dart';
 
 class CreateTicketScreen extends ConsumerStatefulWidget {
   const CreateTicketScreen({super.key});
@@ -18,6 +19,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
   final _description = TextEditingController();
   String _priority = 'normal';
   bool _submitting = false;
+  List<PickedAttachment> _attachments = [];
 
   static const _priorities = ['low', 'normal', 'high', 'urgent'];
 
@@ -38,6 +40,9 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                 ? null
                 : _description.text.trim(),
             priority: _priority,
+            attachmentPaths: _attachments.isEmpty
+                ? null
+                : [for (final a in _attachments) a.path],
           );
       ref.invalidate(ticketsProvider);
       if (!mounted) return;
@@ -90,6 +95,12 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
                 labelText: 'Description',
                 alignLabelWithHint: true,
               ),
+            ),
+            const SizedBox(height: 16),
+            AttachmentPicker(
+              attachments: _attachments,
+              enabled: !_submitting,
+              onChanged: (a) => setState(() => _attachments = a),
             ),
             const SizedBox(height: 24),
             FilledButton(

@@ -7,6 +7,7 @@ import '../../models/invoice.dart';
 import '../../models/ledger.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 import 'invoice_pay_button.dart';
@@ -35,135 +36,144 @@ class InvoicesScreen extends ConsumerWidget {
           Tab(text: 'Activity'),
         ]),
       ),
-      body: TabBarView(
+      body: Column(
         children: [
-          RefreshIndicator(
-            onRefresh: () async {
-              ref.invalidate(invoicesProvider);
-              await ref.read(invoicesProvider.future);
-            },
-            child: AsyncValueView(
-              value: invoices,
-              onRetry: () => ref.invalidate(invoicesProvider),
-              skeleton: const ListSkeleton(),
-              data: (page) {
-                final all = page.items;
-                if (all.isEmpty) {
-                  return const _ScrollableEmpty(
-                    icon: Icons.receipt_long_outlined,
-                    message: 'No invoices yet.',
-                  );
-                }
-                final filter = ref.watch(invoiceFilterProvider);
-                final outstanding = all
-                    .where((i) => !i.isPaid)
-                    .fold<double>(0, (sum, i) => sum + i.balanceDue);
-                final currency = all.first.currency;
-                final items = all.where(filter.test).toList();
-                return ListView(
-                  padding: const EdgeInsets.all(12),
-                  children: [
-                    if (outstanding > 0) ...[
-                      _OutstandingHeader(
-                          amount: outstanding, currency: currency),
-                      const SizedBox(height: 8),
-                    ],
-                    _InvoiceFilterBar(
-                      selected: filter,
-                      onChanged: (f) =>
-                          ref.read(invoiceFilterProvider.notifier).state = f,
-                    ),
-                    const SizedBox(height: 12),
-                    if (items.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 64),
-                        child: EmptyState(
-                          icon: Icons.filter_alt_off_outlined,
-                          message: 'No ${filter.label.toLowerCase()} invoices.',
-                        ),
-                      )
-                    else
-                      for (final inv in items) ...[
-                        _InvoiceTile(invoice: inv),
-                        const SizedBox(height: 8),
-                      ],
-                  ],
-                );
-              },
-            ),
-          ),
-          RefreshIndicator(
-            onRefresh: () async {
-              ref.invalidate(paymentsProvider);
-              await ref.read(paymentsProvider.future);
-            },
-            child: AsyncValueView(
-              value: payments,
-              onRetry: () => ref.invalidate(paymentsProvider),
-              skeleton: const ListSkeleton(hasLeading: true),
-              data: (page) {
-                if (page.items.isEmpty) {
-                  return const _ScrollableEmpty(
-                    icon: Icons.payments_outlined,
-                    message: 'No payments recorded.',
-                  );
-                }
-                return ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: page.items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) {
-                    final p = page.items[i];
-                    return Card(
-                      margin: EdgeInsets.zero,
-                      child: ListTile(
-                        leading: const Icon(Icons.check_circle_outline),
-                        title: Text(Fmt.money(p.amount, p.currency)),
-                        subtitle: Text(Fmt.dateTime(p.paidAt)),
-                        trailing: StatusChip(p.status),
-                      ),
-                    );
+          const OfflineBanner(),
+          Expanded(
+            child: TabBarView(
+              children: [
+                RefreshIndicator(
+                  onRefresh: () async {
+                    ref.invalidate(invoicesProvider);
+                    await ref.read(invoicesProvider.future);
                   },
-                );
-              },
-            ),
-          ),
-          RefreshIndicator(
-            onRefresh: () async {
-              ref.invalidate(ledgerProvider);
-              ref.invalidate(balanceProvider);
-              await ref.read(ledgerProvider.future);
-            },
-            child: AsyncValueView(
-              value: ref.watch(ledgerProvider),
-              onRetry: () => ref.invalidate(ledgerProvider),
-              skeleton: const ListSkeleton(hasLeading: true),
-              data: (page) {
-                final balance = ref.watch(balanceProvider);
-                return ListView(
-                  padding: const EdgeInsets.all(12),
-                  children: [
-                    balance.maybeWhen(
-                      data: (b) => _BalanceCard(balance: b),
-                      orElse: () => const SizedBox.shrink(),
-                    ),
-                    const SizedBox(height: 8),
-                    if (page.items.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 80),
-                        child: EmptyState(
+                  child: AsyncValueView(
+                    value: invoices,
+                    onRetry: () => ref.invalidate(invoicesProvider),
+                    skeleton: const ListSkeleton(),
+                    data: (page) {
+                      final all = page.items;
+                      if (all.isEmpty) {
+                        return const _ScrollableEmpty(
                           icon: Icons.receipt_long_outlined,
-                          message: 'No account activity yet.',
-                        ),
-                      )
-                    else
-                      for (final t in page.items) ...[
-                        _LedgerTile(txn: t),
-                        const SizedBox(height: 8),
-                      ],
-                  ],
-                );
-              },
+                          message: 'No invoices yet.',
+                        );
+                      }
+                      final filter = ref.watch(invoiceFilterProvider);
+                      final outstanding = all
+                          .where((i) => !i.isPaid)
+                          .fold<double>(0, (sum, i) => sum + i.balanceDue);
+                      final currency = all.first.currency;
+                      final items = all.where(filter.test).toList();
+                      return ListView(
+                        padding: const EdgeInsets.all(12),
+                        children: [
+                          if (outstanding > 0) ...[
+                            _OutstandingHeader(
+                                amount: outstanding, currency: currency),
+                            const SizedBox(height: 8),
+                          ],
+                          _InvoiceFilterBar(
+                            selected: filter,
+                            onChanged: (f) => ref
+                                .read(invoiceFilterProvider.notifier)
+                                .state = f,
+                          ),
+                          const SizedBox(height: 12),
+                          if (items.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 64),
+                              child: EmptyState(
+                                icon: Icons.filter_alt_off_outlined,
+                                message:
+                                    'No ${filter.label.toLowerCase()} invoices.',
+                              ),
+                            )
+                          else
+                            for (final inv in items) ...[
+                              _InvoiceTile(invoice: inv),
+                              const SizedBox(height: 8),
+                            ],
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                RefreshIndicator(
+                  onRefresh: () async {
+                    ref.invalidate(paymentsProvider);
+                    await ref.read(paymentsProvider.future);
+                  },
+                  child: AsyncValueView(
+                    value: payments,
+                    onRetry: () => ref.invalidate(paymentsProvider),
+                    skeleton: const ListSkeleton(hasLeading: true),
+                    data: (page) {
+                      if (page.items.isEmpty) {
+                        return const _ScrollableEmpty(
+                          icon: Icons.payments_outlined,
+                          message: 'No payments recorded.',
+                        );
+                      }
+                      return ListView.separated(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: page.items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (_, i) {
+                          final p = page.items[i];
+                          return Card(
+                            margin: EdgeInsets.zero,
+                            child: ListTile(
+                              leading: const Icon(Icons.check_circle_outline),
+                              title: Text(Fmt.money(p.amount, p.currency)),
+                              subtitle: Text(Fmt.dateTime(p.paidAt)),
+                              trailing: StatusChip(p.status),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                RefreshIndicator(
+                  onRefresh: () async {
+                    ref.invalidate(ledgerProvider);
+                    ref.invalidate(balanceProvider);
+                    await ref.read(ledgerProvider.future);
+                  },
+                  child: AsyncValueView(
+                    value: ref.watch(ledgerProvider),
+                    onRetry: () => ref.invalidate(ledgerProvider),
+                    skeleton: const ListSkeleton(hasLeading: true),
+                    data: (page) {
+                      final balance = ref.watch(balanceProvider);
+                      return ListView(
+                        padding: const EdgeInsets.all(12),
+                        children: [
+                          balance.maybeWhen(
+                            data: (b) => _BalanceCard(balance: b),
+                            orElse: () => const SizedBox.shrink(),
+                          ),
+                          const SizedBox(height: 8),
+                          if (page.items.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 80),
+                              child: EmptyState(
+                                icon: Icons.receipt_long_outlined,
+                                message: 'No account activity yet.',
+                              ),
+                            )
+                          else
+                            for (final t in page.items) ...[
+                              _LedgerTile(txn: t),
+                              const SizedBox(height: 8),
+                            ],
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
         ],

@@ -378,6 +378,9 @@ function topupPage() {
             const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
             const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
+            // Saved-card charges go server-side immediately, so guard against a
+            // double-submit with an Idempotency-Key (one per charge attempt).
+            const idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
 
             try {
                 const response = await fetch('/portal/billing/topup/intent', {
@@ -385,6 +388,7 @@ function topupPage() {
                     headers: {
                         'Content-Type': 'application/json',
                         'X-CSRF-Token': this.csrfToken(),
+                        'Idempotency-Key': idempotencyKey,
                     },
                     body: JSON.stringify({
                         amount: amount,

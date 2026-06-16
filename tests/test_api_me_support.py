@@ -14,7 +14,6 @@ from fastapi import HTTPException
 
 from app.api import me as me_api
 from app.models.support import TicketChannel
-from app.schemas.support import MySupportCommentCreate, MySupportTicketCreate
 
 
 def _subscriber_principal():
@@ -93,9 +92,15 @@ def test_my_create_ticket_forces_caller_scope(monkeypatch):
 
     monkeypatch.setattr(me_api.support_service.tickets, "create", fake_create)
 
+    # The endpoint now accepts multipart/form-data (form fields + a repeatable
+    # ``attachments`` file field), not a JSON body.
     me_api.my_create_ticket(
-        payload=MySupportTicketCreate(title="No internet"),
         request=None,
+        title="No internet",
+        description=None,
+        priority="normal",
+        ticket_type=None,
+        attachments=[],
         db=None,
         principal=principal,
     )
@@ -141,8 +146,9 @@ def test_my_add_ticket_comment_forces_public(monkeypatch):
 
     me_api.my_add_ticket_comment(
         ticket_id="t1",
-        payload=MySupportCommentCreate(body="any update?"),
         request=None,
+        body="any update?",
+        attachments=[],
         db=None,
         principal=principal,
     )
