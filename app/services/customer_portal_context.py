@@ -32,6 +32,7 @@ from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services.bandwidth import bandwidth_samples
 from app.services.common import coerce_uuid
+from app.services.collections import get_available_balance
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,16 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             offset=0,
         )
 
-    balance = sum(float(inv.balance_due or 0) for inv in invoices)
+    current_balance = 0.0
+    if account_id:
+        try:
+            current_balance = float(get_available_balance(db, str(account_id)))
+        except Exception:
+            logger.warning(
+                "Failed to resolve available balance for dashboard account %s",
+                account_id,
+                exc_info=True,
+            )
     next_bill_amount = float(invoices[0].total or 0) if invoices else 0.0
     next_bill_date = None
 
@@ -272,7 +282,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         next_bill_date = datetime.now(UTC) + timedelta(days=30)
 
     account = SimpleNamespace(
-        balance=balance,
+        balance=current_balance,
         next_bill_amount=next_bill_amount,
         next_bill_date=next_bill_date,
     )
@@ -344,27 +354,11 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         except Exception:
             open_count = 0
 
-    # Billing mode and prepaid balance
+    # Billing mode and available balance
     billing_mode = "postpaid"
-    prepaid_balance = 0.0
+    prepaid_balance = current_balance
     if subscriber and hasattr(subscriber, "billing_mode") and subscriber.billing_mode:
         billing_mode = subscriber.billing_mode.value
-    if billing_mode == "prepaid" and account_id:
-        try:
-            from app.services.collections._core import (
-                _resolve_prepaid_available_balance,
-            )
-
-            prepaid_balance = float(
-                _resolve_prepaid_available_balance(db, str(account_id))
-            )
-        except Exception:
-            logger.warning(
-                "Failed to resolve prepaid balance for account %s",
-                account_id,
-                exc_info=True,
-            )
-            prepaid_balance = 0.0
 
     # Get subscriber's ONT devices
     devices = []

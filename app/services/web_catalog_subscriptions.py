@@ -17,18 +17,28 @@ from starlette.datastructures import FormData
 from app.models.billing import InvoiceStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
+    AddOn,
+    AddOnType,
     BillingMode,
     ContractTerm,
     NasDevice,
     OfferStatus,
     RadiusProfile,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
-from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
+from app.models.network import (
+    IPAssignment,
+    IpBlock,
+    IpPool,
+    IPv4Address,
+    IPVersion,
+    SubscriberAdditionalRoute,
+)
 from app.models.notification import Notification, NotificationTemplate
 from app.models.radius import (
     RadiusClient,
@@ -66,6 +76,9 @@ from app.services.credential_crypto import decrypt_credential
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
+
+PUBLIC_IP_ADDON_PREFIXES = (32, 30, 29)
+MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK = 512
 
 
 def _format_offer_price_summary(amount: object | None) -> str:
@@ -407,6 +420,10 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
         "ipv4_method": "permanent_static",
         "ipv4_block_ids": [],
         "ipv4_addresses": [],
+        "ip_addon_id": "",
+        "ip_addon_quantity": "1",
+        "additional_route_cidrs": [""],
+        "additional_route_metrics": [""],
     }
 
 
@@ -423,6 +440,12 @@ def parse_subscription_form(
         str(value).strip()
         for value in form.getlist("ipv4_addresses")
         if str(value).strip()
+    ]
+    additional_route_cidrs = [
+        str(value).strip() for value in form.getlist("additional_route_cidrs")
+    ]
+    additional_route_metrics = [
+        str(value).strip() for value in form.getlist("additional_route_metrics")
     ]
     data = {
         "account_id": _form_str(form, "account_id").strip(),
@@ -463,6 +486,10 @@ def parse_subscription_form(
         or "permanent_static",
         "ipv4_block_ids": ipv4_block_ids,
         "ipv4_addresses": ipv4_addresses,
+        "ip_addon_id": _form_str(form, "ip_addon_id").strip(),
+        "ip_addon_quantity": _form_str(form, "ip_addon_quantity", "1").strip() or "1",
+        "additional_route_cidrs": additional_route_cidrs,
+        "additional_route_metrics": additional_route_metrics,
     }
     if subscription_id:
         data["id"] = subscription_id
@@ -1122,6 +1149,365 @@ def _sync_ipv4_assignments_for_subscription(
     return desired_ips
 
 
+def _additional_route_form_rows(
+    db: Session,
+    *,
+    subscriber_id,
+) -> tuple[list[str], list[str]]:
+    if not subscriber_id:
+        return [""], [""]
+    routes = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber_id)
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .order_by(SubscriberAdditionalRoute.cidr.asc())
+        .all()
+    )
+    if not routes:
+        return [""], [""]
+    return (
+        [str(route.cidr or "") for route in routes],
+        [str(route.metric or 1) for route in routes],
+    )
+
+
+def normalize_additional_routes(
+    cidrs: list[str] | None,
+    metrics: list[str] | None = None,
+) -> list[tuple[str, int, int]]:
+    """Validate additional routed blocks from the admin form.
+
+    Returns normalized (cidr, prefix_length, metric) tuples and rejects duplicate
+    routes before any DB writes happen.
+    """
+    routes: list[tuple[str, int, int]] = []
+    seen: set[str] = set()
+    for index, raw_cidr in enumerate(cidrs or []):
+        text = str(raw_cidr or "").strip()
+        if not text:
+            continue
+        if "/" not in text:
+            text = f"{text}/32"
+        try:
+            network = ipaddress.ip_network(text, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"Invalid additional routed IP block: {raw_cidr}") from exc
+        if network.version != 4:
+            raise ValueError("Additional routed IP blocks must be IPv4 CIDRs.")
+        cidr = str(network)
+        if cidr in seen:
+            raise ValueError(f"Duplicate additional routed IP block: {cidr}")
+        seen.add(cidr)
+
+        metric_raw = str((metrics or [])[index] if index < len(metrics or []) else "")
+        metric_text = metric_raw.strip()
+        if not metric_text:
+            metric = 1
+        else:
+            try:
+                metric = int(metric_text)
+            except ValueError as exc:
+                raise ValueError(f"Invalid route metric for {cidr}.") from exc
+            if metric < 1:
+                raise ValueError(f"Route metric for {cidr} must be 1 or higher.")
+        routes.append((cidr, int(network.prefixlen), metric))
+    return routes
+
+
+def sync_additional_routes_for_subscription(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    cidrs: list[str] | None,
+    metrics: list[str] | None = None,
+) -> list[str]:
+    """Upsert active subscriber additional routes and deactivate removed ones."""
+    if not subscription_obj.subscriber_id:
+        return []
+    desired = normalize_additional_routes(cidrs, metrics)
+    desired_map = {
+        cidr: (prefix_length, metric) for cidr, prefix_length, metric in desired
+    }
+    existing = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(
+            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
+        )
+        .all()
+    )
+    existing_by_cidr = {str(route.cidr): route for route in existing}
+
+    for cidr, (prefix_length, metric) in desired_map.items():
+        route = existing_by_cidr.get(cidr)
+        if route is None:
+            db.add(
+                SubscriberAdditionalRoute(
+                    subscriber_id=subscription_obj.subscriber_id,
+                    cidr=cidr,
+                    prefix_length=prefix_length,
+                    metric=metric,
+                    is_active=True,
+                    source="admin_subscription_form",
+                )
+            )
+            continue
+        route.prefix_length = prefix_length
+        route.metric = metric
+        route.is_active = True
+        if not route.source:
+            route.source = "admin_subscription_form"
+
+    for route in existing:
+        if str(route.cidr) not in desired_map and route.is_active:
+            route.is_active = False
+
+    db.commit()
+    return list(desired_map)
+
+
+def _public_ip_addon_options(db: Session) -> list[AddOn]:
+    options: list[AddOn] = (
+        db.query(AddOn)
+        .filter(AddOn.is_active.is_(True))
+        .filter(
+            or_(
+                AddOn.ip_is_public.is_(True),
+                AddOn.addon_type.in_([AddOnType.extra_ip, AddOnType.static_ip]),
+                AddOn.name.ilike("%ip%"),
+                AddOn.name.ilike("%ipv4%"),
+            )
+        )
+        .order_by(AddOn.name.asc())
+        .all()
+    )
+    prefixes: set[int] = set()
+    blocks = (
+        db.query(IpBlock)
+        .join(IpPool, IpPool.id == IpBlock.pool_id)
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .filter(IpBlock.is_active.is_(True))
+        .all()
+    )
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            prefixes.add(int(network.prefixlen))
+            for prefix in PUBLIC_IP_ADDON_PREFIXES:
+                if network.prefixlen <= prefix:
+                    prefixes.add(prefix)
+
+    existing_prefixes = {
+        int(add_on.ip_prefix_length)
+        for add_on in options
+        if add_on.ip_prefix_length is not None
+    }
+    existing_names = {str(add_on.name or "").strip().lower() for add_on in options}
+
+    for prefix in sorted(prefixes):
+        if prefix in existing_prefixes or f"/{prefix} ip" in existing_names:
+            continue
+        add_on = AddOn(
+            name=f"/{prefix} IP",
+            addon_type=AddOnType.static_ip if prefix == 32 else AddOnType.extra_ip,
+            description=f"Public IPv4 /{prefix} block.",
+            is_active=True,
+            ip_is_public=True,
+            ip_prefix_length=prefix,
+        )
+        db.add(add_on)
+        options.append(add_on)
+    if options:
+        db.commit()
+        for add_on in options:
+            if add_on in db:
+                db.refresh(add_on)
+    return sorted(options, key=lambda add_on: str(add_on.name or ""))
+
+
+def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, object]]:
+    options: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        pool_name = getattr(block.pool, "name", "Pool")
+        parent_label = f"{pool_name} - {network}"
+        if str(network) not in seen:
+            seen.add(str(network))
+            options.append(
+                {
+                    "id": str(network),
+                    "cidr": str(network),
+                    "prefix": network.prefixlen,
+                    "parent_cidr": str(network),
+                    "pool_name": pool_name,
+                    "display": f"{parent_label} (entire range)",
+                }
+            )
+
+        for prefix in PUBLIC_IP_ADDON_PREFIXES:
+            if network.prefixlen > prefix:
+                continue
+            subnet_count = 2 ** (prefix - network.prefixlen)
+            if subnet_count > MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK:
+                continue
+            for subnet in network.subnets(new_prefix=prefix):
+                cidr = str(subnet)
+                if cidr in seen:
+                    continue
+                seen.add(cidr)
+                options.append(
+                    {
+                        "id": cidr,
+                        "cidr": cidr,
+                        "prefix": prefix,
+                        "parent_cidr": str(network),
+                        "pool_name": pool_name,
+                        "display": f"{pool_name} - {cidr}",
+                    }
+                )
+    return sorted(
+        options,
+        key=lambda item: (
+            str(item["pool_name"]),
+            int(item["prefix"]),
+            ipaddress.ip_network(str(item["cidr"]), strict=False).network_address,
+        ),
+    )
+
+
+def _subscription_public_ip_addon_form_row(
+    db: Session,
+    *,
+    subscription_id,
+) -> tuple[str, str]:
+    if not subscription_id:
+        return "", "1"
+    row = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .filter(AddOn.ip_is_public.is_(True))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .order_by(SubscriptionAddOn.start_at.desc().nullslast())
+        .first()
+    )
+    if row is None:
+        return "", "1"
+    sub_addon, _add_on = row
+    return str(sub_addon.add_on_id), str(sub_addon.quantity or 1)
+
+
+def sync_public_ip_addon_for_subscription(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    add_on_id: str | None,
+    quantity: str | int | None,
+) -> str | None:
+    """Sync the active public-IP billing add-on from the admin form."""
+    selected = str(add_on_id or "").strip()
+    try:
+        qty = int(str(quantity or "1").strip() or "1")
+    except ValueError as exc:
+        raise ValueError("Additional IP add-on quantity must be a number.") from exc
+    if qty < 1:
+        raise ValueError("Additional IP add-on quantity must be 1 or higher.")
+
+    now = datetime.now(UTC)
+    active_rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription_obj.id)
+        .filter(AddOn.ip_is_public.is_(True))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .all()
+    )
+
+    if not selected:
+        for sub_addon, _add_on in active_rows:
+            sub_addon.end_at = now
+        db.commit()
+        return None
+
+    try:
+        selected_uuid = UUID(selected)
+    except ValueError as exc:
+        raise ValueError("Selected additional IP add-on is invalid.") from exc
+    add_on = db.get(AddOn, selected_uuid)
+    if not add_on or not add_on.is_active:
+        raise ValueError("Selected additional IP add-on is not available.")
+    addon_type = getattr(add_on.addon_type, "value", add_on.addon_type)
+    name = str(add_on.name or "").lower()
+    if (
+        not add_on.ip_is_public
+        and addon_type not in {AddOnType.extra_ip.value, AddOnType.static_ip.value}
+        and "ip" not in name
+        and "ipv4" not in name
+    ):
+        raise ValueError("Selected additional IP add-on is not available.")
+
+    matched = None
+    for sub_addon, _add_on in active_rows:
+        if str(sub_addon.add_on_id) == selected:
+            matched = sub_addon
+            sub_addon.quantity = qty
+        else:
+            sub_addon.end_at = now
+    if matched is None:
+        db.add(
+            SubscriptionAddOn(
+                subscription_id=subscription_obj.id,
+                add_on_id=selected_uuid,
+                quantity=qty,
+                start_at=now,
+            )
+        )
+    db.commit()
+    return selected
+
+
+def validate_public_ip_addon_selection(
+    db: Session,
+    *,
+    add_on_id: str | None,
+    quantity: str | int | None,
+) -> None:
+    selected = str(add_on_id or "").strip()
+    try:
+        qty = int(str(quantity or "1").strip() or "1")
+    except ValueError as exc:
+        raise ValueError("Additional IP add-on quantity must be a number.") from exc
+    if qty < 1:
+        raise ValueError("Additional IP add-on quantity must be 1 or higher.")
+    if not selected:
+        return
+    try:
+        selected_uuid = UUID(selected)
+    except ValueError as exc:
+        raise ValueError("Selected additional IP add-on is invalid.") from exc
+    add_on = db.get(AddOn, selected_uuid)
+    if not add_on or not add_on.is_active:
+        raise ValueError("Selected additional IP add-on is not available.")
+    addon_type = getattr(add_on.addon_type, "value", add_on.addon_type)
+    name = str(add_on.name or "").lower()
+    if (
+        not add_on.ip_is_public
+        and addon_type not in {AddOnType.extra_ip.value, AddOnType.static_ip.value}
+        and "ip" not in name
+        and "ipv4" not in name
+    ):
+        raise ValueError("Selected additional IP add-on is not available.")
+
+
 def ensure_ipv4_blocks_allocatable(
     db: Session,
     block_ids: list[str],
@@ -1245,6 +1631,14 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         db,
         subscription_obj=subscription_obj,
     )
+    additional_route_cidrs, additional_route_metrics = _additional_route_form_rows(
+        db,
+        subscriber_id=subscription_obj.subscriber_id,
+    )
+    ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
+        db,
+        subscription_id=subscription_obj.id,
+    )
     return {
         "id": str(subscription_obj.id),
         "account_id": str(subscription_obj.subscriber_id),
@@ -1303,6 +1697,10 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         ),
         "ipv4_block_ids": ipv4_block_ids,
         "ipv4_addresses": ipv4_addresses,
+        "ip_addon_id": ip_addon_id,
+        "ip_addon_quantity": ip_addon_quantity,
+        "additional_route_cidrs": additional_route_cidrs,
+        "additional_route_metrics": additional_route_metrics,
     }
 
 
@@ -1838,6 +2236,7 @@ def subscription_form_context(
                 "display": f"{pool_name} - {block.cidr} ({len(in_block)} free)",
             }
         )
+    route_range_options = _route_range_options_for_blocks(ipv4_blocks)
 
     rp_stmt = (
         select(RadiusProfile)
@@ -1922,6 +2321,12 @@ def subscription_form_context(
         subscription["ipv4_block_ids"] = []
     if not isinstance(subscription.get("ipv4_addresses"), list):
         subscription["ipv4_addresses"] = []
+    if not subscription.get("ip_addon_quantity"):
+        subscription["ip_addon_quantity"] = "1"
+    if not isinstance(subscription.get("additional_route_cidrs"), list):
+        subscription["additional_route_cidrs"] = [""]
+    if not isinstance(subscription.get("additional_route_metrics"), list):
+        subscription["additional_route_metrics"] = [""]
 
     context: dict[str, object] = {
         "subscription": subscription,
@@ -1933,6 +2338,9 @@ def subscription_form_context(
         "ipv4_pools": ipv4_pools,
         "ipv4_blocks": block_options,
         "ipv4_blocks_json": json.dumps(block_options),
+        "route_range_options": route_range_options,
+        "route_range_options_json": json.dumps(route_range_options),
+        "ip_addon_options": _public_ip_addon_options(db),
         "radius_profiles": radius_profiles,
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],
@@ -2208,6 +2616,12 @@ def create_subscription_with_audit(
         for value in form.getlist("ipv4_addresses")
         if str(value).strip()
     ]
+    additional_route_cidrs = [
+        str(value).strip() for value in form.getlist("additional_route_cidrs")
+    ]
+    additional_route_metrics = [
+        str(value).strip() for value in form.getlist("additional_route_metrics")
+    ]
     allocated_ips = _allocate_ipv4_assignments_for_subscription(
         db,
         subscription_obj=created,
@@ -2222,6 +2636,18 @@ def create_subscription_with_audit(
                 "ipv4_address": allocated_ips[0],
             },
         )
+    additional_routes = sync_additional_routes_for_subscription(
+        db,
+        subscription_obj=created,
+        cidrs=additional_route_cidrs,
+        metrics=additional_route_metrics,
+    )
+    public_ip_addon_id = sync_public_ip_addon_for_subscription(
+        db,
+        subscription_obj=created,
+        add_on_id=str(form.get("ip_addon_id") or ""),
+        quantity=str(form.get("ip_addon_quantity") or "1"),
+    )
 
     if subscriber:
         try:
@@ -2242,6 +2668,8 @@ def create_subscription_with_audit(
             )
         else:
             _reconcile_active_subscription_after_credential_sync(db, str(created.id))
+    elif additional_routes:
+        _reconcile_active_subscription_after_credential_sync(db, str(created.id))
 
     record_audit_event(
         db,
@@ -2259,6 +2687,9 @@ def create_subscription_with_audit(
             "ipv4_method": str(form.get("ipv4_method") or "permanent_static"),
             "allocated_ipv4_count": len(allocated_ips),
             "allocated_ipv4_addresses": allocated_ips,
+            "public_ip_addon_id": public_ip_addon_id,
+            "additional_route_count": len(additional_routes),
+            "additional_routes": additional_routes,
         },
     )
 
@@ -2280,6 +2711,10 @@ def update_subscription_with_audit(
     ipv4_addresses: list[str] | None,
     request: object,
     actor_id: str | None,
+    additional_route_cidrs: list[str] | None = None,
+    additional_route_metrics: list[str] | None = None,
+    ip_addon_id: str | None = None,
+    ip_addon_quantity: str | int | None = None,
 ) -> object:
     """Update subscription, compute diff, and log audit.
 
@@ -2299,6 +2734,22 @@ def update_subscription_with_audit(
         after.ipv4_address = primary_ipv4 or None
         db.commit()
         db.refresh(after)
+    additional_routes: list[str] = []
+    if additional_route_cidrs is not None:
+        additional_routes = sync_additional_routes_for_subscription(
+            db,
+            subscription_obj=after,
+            cidrs=additional_route_cidrs,
+            metrics=additional_route_metrics,
+        )
+    public_ip_addon_id: str | None = None
+    if ip_addon_id is not None:
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
+            db,
+            subscription_obj=after,
+            add_on_id=ip_addon_id,
+            quantity=ip_addon_quantity,
+        )
     entered_password = str(service_password or "").strip()
     try:
         _upsert_access_credential(
@@ -2323,6 +2774,9 @@ def update_subscription_with_audit(
     if allocated_ips:
         metadata_payload["allocated_ipv4_count"] = len(allocated_ips)
         metadata_payload["allocated_ipv4_addresses"] = allocated_ips
+    metadata_payload["public_ip_addon_id"] = public_ip_addon_id
+    metadata_payload["additional_route_count"] = len(additional_routes)
+    metadata_payload["additional_routes"] = additional_routes
 
     record_audit_event(
         db,

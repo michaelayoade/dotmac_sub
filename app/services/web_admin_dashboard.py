@@ -257,7 +257,7 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
                         SELECT SUM(amount)
                         FROM payments
                         WHERE is_active = true
-                          AND status = 'completed'
+                          AND status = 'succeeded'
                           AND paid_at >= date_trunc('month', NOW())
                           AND paid_at < date_trunc('month', NOW()) + INTERVAL '1 month'
                     ), 0) AS payments_this_month,
@@ -943,10 +943,19 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
 
 
 def dashboard_stats_partial(request: Request, db: Session):
-    stats = _get_cached_dashboard_stats(db)
+    show_financials, show_network, show_subscribers = _resolve_dashboard_permissions(
+        request, db
+    )
+    global_ctx = _get_cached_dashboard_global_context(db)
     return templates.TemplateResponse(
         "admin/dashboard/_stats.html",
-        {"request": request, "stats": stats},
+        {
+            "request": request,
+            "show_financials": show_financials,
+            "show_network": show_network,
+            "show_subscribers": show_subscribers,
+            **global_ctx,
+        },
     )
 
 

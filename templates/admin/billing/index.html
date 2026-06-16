@@ -2,8 +2,27 @@
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, status_badge,
     empty_state, action_button, metric_row, filter_bar,
-    icon_invoice, icon_download, icon_credit_card, icon_chart_bar, icon_view
+    icon_invoice, icon_download, icon_credit_card, icon_view,
+    icon_archive, icon_building, icon_calendar, icon_chart_bar, icon_clipboard,
+    icon_database, icon_filter, icon_lightning, icon_refresh,
+    icon_link, icon_shield, icon_upload, icon_warning
 %}
+
+{% macro billing_workbench_card(label, href, icon, color="emerald", color2=None, meta="Open") %}
+{% set c2 = color2 or color %}
+<a href="{{ href }}" class="group flex min-h-[58px] items-center gap-2.5 rounded-lg border border-slate-200/80 bg-white px-3 py-2 transition-all hover:border-{{ color }}-300 hover:shadow-sm dark:border-slate-700/80 dark:bg-slate-800 dark:hover:border-{{ color }}-700/40">
+    <span class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 text-white shadow-sm shadow-{{ color }}-500/20 ring-1 ring-white/70 dark:ring-white/10">
+        {{ icon|safe }}
+    </span>
+    <span class="min-w-0 flex-1">
+        <span class="block truncate text-[13px] font-semibold text-slate-900 dark:text-white">{{ label }}</span>
+        <span class="mt-0.5 block truncate text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ meta }}</span>
+    </span>
+    <svg class="h-3.5 w-3.5 flex-shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500 dark:text-slate-600 dark:group-hover:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+    </svg>
+</a>
+{% endmacro %}
 
 {% block title %}Revenue & Billing - Admin{% endblock %}
 
@@ -20,7 +39,7 @@
 {% set dp = daily_payments|default({'labels': [], 'values': []}) %}
 {% set cd = chart_data|default({'labels': ['Paid','Pending','Overdue','Draft'], 'values': [0,0,0,0], 'colors': ['#10b981','#3b82f6','#f59e0b','#94a3b8']}) %}
 
-<div class="space-y-8">
+<div class="space-y-8" x-data="{ billingWorkbenchOpen: false }">
     {# ═══ Header ═══ #}
     {% call(content) page_header(
         "Revenue & Billing",
@@ -29,6 +48,12 @@
         color="emerald",
         color2="teal"
     ) %}
+        <button type="button"
+                x-on:click="billingWorkbenchOpen = true"
+                class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-emerald-300 hover:text-emerald-700 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-emerald-700/40 dark:hover:text-emerald-300">
+            {{ icon_clipboard("h-4 w-4") }}
+            Billing Workbench
+        </button>
         {{ action_button("Export", href="#", icon=icon_download("h-4 w-4"), variant="secondary", color="emerald") }}
     {% endcall %}
 
@@ -82,6 +107,75 @@
             </div>
         </div>
     </section>
+
+    <div x-show="billingWorkbenchOpen"
+         x-cloak
+         x-on:keydown.escape.window="billingWorkbenchOpen = false"
+         class="fixed inset-0 z-[100] overflow-y-auto"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="billing-workbench-title">
+        <div x-show="billingWorkbenchOpen"
+             x-transition.opacity
+             x-on:click="billingWorkbenchOpen = false"
+             class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"></div>
+        <div class="flex min-h-full items-start justify-center px-3 py-4 sm:items-center sm:px-4">
+            <div x-show="billingWorkbenchOpen"
+                 x-transition
+                 x-on:click.stop
+                 class="relative w-full max-w-3xl overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+                    <div>
+                        <h2 id="billing-workbench-title" class="font-display text-base font-bold text-slate-900 dark:text-white">Billing Workbench</h2>
+                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Choose an activity.</p>
+                    </div>
+                    <button type="button"
+                            x-on:click="billingWorkbenchOpen = false"
+                            class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+                            aria-label="Close billing workbench">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="max-h-[72vh] space-y-4 overflow-y-auto p-4">
+                    <section>
+                        <h3 class="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Finance</h3>
+                        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            {{ billing_workbench_card("Invoices", "/admin/billing/invoices", icon_invoice("h-4 w-4"), "emerald", "teal", stats.total_invoices|default(0) ~ " records") }}
+                            {{ billing_workbench_card("Payments", "/admin/billing/payments", icon_credit_card("h-4 w-4"), "teal", "emerald", stats.payments_count|default(0) ~ " period") }}
+                            {{ billing_workbench_card("Credit Notes", "/admin/billing/credits", icon_archive("h-4 w-4"), "amber", "orange", stats.credit_notes_count|default(0) ~ " period") }}
+                            {{ billing_workbench_card("Ledger", "/admin/billing/ledger", icon_database("h-4 w-4"), "violet", "purple", "Entries") }}
+                            {{ billing_workbench_card("AR Aging", "/admin/billing/ar-aging", icon_chart_bar("h-4 w-4"), "rose", "pink", "Receivables") }}
+                        </div>
+                    </section>
+
+                    <section>
+                        <h3 class="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Collections</h3>
+                        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            {{ billing_workbench_card("Reconciliation", "/admin/billing/payments/reconciliation", icon_filter("h-4 w-4"), "blue", "indigo", "Matching") }}
+                            {{ billing_workbench_card("Payment Proofs", "/admin/billing/payment-proofs", icon_upload("h-4 w-4"), "cyan", "sky", "Reviews") }}
+                            {{ billing_workbench_card("Arrangements", "/admin/billing/payment-arrangements", icon_calendar("h-4 w-4"), "amber", "orange", "Installments") }}
+                            {{ billing_workbench_card("Dunning", "/admin/billing/dunning", icon_warning("h-4 w-4"), "rose", "pink", "Cases") }}
+                            {{ billing_workbench_card("Extensions", "/admin/billing/service-extensions", icon_lightning("h-4 w-4"), "orange", "amber", "Access") }}
+                        </div>
+                    </section>
+
+                    <section>
+                        <h3 class="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Operations</h3>
+                        <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            {{ billing_workbench_card("Accounts", "/admin/billing/accounts", icon_building("h-4 w-4"), "slate", "gray", "Balances") }}
+                            {{ billing_workbench_card("Batch Billing", "/admin/billing/invoices/batch", icon_refresh("h-4 w-4"), "teal", "cyan", "Runs") }}
+                            {{ billing_workbench_card("Import Payments", "/admin/billing/payments/import", icon_upload("h-4 w-4"), "indigo", "blue", "CSV") }}
+                            {{ billing_workbench_card("Consolidated", "/admin/billing/consolidated-accounts", icon_clipboard("h-4 w-4"), "purple", "violet", "Groups") }}
+                        </div>
+                    </section>
+
+                </div>
+            </div>
+        </div>
+    </div>
 
     {# ═══ Revenue Trend (full width, no card wrapper) ═══ #}
     <section>

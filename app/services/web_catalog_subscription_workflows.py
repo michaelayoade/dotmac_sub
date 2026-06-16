@@ -89,6 +89,14 @@ def _selected_ipv4_values_from_form(form: FormData) -> tuple[list[str], list[str
     return block_ids, addresses
 
 
+def _selected_additional_route_values_from_form(
+    form: FormData,
+) -> tuple[list[str], list[str]]:
+    cidrs = [str(value).strip() for value in form.getlist("additional_route_cidrs")]
+    metrics = [str(value).strip() for value in form.getlist("additional_route_metrics")]
+    return cidrs, metrics
+
+
 def handle_subscription_create_form(
     db: Session,
     *,
@@ -105,6 +113,15 @@ def handle_subscription_create_form(
         try:
             block_ids, addresses = _selected_ipv4_values_from_form(form)
             core.ensure_ipv4_blocks_allocatable(db, block_ids, addresses)
+            route_cidrs, route_metrics = _selected_additional_route_values_from_form(
+                form
+            )
+            core.normalize_additional_routes(route_cidrs, route_metrics)
+            core.validate_public_ip_addon_selection(
+                db,
+                add_on_id=str(form.get("ip_addon_id") or ""),
+                quantity=str(form.get("ip_addon_quantity") or "1"),
+            )
         except Exception as exc:
             error = core.error_message(exc)
     if error:
@@ -158,6 +175,19 @@ def handle_subscription_update_form(
     error = core.resolve_account_id(db, subscription)
     if not error:
         error = core.validate_subscription_form(subscription, for_create=False)
+    if not error:
+        try:
+            route_cidrs, route_metrics = _selected_additional_route_values_from_form(
+                form
+            )
+            core.normalize_additional_routes(route_cidrs, route_metrics)
+            core.validate_public_ip_addon_selection(
+                db,
+                add_on_id=str(form.get("ip_addon_id") or ""),
+                quantity=str(form.get("ip_addon_quantity") or "1"),
+            )
+        except Exception as exc:
+            error = core.error_message(exc)
     if error:
         context = core.subscription_form_context(db, subscription, error)
         context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
@@ -174,6 +204,10 @@ def handle_subscription_update_form(
             addresses,
             request,
             actor_id,
+            additional_route_cidrs=route_cidrs,
+            additional_route_metrics=route_metrics,
+            ip_addon_id=str(form.get("ip_addon_id") or ""),
+            ip_addon_quantity=str(form.get("ip_addon_quantity") or "1"),
         )
         subscriber_id = getattr(updated, "subscriber_id", None)
         redirect_url = (

@@ -139,15 +139,24 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     stats["reject_pool_sessions"] += 1
                     to_kick[(row[1], row[2])] = row
 
-        # Dual-run guard: never kick a login that is ACTIVE in Splynx.
-        # Sync gaps exist where a Splynx-active service has no dotmac
+        # Dual-run guard: while Splynx is still the authoritative biller
+        # (billing_enabled is false), never kick a login that is ACTIVE in
+        # Splynx. Sync gaps exist where a Splynx-active service has no dotmac
         # subscription yet (e.g. 100025599 on 2026-06-11) — those users
         # are missing from radcheck through no fault of their own, and
         # kicking them is an outage for a paying customer. Surface them
         # as sync-gap alerts instead.
+        #
+        # Once billing has cut over (billing_enabled true) sub is the
+        # authoritative biller, so the guard is skipped: enforcement runs
+        # purely on dotmac state and no longer depends on a reachable Splynx
+        # (which is decommissioned post-cutover — querying it would fail and
+        # the old fail-safe would wrongly suppress every kick).
+        from app.services.billing_settings import billing_enabled
+
         kick_logins = sorted({row[0] for row in to_kick.values()})
         splynx_active: set[str] = set()
-        if kick_logins:
+        if kick_logins and not billing_enabled(db, default=False):
             try:
                 from scripts.migration.db_connections import splynx_connection
 
