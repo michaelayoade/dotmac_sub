@@ -113,6 +113,11 @@ class InvoiceLineUpdate(BaseModel):
 class InvoiceLineRead(InvoiceLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
+    # Read model reflects what's stored — credit/adjustment lines are
+    # legitimately negative, so don't inherit the create-side ge=0 constraint
+    # (it 500s response serialization for any invoice with a negative line).
+    unit_price: Decimal = Decimal("0.00")
+    amount: Decimal | None = None
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -609,6 +614,12 @@ class TaxRateRead(TaxRateBase):
 class InvoiceRead(InvoiceBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: a credit-heavy invoice can carry a
+    # negative subtotal/total/balance, so don't inherit the create-side ge=0.
+    subtotal: Decimal = Decimal("0.00")
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
+    balance_due: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime
