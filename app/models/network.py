@@ -515,6 +515,12 @@ class IPAssignment(Base):
         ForeignKey("subscribers.id", ondelete="SET NULL"),
         nullable=True,
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -543,6 +549,7 @@ class IPAssignment(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="ip_assignments")
+    subscription = relationship("Subscription", back_populates="ip_assignments")
     service_address = relationship("Address")
     ipv4_address = relationship("IPv4Address", back_populates="assignment")
     ipv6_address = relationship("IPv6Address", back_populates="assignment")

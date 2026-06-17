@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription
 from app.models.network import CPEDevice, IPAssignment
 from app.models.subscriber import Address, Subscriber
 
@@ -41,13 +42,23 @@ def validate_ip_assignment_links(
     db: Session,
     subscriber_id: str,
     service_address_id: str | None,
+    subscription_id: str | None = None,
 ):
     """Validate IP assignment link constraints.
 
-    IP assignments link directly to subscribers (not subscriptions) for independent
-    OLT management.
+    IP assignments can link directly to a subscription when service ownership is
+    known. Subscriber-only assignments remain valid for independent OLT
+    management and older callers.
     """
     subscriber = _validate_subscriber(db, subscriber_id)
+    if subscription_id:
+        subscription = db.get(Subscription, subscription_id)
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        if subscription.subscriber_id != subscriber.id:
+            raise HTTPException(
+                status_code=400, detail="Subscription does not belong to subscriber"
+            )
     if service_address_id:
         _validate_address_belongs(db, subscriber, service_address_id)
 

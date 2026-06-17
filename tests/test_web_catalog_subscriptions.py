@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -14,6 +15,7 @@ from app.models.catalog import (
     AddOnType,
     NasDevice,
     SubscriptionAddOn,
+    SubscriptionStatus,
 )
 from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -342,6 +344,57 @@ def test_subscription_form_context_exposes_json_safe_ipv4_blocks(db_session):
     )
 
     assert isinstance(context["ipv4_blocks_json"], str)
+
+
+def test_subscription_form_context_uses_ipam_ranges_for_ipv4_blocks(
+    db_session,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Kubwa Fallback IP",
+            "ip_version": "ipv4",
+            "cidr": "10.82.0.0/30",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+    reserved = IPv4Address(
+        address="10.82.0.1",
+        pool_id=pool.id,
+        is_reserved=True,
+    )
+    db_session.add(reserved)
+    db_session.commit()
+
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session,
+        {},
+    )
+
+    options = json.loads(context["ipv4_blocks_json"])
+    option = next(item for item in options if item["cidr"] == "10.82.0.0/30")
+    assert option["name"] == "Kubwa Fallback IP"
+    assert option["id"] == f"pool:{pool.id}:10.82.0.0/30"
+    assert option["available_ips"] == ["10.82.0.2"]
+    assert option["display"] == "Kubwa Fallback IP - 10.82.0.0/30 (1 free)"
+
+
+def test_parse_subscription_form_keeps_single_ipv4_row():
+    form = FormData(
+        [
+            ("ipv4_block_ids", "first-block"),
+            ("ipv4_block_ids", "second-block"),
+            ("ipv4_addresses", "10.0.0.2"),
+            ("ipv4_addresses", "10.0.0.3"),
+        ]
+    )
+
+    parsed = web_catalog_subscriptions_service.parse_subscription_form(form)
+
+    assert parsed["ipv4_block_ids"] == ["first-block"]
+    assert parsed["ipv4_addresses"] == ["10.0.0.2"]
 
 
 def test_subscription_detail_context_exposes_events_notifications_and_radius_sync(
@@ -770,6 +823,95 @@ def test_update_subscription_with_audit_persists_added_ipv4_assignment(
     )
     assert assignment.ipv4_address is not None
     assert assignment.ipv4_address.address == "10.82.0.5"
+
+
+def test_update_subscription_preserves_ipv4_when_assignment_omitted(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    subscription.status = SubscriptionStatus.active
+    subscription.ipv4_address = "10.82.10.5"
+    address = IPv4Address(address="10.82.10.5")
+    db_session.add(address)
+    db_session.flush()
+    assignment = IPAssignment(
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=address.id,
+        is_active=True,
+    )
+    db_session.add(assignment)
+    db_session.commit()
+
+    updated = web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [],
+        [],
+        None,
+        None,
+    )
+
+    db_session.refresh(updated)
+    db_session.refresh(assignment)
+    assert updated.ipv4_address == "10.82.10.5"
+    assert assignment.is_active is True
+
+
+def test_update_subscription_rejects_placeholder_ipv4_assignment(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Placeholder Reject Pool",
+            "ip_version": "ipv4",
+            "cidr": "10.82.11.0/29",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    block, block_error = web_network_ip_service.create_ip_block(
+        db_session,
+        {
+            "pool_id": str(pool.id),
+            "cidr": "10.82.11.0/29",
+            "is_active": True,
+        },
+    )
+    assert block_error is None
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="not assignable"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [str(block.id)],
+            ["0.0.0.0"],
+            None,
+            None,
+        )
 
 
 def test_edit_form_data_includes_active_ipv4_assignments(

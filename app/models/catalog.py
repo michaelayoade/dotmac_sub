@@ -828,6 +828,7 @@ class Subscription(Base):
     lifecycle_events = relationship(
         "SubscriptionLifecycleEvent", back_populates="subscription"
     )
+    ip_assignments = relationship("IPAssignment", back_populates="subscription")
     bandwidth_samples = relationship("BandwidthSample", back_populates="subscription")
     usage_charges = relationship("UsageCharge", back_populates="subscription")
     quota_buckets = relationship("QuotaBucket", back_populates="subscription")

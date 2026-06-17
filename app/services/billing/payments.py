@@ -408,6 +408,23 @@ def _record_unallocated_payment_credit(
     _create_payment_ledger_entry(db, payment, None, remaining)
 
 
+def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
+    """Recompute invoice totals, restore eligible service, then derive account status."""
+    _recalculate_invoice_totals(db, invoice)
+
+    if invoice.status == InvoiceStatus.paid:
+        from app.services import collections as collections_service
+
+        if not collections_service.has_overdue_balance(db, str(invoice.account_id)):
+            collections_service.restore_account_services(
+                db, str(invoice.account_id), invoice_id=str(invoice.id)
+            )
+
+    from app.services.account_lifecycle import compute_account_status
+
+    compute_account_status(db, str(invoice.account_id))
+
+
 def _create_refund_ledger_entry(
     db: Session,
     payment: Payment,
@@ -797,13 +814,7 @@ class Payments(ListResponseMixin):
         for invoice_id in invoices_to_recalculate:
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
-                _recalculate_invoice_totals(db, invoice)
-                if invoice.status == InvoiceStatus.paid:
-                    from app.services import collections as collections_service
-
-                    collections_service.restore_account_services(
-                        db, str(invoice.account_id), invoice_id=str(invoice.id)
-                    )
+                _finalize_invoice_payment_effects(db, invoice)
         db.commit()
         db.refresh(payment)
 
@@ -994,15 +1005,7 @@ class Payments(ListResponseMixin):
         for invoice_id in invoice_ids:
             recalculated_invoice = get_by_id(db, Invoice, invoice_id)
             if recalculated_invoice:
-                _recalculate_invoice_totals(db, recalculated_invoice)
-                if recalculated_invoice.status == InvoiceStatus.paid:
-                    from app.services import collections as collections_service
-
-                    collections_service.restore_account_services(
-                        db,
-                        str(recalculated_invoice.account_id),
-                        invoice_id=str(recalculated_invoice.id),
-                    )
+                _finalize_invoice_payment_effects(db, recalculated_invoice)
 
         BillingAccounts.debit_balance(db, str(ba.id), total_allocated)
         db.commit()
@@ -1122,13 +1125,7 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
-                if invoice.status == InvoiceStatus.paid:
-                    from app.services import collections as collections_service
-
-                    collections_service.restore_account_services(
-                        db, str(invoice.account_id), invoice_id=str(invoice.id)
-                    )
+                _finalize_invoice_payment_effects(db, invoice)
         db.commit()
         db.refresh(payment)
         return payment
@@ -1143,7 +1140,7 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
         db.commit()
 
     @staticmethod
@@ -1162,7 +1159,7 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
         if normalized == PaymentStatus.succeeded:
             # Deferred import to avoid circular dependency
             from app.services import collections as collections_service
@@ -1259,13 +1256,7 @@ class PaymentAllocations(ListResponseMixin):
         db.add(allocation)
         db.flush()
         _create_payment_ledger_entry(db, payment, invoice, allocation.amount)
-        _recalculate_invoice_totals(db, invoice)
-        if invoice.status == InvoiceStatus.paid:
-            from app.services import collections as collections_service
-
-            collections_service.restore_account_services(
-                db, str(invoice.account_id), invoice_id=str(invoice.id)
-            )
+        _finalize_invoice_payment_effects(db, invoice)
         db.commit()
         db.refresh(allocation)
         return allocation
@@ -1312,7 +1303,7 @@ class PaymentAllocations(ListResponseMixin):
         allocation.is_active = False
         if invoice:
             db.flush()
-            _recalculate_invoice_totals(db, invoice)
+            _finalize_invoice_payment_effects(db, invoice)
         db.commit()
 
 
@@ -1644,7 +1635,7 @@ class Refunds:
                 if is_full_refund:
                     db.delete(allocation)
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
 
         # Create credit note if requested
         if create_credit_note and payment.allocations:
@@ -1766,7 +1757,7 @@ class Refunds:
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
 
         db.commit()
         db.refresh(payment)

@@ -80,13 +80,17 @@ def _selected_ipv4_values_from_form(form: FormData) -> tuple[list[str], list[str
         str(value).strip()
         for value in form.getlist("ipv4_block_ids")
         if str(value).strip()
-    ]
+    ][:1]
     addresses = [
         str(value).strip()
         for value in form.getlist("ipv4_addresses")
         if str(value).strip()
-    ]
+    ][:1]
     return block_ids, addresses
+
+
+def _has_ipv4_assignment_edit(block_ids: list[str], addresses: list[str]) -> bool:
+    return bool(block_ids or addresses)
 
 
 def _selected_additional_route_values_from_form(
@@ -112,7 +116,8 @@ def handle_subscription_create_form(
     if not error:
         try:
             block_ids, addresses = _selected_ipv4_values_from_form(form)
-            core.ensure_ipv4_blocks_allocatable(db, block_ids, addresses)
+            if block_ids or addresses:
+                core.ensure_ipv4_blocks_allocatable(db, block_ids, addresses)
             route_cidrs, route_metrics = _selected_additional_route_values_from_form(
                 form
             )
@@ -195,6 +200,7 @@ def handle_subscription_update_form(
 
     try:
         block_ids, addresses = _selected_ipv4_values_from_form(form)
+        ipv4_assignment_submitted = _has_ipv4_assignment_edit(block_ids, addresses)
         updated = core.update_subscription_with_audit(
             db,
             subscription_id,
@@ -208,6 +214,7 @@ def handle_subscription_update_form(
             additional_route_metrics=route_metrics,
             ip_addon_id=str(form.get("ip_addon_id") or ""),
             ip_addon_quantity=str(form.get("ip_addon_quantity") or "1"),
+            ipv4_assignment_submitted=ipv4_assignment_submitted,
         )
         subscriber_id = getattr(updated, "subscriber_id", None)
         redirect_url = (

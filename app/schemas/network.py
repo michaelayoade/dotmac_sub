@@ -229,6 +229,7 @@ class IPAssignmentBase(BaseModel):
             "standalone OLT/ONT operation."
         ),
     )
+    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     ip_version: IPVersion = IPVersion.ipv4
     ipv4_address_id: UUID | None = None
@@ -258,6 +259,7 @@ class IPAssignmentUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
+    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     ip_version: IPVersion | None = None
     ipv4_address_id: UUID | None = None
