@@ -47,6 +47,65 @@ def topology_gaps_page(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/outage-impact",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def outage_impact_page(
+    request: Request,
+    basestation_id: str | None = None,
+    node_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Read-only outage impact preview: pick a basestation/node -> affected
+    active subscriptions. No incident is created (that's the outage console)."""
+    import uuid as _uuid
+
+    from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.topology.affected import affected_customers
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["basestations"] = (
+        db.query(PopSite)
+        .filter(PopSite.zabbix_group_id.isnot(None))
+        .order_by(PopSite.name)
+        .all()
+    )
+    context["selected_basestation_id"] = basestation_id
+    target = None
+    result = None
+    try:
+        if basestation_id:
+            pop = db.get(PopSite, _uuid.UUID(basestation_id))
+            if pop is not None:
+                target = f"Basestation: {pop.name}"
+                result = affected_customers(db, basestation=pop)
+        elif node_id:
+            node = db.get(NetworkDevice, _uuid.UUID(node_id))
+            if node is not None:
+                target = f"Node: {node.name}"
+                result = affected_customers(db, node=node)
+    except (ValueError, TypeError):
+        target = None
+    context["target"] = target
+    if result is not None:
+        context["impact_count"] = result["count"]
+        context["impact_rows"] = [
+            {
+                "id": s.id,
+                "subscriber": (
+                    f"{s.subscriber.first_name} {s.subscriber.last_name}"
+                    if s.subscriber
+                    else "—"
+                ),
+                "email": s.subscriber.email if s.subscriber else "",
+            }
+            for s in result["subscriptions"]
+        ]
+    return templates.TemplateResponse("admin/network/outage_impact.html", context)
+
+
+@router.get(
     "/monitoring",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
