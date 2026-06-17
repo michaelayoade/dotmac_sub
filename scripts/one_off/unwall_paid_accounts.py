@@ -24,10 +24,22 @@ from app.models.catalog import Subscription
 from app.services.billing.unwall_paid_accounts import unwall_cohort
 
 
-def _resolve_logins(db, logins: list[str]) -> list[str]:
+def _resolve_login_subscription_ids(db, logins: list[str]) -> list[str]:
     if not logins:
         return []
     rows = db.query(Subscription.id).filter(Subscription.login.in_(logins)).all()
+    return [str(r[0]) for r in rows]
+
+
+def _resolve_login_account_ids(db, logins: list[str]) -> list[str]:
+    if not logins:
+        return []
+    rows = (
+        db.query(Subscription.subscriber_id)
+        .filter(Subscription.login.in_(logins))
+        .distinct()
+        .all()
+    )
     return [str(r[0]) for r in rows]
 
 
@@ -47,21 +59,37 @@ def main() -> None:
         help="Send 'service resumed' notifications (off by default for bulk catch-up).",
     )
     parser.add_argument(
+        "--restore-logins",
+        default="",
+        help=(
+            "TARGETED mode: restore ONLY these comma-separated logins' accounts "
+            "(paid-up gated), instead of the full walled cohort. Use this to "
+            "un-wall a specific reported set first."
+        ),
+    )
+    parser.add_argument(
         "--logins",
         default="",
         help="Comma-separated logins to additionally force RADIUS+CoA onto.",
     )
     args = parser.parse_args()
     dry_run = not args.apply
+    restore_logins = [s.strip() for s in args.restore_logins.split(",") if s.strip()]
     logins = [s.strip() for s in args.logins.split(",") if s.strip()]
 
     db = SessionLocal()
     try:
-        extra = _resolve_logins(db, logins)
+        account_ids = None
+        if restore_logins:
+            account_ids = _resolve_login_account_ids(db, restore_logins)
+            if not account_ids:
+                print(f"WARNING: no account matched --restore-logins: {restore_logins}")
+        extra = _resolve_login_subscription_ids(db, logins)
         if logins and not extra:
-            print(f"WARNING: no subscription matched logins: {logins}")
+            print(f"WARNING: no subscription matched --logins: {logins}")
         summary = unwall_cohort(
             db,
+            account_ids=account_ids,
             limit=args.limit,
             dry_run=dry_run,
             refresh_radius=not args.no_radius,

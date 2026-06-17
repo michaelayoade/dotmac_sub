@@ -143,6 +143,7 @@ class UnwallSummary:
 def unwall_cohort(
     db: Session,
     *,
+    account_ids: list[str] | None = None,
     limit: int | None = None,
     dry_run: bool = True,
     refresh_radius: bool = True,
@@ -150,29 +151,47 @@ def unwall_cohort(
     notify: bool = False,
     extra_subscription_ids: list[str] | None = None,
 ) -> UnwallSummary:
-    """Restore service for the paid-up-but-walled cohort, then refresh RADIUS + CoA.
+    """Restore service for paid-up-but-walled accounts, then refresh RADIUS + CoA.
 
-    ``notify`` defaults False (bulk catch-up over a churned cohort — suppress the
-    "service resumed" burst). ``extra_subscription_ids`` forces the RADIUS + CoA
-    pass onto specific reported logins regardless of the balance gate.
+    Two modes:
+      - **Targeted** (``account_ids`` given): restore ONLY those accounts that are
+        paid up. Use this to safely un-wall a specific reported set first. It also
+        covers active-but-stale-tag accounts (restore is a no-op for them; the
+        RADIUS refresh + CoA below still drops the stale walled-garden tag and
+        kicks the session).
+      - **Cohort** (default): discover and restore all walled + paid-up accounts.
+
+    ``notify`` defaults False (bulk catch-up — suppress the "service resumed"
+    burst). ``extra_subscription_ids`` forces RADIUS + CoA onto extra subscriptions.
     """
-    account_ids = find_walled_paid_account_ids(db, limit=limit)
-    summary = UnwallSummary(candidates=len(account_ids), dry_run=dry_run)
+    from app.services.collections import get_available_balance
+
+    targeted = account_ids is not None
+    if account_ids is not None:
+        # Paid-up gate still applies — never restore an account that genuinely owes.
+        targets = [a for a in account_ids if get_available_balance(db, a) >= 0]
+    else:
+        targets = find_walled_paid_account_ids(db, limit=limit)
+    summary = UnwallSummary(candidates=len(targets), dry_run=dry_run)
 
     if dry_run:
-        summary.results = [project_unwall(db, aid) for aid in account_ids]
+        summary.results = [project_unwall(db, aid) for aid in targets]
         return summary
 
     suppress_ctx = nullcontext() if notify else suppress_notifications()
     coa_subscription_ids: set = set(extra_subscription_ids or [])
     with suppress_ctx:
-        for account_id in account_ids:
+        for account_id in targets:
             result = unwall_account(db, account_id)
             summary.results.append(result)
             if result.error:
                 summary.errors += 1
-            elif result.restored:
+                continue
+            if result.restored:
                 summary.restored += 1
+            # CoA the account's sessions when we restored it, OR always in targeted
+            # mode (so a named active-but-stale-tag account still gets kicked).
+            if result.restored or targeted:
                 coa_subscription_ids.update(_account_subscription_ids(db, account_id))
 
     if refresh_radius:
