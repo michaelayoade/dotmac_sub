@@ -94,7 +94,19 @@ def main() -> None:
                     .scalar()
                 )
             )
-            wrongful = round_money(debit_sum - alloc_sum)
+            # Subtract reversals already written, so re-running --apply is
+            # idempotent and never double-credits.
+            already_reversed = round_money(
+                to_decimal(
+                    db.query(func.coalesce(func.sum(LedgerEntry.amount), 0))
+                    .filter(LedgerEntry.account_id == aid)
+                    .filter(LedgerEntry.memo == REVERSAL_MEMO)
+                    .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
+                    .filter(LedgerEntry.is_active.is_(True))
+                    .scalar()
+                )
+            )
+            wrongful = round_money(debit_sum - alloc_sum - already_reversed)
             if wrongful <= 0:
                 continue
             rows.append((account_id, debit_sum, alloc_sum, wrongful))
