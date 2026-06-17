@@ -1020,7 +1020,17 @@ def run_invoice_cycle(
         # credit settlement below sees the open balance via its query.
         db.flush()
 
-        if newly_created_invoices:
+        # Inline credit settlement is DISABLED by default. It was found to be
+        # unsafe on the migrated dataset: per-invoice balance_due/allocations are
+        # not authoritative (Splynx paid many invoices from the account deposit
+        # with no invoice-linked allocation, and some allocations were synced
+        # without recomputing balance_due), so settling against local "open"
+        # invoices destroyed real credit on already-paid invoices. "Paid but
+        # walled" must be solved at the account level (deposit/Splynx-truth), not
+        # by per-invoice settlement here. Re-enable only after that redesign.
+        if newly_created_invoices and _setting_truthy(
+            db, "settle_credit_on_invoice_enabled", default=False
+        ):
             from contextlib import nullcontext
 
             from app.services import collections as collections_service

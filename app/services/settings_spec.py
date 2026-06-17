@@ -1123,6 +1123,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
+        # Kill-switch for the billing runner's inline "settle open invoices from
+        # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
+        # per-invoice balance_due/allocations aren't authoritative (Splynx
+        # deposit-paid invoices have no local allocation). Re-enable only after
+        # the account-level redesign.
+        domain=SettingDomain.billing,
+        key="settle_credit_on_invoice_enabled",
+        env_var="BILLING_SETTLE_CREDIT_ON_INVOICE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
         domain=SettingDomain.billing,
         key="billing_interval_seconds",
         env_var="BILLING_INTERVAL_SECONDS",
