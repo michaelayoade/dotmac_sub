@@ -49,6 +49,7 @@ from app.tasks.monitoring_cleanup import (
 )
 from app.tasks.monitoring_warm import warm_monitoring_caches
 from app.tasks.mrr import snapshot_mrr
+from app.tasks.topology_sync import run_topology_reconcile
 from app.tasks.nas import (
     check_nas_health,
     cleanup_nas_backups,
@@ -232,6 +233,7 @@ __all__ = [
     "retry_failed_deliveries",
     "deliver_notification_queue",
     "snapshot_mrr",
+    "run_topology_reconcile",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
     "tr069_execute_bulk_action",
