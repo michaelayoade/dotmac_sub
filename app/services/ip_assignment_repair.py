@@ -35,7 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPVersion, IPv4Address, IpPool
+from app.models.network import IPAssignment, IpPool, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
 from app.services.ip_consistency_audit import _norm
 
@@ -77,7 +77,9 @@ def _ipv4_pools(db: Session) -> list[tuple[IpPool, Any]]:
     return pools
 
 
-def _match_pool(ip: str, pools: list[tuple[IpPool, Any]]) -> tuple[IpPool | None, int | None]:
+def _match_pool(
+    ip: str, pools: list[tuple[IpPool, Any]]
+) -> tuple[IpPool | None, int | None]:
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
@@ -246,7 +248,9 @@ def _ensure_assignment(
         pool = db.get(IpPool, addr.pool_id) if addr.pool_id else None
         prefix = None
         if pool:
-            _, prefix = _match_pool(desired_ip, [(pool, ipaddress.ip_network(pool.cidr, strict=False))])
+            _, prefix = _match_pool(
+                desired_ip, [(pool, ipaddress.ip_network(pool.cidr, strict=False))]
+            )
 
     if assignment is None:
         assignment = IPAssignment(

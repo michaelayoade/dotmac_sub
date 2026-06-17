@@ -11,7 +11,7 @@ import sqlite3
 from unittest.mock import MagicMock, patch
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPVersion, IPv4Address
+from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.connectivity_reconciler import (
     converge_subscription_connectivity,
@@ -102,7 +102,10 @@ class TestPlan:
             radreply=[("u1", "Framed-IP-Address", "10.0.0.5")],
         )
         sub = _seed_sub(
-            db_session, login="u1", offer=catalog_offer, col_ip="10.0.0.5",
+            db_session,
+            login="u1",
+            offer=catalog_offer,
+            col_ip="10.0.0.5",
             assign_ip="10.0.0.5",
         )
         with patch(
@@ -126,7 +129,10 @@ class TestPlan:
             radreply=[("u2", "Framed-IP-Address", "10.0.0.9")],
         )
         sub = _seed_sub(
-            db_session, login="u2", offer=catalog_offer, col_ip="10.0.0.9",
+            db_session,
+            login="u2",
+            offer=catalog_offer,
+            col_ip="10.0.0.9",
             assign_ip="10.0.0.7",
         )
         with patch(
@@ -147,7 +153,10 @@ class TestPlan:
             radreply=[("u2", "Framed-IP-Address", "10.0.0.9")],
         )
         sub = _seed_sub(
-            db_session, login="u2", offer=catalog_offer, col_ip="10.0.0.9",
+            db_session,
+            login="u2",
+            offer=catalog_offer,
+            col_ip="10.0.0.9",
             assign_ip="10.0.0.7",
         )
         with patch(
@@ -188,12 +197,13 @@ class TestConverge:
             radreply=[("u4", "Framed-IP-Address", "10.0.0.9")],
         )
         sub = _seed_sub(
-            db_session, login="u4", offer=catalog_offer, col_ip="10.0.0.9",
+            db_session,
+            login="u4",
+            offer=catalog_offer,
+            col_ip="10.0.0.9",
             assign_ip="10.0.0.7",
         )
-        with patch(
-            "app.tasks.splynx_sync.run_refresh_radius_from_subs"
-        ) as task:
+        with patch("app.tasks.splynx_sync.run_refresh_radius_from_subs") as task:
             result = _converge(db_session, sub.id, db_path, apply=False)
         db_session.refresh(sub)
         assert result["applied"] is False
@@ -210,15 +220,19 @@ class TestConverge:
             radreply=[("u5", "Framed-IP-Address", "10.0.0.9")],
         )
         sub = _seed_sub(
-            db_session, login="u5", offer=catalog_offer, col_ip="10.0.0.9",
+            db_session,
+            login="u5",
+            offer=catalog_offer,
+            col_ip="10.0.0.9",
             assign_ip="10.0.0.7",
         )
         fake_task = MagicMock()
-        with patch(
-            "app.tasks.splynx_sync.run_refresh_radius_from_subs", fake_task
-        ), patch(
-            "app.services.ip_consistency_audit._active_external_sync_configs",
-            return_value=[_fake_config(db_path)],
+        with (
+            patch("app.tasks.splynx_sync.run_refresh_radius_from_subs", fake_task),
+            patch(
+                "app.services.ip_consistency_audit._active_external_sync_configs",
+                return_value=[_fake_config(db_path)],
+            ),
         ):
             result = converge_subscription_connectivity(
                 db_session, str(sub.id), apply=True, trust_ipam=True
@@ -230,9 +244,7 @@ class TestConverge:
         assert "refresh_radius" in result["applied_actions"]
         fake_task.delay.assert_called_once()
 
-    def test_apply_idempotent_when_in_sync(
-        self, db_session, tmp_path, catalog_offer
-    ):
+    def test_apply_idempotent_when_in_sync(self, db_session, tmp_path, catalog_offer):
         db_path = tmp_path / "r.db"
         _seed_radius_sqlite(
             db_path,
@@ -240,7 +252,10 @@ class TestConverge:
             radreply=[("u6", "Framed-IP-Address", "10.0.0.7")],
         )
         sub = _seed_sub(
-            db_session, login="u6", offer=catalog_offer, col_ip="10.0.0.7",
+            db_session,
+            login="u6",
+            offer=catalog_offer,
+            col_ip="10.0.0.7",
             assign_ip="10.0.0.7",
         )
         with patch("app.tasks.splynx_sync.run_refresh_radius_from_subs") as task:
@@ -253,8 +268,11 @@ class TestConverge:
         db_path = tmp_path / "r.db"
         _seed_radius_sqlite(db_path)
         sub = _seed_sub(
-            db_session, login="u7", offer=catalog_offer,
-            status=SubscriptionStatus.suspended, col_ip="10.0.0.9",
+            db_session,
+            login="u7",
+            offer=catalog_offer,
+            status=SubscriptionStatus.suspended,
+            col_ip="10.0.0.9",
             assign_ip="10.0.0.7",
         )
         result = _converge(db_session, sub.id, db_path, apply=True)

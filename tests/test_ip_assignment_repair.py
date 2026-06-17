@@ -7,7 +7,7 @@ refuses conflicts. See docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md §5b.
 from __future__ import annotations
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPVersion, IPv4Address, IpPool
+from app.models.network import IPAssignment, IpPool, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.ip_assignment_repair import apply_repair, plan_repair
 
@@ -32,10 +32,14 @@ def _mk_sub(db, subscriber, offer, served_ip, status=SubscriptionStatus.active):
     return sub
 
 
-def _mk_assignment(db, subscriber, ip, *, active=True, allocation_type=None, ont_unit_id=None):
+def _mk_assignment(
+    db, subscriber, ip, *, active=True, allocation_type=None, ont_unit_id=None
+):
     addr = db.query(IPv4Address).filter(IPv4Address.address == ip).first()
     if addr is None:
-        addr = IPv4Address(address=ip, allocation_type=allocation_type, ont_unit_id=ont_unit_id)
+        addr = IPv4Address(
+            address=ip, allocation_type=allocation_type, ont_unit_id=ont_unit_id
+        )
         db.add(addr)
         db.flush()
     a = IPAssignment(
@@ -131,7 +135,9 @@ class TestApply:
         assert result["backfill_create"] == 1
         a = (
             db_session.query(IPAssignment)
-            .filter(IPAssignment.subscriber_id == s.id, IPAssignment.is_active.is_(True))
+            .filter(
+                IPAssignment.subscriber_id == s.id, IPAssignment.is_active.is_(True)
+            )
             .one()
         )
         assert a.ipv4_address.address == "10.0.0.20"
@@ -150,7 +156,9 @@ class TestApply:
         assert stale.is_active is False
         active = (
             db_session.query(IPAssignment)
-            .filter(IPAssignment.subscriber_id == s.id, IPAssignment.is_active.is_(True))
+            .filter(
+                IPAssignment.subscriber_id == s.id, IPAssignment.is_active.is_(True)
+            )
             .one()
         )
         assert active.ipv4_address.address == "10.0.0.21"
@@ -173,7 +181,9 @@ class TestApply:
         apply_repair(db_session, plan)
         a = (
             db_session.query(IPAssignment)
-            .filter(IPAssignment.subscriber_id == s.id, IPAssignment.is_active.is_(True))
+            .filter(
+                IPAssignment.subscriber_id == s.id, IPAssignment.is_active.is_(True)
+            )
             .one()
         )
         assert a.gateway == "10.0.0.1"
@@ -231,8 +241,8 @@ class TestApply:
         assert result["dedupe_active"] == 1
         db_session.refresh(served_a)
         db_session.refresh(stale_a)
-        assert served_a.is_active is True   # served-matching kept
-        assert stale_a.is_active is False   # extra deactivated
+        assert served_a.is_active is True  # served-matching kept
+        assert stale_a.is_active is False  # extra deactivated
 
     def test_limit_caps_repairs(self, db_session, catalog_offer):
         for i in range(3):

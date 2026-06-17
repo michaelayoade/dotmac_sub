@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPVersion, IPv4Address
+from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
 from app.services.ip_consistency_audit import _external_ip_state, _norm
 
@@ -118,12 +118,7 @@ def plan_subscription_ip(
             )
     if col_ip and not assign_ip:
         actions.append({"kind": "backfill_ipam", "ip": col_ip, "note": "report-only"})
-    if (
-        login
-        and provisioned
-        and desired_ip
-        and _norm(radreply_ip) != desired_ip
-    ):
+    if login and provisioned and desired_ip and _norm(radreply_ip) != desired_ip:
         actions.append(
             {"kind": "refresh_radius", "from": radreply_ip or "", "to": desired_ip}
         )

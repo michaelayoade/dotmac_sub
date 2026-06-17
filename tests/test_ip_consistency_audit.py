@@ -13,7 +13,7 @@ import sqlite3
 from unittest.mock import patch
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPVersion, IPv4Address
+from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.ip_consistency_audit import audit_ip_consistency
 
@@ -111,7 +111,7 @@ class TestIpConsistencyAudit:
         result = _run(db_session, db_path)
         assert result["ok"] is True
         assert result["population"] == 1
-        assert result["counts"] == {k: 0 for k in result["counts"]}
+        assert result["counts"] == dict.fromkeys(result["counts"], 0)
 
     def test_dynamic_sub_excluded(self, db_session, tmp_path, catalog_offer):
         """Active sub with no IP in any source is dynamic — not drift."""
@@ -201,15 +201,11 @@ class TestIpConsistencyAudit:
         assert result["counts"]["radreply_orphan"] == 1
         assert result["population"] == 1
 
-    def test_suspended_sub_not_in_population(
-        self, db_session, tmp_path, catalog_offer
-    ):
+    def test_suspended_sub_not_in_population(self, db_session, tmp_path, catalog_offer):
         """Only active subs are audited — a suspended sub (radreply deleted by
         design) must not be flagged as radreply_missing."""
         db_path = tmp_path / "radius.db"
-        _seed_radius_sqlite(
-            db_path, radcheck=[("user-g", "Auth-Type", "Reject")]
-        )
+        _seed_radius_sqlite(db_path, radcheck=[("user-g", "Auth-Type", "Reject")])
         _seed_sub(
             db_session,
             login="user-g",
@@ -225,9 +221,7 @@ class TestIpConsistencyAudit:
     def test_no_external_config_reports_error(
         self, db_session, tmp_path, catalog_offer
     ):
-        _seed_sub(
-            db_session, login="user-h", offer=catalog_offer, col_ip="10.0.0.11"
-        )
+        _seed_sub(db_session, login="user-h", offer=catalog_offer, col_ip="10.0.0.11")
         with patch(
             "app.services.ip_consistency_audit._active_external_sync_configs",
             return_value=[],

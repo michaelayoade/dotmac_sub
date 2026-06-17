@@ -69,8 +69,11 @@ def main() -> int:
         # Samples per action so the operator can eyeball before applying.
         for action in (*ACTIONABLE, *CONFLICTS):
             sample = [
-                {"subscriber_id": it["subscriber_id"], "desired_ip": it["desired_ip"],
-                 "current": it["current_ipam_ips"]}
+                {
+                    "subscriber_id": it["subscriber_id"],
+                    "desired_ip": it["desired_ip"],
+                    "current": it["current_ipam_ips"],
+                }
                 for it in plan["items"]
                 if it["action"] == action
             ][:SAMPLE]

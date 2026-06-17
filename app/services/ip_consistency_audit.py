@@ -48,7 +48,7 @@ from sqlalchemy import Column, String, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPVersion, IPv4Address
+from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.radius import (
     _active_external_sync_configs,
     _external_radius_table,
