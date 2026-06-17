@@ -723,6 +723,189 @@ class TestRunInvoiceCycle:
         )
         assert final_invoices > initial_invoices
 
+    def test_creates_invoice_for_active_subscription_on_blocked_account(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Blocked network access should not make an active subscription invisible
+        to recurring billing."""
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.blocked
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = run_at - timedelta(days=2)
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoices_created"] >= 1
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        assert invoice.total == Decimal("100.00")
+        assert subscription.next_billing_at > run_at
+
+    def test_applies_existing_credit_to_new_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        """If a top-up lands before the invoice exists, invoice generation should
+        settle the new invoice from available account credit."""
+        from app.models.billing import (
+            Invoice,
+            InvoiceStatus,
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+            Payment,
+            PaymentStatus,
+        )
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = run_at - timedelta(days=2)
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        payment = Payment(
+            account_id=subscriber_account.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status=PaymentStatus.succeeded,
+            paid_at=run_at - timedelta(hours=1),
+            memo="Pre-invoice top-up",
+        )
+        db_session.add(payment)
+        db_session.flush()
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber_account.id,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("100.00"),
+                currency="USD",
+                memo="Pre-invoice top-up",
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoices_created"] >= 1
+        assert summary["credit_applied"] == Decimal("100.00")
+        assert summary["credit_settled_invoices"] == 1
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        assert invoice.status == InvoiceStatus.paid
+        assert invoice.balance_due == Decimal("0.00")
+
+    def test_settling_credit_restores_walled_account(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Strand-after-settle fix: when credit settles a blocked account's debt,
+        the runner re-evaluates enforcement and restores access. No payment event
+        fires on this path, so without this the account would settle-but-stay-walled."""
+        from app.models.billing import (
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+            Payment,
+            PaymentStatus,
+        )
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        # Account-level walled-garden with an active subscription (the runner's
+        # widened, Splynx-imported-style population).
+        subscriber_account.status = AccountStatus.blocked
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = run_at - timedelta(days=2)
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        payment = Payment(
+            account_id=subscriber_account.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status=PaymentStatus.succeeded,
+            paid_at=run_at - timedelta(hours=1),
+            memo="Pre-invoice top-up",
+        )
+        db_session.add(payment)
+        db_session.flush()
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber_account.id,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("100.00"),
+                currency="USD",
+                memo="Pre-invoice top-up",
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["credit_applied"] == Decimal("100.00")
+        assert summary["accounts_restored"] >= 1
+        db_session.refresh(subscriber_account)
+        assert subscriber_account.status == AccountStatus.active
+
     def test_backdated_subscription_fast_forwards_without_arrears(
         self, db_session, subscription, subscriber_account
     ):
@@ -999,7 +1182,10 @@ class TestRunInvoiceCycle:
         from app.models.subscriber import AccountStatus
 
         subscription.status = SubscriptionStatus.active
-        subscriber_account.status = AccountStatus.suspended  # Inactive
+        # Terminal account states (disabled/canceled) are never billed. Note
+        # suspended/blocked are now intentionally billable — they still owe for
+        # active service periods — so a terminal status is what proves the skip.
+        subscriber_account.status = AccountStatus.disabled  # Inactive
         db_session.commit()
 
         offer_price = OfferPrice(

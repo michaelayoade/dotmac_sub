@@ -518,6 +518,11 @@ class PaymentProviderEventIngest(BaseModel):
     payment_id: UUID | None = None
     invoice_id: UUID | None = None
     account_id: UUID | None = None
+    # Reseller-consolidated billing account. Carried from the originating
+    # TopupIntent so a consolidated webhook payment posts against the billing
+    # account (crediting its balance / settling member invoices) instead of
+    # landing with billing_account_id NULL and never settling. (cutover fix)
+    billing_account_id: UUID | None = None
     event_type: str = Field(min_length=1, max_length=120)
     external_id: str | None = Field(default=None, max_length=160)
     idempotency_key: str | None = Field(default=None, max_length=160)

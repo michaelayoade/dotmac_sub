@@ -299,6 +299,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
+        # Hard gate: suppress customer notifications to terminal accounts
+        # (canceled/disabled get nothing) and non-actionable mail to walled
+        # accounts (suspended/blocked get only billing/account/service).
+        # Overrides per-subscriber preferences. Kill-switch, default on.
+        domain=SettingDomain.notification,
+        key="status_gate_enabled",
+        env_var="NOTIFICATION_STATUS_GATE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
         domain=SettingDomain.notification,
         key="alert_notifications_default_channel",
         env_var="ALERT_NOTIFICATIONS_DEFAULT_CHANNEL",

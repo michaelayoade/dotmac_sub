@@ -35,6 +35,7 @@ from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
+from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.common import coerce_uuid, round_money
 from app.services.events import emit_event
@@ -76,10 +77,14 @@ def _billing_run_extra(
             "pending_activated",
             "invoice_reminders_sent",
             "dunning_escalations_sent",
+            "credit_applied",
+            "credit_settled_invoices",
+            "accounts_restored",
             "run_id",
         ):
             if key in summary:
-                extra[key] = summary[key]
+                value = summary[key]
+                extra[key] = str(value) if isinstance(value, Decimal) else value
     if error is not None:
         extra["error"] = error
     if attempt is not None:
@@ -675,6 +680,7 @@ def run_invoice_cycle(
     dry_run: bool = False,
     include_pending: bool = True,
     auto_activate_pending: bool = True,
+    suppress_restore_notifications: bool = False,
 ) -> dict[str, Any]:
     """Run the billing cycle to generate invoices for subscriptions.
 
@@ -685,6 +691,10 @@ def run_invoice_cycle(
         dry_run: If True, don't create any records, just return what would be done
         include_pending: If True, also bill pending subscriptions ready for activation
         auto_activate_pending: If True, auto-activate pending subscriptions when billed
+        suppress_restore_notifications: If True, mute customer notifications from any
+            service restore triggered when credit settles a suspended account's debt.
+            Off by default (steady-state restores are a legitimate "service resumed"
+            notice); set True for a bulk catch-up run to avoid a notification burst.
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
 
@@ -740,12 +750,20 @@ def run_invoice_cycle(
         ),
     )
 
-    # Query active subscriptions
+    # Query billable active subscriptions. Network/account enforcement states
+    # like blocked/suspended must not suppress invoicing: those accounts still
+    # owe for active service periods and may need the invoice to clear the block.
+    billable_account_statuses = (
+        SubscriberStatus.active,
+        SubscriberStatus.blocked,
+        SubscriberStatus.suspended,
+        SubscriberStatus.delinquent,
+    )
     active_subscriptions = (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(Subscriber.status == SubscriberStatus.active)
+        .filter(Subscriber.status.in_(billable_account_statuses))
         .all()
     )
 
@@ -775,6 +793,9 @@ def run_invoice_cycle(
         "pending_activated": 0,
         "invoice_reminders_sent": 0,
         "dunning_escalations_sent": 0,
+        "credit_applied": Decimal("0.00"),
+        "credit_settled_invoices": 0,
+        "accounts_restored": 0,
     }
 
     for subscription in subscriptions:
@@ -986,9 +1007,93 @@ def run_invoice_cycle(
         return summary
 
     try:
+        # Persist the invoice lines just added in the loop before recalculating
+        # totals and settling credit. _recalculate_invoice_totals and
+        # settle_open_invoices_from_credit read rows back via queries, which only
+        # see flushed rows when the session has autoflush disabled (the test
+        # harness does); these flushes are harmless no-ops under default autoflush.
+        db.flush()
         # Recalculate totals for all invoices
         for invoice in invoices.values():
             _recalculate_invoice_totals(db, invoice)
+        # Recalc writes balance_due/status onto the invoice objects; flush so the
+        # credit settlement below sees the open balance via its query.
+        db.flush()
+
+        if newly_created_invoices:
+            from contextlib import nullcontext
+
+            from app.services import collections as collections_service
+            from app.services.notification_suppression import suppress_notifications
+
+            touched_account_ids = {
+                str(invoice.account_id) for invoice in newly_created_invoices
+            }
+            # Restore can emit "service resumed" notifications; suppress them for
+            # a bulk catch-up run so we don't burst-mail a large suspended cohort.
+            restore_notify_ctx = (
+                suppress_notifications()
+                if suppress_restore_notifications
+                else nullcontext()
+            )
+            with restore_notify_ctx:
+                for account_id in touched_account_ids:
+                    try:
+                        settle_result = settle_open_invoices_from_credit(db, account_id)
+                    except Exception:
+                        logger.exception(
+                            "invoice_credit_settlement_failed",
+                            extra={
+                                "event": "invoice_credit_settlement_failed",
+                                "run_id": str(run_uuid) if run_uuid else None,
+                                "account_id": account_id,
+                            },
+                        )
+                        continue
+                    if settle_result.changed:
+                        summary["credit_applied"] = round_money(
+                            summary["credit_applied"] + settle_result.applied
+                        )
+                        summary["credit_settled_invoices"] += len(
+                            settle_result.invoices_settled
+                        )
+                    # Re-couple access state to debt: settling credit clears debt
+                    # WITHOUT a payment event, so the payment_received restore never
+                    # fires and the account would settle-but-stay-walled. When credit
+                    # applied and no overdue debt remains, re-evaluate enforcement:
+                    #   - restore_account_services lifts payment-suspended SUBSCRIPTIONS
+                    #     (reason-scoped: admin/abuse blocks untouched);
+                    #   - compute_account_status re-derives the SUBSCRIBER status, which
+                    #     is what the runner's widened (active-subscription) population
+                    #     needs — restore alone won't clear a stale account-level block.
+                    # Both are idempotent and never override a genuine subscription-level
+                    # suspension (the derived status stays suspended in that case).
+                    if settle_result.changed and not collections_service.has_overdue_balance(
+                        db, account_id
+                    ):
+                        from app.services.account_lifecycle import compute_account_status
+
+                        account = db.get(Subscriber, coerce_uuid(account_id))
+                        was_walled = account is not None and account.status in (
+                            SubscriberStatus.suspended,
+                            SubscriberStatus.blocked,
+                        )
+                        try:
+                            collections_service.restore_account_services(db, account_id)
+                            new_status = compute_account_status(db, account_id)
+                        except Exception:
+                            logger.exception(
+                                "invoice_credit_restore_failed",
+                                extra={
+                                    "event": "invoice_credit_restore_failed",
+                                    "run_id": str(run_uuid) if run_uuid else None,
+                                    "account_id": account_id,
+                                },
+                            )
+                            new_status = None
+                        if was_walled and new_status == SubscriberStatus.active:
+                            summary["accounts_restored"] += 1
+
         db.commit()
 
         # Emit invoice.created events for newly created invoices

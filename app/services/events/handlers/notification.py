@@ -408,6 +408,19 @@ class NotificationHandler:
         if spec is None:
             return
 
+        # Back-office bookkeeping (e.g. the cutover credit reconcile) suppresses
+        # customer notifications: the activity is not a real-time customer action,
+        # so "Payment received"/"Service resumed" mail would be wrong and, in a
+        # bulk burst to churned mailboxes, reputation-damaging.
+        from app.services.notification_suppression import notifications_suppressed
+
+        if notifications_suppressed():
+            logger.info(
+                "Suppressed notification for event %s (back-office scope)",
+                event.event_type.value,
+            )
+            return
+
         templates = self._load_templates(db, spec.template_code)
         if not templates:
             templates = self._seed_and_reload_templates(db, spec.template_code)
@@ -434,6 +447,18 @@ class NotificationHandler:
                 continue
 
             subscriber_id = self._resolve_subscriber_id(db, event, recipient)
+            # Hard account-status gate (overrides preferences): terminal accounts
+            # (canceled/disabled) get nothing; walled accounts (suspended/blocked)
+            # get only actionable categories. Never mail a churned/closed account.
+            if subscriber_id and not self._status_allows(db, subscriber_id, spec.category):
+                logger.info(
+                    "Suppressed %s notification for event %s on %s to %s by account status",
+                    spec.category,
+                    event.event_type.value,
+                    channel.value,
+                    recipient,
+                )
+                continue
             if not is_notification_enabled_for_subscriber(
                 db,
                 subscriber_id=subscriber_id,
@@ -469,6 +494,22 @@ class NotificationHandler:
                 channel.value,
                 recipient,
             )
+
+    def _status_allows(self, db: Session, subscriber_id, category: str) -> bool:
+        """Apply the account-status notification gate (kill-switch aware)."""
+        from app.models.domain_settings import SettingDomain
+        from app.models.subscriber import Subscriber
+        from app.services import settings_spec
+        from app.services.notification_status_policy import status_allows_notification
+
+        enabled = settings_spec.resolve_value(
+            db, SettingDomain.notification, "status_gate_enabled"
+        )
+        if enabled is False:
+            return True
+        subscriber = db.get(Subscriber, subscriber_id)
+        status = subscriber.status if subscriber else None
+        return status_allows_notification(status, category)
 
     def _load_templates(
         self,

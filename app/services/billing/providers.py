@@ -226,6 +226,12 @@ class PaymentProviderEvents(ListResponseMixin):
                 status_code=400, detail="Invoice does not belong to account"
             )
         account_id = payload.account_id or (invoice.account_id if invoice else None)
+        # Reseller-consolidated payments carry billing_account_id and no
+        # account_id; native subscriber payments carry account_id. When both are
+        # present the account-scoped (native) linkage wins.
+        billing_account_id = (
+            payload.billing_account_id if account_id is None else None
+        )
         new_status = payload.status_hint or PaymentProviderEvents._event_status_map.get(
             payload.event_type
         )
@@ -252,8 +258,9 @@ class PaymentProviderEvents(ListResponseMixin):
                 .order_by((Payment.provider_id == provider.id).desc())
                 .first()
             )
-        if not payment and payload.amount and account_id:
-            _validate_account(db, str(account_id))
+        if not payment and payload.amount and (account_id or billing_account_id):
+            if account_id is not None:
+                _validate_account(db, str(account_id))
             currency = payload.currency or (invoice.currency if invoice else "NGN")
             if invoice:
                 _validate_invoice_currency(invoice, currency)
@@ -265,7 +272,7 @@ class PaymentProviderEvents(ListResponseMixin):
                 # payment.received events. This is the backstop for customers
                 # who paid but never returned to the redirect/verify URL.
                 allocations: list[PaymentAllocationApply] | None = None
-                if invoice is not None:
+                if invoice is not None and account_id is not None:
                     balance_due = round_money(to_decimal(invoice.balance_due or 0))
                     if balance_due > Decimal("0.00"):
                         allocations = [
@@ -277,10 +284,15 @@ class PaymentProviderEvents(ListResponseMixin):
                                 ),
                             )
                         ]
+                # Consolidated payments post against the billing account: credit
+                # its balance (auto_allocate=False) rather than spreading across
+                # member invoices, matching the reseller manual-record flow.
+                is_consolidated = billing_account_id is not None and account_id is None
                 payment = Payments.create(
                     db,
                     PaymentCreate(
                         account_id=account_id,
+                        billing_account_id=billing_account_id,
                         provider_id=provider.id,
                         amount=payload.amount,
                         currency=currency,
@@ -289,6 +301,7 @@ class PaymentProviderEvents(ListResponseMixin):
                         memo=f"{provider.name} webhook event: {payload.event_type}",
                         allocations=allocations,
                     ),
+                    auto_allocate=not is_consolidated,
                 )
                 created_settled = True
             else:
@@ -303,6 +316,7 @@ class PaymentProviderEvents(ListResponseMixin):
                 )
                 payment = Payment(
                     account_id=account_id,
+                    billing_account_id=billing_account_id,
                     amount=payload.amount,
                     currency=currency,
                     provider_id=provider.id,
