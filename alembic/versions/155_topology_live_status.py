@@ -4,9 +4,13 @@ Warmed from Zabbix (host availability + active triggers) by a background task
 and read by the Network Path panel — never fetched on the request path. Kept
 separate from the ping/snmp ``status`` column (different writer).
 
-Revision ID: 154_topology_live_status
-Revises: 153_topology_zabbix_linkage
+Revision ID: 155_topology_live_status
+Revises: 154_relax_inactive_olt_config_pack_constraint
 Create Date: 2026-06-17
+
+Re-parented onto 154_relax (an orphaned-but-prod-applied migration vendored into
+the tree in this PR) instead of 153, so the chain is linear
+153 -> 154_relax -> 155 and prod (already at 154_relax) upgrades cleanly.
 """
 
 from __future__ import annotations
@@ -16,8 +20,8 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision = "154_topology_live_status"
-down_revision = "153_topology_zabbix_linkage"
+revision = "155_topology_live_status"
+down_revision = "154_relax_inactive_olt_config_pack_constraint"
 branch_labels = None
 depends_on = None
 
