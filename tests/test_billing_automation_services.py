@@ -1341,6 +1341,7 @@ class TestRunInvoiceCycle:
         self,
         db_session,
         subscriber,
+        subscription,
         monkeypatch,
     ):
         from app.models.billing import Invoice, InvoiceStatus
@@ -1384,10 +1385,71 @@ class TestRunInvoiceCycle:
         assert calls[-1][1]["invoice_number"] == "INV-REM-1"
         assert (invoice.metadata_ or {}).get("invoice_reminder_sent_7")
 
+    def test_run_invoice_cycle_skips_reminders_and_escalations_for_terminal_account(
+        self,
+        db_session,
+        subscriber,
+        subscription,
+        monkeypatch,
+    ):
+        """Disabled/terminated service → no reminders or dunning escalations,
+        even with an open/overdue balance on the account."""
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.models.catalog import SubscriptionStatus
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        subscription.status = SubscriptionStatus.disabled  # service terminated
+        db_session.add(subscription)
+
+        run_at = datetime.now(UTC).replace(tzinfo=None)
+        db_session.add(
+            Invoice(
+                account_id=subscriber.id,
+                invoice_number="INV-REM-TERM",
+                status=InvoiceStatus.issued,
+                total=Decimal("150.00"),
+                balance_due=Decimal("150.00"),
+                due_at=run_at + timedelta(days=7),
+                metadata_={},
+            )
+        )
+        db_session.add(
+            Invoice(
+                account_id=subscriber.id,
+                invoice_number="INV-DUN-TERM",
+                status=InvoiceStatus.overdue,
+                total=Decimal("200.00"),
+                balance_due=Decimal("200.00"),
+                due_at=run_at - timedelta(days=3),
+                metadata_={},
+            )
+        )
+        for key, value in (
+            ("invoice_reminder_days", "7,1"),
+            ("dunning_escalation_days", "3,7,14"),
+        ):
+            db_session.add(
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key=key,
+                    value_type=SettingValueType.string,
+                    value_text=value,
+                    is_active=True,
+                )
+            )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoice_reminders_sent"] == 0
+        assert summary["dunning_escalations_sent"] == 0
+
     def test_run_invoice_cycle_emits_dunning_escalation_for_configured_day(
         self,
         db_session,
         subscriber,
+        subscription,
         monkeypatch,
     ):
         from app.models.billing import Invoice, InvoiceStatus

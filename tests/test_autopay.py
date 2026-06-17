@@ -13,9 +13,19 @@ import pytest
 
 import app.services.paystack as paystack
 from app.models.billing import InvoiceStatus, Payment, PaymentStatus
+from app.models.catalog import SubscriptionStatus
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
 from app.services import autopay
 from app.services import billing as billing_service
+
+
+@pytest.fixture(autouse=True)
+def _live_service(subscription):
+    """Autopay skips accounts with no live service (``account_has_live_service``).
+    Every autopay test charges the ``subscriber`` account, so give it a live
+    subscription (the conftest fixture creates a ``pending`` one — live but not
+    auto-billed). Without this, the live-service gate would skip every charge."""
+    return subscription
 
 
 def _card(db_session, account_id, *, default=True):
@@ -132,6 +142,31 @@ def test_run_does_not_record_when_charge_fails(db_session, subscriber, monkeypat
 
     db_session.refresh(invoice)
     assert Decimal(str(invoice.balance_due)) == Decimal("5000.00")
+    assert (
+        db_session.query(Payment).filter(Payment.account_id == subscriber.id).count()
+        == 0
+    )
+
+
+def test_run_skips_account_with_no_live_service(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """A terminated service must not keep capturing the saved card, even with
+    an active mandate and an open balance."""
+    subscription.status = SubscriptionStatus.disabled  # service terminated
+    db_session.add(subscription)
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    db_session.commit()
+    charge_calls: list[dict] = []
+    _mock_charge(monkeypatch, calls=charge_calls)
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    assert result["skipped"] == "no_live_service"
+    assert result["charged"] == 0
+    assert charge_calls == []  # card was never touched
     assert (
         db_session.query(Payment).filter(Payment.account_id == subscriber.id).count()
         == 0
