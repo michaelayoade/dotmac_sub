@@ -237,11 +237,19 @@ synchronous fan-out was ~100s):
    `map.get`/`get_maps()` to the Zabbix client.
 1. **Forward, basestation-level.** `Basestation` model + node/membership reconcile + matcher
    (zabbix_hostid → IP → name) + support "which basestation + access device" panel. Smallest
-   shippable slice.
-2. **Full forward chain.** Sysmap link reconcile (`map.get`) + core-rooted directed chain in the
-   panel.
+   shippable slice. **DONE — shipped 2026-06-17 (PR #274, mig 153); 96.2% match-rate in prod.**
+2. **Full forward chain.** Core-rooted directed access→agg→core chain in the panel.
+   **DEFERRED 2026-06-17 — blocked, no data source.** A spike confirmed sub-zabbix has *no*
+   topology signal: 0 items for `lldp`/`cdp`/`neighbor`/`topology`/`uplink`/`ifalias`/`ifdescr`/
+   `sysname`, the sysmap is empty, and `parent_device_id` is 0/461. Monitoring is host-level
+   (ping/availability) only, so there is nothing to auto-derive device→device edges from.
+   **Prerequisite to unblock:** enable LLDP/CDP collection in Zabbix (SNMP `lldpRemTable` on the
+   NAS/switches — an infra/SNMP change outside sub). Once neighbor items exist, the reconcile
+   derives edges into `NetworkTopologyLink` and this phase proceeds. Rejected alternatives: manual
+   topology entry (breaks the auto-maintained principle) and heuristic role/BTS inference
+   (unreliable). The sysmap/`map.get` path in §5/§6 is moot for sub-zabbix (no sysmap).
 3. **Live-status overlay (forward) + selfcare view.** Warmer task + cached status + customer-safe
-   panel.
+   panel. **DONE — shipped 2026-06-17 (PR #275, mig 155).**
 4. **Reverse traversal + manual outage console.** `affected_customers()`, `OutageIncident` model,
    admin outage console (operator declares an outage against a node/BTS → affected set computed),
    "known outage" banner on customer/selfcare views. Notify is a **manual** button (no sending yet
