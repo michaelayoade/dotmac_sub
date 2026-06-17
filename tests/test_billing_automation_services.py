@@ -7,6 +7,21 @@ from app.models.catalog import BillingCycle
 from app.services import billing_automation
 from app.services.events.types import EventType
 
+
+def _enable_inline_settle(db) -> None:
+    """Opt into the runner's inline credit-settle (default OFF kill-switch)."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="settle_credit_on_invoice_enabled",
+            value_text="true",
+        )
+    )
+    db.commit()
+
+
 # =============================================================================
 # _add_months Tests
 # =============================================================================
@@ -824,6 +839,7 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.commit()
+        _enable_inline_settle(db_session)
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
@@ -898,6 +914,7 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.commit()
+        _enable_inline_settle(db_session)
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
