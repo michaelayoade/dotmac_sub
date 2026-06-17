@@ -205,14 +205,23 @@ def _find_network_device(
     )
     if nd is not None:
         return nd, "linked"
+    # mgmt_ip has a unique constraint in the model, but order deterministically
+    # anyway so a future schema drift / duplicate can't make the merge target
+    # nondeterministic (oldest row wins).
     for ip in ips:
-        nd = session.query(NetworkDevice).filter(NetworkDevice.mgmt_ip == ip).first()
+        nd = (
+            session.query(NetworkDevice)
+            .filter(NetworkDevice.mgmt_ip == ip)
+            .order_by(NetworkDevice.created_at.asc(), NetworkDevice.id.asc())
+            .first()
+        )
         if nd is not None:
             return nd, "merged"
     if label:
         nd = (
             session.query(NetworkDevice)
             .filter(or_(NetworkDevice.name == label, NetworkDevice.hostname == label))
+            .order_by(NetworkDevice.created_at.asc(), NetworkDevice.id.asc())
             .first()
         )
         if nd is not None:
