@@ -823,3 +823,47 @@ class NetworkTopologyLink(Base):
     target_interface = relationship(
         "DeviceInterface", foreign_keys=[target_interface_id], lazy="joined"
     )
+
+
+class OutageIncident(Base):
+    """An operator-declared outage against a node or basestation (Phase 4b).
+
+    Manual only — no auto-detection. ``affected_count`` is snapshotted from
+    affected_customers at declare time. Kept lean (the Alert model is
+    rule/metric-bound and not reused).
+    """
+
+    __tablename__ = "outage_incidents"
+    __table_args__ = (
+        Index("ix_outage_incidents_status", "status"),
+        Index("ix_outage_incidents_root_node", "root_node_id"),
+        Index("ix_outage_incidents_basestation", "basestation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    root_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id")
+    )
+    basestation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    declared_by: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open / resolved
+    severity: Mapped[str | None] = mapped_column(String(20))
+    affected_count: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
