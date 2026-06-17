@@ -63,6 +63,7 @@ def _radreply_attrs(
     profile: RadiusProfile | None,
     subscriber_blocked: bool = False,
     additional_routes: list[tuple[str, int | None]] | None = None,
+    framed_ipv4: str | None = None,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -74,15 +75,25 @@ def _radreply_attrs(
     (cidr, metric) tuples. Emitted as Framed-Route for non-walled-garden subs only
     — this is the authoritative single-writer, so the routes must be emitted here
     or the periodic sweep wipes what build_radius_reply_attributes wrote.
+
+    `framed_ipv4`: the IP to emit as Framed-IP-Address. Defaults to
+    `sub.ipv4_address`, but the caller passes an active-IPAssignment fallback so a
+    stale/cleared `subscriptions.ipv4_address` does NOT silently drop Framed-IP
+    (which de-IPs the customer and the BNG tears the session down). "0.0.0.0" is
+    treated as no address.
     """
+    ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
+    if ipv4 == "0.0.0.0":  # noqa: S104 — IP-string comparison, not a socket bind
+        ipv4 = None
+
     attrs: list[tuple[str, str, str]] = [
         ("Service-Type", ":=", "Framed-User"),
         ("Framed-Protocol", ":=", "PPP"),
         ("Acct-Interim-Interval", ":=", str(ACCT_INTERIM_SECONDS)),
     ]
 
-    if sub.ipv4_address:
-        attrs.append(("Framed-IP-Address", ":=", sub.ipv4_address))
+    if ipv4:
+        attrs.append(("Framed-IP-Address", ":=", ipv4))
 
     rate = _rate_limit(offer, profile)
     if rate:
@@ -104,7 +115,7 @@ def _radreply_attrs(
         # Additional routed IP blocks -> one Framed-Route each (+= so multiple
         # coexist; gateway 0.0.0.0 = via this session, since primaries are CGNAT).
         # Not for walled-garden subs: a captive customer must not route extra IPs.
-        primary_host = f"{sub.ipv4_address}/32" if sub.ipv4_address else None
+        primary_host = f"{ipv4}/32" if ipv4 else None
         seen: set[str] = set()
         for cidr, metric in additional_routes:
             cidr = (cidr or "").strip()
@@ -211,6 +222,22 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             len(routes_by_subscriber),
         )
 
+        # Fallback IPv4 from the active IPAssignment so a stale/cleared
+        # subscriptions.ipv4_address doesn't silently drop Framed-IP-Address (which
+        # de-IPs the customer -> BNG teardown -> reconnect flap). One query, keyed
+        # by subscriber_id.
+        from app.models.network import IPAssignment, IPv4Address, IPVersion
+
+        ipv4_by_subscriber: dict = {}
+        for sid, addr in db.execute(
+            select(IPAssignment.subscriber_id, IPv4Address.address)
+            .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .where(IPAssignment.is_active.is_(True))
+            .where(IPAssignment.ip_version == IPVersion.ipv4)
+        ).all():
+            if sid and addr:
+                ipv4_by_subscriber.setdefault(sid, str(addr))
+
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
@@ -235,12 +262,16 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 continue
 
             sub_blocked = sub.subscriber_id in blocked_subscriber_ids
+            eff_ipv4 = sub.ipv4_address
+            if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # noqa: S104 — IP compare
+                eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
             attrs = _radreply_attrs(
                 sub,
                 sub.offer,
                 sub.radius_profile,
                 sub_blocked,
                 routes_by_subscriber.get(sub.subscriber_id),
+                framed_ipv4=eff_ipv4,
             )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,

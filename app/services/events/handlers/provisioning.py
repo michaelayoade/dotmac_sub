@@ -19,8 +19,37 @@ class ProvisioningHandler:
     def handle(self, db: Session, event: Event) -> None:
         if event.event_type == EventType.subscription_activated:
             self._handle_subscription_activated(db, event)
+        elif event.event_type == EventType.subscription_resumed:
+            self._handle_subscription_resumed(db, event)
         elif event.event_type == EventType.service_order_assigned:
             self._handle_service_order_assigned(db, event)
+
+    def _handle_subscription_resumed(self, db: Session, event: Event) -> None:
+        """Re-provision IP on reactivation.
+
+        ``restore_subscription`` (payment-reactivation) emits
+        ``subscription_resumed``, NOT ``subscription_activated`` — so without this
+        the IPv4 assignment and ``subscriptions.ipv4_address`` are never restored
+        on reactivation. The RADIUS refresh then rebuilds the reply WITHOUT
+        Framed-IP-Address and the BNG tears the session down ~130ms after auth
+        (the "paid -> went offline" 30s flap). ``ensure_ip_assignments_for_subscription``
+        reactivates the inactive IPv4 assignment and re-sets ipv4_address; the
+        RADIUS refresh enqueued by the enforcement handler on the same event then
+        regenerates the reply WITH Framed-IP-Address.
+        """
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
+        if not subscription_id:
+            return
+        try:
+            provisioning_service.ensure_ip_assignments_for_subscription(
+                db, str(subscription_id)
+            )
+        except Exception as exc:
+            logger.warning(
+                "IP re-provision on resume failed for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
 
     def _handle_subscription_activated(self, db: Session, event: Event) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
