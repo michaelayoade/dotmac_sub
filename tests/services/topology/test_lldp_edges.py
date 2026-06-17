@@ -25,8 +25,16 @@ def test_edges_build_drop_cpe_medium_and_dedup(db_session):
 
     neighbors = [
         {"identity": "GBB", "interface": "sfp-sfpplus1", "board": "CCR2004"},  # fiber
-        {"identity": "", "interface": "ether5", "address4": "192.168.88.50"},  # CPE -> drop
-        {"identity": "x", "address4": "10.0.0.77", "interface": "ether2"},  # switch by IP
+        {
+            "identity": "",
+            "interface": "ether5",
+            "address4": "192.168.88.50",
+        },  # CPE -> drop
+        {
+            "identity": "x",
+            "address4": "10.0.0.77",
+            "interface": "ether2",
+        },  # switch by IP
         {"identity": "GBB", "interface": "sfp-sfpplus2"},  # duplicate of GBB -> dedup
     ]
     edges = accumulate_edges({}, spdc, neighbors, index)
@@ -52,7 +60,9 @@ def test_edges_build_drop_cpe_medium_and_dedup(db_session):
 def test_self_link_dropped(db_session):
     spdc = _dev(db_session, "SPDC Access")
     index = build_device_index(db_session)
-    edges = accumulate_edges({}, spdc, [{"identity": "SPDC Access", "interface": "e1"}], index)
+    edges = accumulate_edges(
+        {}, spdc, [{"identity": "SPDC Access", "interface": "e1"}], index
+    )
     assert edges == {}
 
 
@@ -61,6 +71,10 @@ def test_cross_node_pair_dedups(db_session):
     b = _dev(db_session, "B")
     index = build_device_index(db_session)
     edges: dict = {}
-    accumulate_edges(edges, a, [{"identity": "B", "interface": "sfp1"}], index)  # A sees B
-    accumulate_edges(edges, b, [{"identity": "A", "interface": "sfp1"}], index)  # B sees A
+    accumulate_edges(
+        edges, a, [{"identity": "B", "interface": "sfp1"}], index
+    )  # A sees B
+    accumulate_edges(
+        edges, b, [{"identity": "A", "interface": "sfp1"}], index
+    )  # B sees A
     assert len(edges) == 1  # one canonical edge

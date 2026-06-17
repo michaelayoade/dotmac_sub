@@ -12,12 +12,22 @@ Match: neighbor ``identity`` (normalized) -> network_device name/hostname, then
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
+from collections import Counter
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import NetworkDevice, TopologyLinkMedium
+from app.models.catalog import NasDevice
+from app.models.network_monitoring import (
+    NetworkDevice,
+    NetworkTopologyLink,
+    TopologyLinkMedium,
+)
+
+logger = logging.getLogger(__name__)
 
 SOURCE = "lldp_neighbor"
 
@@ -35,7 +45,9 @@ def _neighbor_address(nb: dict) -> str | None:
     return nb.get("address4") or nb.get("address") or None
 
 
-def build_device_index(session: Session) -> tuple[dict[str, NetworkDevice], dict[str, NetworkDevice]]:
+def build_device_index(
+    session: Session,
+) -> tuple[dict[str, NetworkDevice], dict[str, NetworkDevice]]:
     """Index active nodes by normalized name/hostname and by mgmt_ip."""
     by_name: dict[str, NetworkDevice] = {}
     by_ip: dict[str, NetworkDevice] = {}
@@ -115,3 +127,129 @@ def accumulate_edges(
             },
         }
     return edges
+
+
+# --- Connection + poll -------------------------------------------------------
+
+
+def _read_ip_neighbors(nas: NasDevice) -> list[dict]:
+    """Read a MikroTik NAS's ``/ip/neighbor`` over the REST API (read-only)."""
+    from app.services.nas import _mikrotik as mt
+
+    base_url, auth, headers, verify_tls = mt._mikrotik_rest_auth(nas)
+    data = mt._mikrotik_rest_get(
+        base_url=base_url,
+        path="/rest/ip/neighbor",
+        auth=auth,
+        headers=headers,
+        verify_tls=verify_tls,
+    )
+    return data if isinstance(data, list) else []
+
+
+def poll_all(
+    session: Session, read_neighbors=None, now: datetime | None = None
+) -> dict:
+    """Poll every NAS node's neighbors, upsert lldp_neighbor edges, soft-prune.
+
+    Idempotent: edges are keyed by canonical device pair (NULL interfaces), so a
+    re-run only bumps ``last_seen_at``. A NAS that's unreachable (e.g. karsana)
+    is counted and skipped — it never aborts the run or prunes others' edges.
+    """
+    read_neighbors = read_neighbors or _read_ip_neighbors
+    now = now or datetime.now(UTC)
+    index = build_device_index(session)
+    stats: Counter = Counter(
+        {
+            "nas_polled": 0,
+            "nas_failed": 0,
+            "neighbors_seen": 0,
+            "created": 0,
+            "updated": 0,
+            "pruned": 0,
+            "edges": 0,
+        }
+    )
+
+    nas_nodes = (
+        session.query(NetworkDevice)
+        .filter(
+            NetworkDevice.matched_device_type == "nas",
+            NetworkDevice.matched_device_id.isnot(None),
+            NetworkDevice.is_active.is_(True),
+        )
+        .all()
+    )
+
+    edges: dict = {}
+    for node in nas_nodes:
+        nas = session.get(NasDevice, node.matched_device_id)
+        if nas is None:
+            continue
+        try:
+            neighbors = read_neighbors(nas)
+        except Exception as exc:  # one unreachable NAS must not abort the run
+            stats["nas_failed"] += 1
+            logger.warning("lldp_poll_nas_failed node=%s: %s", node.name, exc)
+            continue
+        stats["nas_polled"] += 1
+        stats["neighbors_seen"] += len(neighbors)
+        accumulate_edges(edges, node, neighbors, index)
+
+    # Upsert by canonical pair, scoped to our source (query-before-insert: the
+    # 4-tuple unique constraint treats NULL interfaces as distinct, so we keep
+    # one-row-per-pair in code).
+    seen_pairs: set = set()
+    for key, e in edges.items():
+        seen_pairs.add(key)
+        link = (
+            session.query(NetworkTopologyLink)
+            .filter(
+                NetworkTopologyLink.source == SOURCE,
+                NetworkTopologyLink.source_device_id == e["source_device_id"],
+                NetworkTopologyLink.target_device_id == e["target_device_id"],
+                NetworkTopologyLink.source_interface_id.is_(None),
+                NetworkTopologyLink.target_interface_id.is_(None),
+            )
+            .first()
+        )
+        if link is None:
+            session.add(
+                NetworkTopologyLink(
+                    source_device_id=e["source_device_id"],
+                    target_device_id=e["target_device_id"],
+                    source=SOURCE,
+                    medium=e["medium"],
+                    metadata_=e["metadata"],
+                    is_active=True,
+                    discovered_at=now,
+                    last_seen_at=now,
+                )
+            )
+            stats["created"] += 1
+        else:
+            link.medium = e["medium"]
+            link.metadata_ = e["metadata"]
+            link.is_active = True
+            link.last_seen_at = now
+            stats["updated"] += 1
+    session.flush()
+
+    # Soft-prune our rows not seen this run.
+    pruned = 0
+    for link in (
+        session.query(NetworkTopologyLink)
+        .filter(
+            NetworkTopologyLink.source == SOURCE,
+            NetworkTopologyLink.is_active.is_(True),
+        )
+        .all()
+    ):
+        if _canonical(link.source_device_id, link.target_device_id) not in seen_pairs:
+            link.is_active = False
+            pruned += 1
+    session.flush()
+
+    stats["edges"] = len(edges)
+    stats["pruned"] = pruned
+    return dict(stats)
