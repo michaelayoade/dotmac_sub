@@ -37,7 +37,7 @@ def _fiber(db_session, subscriber, live_status):
 def test_healthy(db_session, subscriber, subscription):
     _fiber(db_session, subscriber, "up")
     out = customer_connection_status(db_session, subscription)
-    assert out == {"basestation": "Garki", "status": "healthy"}
+    assert out == {"basestation": "Garki", "status": "healthy", "known_outage": False}
 
 
 def test_outage_and_degraded(db_session, subscriber, subscription):
@@ -47,14 +47,14 @@ def test_outage_and_degraded(db_session, subscriber, subscription):
 
 def test_unknown_when_no_path(db_session, subscription):
     out = customer_connection_status(db_session, subscription)
-    assert out == {"basestation": None, "status": "unknown"}
+    assert out == {"basestation": None, "status": "unknown", "known_outage": False}
 
 
 def test_no_internal_details_leak(db_session, subscriber, subscription):
     _fiber(db_session, subscriber, "problem")
     out = customer_connection_status(db_session, subscription)
-    # Only the two safe keys; no ip/device/node/gap internals.
-    assert set(out.keys()) == {"basestation", "status"}
+    # Only the safe keys; no ip/device/node/gap internals.
+    assert set(out.keys()) == {"basestation", "status", "known_outage"}
     assert out["status"] == "degraded"
     blob = repr(out).lower()
     for leaked in ("10.0.0.1", "olt1-node", "201", "matched", "node", "gap"):

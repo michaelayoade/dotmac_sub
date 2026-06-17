@@ -6,6 +6,11 @@
     {% set _label = {'up': 'Up', 'down': 'Down', 'problem': 'Problem'}.get(_ls, 'Unknown') %}
     <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Path</h3>
     <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Reconciled from Zabbix; live status warmed periodically (cached, not live-polled).</p>
+    {% if known_outage %}
+    <div class="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
+        Known outage{% if known_outage.note %} &mdash; {{ known_outage.note }}{% endif %} ({{ known_outage.affected_count }} subscriptions affected). This customer is within a declared outage.
+    </div>
+    {% endif %}
     <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
         {% if network_path.ont %}
         <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="ONT serial">ONT {{ network_path.ont.serial_number }}</span>

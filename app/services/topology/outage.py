@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
@@ -50,6 +51,32 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
     incident.resolved_at = datetime.now(UTC)
     session.flush()
     return incident
+
+
+def open_incident_for_path(session: Session, path) -> OutageIncident | None:
+    """The open incident covering a customer's path, if any — matched on the
+    access node, any upstream hop, or the basestation. ``path`` is a
+    CustomerPath (duck-typed to avoid a circular import)."""
+    if path is None:
+        return None
+    node_ids = set()
+    if getattr(path, "node", None) is not None:
+        node_ids.add(path.node.id)
+    for hop in getattr(path, "upstream_chain", None) or []:
+        node_ids.add(hop.id)
+    conds = []
+    if node_ids:
+        conds.append(OutageIncident.root_node_id.in_(node_ids))
+    if getattr(path, "basestation", None) is not None:
+        conds.append(OutageIncident.basestation_id == path.basestation.id)
+    if not conds:
+        return None
+    return (
+        session.query(OutageIncident)
+        .filter(OutageIncident.status == "open", or_(*conds))
+        .order_by(OutageIncident.started_at.desc())
+        .first()
+    )
 
 
 def list_open_incidents(session: Session) -> list[OutageIncident]:
