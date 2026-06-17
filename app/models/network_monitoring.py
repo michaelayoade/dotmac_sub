@@ -281,6 +281,12 @@ class NetworkDevice(Base):
     # resolve_customer_path and the topology-gaps report.
     matched_device_type: Mapped[str | None] = mapped_column(String(20))
     matched_device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Topology live status (Phase 3), warmed from Zabbix into this cache and read
+    # by the Network Path panel — never fetched on the request path. Distinct
+    # from the ping/snmp `status` column (different writer). One of
+    # up/down/problem/unknown.
+    live_status: Mapped[str | None] = mapped_column(String(20))
+    live_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Capacity tracking
     max_concurrent_subscribers: Mapped[int | None] = mapped_column(Integer)
