@@ -791,6 +791,11 @@ class NetworkTopologyLink(Base):
     # Discovery / reconciliation
     discovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    # Provenance: which reconciler owns this edge (e.g. 'lldp_neighbor'). The
+    # LLDP poller only ever touches its own rows (upsert + soft-prune); never
+    # manual/other-sourced links. last_seen_at bumps each poll the edge is seen.
+    source: Mapped[str | None] = mapped_column(String(40))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Metadata
     notes: Mapped[str | None] = mapped_column(Text)
