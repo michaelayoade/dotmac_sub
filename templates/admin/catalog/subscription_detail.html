@@ -230,9 +230,60 @@
                             {% endif %}
                         </p>
                     </div>
-                    <div>
+                    <div x-data="{ showPricingDetails: false }">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Plan</p>
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ offer_label }}</p>
+                        <button type="button"
+                                @click="showPricingDetails = true"
+                                class="mt-2 inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-primary-600 transition hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
+                            <span>Pricing details</span>
+                            <span class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] font-semibold leading-none">?</span>
+                        </button>
+
+                        <div x-show="showPricingDetails"
+                             x-transition.opacity
+                             x-cloak
+                             class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"
+                             role="dialog"
+                             aria-modal="true"
+                             aria-labelledby="pricing-details-title"
+                             @keydown.escape.window="showPricingDetails = false">
+                            <div @click.outside="showPricingDetails = false"
+                                 class="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+                                <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                                    <div>
+                                        <h3 id="pricing-details-title" class="text-base font-semibold text-slate-900 dark:text-white">Pricing Details</h3>
+                                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription-specific quantity, price, and discount.</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="showPricingDetails = false"
+                                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+                                            aria-label="Close Pricing Details">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </div>
+                                <div class="space-y-3 p-6 text-sm text-slate-700 dark:text-slate-300">
+                                    <div class="flex items-center justify-between gap-4">
+                                        <span>Quantity</span>
+                                        <span class="font-medium text-slate-900 dark:text-white">{{ subscription.quantity or '—' }} {{ subscription.unit or '' }}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between gap-4">
+                                        <span>Unit Price</span>
+                                        <span class="font-medium text-slate-900 dark:text-white">{{ subscription.unit_price or '—' }}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between gap-4">
+                                        <span>Discount</span>
+                                        <span class="font-medium text-slate-900 dark:text-white">
+                                            {% if subscription.discount %}
+                                                {{ subscription.discount_value or '—' }} {{ subscription.discount_type | default('') }}
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Contract Term</p>
@@ -246,9 +297,70 @@
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start</p>
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.start_at.strftime('%b %d, %Y %H:%M') if subscription.start_at else '—' }}</p>
                     </div>
-                    <div>
+                    <div x-data="{ showCommercialTerms: false }">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Next Billing</p>
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.next_billing_at.strftime('%b %d, %Y %H:%M') if subscription.next_billing_at else '—' }}</p>
+                        <button type="button"
+                                @click="showCommercialTerms = true"
+                                class="mt-2 inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-primary-600 transition hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
+                            <span>Why these billing dates?</span>
+                            <span class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] font-semibold leading-none">?</span>
+                        </button>
+
+                        <div x-show="showCommercialTerms"
+                             x-transition.opacity
+                             x-cloak
+                             class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"
+                             role="dialog"
+                             aria-modal="true"
+                             aria-labelledby="commercial-terms-title"
+                             @keydown.escape.window="showCommercialTerms = false">
+                            <div @click.outside="showCommercialTerms = false"
+                                 class="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+                                <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                                    <div>
+                                        <h3 id="commercial-terms-title" class="text-base font-semibold text-slate-900 dark:text-white">Commercial Terms</h3>
+                                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Billing rules, defaults, grace periods, and overrides for this subscription.</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="showCommercialTerms = false"
+                                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+                                            aria-label="Close Commercial Terms">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </div>
+                                <div class="max-h-[65vh] overflow-auto p-6">
+                                    <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+                                        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                                            <thead class="bg-slate-50 dark:bg-slate-900/40">
+                                                <tr>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Setting</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effective</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Global Default</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Override</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                                                {% for row in commercial_policy.rows %}
+                                                <tr>
+                                                    <td class="px-3 py-2 text-slate-700 dark:text-slate-200">{{ row.label }}</td>
+                                                    <td class="px-3 py-2 text-slate-900 dark:text-white">{{ row.effective }}</td>
+                                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.source }}</td>
+                                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
+                                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
+                                                </tr>
+                                                {% else %}
+                                                <tr>
+                                                    <td colspan="5" class="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">Commercial policy is unavailable for this subscription.</td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">End</p>
@@ -264,113 +376,6 @@
                     </div>
                 </div>
             </div>
-
-            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="flex items-start justify-between gap-4">
-                    <div>
-                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Commercial Terms</h3>
-                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription terms plus effective customer and billing defaults.</p>
-                    </div>
-                </div>
-                <div class="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
-                    <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                        <thead class="bg-slate-50 dark:bg-slate-900/40">
-                            <tr>
-                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Setting</th>
-                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effective</th>
-                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
-                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Global Default</th>
-                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Override</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                            {% for row in commercial_policy.rows %}
-                            <tr>
-                                <td class="px-3 py-2 text-slate-700 dark:text-slate-200">{{ row.label }}</td>
-                                <td class="px-3 py-2 text-slate-900 dark:text-white">{{ row.effective }}</td>
-                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.source }}</td>
-                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
-                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="5" class="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">Commercial policy is unavailable for this subscription.</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800" x-data="{ open: false }">
-                <div class="flex items-center justify-between gap-4">
-                    <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning</h3>
-                    <button type="button" @click="open = !open" class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200" :aria-expanded="open.toString()" aria-label="Toggle Provisioning">
-                        <svg class="h-4 w-4 transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                    </button>
-                </div>
-                <div x-show="open" x-collapse class="mt-4 grid gap-4 sm:grid-cols-2">
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Login</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.login or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning Router</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">
-                            {% if provisioning_router %}
-                                {{ provisioning_router.name }}
-                                {% if provisioning_router.management_ip %}
-                                    ({{ provisioning_router.management_ip }})
-                                {% elif provisioning_router.ip_address %}
-                                    ({{ provisioning_router.ip_address }})
-                                {% elif provisioning_router.nas_ip %}
-                                    ({{ provisioning_router.nas_ip }})
-                                {% endif %}
-                            {% else %}
-                                —
-                            {% endif %}
-                        </p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Router ID</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.router_id or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning NAS ID</p>
-                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.provisioning_nas_device_id or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IPv4</p>
-                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ display_ipv4 or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IPv6</p>
-                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.ipv6_address or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">MAC Address</p>
-                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.mac_address or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">External Service ID</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.splynx_service_id or '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">RADIUS Profile</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.radius_profile.name if subscription.radius_profile else '—' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service Status Raw</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.service_status_raw or '—' }}</p>
-                    </div>
-                </div>
-                {% if subscription.service_description %}
-                <div x-show="open" x-collapse class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
-                    {{ subscription.service_description }}
-                </div>
-                {% endif %}
-            </div>
-
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800" x-data="{ open: false }">
                 <div class="flex items-start justify-between gap-4">
                     <div>
@@ -381,6 +386,67 @@
                         {% if direct_active_workflow %}
                         <span class="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Direct-Active Workflow</span>
                         {% endif %}
+                        <div x-data="{ showProvisioningIds: false }">
+                            <button type="button"
+                                    @click="showProvisioningIds = true"
+                                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary-600 transition hover:bg-primary-50 hover:text-primary-700 dark:text-primary-400 dark:hover:bg-primary-900/20 dark:hover:text-primary-300">
+                                <span>Provisioning IDs</span>
+                                <span class="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] font-semibold leading-none">?</span>
+                            </button>
+
+                            <div x-show="showProvisioningIds"
+                                 x-transition.opacity
+                                 x-cloak
+                                 class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"
+                                 role="dialog"
+                                 aria-modal="true"
+                                 aria-labelledby="provisioning-ids-title"
+                                 @keydown.escape.window="showProvisioningIds = false">
+                                <div @click.outside="showProvisioningIds = false"
+                                     class="w-full max-w-2xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+                                    <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                                        <div>
+                                            <h3 id="provisioning-ids-title" class="text-base font-semibold text-slate-900 dark:text-white">Provisioning IDs</h3>
+                                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Internal and external references used to match this subscription with network and upstream systems.</p>
+                                        </div>
+                                        <button type="button"
+                                                @click="showProvisioningIds = false"
+                                                class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+                                                aria-label="Close Provisioning IDs">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                        </button>
+                                    </div>
+                                    <div class="grid gap-4 p-6 sm:grid-cols-2">
+                                        <div>
+                                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Router ID</p>
+                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.router_id or '—' }}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning NAS ID</p>
+                                            <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.provisioning_nas_device_id or '—' }}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">External Service ID</p>
+                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.splynx_service_id or '—' }}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">RADIUS Profile</p>
+                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.radius_profile.name if subscription.radius_profile else '—' }}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service Status Raw</p>
+                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.service_status_raw or '—' }}</p>
+                                        </div>
+                                        {% if subscription.service_description %}
+                                        <div class="sm:col-span-2">
+                                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service Description</p>
+                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.service_description }}</p>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <button type="button" @click="open = !open" class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200" :aria-expanded="open.toString()" aria-label="Toggle Provisioning Evidence">
                             <svg class="h-4 w-4 transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                         </button>
@@ -879,30 +945,6 @@
                         </a>
                     </div>
                     {% endif %}
-                </div>
-            </div>
-
-            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pricing</h3>
-                <div class="mt-4 space-y-2 text-sm text-slate-700 dark:text-slate-300">
-                    <div class="flex items-center justify-between">
-                        <span>Quantity</span>
-                        <span class="font-medium">{{ subscription.quantity or '—' }} {{ subscription.unit or '' }}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span>Unit Price</span>
-                        <span class="font-medium">{{ subscription.unit_price or '—' }}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span>Discount</span>
-                        <span class="font-medium">
-                            {% if subscription.discount %}
-                                {{ subscription.discount_value or '—' }} {{ subscription.discount_type | default('') }}
-                            {% else %}
-                                —
-                            {% endif %}
-                        </span>
-                    </div>
                 </div>
             </div>
         </div>

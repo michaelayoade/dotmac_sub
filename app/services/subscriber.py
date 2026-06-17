@@ -1,6 +1,7 @@
 import builtins
 import logging
 from datetime import UTC, datetime
+from ipaddress import IPv4Address as ParsedIPv4Address
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -48,6 +49,20 @@ from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+_UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
+
+
+def _parse_ipv4_search(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = ParsedIPv4Address(normalized)
+    except ValueError:
+        return None
+    if parsed == _UNSPECIFIED_IPV4:
+        return None
+    return str(parsed)
 
 _validate_enum = validate_enum
 _RESTRICTED_STATUSES = {
@@ -509,9 +524,16 @@ class Subscribers(ListResponseMixin):
         if search:
             term = search.strip()
             if term:
-                from app.models.catalog import AccessCredential, NasDevice, Subscription
+                from app.models.catalog import (
+                    AccessCredential,
+                    NasDevice,
+                    Subscription,
+                    SubscriptionStatus,
+                )
                 from app.models.network import (
                     FdhCabinet,
+                    IPAssignment,
+                    IPv4Address,
                     OntAssignment,
                     OntUnit,
                     Splitter,
@@ -519,6 +541,7 @@ class Subscribers(ListResponseMixin):
                 from app.models.network_monitoring import PopSite
 
                 like = f"%{term}%"
+                exact_ipv4 = _parse_ipv4_search(term)
                 # Direct subscriber fields
                 direct_conditions = or_(
                     Subscriber.first_name.ilike(like),
@@ -532,20 +555,58 @@ class Subscribers(ListResponseMixin):
                     Subscriber.city.ilike(like),
                     Subscriber.notes.ilike(like),
                 )
-                # Subscription fields (IP, login, MAC)
-                (
-                    db.query(Subscription.subscriber_id)
-                    .filter(
+                active_subscription = Subscription.status == SubscriptionStatus.active
+                active_subscription_text_match = Subscriber.id.in_(
+                    db.query(Subscription.subscriber_id).filter(
+                        active_subscription,
                         or_(
                             Subscription.login.ilike(like),
-                            Subscription.ipv4_address.ilike(like),
                             Subscription.ipv6_address.ilike(like),
                             Subscription.mac_address.ilike(like),
+                        ),
+                    )
+                )
+                if exact_ipv4:
+                    active_subscription_ip_match = Subscriber.id.in_(
+                        db.query(Subscription.subscriber_id).filter(
+                            active_subscription,
+                            Subscription.ipv4_address == exact_ipv4,
                         )
                     )
-                    .correlate(Subscriber)
-                    .exists()
-                )
+                    active_ipam_ip_match = Subscriber.ip_assignments.any(
+                        and_(
+                            IPAssignment.is_active.is_(True),
+                            IPAssignment.ipv4_address.has(
+                                IPv4Address.address == exact_ipv4
+                            ),
+                            or_(
+                                IPAssignment.subscription.has(active_subscription),
+                                and_(
+                                    IPAssignment.subscription_id.is_(None),
+                                    Subscriber.subscriptions.any(active_subscription),
+                                ),
+                            ),
+                        )
+                    )
+                    active_ont_ip_match = Subscriber.ont_assignments.any(
+                        and_(
+                            OntAssignment.active.is_(True),
+                            or_(
+                                OntAssignment.static_ip == exact_ipv4,
+                                OntAssignment.ont_unit.has(
+                                    OntUnit.observed_wan_ip == exact_ipv4
+                                ),
+                            ),
+                        )
+                    )
+                    subscription_match = or_(
+                        active_subscription_text_match,
+                        active_subscription_ip_match,
+                        active_ipam_ip_match,
+                        active_ont_ip_match,
+                    )
+                else:
+                    subscription_match = active_subscription_text_match
                 # PPPoE/RADIUS username
                 cred_match = (
                     db.query(AccessCredential.subscriber_id)
@@ -603,16 +664,7 @@ class Subscribers(ListResponseMixin):
                 query = query.filter(
                     or_(
                         direct_conditions,
-                        Subscriber.id.in_(
-                            db.query(Subscription.subscriber_id).filter(
-                                or_(
-                                    Subscription.login.ilike(like),
-                                    Subscription.ipv4_address.ilike(like),
-                                    Subscription.ipv6_address.ilike(like),
-                                    Subscription.mac_address.ilike(like),
-                                )
-                            )
-                        ),
+                        subscription_match,
                         cred_match,
                         ont_match,
                         nas_match,
@@ -791,9 +843,16 @@ class Subscribers(ListResponseMixin):
         if search:
             term = search.strip()
             if term:
-                from app.models.catalog import AccessCredential, NasDevice, Subscription
+                from app.models.catalog import (
+                    AccessCredential,
+                    NasDevice,
+                    Subscription,
+                    SubscriptionStatus,
+                )
                 from app.models.network import (
                     FdhCabinet,
+                    IPAssignment,
+                    IPv4Address,
                     OntAssignment,
                     OntUnit,
                     Splitter,
@@ -801,6 +860,59 @@ class Subscribers(ListResponseMixin):
                 from app.models.network_monitoring import PopSite
 
                 like = f"%{term}%"
+                exact_ipv4 = _parse_ipv4_search(term)
+                active_subscription = Subscription.status == SubscriptionStatus.active
+                active_subscription_text_match = Subscriber.id.in_(
+                    db.query(Subscription.subscriber_id).filter(
+                        active_subscription,
+                        or_(
+                            Subscription.login.ilike(like),
+                            Subscription.ipv6_address.ilike(like),
+                            Subscription.mac_address.ilike(like),
+                        ),
+                    )
+                )
+                if exact_ipv4:
+                    active_subscription_ip_match = Subscriber.id.in_(
+                        db.query(Subscription.subscriber_id).filter(
+                            active_subscription,
+                            Subscription.ipv4_address == exact_ipv4,
+                        )
+                    )
+                    active_ipam_ip_match = Subscriber.ip_assignments.any(
+                        and_(
+                            IPAssignment.is_active.is_(True),
+                            IPAssignment.ipv4_address.has(
+                                IPv4Address.address == exact_ipv4
+                            ),
+                            or_(
+                                IPAssignment.subscription.has(active_subscription),
+                                and_(
+                                    IPAssignment.subscription_id.is_(None),
+                                    Subscriber.subscriptions.any(active_subscription),
+                                ),
+                            ),
+                        )
+                    )
+                    active_ont_ip_match = Subscriber.ont_assignments.any(
+                        and_(
+                            OntAssignment.active.is_(True),
+                            or_(
+                                OntAssignment.static_ip == exact_ipv4,
+                                OntAssignment.ont_unit.has(
+                                    OntUnit.observed_wan_ip == exact_ipv4
+                                ),
+                            ),
+                        )
+                    )
+                    subscription_match = or_(
+                        active_subscription_text_match,
+                        active_subscription_ip_match,
+                        active_ipam_ip_match,
+                        active_ont_ip_match,
+                    )
+                else:
+                    subscription_match = active_subscription_text_match
                 query = query.filter(
                     or_(
                         Subscriber.first_name.ilike(like),
@@ -813,16 +925,7 @@ class Subscribers(ListResponseMixin):
                         Subscriber.address_line1.ilike(like),
                         Subscriber.city.ilike(like),
                         Subscriber.notes.ilike(like),
-                        Subscriber.id.in_(
-                            db.query(Subscription.subscriber_id).filter(
-                                or_(
-                                    Subscription.login.ilike(like),
-                                    Subscription.ipv4_address.ilike(like),
-                                    Subscription.ipv6_address.ilike(like),
-                                    Subscription.mac_address.ilike(like),
-                                )
-                            )
-                        ),
+                        subscription_match,
                         Subscriber.id.in_(
                             db.query(AccessCredential.subscriber_id).filter(
                                 AccessCredential.username.ilike(like),

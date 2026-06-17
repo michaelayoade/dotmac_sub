@@ -450,32 +450,28 @@
                 {% set initial_ipv4_addresses = subscription.ipv4_addresses if subscription.ipv4_addresses else ([subscription.ipv4_address] if subscription.ipv4_address else ['']) %}
                 {% set initial_ipv4_block_ids = subscription.ipv4_block_ids if subscription.ipv4_block_ids else [] %}
                 <div class="space-y-3">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">IPv4 Allocation</h3>
-                        <button type="button" @click="addIpv4Row()" :disabled="!blocks.length"
-                            :class="!blocks.length ? 'cursor-not-allowed opacity-50' : ''"
-                            class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:disabled:hover:bg-slate-800">
-                            Add more IPv4
-                        </button>
-                    </div>
+                    <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">IPv4 Allocation</h3>
                     {% if not ipv4_blocks %}
                     <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
-                        No active IPv4 blocks are available for subscription provisioning.
-                        There are {{ ipv4_pools|length }} active IPv4 pools, but none currently have an active block to allocate from.
-                        Add or activate a block in <a href="/admin/network/ip-management" class="font-medium underline underline-offset-2 hover:no-underline">IP Pools &amp; Blocks</a>.
+                        No active IPv4 ranges are available for subscription provisioning.
+                        There are {{ ipv4_pools|length }} active IPv4 pools, but none currently have an allocatable range.
+                        Add or activate a range in <a href="/admin/network/ip-management" class="font-medium underline underline-offset-2 hover:no-underline">IP Pools &amp; Blocks</a>.
                     </div>
                     {% endif %}
                     <template x-for="(row, idx) in rows" :key="idx">
                         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Block</label>
-                                <select :name="'ipv4_block_ids'" x-model="row.blockId" @change="populateIpFromBlock(row)"
+                                <input type="hidden" name="ipv4_block_ids" :value="row.blockId">
+                                <input type="text" x-model="row.blockQuery" list="ipv4-block-options"
+                                    @change="selectBlockForRow(row)" @input="syncTypedBlock(row)"
+                                    :placeholder="blocks.length ? 'Type block name or range' : 'No active IPv4 blocks configured'"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="" x-text="blocks.length ? 'Select block' : 'No active IPv4 blocks configured'"></option>
+                                <datalist id="ipv4-block-options">
                                     <template x-for="block in blocks" :key="block.id">
-                                        <option :value="block.id" x-text="block.display"></option>
+                                        <option :value="block.display"></option>
                                     </template>
-                                </select>
+                                </datalist>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Address</label>
@@ -487,9 +483,6 @@
                                     </template>
                                 </datalist>
                                 <p class="mt-1 text-xs text-slate-500">Auto-fills the next free IP. You can replace it with another free IP from the selected block.</p>
-                            </div>
-                            <div class="sm:col-span-2 flex justify-end" x-show="rows.length > 1">
-                                <button type="button" @click="removeIpv4Row(idx)" class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400">Remove</button>
                             </div>
                         </div>
                     </template>
@@ -536,13 +529,15 @@
                         <div class="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(12rem,0.8fr)_8rem_auto]">
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Parent /24 Range</label>
-                                <select x-model="route.parentId" @change="populateRouteChildren(route)"
+                                <input type="text" x-model="route.parentQuery" :list="'additional-route-parent-options-' + idx"
+                                    @change="selectRouteParent(route)" @input="syncTypedRouteParent(route)"
+                                    :placeholder="routeRanges.length ? 'Type range name or CIDR' : 'No IPv4 ranges configured'"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="" x-text="routeRanges.length ? 'Select /24 range' : 'No IPv4 ranges configured'"></option>
+                                <datalist :id="'additional-route-parent-options-' + idx">
                                     <template x-for="range in routeRanges" :key="range.id">
-                                        <option :value="range.id" x-text="range.display"></option>
+                                        <option :value="range.display"></option>
                                     </template>
-                                </select>
+                                </datalist>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Assignable Subnet</label>
@@ -665,8 +660,17 @@ function subscriptionProvisioning() {
     const initialBlocks = {{ initial_ipv4_block_ids | tojson }};
     const initialRouteCidrs = {{ initial_additional_route_cidrs | tojson }};
     const initialRouteMetrics = {{ initial_additional_route_metrics | tojson }};
-    const rows = initialAddresses.map((ip, idx) => ({
+    const blockLabel = (blockId) => {
+        const block = blocks.find((item) => item.id === blockId);
+        return block ? block.display : "";
+    };
+    const routeRangeLabel = (parentId) => {
+        const range = routeRanges.find((item) => item.id === parentId);
+        return range ? range.display : "";
+    };
+    const rows = initialAddresses.slice(0, 1).map((ip, idx) => ({
         blockId: initialBlocks[idx] || "",
+        blockQuery: blockLabel(initialBlocks[idx] || ""),
         ip: ip || "",
     }));
     const routeRows = initialRouteCidrs.map((cidr, idx) => {
@@ -686,6 +690,7 @@ function subscriptionProvisioning() {
             .find((item) => item.cidr === cidr) || {};
         return {
             parentId: parent.id || "",
+            parentQuery: routeRangeLabel(parent.id || ""),
             childId: child.id || "",
             cidr: cidr || "",
             metric: initialRouteMetrics[idx] || "1",
@@ -693,6 +698,7 @@ function subscriptionProvisioning() {
     });
     const initialRows = routeRows.length ? routeRows : [{
         parentId: "",
+        parentQuery: "",
         childId: "",
         cidr: "",
         metric: "1",
@@ -702,19 +708,42 @@ function subscriptionProvisioning() {
         routeRanges,
         ipAddonOptions,
         selectedAddonId: initialAddonId,
-        rows: rows.length ? rows : [{ blockId: "", ip: "" }],
+        rows: rows.length ? rows : [{ blockId: "", blockQuery: "", ip: "" }],
         routeRows: initialRows,
         get selectedAddonPrefix() {
             const option = this.ipAddonOptions.find((item) => item.id === this.selectedAddonId);
             return option && option.prefix ? String(option.prefix) : "";
         },
-        addIpv4Row() {
-            this.rows.push({ blockId: "", ip: "" });
+        normalizeBlockQuery(value) {
+            return String(value || "").trim().toLowerCase();
         },
-        removeIpv4Row(index) {
-            this.rows.splice(index, 1);
-            if (!this.rows.length) {
-                this.rows.push({ blockId: "", ip: "" });
+        blockMatchesQuery(block, query) {
+            const normalized = this.normalizeBlockQuery(query);
+            if (!normalized) {
+                return false;
+            }
+            return [block.display, block.name, block.pool_name, block.cidr]
+                .some((value) => this.normalizeBlockQuery(value) === normalized);
+        },
+        selectBlockForRow(row) {
+            const block = this.blocks.find((item) => this.blockMatchesQuery(item, row.blockQuery));
+            row.blockId = block ? block.id : "";
+            if (block) {
+                row.blockQuery = block.display;
+            }
+            this.populateIpFromBlock(row);
+        },
+        syncTypedBlock(row) {
+            if (!row.blockQuery) {
+                row.blockId = "";
+                row.ip = "";
+                return;
+            }
+            const block = this.blocks.find((item) => this.blockMatchesQuery(item, row.blockQuery));
+            if (block && block.id !== row.blockId) {
+                row.blockId = block.id;
+                row.blockQuery = block.display;
+                this.populateIpFromBlock(row);
             }
         },
         availableIpsForBlock(blockId) {
@@ -740,12 +769,50 @@ function subscriptionProvisioning() {
             row.ip = candidate || availableIps[0];
         },
         addRouteRow() {
-            this.routeRows.push({ parentId: "", childId: "", cidr: "", metric: "1" });
+            this.routeRows.push({ parentId: "", parentQuery: "", childId: "", cidr: "", metric: "1" });
         },
         removeRouteRow(index) {
             this.routeRows.splice(index, 1);
             if (!this.routeRows.length) {
-                this.routeRows.push({ parentId: "", childId: "", cidr: "", metric: "1" });
+                this.routeRows.push({ parentId: "", parentQuery: "", childId: "", cidr: "", metric: "1" });
+            }
+        },
+        routeRangeMatchesQuery(range, query) {
+            const normalized = this.normalizeBlockQuery(query);
+            if (!normalized) {
+                return false;
+            }
+            return [range.display, range.pool_name, range.cidr]
+                .some((value) => this.normalizeBlockQuery(value) === normalized);
+        },
+        clearRouteSelection(route, clearQuery = false) {
+            route.parentId = "";
+            route.childId = "";
+            route.cidr = "";
+            if (clearQuery) {
+                route.parentQuery = "";
+            }
+        },
+        selectRouteParent(route) {
+            const range = this.routeRanges.find((item) => this.routeRangeMatchesQuery(item, route.parentQuery));
+            if (!range) {
+                this.clearRouteSelection(route, true);
+                return;
+            }
+            route.parentId = range.id;
+            route.parentQuery = range.display;
+            this.populateRouteChildren(route);
+        },
+        syncTypedRouteParent(route) {
+            if (!route.parentQuery) {
+                this.clearRouteSelection(route);
+                return;
+            }
+            const range = this.routeRanges.find((item) => this.routeRangeMatchesQuery(item, route.parentQuery));
+            if (range && range.id !== route.parentId) {
+                route.parentId = range.id;
+                route.parentQuery = range.display;
+                this.populateRouteChildren(route);
             }
         },
         childOptionsForRoute(route) {

@@ -329,6 +329,7 @@ def _ensure_ip_assignment_for_version(
     else:
         assignment_payload = IPAssignmentCreate(
             subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
             service_address_id=subscription.service_address_id,
             ip_version=ip_version,
             ipv4_address_id=address.id if ip_version == IPVersion.ipv4 else None,

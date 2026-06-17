@@ -16,7 +16,6 @@ from sqlalchemy.orm import joinedload
 
 from app.models.catalog import NasDevice, Subscription
 from app.models.network import IPAssignment, IPv4Address, IPv6Address, IPVersion
-from app.schemas.catalog import SubscriptionUpdate
 from app.schemas.network import (
     IPAssignmentCreate,
     IPAssignmentUpdate,
@@ -24,7 +23,6 @@ from app.schemas.network import (
     IpPoolCreate,
     IpPoolUpdate,
 )
-from app.services import catalog as catalog_service
 from app.services import network as network_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
@@ -1040,9 +1038,11 @@ def assign_ipv4_address(
                 "reassigned": False,
             }
 
-    # IP assignments now link directly to subscribers, not subscriptions
     assignment_payload = {
         "account_id": UUID(normalized_subscriber_id),
+        "subscription_id": UUID(normalized_subscription_id)
+        if normalized_subscription_id
+        else None,
         "ip_version": IPVersion.ipv4,
         "ipv4_address_id": address_record.id,
         "is_active": True,
@@ -1057,15 +1057,6 @@ def assign_ipv4_address(
         assignment = network_service.ip_assignments.create(
             db=db,
             payload=IPAssignmentCreate.model_validate(assignment_payload),
-        )
-
-    if normalized_subscription_id:
-        catalog_service.subscriptions.update(
-            db=db,
-            subscription_id=normalized_subscription_id,
-            payload=SubscriptionUpdate.model_validate(
-                {"ipv4_address": state["ip_address"]}
-            ),
         )
 
     return {
