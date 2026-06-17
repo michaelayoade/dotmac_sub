@@ -98,6 +98,7 @@ from app.tasks.splynx_sync import (
     run_subscriber_status_sync,
     run_subscription_status_sync,
 )
+from app.tasks.topology_sync import run_topology_reconcile
 from app.tasks.tr069 import (
     apply_acs_config as tr069_apply_acs_config,
 )
@@ -232,6 +233,7 @@ __all__ = [
     "retry_failed_deliveries",
     "deliver_notification_queue",
     "snapshot_mrr",
+    "run_topology_reconcile",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
     "tr069_execute_bulk_action",

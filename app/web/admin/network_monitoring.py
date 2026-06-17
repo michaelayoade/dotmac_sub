@@ -34,6 +34,19 @@ def _base_context(
 
 
 @router.get(
+    "/topology-gaps",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def topology_gaps_page(request: Request, db: Session = Depends(get_db)):
+    from app.services.topology.gaps import topology_gaps
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["gaps"] = topology_gaps(db)
+    return templates.TemplateResponse("admin/network/topology_gaps.html", context)
+
+
+@router.get(
     "/monitoring",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],

@@ -1048,6 +1048,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=600,
         )
+        # Topology reconcile: pull Zabbix groups/hosts onto pop_sites +
+        # network_devices. Device graph changes slowly, so hourly is ample.
+        topology_reconcile_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_reconcile_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_reconcile",
+            task_name="app.tasks.topology_sync.run_topology_reconcile",
+            enabled=True,
+            interval_seconds=max(topology_reconcile_minutes * 60, 300),
+        )
         dashboard_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,

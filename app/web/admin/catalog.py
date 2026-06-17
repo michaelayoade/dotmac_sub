@@ -21,6 +21,7 @@ from app.services import (
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
 from app.services.auth_dependencies import require_permission
+from app.services.topology.customer_path import resolve_customer_path
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -499,6 +500,12 @@ def catalog_subscription_detail(
     context.update(detail_context)
     context["notice"] = notice
     context["error"] = error
+    subscription_obj = context.get("subscription")
+    context["network_path"] = (
+        resolve_customer_path(db, subscription_obj)
+        if subscription_obj is not None
+        else None
+    )
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 
