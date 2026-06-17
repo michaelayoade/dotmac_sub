@@ -24,9 +24,15 @@ def customer_connection_status(session: Session, subscription: Subscription) -> 
     ``status`` is healthy/degraded/outage/unknown; ``basestation`` is the site
     name or None. Nothing internal (IPs, device names, gap reasons) leaks.
     """
+    from app.services.topology.outage import open_incident_for_path
+
     path = resolve_customer_path(session, subscription)
     live = path.node.live_status if path.node is not None else None
+    known_outage = open_incident_for_path(session, path) is not None
+    # A declared outage overrides the cached dot for the customer-facing view.
+    status = "outage" if known_outage else _SAFE.get(live or "", "unknown")
     return {
         "basestation": path.basestation.name if path.basestation is not None else None,
-        "status": _SAFE.get(live or "", "unknown"),
+        "status": status,
+        "known_outage": known_outage,
     }

@@ -47,6 +47,140 @@ def topology_gaps_page(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/outage-impact",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def outage_impact_page(
+    request: Request,
+    basestation_id: str | None = None,
+    node_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Read-only outage impact preview: pick a basestation/node -> affected
+    active subscriptions. No incident is created (that's the outage console)."""
+    import uuid as _uuid
+
+    from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.topology.affected import affected_customers, list_basestations
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["basestations"] = list_basestations(db)
+    context["selected_basestation_id"] = basestation_id
+    target = None
+    result = None
+    try:
+        if basestation_id:
+            pop = db.get(PopSite, _uuid.UUID(basestation_id))
+            if pop is not None:
+                target = f"Basestation: {pop.name}"
+                result = affected_customers(db, basestation=pop)
+        elif node_id:
+            node = db.get(NetworkDevice, _uuid.UUID(node_id))
+            if node is not None:
+                target = f"Node: {node.name}"
+                result = affected_customers(db, node=node)
+    except (ValueError, TypeError):
+        target = None
+    context["target"] = target
+    if result is not None:
+        context["impact_count"] = result["count"]
+        context["impact_rows"] = [
+            {
+                "id": s.id,
+                "subscriber": (
+                    f"{s.subscriber.first_name} {s.subscriber.last_name}"
+                    if s.subscriber
+                    else "—"
+                ),
+                "email": s.subscriber.email if s.subscriber else "",
+            }
+            for s in result["subscriptions"]
+        ]
+    return templates.TemplateResponse("admin/network/outage_impact.html", context)
+
+
+def _actor(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    if isinstance(user, dict):
+        return user.get("email") or user.get("username")
+    return getattr(user, "email", None) or getattr(user, "username", None)
+
+
+@router.get(
+    "/outages",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def outages_console(request: Request, db: Session = Depends(get_db)):
+    """Manual outage console: declare against a basestation, list/resolve open
+    incidents. No auto-detection, no notification sending."""
+    from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.topology.affected import list_basestations
+    from app.services.topology.outage import list_open_incidents
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["basestations"] = list_basestations(db)
+    rows = []
+    for inc in list_open_incidents(db):
+        if inc.basestation_id is not None:
+            pop = db.get(PopSite, inc.basestation_id)
+            target = f"BTS: {pop.name}" if pop else "BTS"
+        elif inc.root_node_id is not None:
+            node = db.get(NetworkDevice, inc.root_node_id)
+            target = f"Node: {node.name}" if node else "Node"
+        else:
+            target = "—"
+        rows.append({"incident": inc, "target": target})
+    context["incidents"] = rows
+    return templates.TemplateResponse("admin/network/outages.html", context)
+
+
+@router.post(
+    "/outages/declare",
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def outages_declare(
+    request: Request,
+    basestation_id: str = Form(...),
+    note: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    import uuid as _uuid
+
+    from app.models.network_monitoring import PopSite
+    from app.services.topology.outage import declare_outage
+
+    try:
+        pop = db.get(PopSite, _uuid.UUID(basestation_id))
+    except (ValueError, TypeError):
+        pop = None
+    if pop is not None:
+        declare_outage(db, basestation=pop, declared_by=_actor(request), note=note)
+        db.commit()
+    return RedirectResponse("/admin/network/outages", status_code=303)
+
+
+@router.post(
+    "/outages/{incident_id}/resolve",
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def outages_resolve(incident_id: str, request: Request, db: Session = Depends(get_db)):
+    import uuid as _uuid
+
+    from app.services.topology.outage import resolve_outage
+
+    try:
+        resolve_outage(db, _uuid.UUID(incident_id))
+        db.commit()
+    except (ValueError, TypeError):
+        pass
+    return RedirectResponse("/admin/network/outages", status_code=303)
+
+
+@router.get(
     "/monitoring",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],

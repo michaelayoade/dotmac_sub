@@ -501,11 +501,16 @@ def catalog_subscription_detail(
     context["notice"] = notice
     context["error"] = error
     subscription_obj = context.get("subscription")
-    context["network_path"] = (
+    network_path = (
         resolve_customer_path(db, subscription_obj)
         if subscription_obj is not None
         else None
     )
+    context["network_path"] = network_path
+    if network_path is not None:
+        from app.services.topology.outage import open_incident_for_path
+
+        context["known_outage"] = open_incident_for_path(db, network_path)
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 
