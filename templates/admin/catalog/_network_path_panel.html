@@ -24,6 +24,22 @@
         </span>
         {% endif %}
     </div>
+    {% if network_path.upstream_chain %}
+    <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Upstream</span>
+        {% for hop in network_path.upstream_chain %}
+        {% set _hls = hop.live_status %}
+        {% set _hdot = {'up': 'bg-emerald-500', 'down': 'bg-rose-500', 'problem': 'bg-amber-500'}.get(_hls, 'bg-slate-300 dark:bg-slate-600') %}
+        {% if not loop.first %}<span class="text-slate-300 dark:text-slate-600">&rarr;</span>{% endif %}
+        <span class="inline-flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-1.5 text-slate-700 dark:bg-slate-700/50 dark:text-slate-200">
+            <span class="inline-block h-2 w-2 rounded-full {{ _hdot }}" title="Status: {{ {'up': 'Up', 'down': 'Down', 'problem': 'Problem'}.get(_hls, 'Unknown') }}"></span>
+            {{ hop.name }}
+        </span>
+        {% endfor %}
+    </div>
+    {% elif network_path.node and not network_path.gap %}
+    <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">Upstream not mapped yet.</p>
+    {% endif %}
     {% if network_path.gap %}
     <p class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
         {% if network_path.gap == 'no_ont' %}Path unknown &mdash; provisioning incomplete.
