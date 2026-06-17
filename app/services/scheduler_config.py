@@ -1078,6 +1078,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_status_seconds, 60),
         )
+        # LLDP neighbor poll -> directed device graph. Physical adjacency changes
+        # rarely; hourly is ample.
+        lldp_poll_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_lldp_poll_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_lldp_poll",
+            task_name="app.tasks.topology_lldp.run_lldp_topology_poll",
+            enabled=True,
+            interval_seconds=max(lldp_poll_minutes * 60, 300),
+        )
         dashboard_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
