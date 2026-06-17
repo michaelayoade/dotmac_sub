@@ -118,6 +118,7 @@ from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
 from app.services import web_support_tickets
 from app.services.auth_dependencies import require_user_auth
+from app.services.topology import selfcare as topology_selfcare
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -382,6 +383,25 @@ def my_plan_change_quote(
     if quote is None:
         raise HTTPException(status_code=404, detail="Plan not available")
     return quote
+
+
+@router.get("/subscriptions/{subscription_id}/connection")
+def my_connection_status(
+    subscription_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Customer-safe connection status: which basestation + healthy/degraded/
+    outage/unknown. No internal IPs/device/topology details are exposed."""
+    customer = _customer(db, principal)
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription or str(subscription.subscriber_id) != str(
+        customer["account_id"]
+    ):
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return topology_selfcare.customer_connection_status(db, subscription)
 
 
 @router.post(

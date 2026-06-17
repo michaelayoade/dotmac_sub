@@ -1,15 +1,19 @@
 {# Read-only Network Path panel (Phase 1): ONT -> access device -> basestation.
    Expects `network_path` (app.services.topology.customer_path.CustomerPath). #}
 <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    {% set _ls = network_path.node.live_status if network_path.node else None %}
+    {% set _dot = {'up': 'bg-emerald-500', 'down': 'bg-rose-500', 'problem': 'bg-amber-500'}.get(_ls, 'bg-slate-300 dark:bg-slate-600') %}
+    {% set _label = {'up': 'Up', 'down': 'Down', 'problem': 'Problem'}.get(_ls, 'Unknown') %}
     <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Path</h3>
-    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Reconciled from Zabbix. Live status not shown in this phase.</p>
+    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Reconciled from Zabbix; live status warmed periodically (cached, not live-polled).</p>
     <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
         {% if network_path.ont %}
         <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="ONT serial">ONT {{ network_path.ont.serial_number }}</span>
         <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
         {% endif %}
         {% if network_path.access_device %}
-        <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+        <span class="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+            <span class="inline-block h-2 w-2 rounded-full {{ _dot }}" title="Status: {{ _label }}{% if network_path.node and network_path.node.live_status_at %} (as of {{ network_path.node.live_status_at.strftime('%Y-%m-%d %H:%M UTC') }}){% endif %}"></span>
             {{ network_path.access_device_kind | upper }} &middot; {{ network_path.access_device.name }}
         </span>
         {% endif %}

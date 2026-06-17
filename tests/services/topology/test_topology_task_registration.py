@@ -22,3 +22,13 @@ def test_task_exported_from_package():
 
     assert "run_topology_reconcile" in tasks.__all__
     assert hasattr(tasks, "run_topology_reconcile")
+
+
+WARM_TASK = "app.tasks.topology_sync.warm_topology_status"
+
+
+def test_warm_task_registered_and_routed():
+    import app.tasks  # noqa: F401
+
+    assert WARM_TASK in celery_app.tasks
+    assert celery_app.conf.task_routes[WARM_TASK] == {"queue": "ingestion"}

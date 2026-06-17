@@ -25,10 +25,15 @@ def test_detail_template_compiles():
 
 
 def test_renders_full_fiber_chain():
+    from datetime import UTC, datetime
+
     path = CustomerPath(
         ont=SimpleNamespace(serial_number="SN-123"),
         access_device=SimpleNamespace(name="OLT-1"),
         access_device_kind="olt",
+        node=SimpleNamespace(
+            live_status="up", live_status_at=datetime(2026, 6, 17, 9, 0, tzinfo=UTC)
+        ),
         basestation=SimpleNamespace(name="Garki", code="GARKI"),
     )
     html = _render(path)
@@ -37,6 +42,25 @@ def test_renders_full_fiber_chain():
     assert "OLT &middot; OLT-1" in html or "OLT · OLT-1" in html
     assert "Garki" in html and "GARKI" in html
     assert "incomplete" not in html.lower()
+    # up status -> green dot + tooltip
+    assert "bg-emerald-500" in html
+    assert "Status: Up" in html
+
+
+def test_status_dot_colors():
+    def dot(status):
+        return _render(
+            CustomerPath(
+                access_device=SimpleNamespace(name="N"),
+                access_device_kind="nas",
+                node=SimpleNamespace(live_status=status, live_status_at=None),
+            )
+        )
+
+    assert "bg-rose-500" in dot("down")
+    assert "bg-amber-500" in dot("problem")
+    # unknown / no node -> grey
+    assert "bg-slate-300" in dot(None)
 
 
 def test_renders_nas_without_ont():
