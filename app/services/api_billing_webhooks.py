@@ -313,9 +313,16 @@ def _process_webhook(
         metadata = settlement.metadata or {}
         invoice_id = _coerce_uuid(metadata.get("invoice_id"))
         account_id = _coerce_uuid(metadata.get("account_id"))
+        billing_account_id = _coerce_uuid(metadata.get("billing_account_id"))
         topup_intent = _resolve_settlement_topup_intent(db, settlement)
         if topup_intent is not None and topup_intent.account_id is not None:
             account_id = topup_intent.account_id
+        # Reseller-consolidated top-ups carry billing_account_id (and no
+        # account_id) on the intent. Without forwarding it, the webhook payment
+        # posts with billing_account_id NULL and never credits the billing
+        # account / settles member invoices — the cutover posting gap. (#cutover)
+        if topup_intent is not None and topup_intent.billing_account_id is not None:
+            billing_account_id = topup_intent.billing_account_id
         if (
             settlement.status_hint == PaymentStatus.succeeded
             and settlement.amount is not None
@@ -325,6 +332,7 @@ def _process_webhook(
             ingest_payload.currency = settlement.currency
             ingest_payload.invoice_id = invoice_id
             ingest_payload.account_id = account_id
+            ingest_payload.billing_account_id = billing_account_id
 
     # 2. Process inside a SAVEPOINT so a failure rolls back only ingest's own
     #    partial writes, leaving the committed dead-letter row (and the outer
