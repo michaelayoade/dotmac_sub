@@ -62,15 +62,10 @@ def outage_impact_page(
     import uuid as _uuid
 
     from app.models.network_monitoring import NetworkDevice, PopSite
-    from app.services.topology.affected import affected_customers
+    from app.services.topology.affected import affected_customers, list_basestations
 
     context = _base_context(request, db, active_page="monitoring")
-    context["basestations"] = (
-        db.query(PopSite)
-        .filter(PopSite.zabbix_group_id.isnot(None))
-        .order_by(PopSite.name)
-        .all()
-    )
+    context["basestations"] = list_basestations(db)
     context["selected_basestation_id"] = basestation_id
     target = None
     result = None
@@ -123,15 +118,11 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     """Manual outage console: declare against a basestation, list/resolve open
     incidents. No auto-detection, no notification sending."""
     from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.topology.affected import list_basestations
     from app.services.topology.outage import list_open_incidents
 
     context = _base_context(request, db, active_page="monitoring")
-    context["basestations"] = (
-        db.query(PopSite)
-        .filter(PopSite.zabbix_group_id.isnot(None))
-        .order_by(PopSite.name)
-        .all()
-    )
+    context["basestations"] = list_basestations(db)
     rows = []
     for inc in list_open_incidents(db):
         if inc.basestation_id is not None:

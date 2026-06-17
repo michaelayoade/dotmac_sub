@@ -26,6 +26,16 @@ from app.models.network_monitoring import (
 from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
 
 
+def list_basestations(session: Session) -> list[PopSite]:
+    """Zabbix-linked pop_sites (basestations) for the outage pickers."""
+    return (
+        session.query(PopSite)
+        .filter(PopSite.zabbix_group_id.isnot(None))
+        .order_by(PopSite.name)
+        .all()
+    )
+
+
 def _neighbor_ids(session: Session, node_id) -> list:
     links = (
         session.query(NetworkTopologyLink)
