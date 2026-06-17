@@ -64,6 +64,7 @@ def _parse_ipv4_search(value: str | None) -> str | None:
         return None
     return str(parsed)
 
+
 _validate_enum = validate_enum
 _RESTRICTED_STATUSES = {
     SubscriberStatus.blocked,

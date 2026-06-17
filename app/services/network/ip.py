@@ -1,11 +1,11 @@
 """IP management services."""
 
 import logging
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.network import (
     IPAssignment,
@@ -36,6 +36,16 @@ from app.services.query_builders import apply_active_state, apply_optional_equal
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
+ACTIVE_SUBSCRIPTION_STATUS = "active"
+
+
+def _subscription_model() -> type[Any]:
+    return IPAssignment.subscription.property.mapper.class_
+
+
+def _is_active_subscription(subscription: Any) -> bool:
+    status = getattr(subscription, "status", None)
+    return getattr(status, "value", status) == ACTIVE_SUBSCRIPTION_STATUS
 
 
 class IPAssignments(CRUDManager[IPAssignment]):
@@ -50,7 +60,7 @@ class IPAssignments(CRUDManager[IPAssignment]):
         subscriber_id = data.get("subscriber_id")
         if subscription_id is None:
             return
-        subscription = db.get(Subscription, subscription_id)
+        subscription = db.get(_subscription_model(), subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
         if subscriber_id is None:
@@ -61,13 +71,12 @@ class IPAssignments(CRUDManager[IPAssignment]):
             )
 
     @staticmethod
-    def _single_active_subscription_for_subscriber(
-        db: Session, subscriber_id
-    ) -> Subscription | None:
+    def _single_active_subscription_for_subscriber(db: Session, subscriber_id) -> Any:
+        subscription_model = _subscription_model()
         active_subscriptions = (
-            db.query(Subscription)
-            .filter(Subscription.subscriber_id == subscriber_id)
-            .filter(Subscription.status == SubscriptionStatus.active)
+            db.query(subscription_model)
+            .filter(subscription_model.subscriber_id == subscriber_id)
+            .filter(subscription_model.status == ACTIVE_SUBSCRIPTION_STATUS)
             .all()
         )
         if len(active_subscriptions) != 1:
@@ -89,7 +98,7 @@ class IPAssignments(CRUDManager[IPAssignment]):
             subscription = cls._single_active_subscription_for_subscriber(
                 db, assignment.subscriber_id
             )
-        if subscription is None or subscription.status != SubscriptionStatus.active:
+        if subscription is None or not _is_active_subscription(subscription):
             return
 
         if not assignment.is_active:
@@ -109,7 +118,9 @@ class IPAssignments(CRUDManager[IPAssignment]):
             network_validators.validate_ip_assignment_links(
                 db,
                 str(data["subscriber_id"]),
-                str(data["service_address_id"]) if data.get("service_address_id") else None,
+                str(data["service_address_id"])
+                if data.get("service_address_id")
+                else None,
                 str(data["subscription_id"]) if data.get("subscription_id") else None,
             )
         elif data.get("service_address_id") is not None:
@@ -174,8 +185,10 @@ class IPAssignments(CRUDManager[IPAssignment]):
         )
         previous_subscription = assignment.subscription
         if previous_subscription is None and assignment.subscriber_id is not None:
-            previous_subscription = IPAssignments._single_active_subscription_for_subscriber(
-                db, assignment.subscriber_id
+            previous_subscription = (
+                IPAssignments._single_active_subscription_for_subscriber(
+                    db, assignment.subscriber_id
+                )
             )
         data = payload.model_dump(exclude_unset=True)
         IPAssignments._resolve_owner(db, data)

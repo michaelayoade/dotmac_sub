@@ -83,19 +83,17 @@ def _active_subscription_clause():
 
 
 def _active_ipam_ipv4_match(ip_address: str):
-    return (
-        Subscriber.ip_assignments.any(
-            and_(
-                IPAssignment.is_active.is_(True),
-                IPAssignment.ipv4_address.has(IPv4Address.address == ip_address),
-                or_(
-                    IPAssignment.subscription.has(_active_subscription_clause()),
-                    and_(
-                        IPAssignment.subscription_id.is_(None),
-                        Subscriber.subscriptions.any(_active_subscription_clause()),
-                    ),
+    return Subscriber.ip_assignments.any(
+        and_(
+            IPAssignment.is_active.is_(True),
+            IPAssignment.ipv4_address.has(IPv4Address.address == ip_address),
+            or_(
+                IPAssignment.subscription.has(_active_subscription_clause()),
+                and_(
+                    IPAssignment.subscription_id.is_(None),
+                    Subscriber.subscriptions.any(_active_subscription_clause()),
                 ),
-            )
+            ),
         )
     )
 
@@ -151,10 +149,7 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
                     assignment.subscription_id is not None
                     and assignment.subscription_id in active_subscription_ids
                 )
-                or (
-                    assignment.subscription_id is None
-                    and bool(active_subscriptions)
-                )
+                or (assignment.subscription_id is None and bool(active_subscriptions))
             )
         ),
         key=lambda assignment: assignment.created_at,
