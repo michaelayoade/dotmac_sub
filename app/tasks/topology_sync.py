@@ -51,3 +51,36 @@ def run_topology_reconcile() -> dict[str, Any]:
         return {"error": str(exc)}
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="app.tasks.topology_sync.warm_topology_status",
+    soft_time_limit=110,
+    time_limit=150,
+)
+def warm_topology_status() -> dict[str, Any]:
+    """Refresh cached live_status for reconciled topology nodes from Zabbix."""
+    if not zabbix_configured():
+        return {"skipped": "zabbix_token_missing"}
+
+    from app.services.topology.live_status import warm_topology_status as _warm
+
+    db = db_session_adapter.create_session()
+    try:
+        result = _warm(db, ZabbixClient.from_env())
+        db.commit()
+        return result
+    except ZabbixClientError as exc:
+        db.rollback()
+        logger.warning("topology_status_warm_failed: %s", exc)
+        return {"error": "zabbix_unavailable", "message": str(exc)}
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        logger.warning("topology_status_warm_timed_out")
+        return {"error": "topology_status_warm_timed_out"}
+    except Exception as exc:  # noqa: BLE001 - report and roll back
+        db.rollback()
+        logger.exception("topology_status_warm_failed")
+        return {"error": str(exc)}
+    finally:
+        db.close()

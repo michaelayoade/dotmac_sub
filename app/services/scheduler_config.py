@@ -1063,6 +1063,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_reconcile_minutes * 60, 300),
         )
+        # Warm cached live status for topology nodes (read by the Network Path
+        # panel). Default 180s, matching the monitoring dashboard cache TTL.
+        topology_status_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_status_warm_interval_seconds",
+            180,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_status_warm",
+            task_name="app.tasks.topology_sync.warm_topology_status",
+            enabled=True,
+            interval_seconds=max(topology_status_seconds, 60),
+        )
         dashboard_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -1525,6 +1540,34 @@ def build_beat_schedule() -> dict:
             schedule["splynx_incremental_sync"] = {
                 "task": "app.tasks.splynx_sync.run_incremental_sync",
                 "schedule": timedelta(minutes=splynx_sync_interval),
+            }
+
+        # RADIUS refresh safety-net. radcheck/radreply rebuilds are normally
+        # enqueued fire-and-forget on block/restore events; if that enqueue is
+        # lost (worker down, broker hiccup, restart) a paid customer can stay
+        # walled-gardened until the next event touches them. This periodic
+        # whole-table rebuild converges radcheck/radreply on the authoritative
+        # subscription/subscriber status, so a dropped enqueue self-heals within
+        # one interval. Idempotent (per-user DELETE+INSERT). (cutover fix)
+        radius_refresh_safety_enabled = _effective_bool(
+            session,
+            SettingDomain.subscriber,
+            "radius_refresh_safety_net_enabled",
+            "RADIUS_REFRESH_SAFETY_NET_ENABLED",
+            True,
+        )
+        radius_refresh_safety_interval = _effective_int(
+            session,
+            SettingDomain.subscriber,
+            "radius_refresh_safety_net_interval_minutes",
+            "RADIUS_REFRESH_SAFETY_NET_INTERVAL_MINUTES",
+            15,
+        )
+        radius_refresh_safety_interval = max(radius_refresh_safety_interval, 5)
+        if radius_refresh_safety_enabled:
+            schedule["radius_refresh_safety_net"] = {
+                "task": "app.tasks.splynx_sync.run_refresh_radius_from_subs",
+                "schedule": timedelta(minutes=radius_refresh_safety_interval),
             }
 
         # Splynx customer accounts/details sync only. This intentionally stays
