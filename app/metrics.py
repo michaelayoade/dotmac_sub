@@ -88,6 +88,64 @@ class _SuspensionAuditCollector(Collector):
 
 REGISTRY.register(_SuspensionAuditCollector())
 
+
+class _IpConsistencyAuditCollector(Collector):
+    """Exports the latest IPv4-consistency audit result at scrape time.
+
+    Same Redis-backed, worker-runs/web-scrapes pattern as the suspension
+    audit. Non-zero radius_ip_consistency_drift means an active subscriber's
+    IPv4 disagrees across its three sources (column / IPAM / radreply) — the
+    structural risk behind silent partial desync. kind=assignment_missing is
+    the one to watch: the address is backed only by the subscription column.
+    """
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.ip_consistency_audit import load_latest_ip_audit
+
+            data = load_latest_ip_audit()
+        except Exception:
+            return
+        if not data:
+            return
+        drift = GaugeMetricFamily(
+            "radius_ip_consistency_drift",
+            "Active-subscriber IPv4 drift count by class",
+            labels=["kind"],
+        )
+        for kind, count in (data.get("counts") or {}).items():
+            drift.add_metric([kind], float(count or 0))
+        yield drift
+
+        population = GaugeMetricFamily(
+            "radius_ip_consistency_population",
+            "Active subscriptions expected to carry a pinned IPv4",
+        )
+        population.add_metric([], float(data.get("population") or 0))
+        yield population
+
+        ran_at = data.get("ran_at")
+        if ran_at:
+            from datetime import UTC, datetime
+
+            try:
+                age = (
+                    datetime.now(UTC) - datetime.fromisoformat(ran_at)
+                ).total_seconds()
+            except ValueError:
+                return
+            age_metric = GaugeMetricFamily(
+                "radius_ip_consistency_audit_age_seconds",
+                "Seconds since the last completed IP consistency audit",
+            )
+            age_metric.add_metric([], max(age, 0))
+            yield age_metric
+
+
+REGISTRY.register(_IpConsistencyAuditCollector())
+
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     "genieacs_identity_recovery_events_total",
     "Total GenieACS identity recovery events",
