@@ -56,17 +56,16 @@ def _host_label(zhost: dict) -> str:
 def infer_kind(zhost: dict) -> str | None:
     """Infer which provisioning device kind a Zabbix host represents.
 
-    Used to disambiguate the ~2-hosts-per-IP case: a device host lives in a
-    ``*BTS*`` group, while its NAS counterpart is named ``NAS: X`` / sits in the
-    ``DotMac/Network/NAS`` group. Returns ``'olt'``, ``'nas'`` or ``None``
-    (unknown -> try both kinds).
+    Only an explicit NAS signal narrows the kind: a host named ``NAS: X`` or in
+    the ``DotMac/Network/NAS`` group is a NAS. Everything else returns ``None``
+    (try both kinds). Crucially, ``*BTS*`` membership is NOT treated as "OLT":
+    a BTS group names the *site/pop_site*, and most access devices at a BTS are
+    NAS routers, not OLTs. Genuine OLTs still match first by ``zabbix_host_id``.
     """
     label = _host_label(zhost).upper()
     names = [n.upper() for n in _group_names(zhost)]
     if label.startswith("NAS:") or any("NAS" in n for n in names):
         return "nas"
-    if any("BTS" in n for n in names):
-        return "olt"
     return None
 
 

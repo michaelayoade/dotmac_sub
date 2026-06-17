@@ -58,7 +58,7 @@ HOSTS = [
 
 def _seed(db_session):
     garki = PopSite(name="Garki", code="GARKI", is_active=True)
-    olt = OLTDevice(name="OLT-2", hostname="olt2", mgmt_ip="10.0.0.8")
+    olt = OLTDevice(name="OLT-2", hostname="olt2", mgmt_ip="10.0.0.8", zabbix_host_id="201")
     nas = NasDevice(name="NAS-B", management_ip="10.0.0.8")
     # Orphaned Splynx-sourced node at the OLT's IP — the merge target.
     splynx_node = NetworkDevice(
