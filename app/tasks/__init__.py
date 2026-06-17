@@ -49,7 +49,6 @@ from app.tasks.monitoring_cleanup import (
 )
 from app.tasks.monitoring_warm import warm_monitoring_caches
 from app.tasks.mrr import snapshot_mrr
-from app.tasks.topology_sync import run_topology_reconcile
 from app.tasks.nas import (
     check_nas_health,
     cleanup_nas_backups,
@@ -99,6 +98,7 @@ from app.tasks.splynx_sync import (
     run_subscriber_status_sync,
     run_subscription_status_sync,
 )
+from app.tasks.topology_sync import run_topology_reconcile
 from app.tasks.tr069 import (
     apply_acs_config as tr069_apply_acs_config,
 )
