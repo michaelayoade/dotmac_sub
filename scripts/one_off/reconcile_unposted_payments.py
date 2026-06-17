@@ -40,11 +40,9 @@ from app.db import SessionLocal
 from app.models.catalog import Subscription
 from app.services.billing.reconcile_unposted import reconcile_cohort
 
-# Local-ledger cutover window. Payments from this date carry the posting gap.
-DEFAULT_SINCE = "2026-06-13"
-
-
-def _parse_since(value: str) -> datetime:
+def _parse_since(value: str | None) -> datetime | None:
+    if not value:
+        return None
     dt = datetime.strptime(value, "%Y-%m-%d")
     return dt.replace(tzinfo=UTC)
 
@@ -65,8 +63,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--since",
-        default=DEFAULT_SINCE,
-        help=f"Only consider payments on/after this date (YYYY-MM-DD). Default {DEFAULT_SINCE}.",
+        default=None,
+        help=(
+            "Optional scoping filter (YYYY-MM-DD): only include accounts with a "
+            "succeeded payment on/after this date. Default: no filter — the full "
+            "credit+open-debt cohort (a date UNDER-counts it, since sitting credit "
+            "can predate any cutover date)."
+        ),
     )
     parser.add_argument(
         "--limit",
@@ -135,7 +138,7 @@ def main() -> None:
 
     mode = "DRY-RUN (no changes written)" if dry_run else "APPLY"
     print(f"\n=== Cutover payment reconcile — {mode} ===")
-    print(f"since                  : {summary['since']}")
+    print(f"since                  : {summary['since'] or '(no date filter — full cohort)'}")
     print(f"candidate accounts     : {summary['candidates']}")
     print(f"accounts changed       : {summary['accounts_changed']}")
     print(f"total credit applied   : {summary['total_applied']}")

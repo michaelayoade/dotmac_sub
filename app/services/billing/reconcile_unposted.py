@@ -379,41 +379,52 @@ def reconcile_subscriber(
 
 
 def find_cohort_account_ids(
-    db: Session, *, since: datetime, limit: int | None = None
+    db: Session, *, since: datetime | None = None, limit: int | None = None
 ) -> list[str]:
-    """Accounts with a succeeded payment since ``since`` that still carry open
-    invoices AND hold unallocated credit — i.e. money sitting while debt ages.
+    """Accounts that hold unallocated credit AND still carry open invoice debt —
+    money sitting while debt ages ('paid but unsettled').
 
-    This is the systemic 'paid but unsettled' set. It is keyed on
-    allocation/ledger state, NOT on ``billing_account_id IS NULL`` (which is
-    normal for native subscribers), so it catches both the native and
-    reseller-consolidated failure modes without false positives.
+    Keyed on credit + open-debt state, NOT on when a payment landed (the credit
+    can predate any given date) nor on ``billing_account_id IS NULL`` (normal for
+    native subscribers). ``since``, when given, additionally scopes candidates to
+    accounts with a succeeded payment on/after that date — useful to target a
+    specific window, but it UNDER-counts the true cohort, so the default (None)
+    is the full set. The settler only ever applies payment-backed credit, so
+    deposit-seed / credit-note balances surface as ``unbacked_credit`` rather
+    than being settled.
     """
+    # Necessary condition: an open invoice with a positive balance. This bounds
+    # the candidate set without depending on when any payment arrived.
     candidate_ids = [
         str(r[0])
         for r in (
-            db.query(Payment.account_id)
-            .filter(Payment.account_id.isnot(None))
-            .filter(Payment.is_active.is_(True))
-            .filter(Payment.status == PaymentStatus.succeeded)
-            .filter(Payment.created_at >= since)
+            db.query(Invoice.account_id)
+            .filter(Invoice.account_id.isnot(None))
+            .filter(Invoice.is_active.is_(True))
+            .filter(Invoice.status.in_(_OPEN_STATUSES))
+            .filter(Invoice.balance_due > 0)
             .distinct()
             .all()
         )
     ]
+    if since is not None:
+        paid_since = {
+            str(r[0])
+            for r in (
+                db.query(Payment.account_id)
+                .filter(Payment.account_id.isnot(None))
+                .filter(Payment.is_active.is_(True))
+                .filter(Payment.status == PaymentStatus.succeeded)
+                .filter(Payment.created_at >= since)
+                .distinct()
+                .all()
+            )
+        }
+        candidate_ids = [a for a in candidate_ids if a in paid_since]
+
     out: list[str] = []
     for account_id in candidate_ids:
         if get_account_credit_balance(db, account_id) <= 0:
-            continue
-        has_open = (
-            db.query(Invoice.id)
-            .filter(Invoice.account_id == coerce_uuid(account_id))
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.status.in_(_OPEN_STATUSES))
-            .filter(Invoice.balance_due > 0)
-            .first()
-        )
-        if has_open is None:
             continue
         out.append(account_id)
         if limit is not None and len(out) >= limit:
@@ -424,7 +435,7 @@ def find_cohort_account_ids(
 def reconcile_cohort(
     db: Session,
     *,
-    since: datetime,
+    since: datetime | None = None,
     limit: int | None = None,
     dry_run: bool = True,
     refresh_radius: bool = True,
@@ -466,7 +477,7 @@ def reconcile_cohort(
         coa_subscription_ids.update(r.subscription_ids)
 
     summary = {
-        "since": since.isoformat(),
+        "since": since.isoformat() if since is not None else None,
         "candidates": len(account_ids),
         "accounts_changed": len(changed),
         "total_applied": str(total_applied),
