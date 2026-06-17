@@ -47,6 +47,36 @@ def test_renders_full_fiber_chain():
     assert "Status: Up" in html
 
 
+def test_renders_upstream_chain():
+    path = CustomerPath(
+        access_device=SimpleNamespace(name="SPDC Access"),
+        access_device_kind="nas",
+        node=SimpleNamespace(live_status="up", live_status_at=None),
+        basestation=SimpleNamespace(name="SPDC", code=None),
+        upstream_chain=[
+            SimpleNamespace(name="Agg-1", live_status="up"),
+            SimpleNamespace(name="Core-1", live_status="down"),
+        ],
+    )
+    html = _render(path)
+    assert "Upstream" in html
+    assert "Agg-1" in html and "Core-1" in html
+    assert "bg-rose-500" in html  # Core-1 down dot
+    assert "not mapped yet" not in html
+
+
+def test_upstream_not_mapped_hint_when_node_but_no_chain():
+    path = CustomerPath(
+        access_device=SimpleNamespace(name="N"),
+        access_device_kind="nas",
+        node=SimpleNamespace(live_status="up", live_status_at=None),
+        basestation=SimpleNamespace(name="BTS", code=None),
+        upstream_chain=[],
+    )
+    html = _render(path)
+    assert "Upstream not mapped yet" in html
+
+
 def test_status_dot_colors():
     def dot(status):
         return _render(
