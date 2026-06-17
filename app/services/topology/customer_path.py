@@ -68,6 +68,7 @@ def _node_for_device(
 
 def _finish(session: Session, path: CustomerPath, device_type: str) -> CustomerPath:
     """Walk device -> node -> basestation, recording the first gap."""
+    assert path.access_device is not None  # callers set it before _finish
     node = _node_for_device(session, device_type, path.access_device.id)
     if node is None:
         path.gap = GAP_NO_NODE

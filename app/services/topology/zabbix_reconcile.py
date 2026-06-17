@@ -112,7 +112,9 @@ def match_host(session: Session, zhost: dict) -> MatchResult:
     candidates: list[tuple[str, uuid.UUID]] = []
     for ip in _host_ips(zhost):
         if kind in (None, "olt"):
-            candidates += [("olt", i) for i in _olt_ids_by(session, OLTDevice.mgmt_ip == ip)]
+            candidates += [
+                ("olt", i) for i in _olt_ids_by(session, OLTDevice.mgmt_ip == ip)
+            ]
         if kind in (None, "nas"):
             candidates += [
                 ("nas", i) for i in _nas_ids_by(session, NasDevice.management_ip == ip)
@@ -344,9 +346,11 @@ def reconcile(session: Session, client, dry_run: bool = False) -> dict:
 
             mt, mid, mstatus = match_host(session, zhost)
             result["network_devices"][
-                {MATCHED: "device_matched", UNMATCHED: "unmatched", AMBIGUOUS: "ambiguous"}[
-                    mstatus
-                ]
+                {
+                    MATCHED: "device_matched",
+                    UNMATCHED: "unmatched",
+                    AMBIGUOUS: "ambiguous",
+                }[mstatus]
             ] += 1
 
             if dry_run:

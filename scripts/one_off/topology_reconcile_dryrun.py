@@ -17,8 +17,8 @@ import argparse
 import json
 
 from app.db import SessionLocal
-from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
 from app.services.topology.zabbix_reconcile import reconcile
+from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
 
 
 def main() -> int:
