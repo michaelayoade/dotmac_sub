@@ -13,10 +13,11 @@ Match: neighbor ``identity`` (normalized) -> network_device name/hostname, then
 from __future__ import annotations
 
 import re
+import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import NetworkDevice
+from app.models.network_monitoring import NetworkDevice, TopologyLinkMedium
 
 SOURCE = "lldp_neighbor"
 
@@ -69,3 +70,48 @@ def match_neighbor(session: Session, nb: dict) -> NetworkDevice | None:
     Empty identity with no IP hit (CPE) or no match at all returns None.
     """
     return match_in_index(build_device_index(session), nb)
+
+
+# --- Edge building -----------------------------------------------------------
+
+
+def _medium(local_iface: str | None) -> TopologyLinkMedium:
+    i = (local_iface or "").lower()
+    if i.startswith("sfp"):
+        return TopologyLinkMedium.fiber
+    if i.startswith("ether"):
+        return TopologyLinkMedium.ethernet
+    return TopologyLinkMedium.unknown
+
+
+def _canonical(a: uuid.UUID, b: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    """Order a device pair deterministically so A->B and B->A collapse to one."""
+    return (a, b) if str(a) <= str(b) else (b, a)
+
+
+def accumulate_edges(
+    edges: dict, local: NetworkDevice, neighbors: list[dict], index
+) -> dict:
+    """Add this node's matched neighbor edges into ``edges`` (keyed by canonical
+    device pair). Drops empty-identity/unmatched neighbors (CPE/unknown) and
+    self-links; first observation of a pair wins (A<->B + repeats dedup)."""
+    for nb in neighbors:
+        remote = match_in_index(index, nb)
+        if remote is None or remote.id == local.id:
+            continue
+        key = _canonical(local.id, remote.id)
+        if key in edges:
+            continue
+        local_iface = nb.get("interface") or ""
+        edges[key] = {
+            "source_device_id": key[0],
+            "target_device_id": key[1],
+            "medium": _medium(local_iface),
+            "metadata": {
+                "observed_from": str(local.id),
+                "local_interface": local_iface,
+                "remote_identity": _neighbor_identity(nb),
+                "remote_board": nb.get("board") or nb.get("platform"),
+            },
+        }
+    return edges
