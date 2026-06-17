@@ -238,7 +238,9 @@ def test_ingest_carries_billing_account_id_for_consolidated_payment(db_session):
     ba = billing_service.billing_accounts.create_default_for_reseller(
         db_session, str(reseller.id)
     )
-    provider = PaymentProvider(name="Paystack", provider_type=PaymentProviderType.paystack)
+    provider = PaymentProvider(
+        name="Paystack", provider_type=PaymentProviderType.paystack
+    )
     db_session.add(provider)
     db_session.commit()
 

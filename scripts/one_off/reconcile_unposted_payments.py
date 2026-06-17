@@ -40,6 +40,7 @@ from app.db import SessionLocal
 from app.models.catalog import Subscription
 from app.services.billing.reconcile_unposted import reconcile_cohort
 
+
 def _parse_since(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -51,11 +52,7 @@ def _resolve_logins(db, logins: list[str]) -> list[str]:
     """Map customer logins to their subscription ids for the targeted CoA pass."""
     if not logins:
         return []
-    rows = (
-        db.query(Subscription.id)
-        .filter(Subscription.login.in_(logins))
-        .all()
-    )
+    rows = db.query(Subscription.id).filter(Subscription.login.in_(logins)).all()
     return [str(r[0]) for r in rows]
 
 
@@ -121,7 +118,9 @@ def main() -> None:
     try:
         extra_subscription_ids = _resolve_logins(db, logins)
         if logins and not extra_subscription_ids:
-            print(f"WARNING: none of the supplied logins matched a subscription: {logins}")
+            print(
+                f"WARNING: none of the supplied logins matched a subscription: {logins}"
+            )
 
         summary = reconcile_cohort(
             db,
@@ -138,7 +137,9 @@ def main() -> None:
 
     mode = "DRY-RUN (no changes written)" if dry_run else "APPLY"
     print(f"\n=== Cutover payment reconcile — {mode} ===")
-    print(f"since                  : {summary['since'] or '(no date filter — full cohort)'}")
+    print(
+        f"since                  : {summary['since'] or '(no date filter — full cohort)'}"
+    )
     print(f"candidate accounts     : {summary['candidates']}")
     print(f"accounts changed       : {summary['accounts_changed']}")
     print(f"total credit applied   : {summary['total_applied']}")
@@ -152,14 +153,20 @@ def main() -> None:
 
     # Per-account detail (dry-run shows the projected plan).
     results = summary.get("results", [])
-    rows = [r for r in results if r.settle.applied > 0 or r.settle.unbacked_credit > 0 or r.error]
+    rows = [
+        r
+        for r in results
+        if r.settle.applied > 0 or r.settle.unbacked_credit > 0 or r.error
+    ]
     if rows:
         print("\n--- per-account detail ---")
         for r in rows:
             s = r.settle
             note = f" ERROR: {r.error}" if r.error else ""
             unbacked = (
-                f" (unbacked credit {s.unbacked_credit})" if s.unbacked_credit > 0 else ""
+                f" (unbacked credit {s.unbacked_credit})"
+                if s.unbacked_credit > 0
+                else ""
             )
             print(
                 f"  {r.account_id}: credit={s.available_credit} "

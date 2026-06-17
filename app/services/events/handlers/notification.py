@@ -450,7 +450,9 @@ class NotificationHandler:
             # Hard account-status gate (overrides preferences): terminal accounts
             # (canceled/disabled) get nothing; walled accounts (suspended/blocked)
             # get only actionable categories. Never mail a churned/closed account.
-            if subscriber_id and not self._status_allows(db, subscriber_id, spec.category):
+            if subscriber_id and not self._status_allows(
+                db, subscriber_id, spec.category
+            ):
                 logger.info(
                     "Suppressed %s notification for event %s on %s to %s by account status",
                     spec.category,

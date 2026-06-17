@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -50,11 +50,11 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.services.billing._common import (
-    get_account_credit_balance,
-    lock_account,
+    _recalculate_invoice_totals as recalculate_invoice_totals,
 )
 from app.services.billing._common import (
-    _recalculate_invoice_totals as recalculate_invoice_totals,
+    get_account_credit_balance,
+    lock_account,
 )
 from app.services.billing.payments import _apply_payment_allocation
 from app.services.common import coerce_uuid, round_money, to_decimal
@@ -64,7 +64,9 @@ logger = logging.getLogger(__name__)
 
 # Memo stamped on the offsetting unallocated debit so the reduction of the
 # credit pool is auditable and distinguishable from refunds.
-CREDIT_SETTLEMENT_MEMO = "Available balance applied to open invoices (cutover reconcile)"
+CREDIT_SETTLEMENT_MEMO = (
+    "Available balance applied to open invoices (cutover reconcile)"
+)
 
 _OPEN_STATUSES = (
     InvoiceStatus.issued,
@@ -107,7 +109,9 @@ def _open_invoices(db: Session, account_id: str) -> list[Invoice]:
     )
 
 
-def _allocatable_payments(db: Session, account_id: str) -> list[tuple[Payment, Decimal]]:
+def _allocatable_payments(
+    db: Session, account_id: str
+) -> list[tuple[Payment, Decimal]]:
     """Succeeded payments for the account with their already-allocated totals.
 
     Returns ``(payment, unallocated_room)`` oldest first. ``unallocated_room`` is
@@ -222,12 +226,12 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
 
     db.flush()
     for invoice_id in touched:
-        invoice = db.get(Invoice, invoice_id)
-        if invoice is None:
+        inv = db.get(Invoice, invoice_id)
+        if inv is None:
             continue
-        recalculate_invoice_totals(db, invoice)
+        recalculate_invoice_totals(db, inv)
         result.invoices_touched.append(str(invoice_id))
-        if invoice.status == InvoiceStatus.paid:
+        if inv.status == InvoiceStatus.paid:
             result.invoices_settled.append(str(invoice_id))
 
     # Reduce the unallocated-credit pool by exactly what we applied. Mirrors the
@@ -363,11 +367,12 @@ def reconcile_subscriber(
         # Even when nothing was newly settled, run a no-invoice restore so an
         # account that already cleared its debt (credit fully covers it) but is
         # still suspended gets re-evaluated.
-        if not result.settle.invoices_settled and not collections_service.has_overdue_balance(
-            db, str(account_id)
+        if (
+            not result.settle.invoices_settled
+            and not collections_service.has_overdue_balance(db, str(account_id))
         ):
-            result.subscriptions_restored += collections_service.restore_account_services(
-                db, str(account_id)
+            result.subscriptions_restored += (
+                collections_service.restore_account_services(db, str(account_id))
             )
         result.subscription_ids = _account_subscription_ids(db, str(account_id))
         db.commit()
@@ -458,11 +463,11 @@ def reconcile_cohort(
     """
     account_ids = find_cohort_account_ids(db, since=since, limit=limit)
 
-    suppress_ctx = (
-        nullcontext() if (notify or dry_run) else suppress_notifications()
-    )
+    suppress_ctx = nullcontext() if (notify or dry_run) else suppress_notifications()
     with suppress_ctx:
-        results = [reconcile_subscriber(db, aid, dry_run=dry_run) for aid in account_ids]
+        results = [
+            reconcile_subscriber(db, aid, dry_run=dry_run) for aid in account_ids
+        ]
 
     total_applied = round_money(
         sum((r.settle.applied for r in results), Decimal("0.00"))

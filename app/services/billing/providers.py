@@ -229,9 +229,7 @@ class PaymentProviderEvents(ListResponseMixin):
         # Reseller-consolidated payments carry billing_account_id and no
         # account_id; native subscriber payments carry account_id. When both are
         # present the account-scoped (native) linkage wins.
-        billing_account_id = (
-            payload.billing_account_id if account_id is None else None
-        )
+        billing_account_id = payload.billing_account_id if account_id is None else None
         new_status = payload.status_hint or PaymentProviderEvents._event_status_map.get(
             payload.event_type
         )

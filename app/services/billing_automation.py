@@ -1068,10 +1068,13 @@ def run_invoice_cycle(
                     #     needs — restore alone won't clear a stale account-level block.
                     # Both are idempotent and never override a genuine subscription-level
                     # suspension (the derived status stays suspended in that case).
-                    if settle_result.changed and not collections_service.has_overdue_balance(
-                        db, account_id
+                    if (
+                        settle_result.changed
+                        and not collections_service.has_overdue_balance(db, account_id)
                     ):
-                        from app.services.account_lifecycle import compute_account_status
+                        from app.services.account_lifecycle import (
+                            compute_account_status,
+                        )
 
                         account = db.get(Subscriber, coerce_uuid(account_id))
                         was_walled = account is not None and account.status in (
