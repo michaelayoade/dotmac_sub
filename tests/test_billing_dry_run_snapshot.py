@@ -14,7 +14,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import patch
 
-from app.models.catalog import BillingCycle, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    BillingCycle,
+    BillingMode,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.billing_automation import run_invoice_cycle
 
@@ -33,6 +38,9 @@ def test_dry_run_then_rollback_restores_next_billing_at(db_session, catalog_offe
         subscriber_id=subscriber.id,
         offer_id=catalog_offer.id,
         status=SubscriptionStatus.active,
+        # Postpaid: prepaid is excluded from invoice generation, so this test
+        # of the cycle's in-session fast-forward must use a postpaid sub.
+        billing_mode=BillingMode.postpaid,
         next_billing_at=past,
         start_at=past,
     )

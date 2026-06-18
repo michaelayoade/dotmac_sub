@@ -8,7 +8,7 @@ be modified. To correct an entry, create a reversing entry using the
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
@@ -96,7 +96,15 @@ class LedgerEntries(ListResponseMixin):
             stmt,
             order_by,
             order_dir,
-            {"created_at": LedgerEntry.created_at, "amount": LedgerEntry.amount},
+            {
+                "created_at": LedgerEntry.created_at,
+                # Real-world date, falling back to the import instant for native
+                # / unbackfilled rows — the canonical ledger ordering key.
+                "effective_date": func.coalesce(
+                    LedgerEntry.effective_date, LedgerEntry.created_at
+                ),
+                "amount": LedgerEntry.amount,
+            },
         )
         return list(db.scalars(apply_pagination(stmt, limit, offset)).all())
 

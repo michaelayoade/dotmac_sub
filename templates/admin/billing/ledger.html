@@ -229,8 +229,10 @@
                             </span>
                         </td>
                         <td class="min-w-0 px-3 py-4">
-                            <span class="block truncate text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at.strftime('%b %d, %Y') if entry.created_at else '—' }}</span>
-                            {% if entry.created_at %}
+                            {% set entry_date = entry.effective_date or entry.created_at %}
+                            <span class="block truncate text-sm text-slate-600 dark:text-slate-400">{{ entry_date.strftime('%b %d, %Y') if entry_date else '—' }}</span>
+                            {# Migrated rows are date-grained (effective_date at midnight); show time only for native rows. #}
+                            {% if entry.effective_date is none and entry.created_at %}
                             <p class="truncate text-xs text-slate-400 dark:text-slate-500">{{ entry.created_at.strftime('%I:%M %p') }}</p>
                             {% endif %}
                         </td>
