@@ -53,12 +53,35 @@ Re-run the audit after remediation; do not proceed until the money gauges are 0.
 
 ## Step 2 — fix service-access blockers
 
-Resolve the active subscriptions in `active_subscription_missing_radius` (4 in
-the snapshot — one is a QA/test login). A customer must not be billed by
-automation while they cannot authenticate. Either:
+A customer must not be billed by automation while they cannot authenticate.
+Enumerate and classify the cases:
 
-- provision the missing RADIUS credentials, or
-- explicitly exclude known QA/test logins from the launch gate (documented).
+```bash
+docker compose exec -T -e PYTHONPATH=/app app \
+    python scripts/network/missing_radius_report.py
+```
+
+`active_subscription_missing_radius` (radcheck absent) is the launch-blocker.
+**Two distinct causes** — do not conflate them (re-syncing a password-less
+credential is a no-op, verified):
+
+- **re-syncable drift** — credential is active with a usable password, only the
+  external radcheck/radreply drifted. Engineering fix:
+  `reconcile_subscription_connectivity` (the `_external_sync_users` writer)
+  recreates both. Low-risk, restorative.
+- **`password_reset_required`** — the credential has **no usable PPPoE secret**
+  (empty / unusable migration hash / no credential). Tracked by the
+  `active_subscription_with_unusable_radius_password` gauge. **No re-sync can
+  create a radcheck row without a password** — this is a customer **password
+  RESET** (CPE update + notification), owned by **NOC/ops**, not engineering.
+  In the 2026-06-18 snapshot all 3 real cases were this (secrets unrecoverable —
+  backup empty, Splynx decommissioned).
+- **qa_exclude** — QA/test login: exclude from the launch gate with documentation.
+
+The unusable-password gauge is broader than `missing_radius`: it also catches
+active subs that authenticate *today* via an external cleartext row but have **no
+local credential** to reproduce it — a latent break (they'd fail the next time
+RADIUS is rebuilt). Resolve those before launch too.
 
 ## Step 3 — dry-run billing daily (at least a few cycles)
 
