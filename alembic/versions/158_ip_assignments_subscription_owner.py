@@ -1,8 +1,14 @@
 """Add subscription owner to IP assignments.
 
-Revision ID: 153_ip_assignments_subscription_owner
-Revises: 152_subscriber_additional_routes
+Revision ID: 158_ip_assignments_subscription_owner
+Revises: 157_outage_incidents
 Create Date: 2026-06-17
+
+Re-parented onto 157_outage_incidents (the real applied chain). Originally
+authored off 152_subscriber_additional_routes as a second 153_* head; the
+prod DB advanced down the topology branch (153_topology_zabbix_linkage ->
+157) and never recorded this branch, so the column was added out-of-band.
+This migration is idempotent (guards on column/index existence).
 """
 
 from __future__ import annotations
@@ -13,8 +19,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "153_ip_assignments_subscription_owner"
-down_revision = "152_subscriber_additional_routes"
+revision = "158_ip_assignments_subscription_owner"
+down_revision = "157_outage_incidents"
 branch_labels = None
 depends_on = None
 

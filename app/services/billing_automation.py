@@ -36,7 +36,10 @@ from app.services import settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
-from app.services.billing_settings import resolve_payment_due_days
+from app.services.billing_settings import (
+    accounts_with_live_service,
+    resolve_payment_due_days,
+)
 from app.services.common import coerce_uuid, round_money
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -492,6 +495,7 @@ def _emit_invoice_reminders(
         return 0
 
     sent = 0
+    live_accounts = accounts_with_live_service(db)
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
@@ -501,6 +505,11 @@ def _emit_invoice_reminders(
         .all()
     )
     for invoice in invoices:
+        # Don't remind on balances for accounts whose services are all
+        # terminal (disabled/canceled/expired/…) — a dead service shouldn't
+        # keep pinging the customer.
+        if invoice.account_id not in live_accounts:
+            continue
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
             "0.00"
         ):
@@ -546,6 +555,7 @@ def _emit_dunning_escalations(
         return 0
 
     sent = 0
+    live_accounts = accounts_with_live_service(db)
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
@@ -561,6 +571,11 @@ def _emit_dunning_escalations(
         .all()
     )
     for invoice in invoices:
+        # Skip escalations for accounts whose services are all terminal
+        # (disabled/canceled/expired/…): the real dunning workflow already
+        # excludes them, and a dead service shouldn't keep escalating.
+        if invoice.account_id not in live_accounts:
+            continue
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
             "0.00"
         ):
