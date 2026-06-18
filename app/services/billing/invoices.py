@@ -123,7 +123,12 @@ class Invoices(ListResponseMixin):
         this raises unless ``allow_prepaid=True`` is passed as a deliberate
         credit/admin override.
         """
-        from app.models.catalog import BillingMode, CatalogOffer, OfferPrice, Subscription
+        from app.models.catalog import (
+            BillingMode,
+            CatalogOffer,
+            OfferPrice,
+            Subscription,
+        )
         from app.models.subscriber import Subscriber
 
         subscription = db.get(Subscription, coerce_uuid(subscription_id))

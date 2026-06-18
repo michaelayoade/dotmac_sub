@@ -61,7 +61,9 @@ def test_subscription_invoice_eligible_helper(db_session, subscription):
 
 
 def test_invoice_cycle_skips_prepaid(db_session, subscription, subscriber_account):
-    now_naive = _activate(db_session, subscription, subscriber_account, BillingMode.prepaid)
+    now_naive = _activate(
+        db_session, subscription, subscriber_account, BillingMode.prepaid
+    )
     _add_recurring_price(db_session, subscription.offer_id)
 
     summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
@@ -76,7 +78,9 @@ def test_invoice_cycle_skips_prepaid(db_session, subscription, subscriber_accoun
 
 
 def test_invoice_cycle_bills_postpaid(db_session, subscription, subscriber_account):
-    now_naive = _activate(db_session, subscription, subscriber_account, BillingMode.postpaid)
+    now_naive = _activate(
+        db_session, subscription, subscriber_account, BillingMode.postpaid
+    )
     _add_recurring_price(db_session, subscription.offer_id)
 
     summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
