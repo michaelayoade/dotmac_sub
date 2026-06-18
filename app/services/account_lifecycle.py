@@ -377,6 +377,21 @@ def activate_subscription(
     logger.info("Subscription %s activated", subscription_id)
 
 
+def _release_service_ips(db: Session, subscription: Subscription) -> None:
+    """Forward fix (idempotent, guarded): terminal service owns no service IPs.
+    Wrapped so an IP-release failure never breaks the lifecycle transaction."""
+    try:
+        from app.services.ip_lifecycle import release_service_ips_for_subscription
+
+        release_service_ips_for_subscription(db, subscription)
+    except Exception:
+        logger.warning(
+            "service-IP release failed for terminal subscription %s",
+            subscription.id,
+            exc_info=True,
+        )
+
+
 def expire_subscription(
     db: Session,
     subscription_id: str,
@@ -403,6 +418,8 @@ def expire_subscription(
 
     subscription.status = SubscriptionStatus.expired
     db.flush()
+
+    _release_service_ips(db, subscription)
 
     if emit:
         emit_event(
@@ -466,6 +483,8 @@ def cancel_subscription(
         sub_addon.end_at = subscription.canceled_at
 
     db.flush()
+
+    _release_service_ips(db, subscription)
 
     # Generate credit note for unused portion of the billing period.
     # Use a savepoint so a credit note failure doesn't corrupt the
