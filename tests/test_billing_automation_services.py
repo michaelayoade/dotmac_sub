@@ -1693,6 +1693,7 @@ class TestRunInvoiceCycleMoneyCorrectness:
     ):
         from app.models.catalog import (
             BillingCycle,
+            BillingMode,
             OfferVersion,
             OfferVersionPrice,
             PriceType,
@@ -1725,6 +1726,7 @@ class TestRunInvoiceCycleMoneyCorrectness:
             offer_id=subscription.offer_id,
             offer_version_id=version.id,
             status=SubscriptionStatus.active,
+            billing_mode=BillingMode.postpaid,
             start_at=now_naive - timedelta(days=30),
             next_billing_at=now_naive - timedelta(days=1),
         )

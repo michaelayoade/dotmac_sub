@@ -137,7 +137,11 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Run tests with coverage
-        run: poetry run pytest tests/ --ignore=tests/integration --ignore=tests/e2e --cov=app --cov-report=xml --cov-report=term-missing -q
+        env:
+          # Use 3.12's sys.monitoring coverage backend — much lower instrumentation
+          # overhead than the legacy trace function. Unit tests only.
+          COVERAGE_CORE: sysmon
+        run: poetry run pytest tests/ --ignore=tests/integration --ignore=tests/e2e -n auto --durations=25 --cov=app --cov-report=xml -q
 
       - name: Upload coverage
         if: github.event_name == 'pull_request'

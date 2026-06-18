@@ -443,7 +443,15 @@ def catalog_offer(db_session):
 
 @pytest.fixture()
 def subscription(db_session, subscriber, catalog_offer):
-    """Active subscription for usage tests."""
+    """Active subscription for usage tests.
+
+    Defaults to POSTPAID (the invoice-eligible mode). The model column default
+    is prepaid, but prepaid is billed by deposit drawdown and is excluded from
+    invoice generation, so a generic invoiceable subscription must be postpaid.
+    Prepaid tests override billing_mode explicitly.
+    """
+    from app.models.catalog import BillingMode
+
     subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
@@ -451,6 +459,8 @@ def subscription(db_session, subscriber, catalog_offer):
             offer_id=catalog_offer.id,
         ),
     )
+    subscription.billing_mode = BillingMode.postpaid
+    db_session.commit()
     return subscription
 
 

@@ -46,6 +46,29 @@ def audit_suspension_enforcement() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.radius.audit_ip_consistency")
+def audit_ip_consistency() -> dict:
+    """Periodic read-only check that an active subscriber's IPv4 agrees across
+    its three sources (subscription.ipv4_address column, the IPAM IPAssignment,
+    and the external radreply Framed-IP). Drift here is the structural risk
+    behind silent partial desync — see
+    docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md. Stores the result in
+    Redis where the web process's metrics collector exports it as
+    radius_ip_consistency_drift{kind}."""
+    from app.services.ip_consistency_audit import (
+        audit_ip_consistency as run_audit,
+    )
+    from app.services.ip_consistency_audit import store_latest_ip_audit
+
+    session = SessionLocal()
+    try:
+        result = run_audit(session)
+        store_latest_ip_audit(result)
+        return result
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.radius.run_enforcement_reconciler")
 def run_enforcement_reconciler() -> dict[str, int]:
     """Assert that non-serviceable subscribers are actually unreachable.

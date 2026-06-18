@@ -22,6 +22,7 @@ from app.models.catalog import (
     AddOn,
     AddOnPrice,
     BillingCycle,
+    BillingMode,
     DiscountType,
     OfferPrice,
     OfferVersionPrice,
@@ -688,6 +689,21 @@ def _fail_abandoned_runs(db: Session) -> int:
     return len(stale)
 
 
+def subscription_invoice_eligible(
+    subscription: Subscription, *, allow_prepaid: bool = False
+) -> bool:
+    """Whether a subscription may enter invoice generation.
+
+    Prepaid subscriptions draw down a deposit balance (see
+    ``app/services/prepaid_billing.py``) and must NOT receive balance-due
+    invoices — doing so double-bills them. Only postpaid subscriptions are
+    invoice-eligible, unless a caller passes an explicit credit/admin override.
+    """
+    if allow_prepaid:
+        return True
+    return subscription.billing_mode != BillingMode.prepaid
+
+
 def run_invoice_cycle(
     db: Session,
     run_at: datetime | None = None,
@@ -774,11 +790,15 @@ def run_invoice_cycle(
         SubscriberStatus.suspended,
         SubscriberStatus.delinquent,
     )
+    # Prepaid subscriptions draw down a deposit and must never be invoiced
+    # (see subscription_invoice_eligible); excluding them here is the single
+    # source of the postpaid-only rule for the scheduled cycle.
     active_subscriptions = (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
         .filter(Subscriber.status.in_(billable_account_statuses))
+        .filter(Subscription.billing_mode != BillingMode.prepaid)
         .all()
     )
 
@@ -790,7 +810,22 @@ def run_invoice_cycle(
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .filter(Subscription.status == SubscriptionStatus.pending)
             .filter(Subscriber.status == SubscriberStatus.active)
+            .filter(Subscription.billing_mode != BillingMode.prepaid)
             .all()
+        )
+
+    prepaid_skipped = (
+        db.query(Subscription)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(Subscriber.status.in_(billable_account_statuses))
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .count()
+    )
+    if prepaid_skipped:
+        logger.info(
+            "Invoice cycle skipped %d prepaid subscription(s) (drawdown-billed)",
+            prepaid_skipped,
         )
 
     subscriptions = active_subscriptions + pending_subscriptions
@@ -804,6 +839,7 @@ def run_invoice_cycle(
         "invoices_created": 0,
         "lines_created": 0,
         "skipped": 0,
+        "prepaid_skipped": prepaid_skipped,
         "currency_skipped": 0,
         "pending_activated": 0,
         "invoice_reminders_sent": 0,
@@ -1235,6 +1271,14 @@ def generate_prorated_invoice(
     Returns:
         The created invoice or None if no proration is needed
     """
+    # Prepaid subscriptions draw down a deposit and are never invoiced; a
+    # mid-cycle activation must not mint a balance-due proration invoice.
+    if not subscription_invoice_eligible(subscription):
+        logger.info(
+            "Skipping prorated invoice for prepaid subscription %s",
+            subscription.id,
+        )
+        return None
     activation_date = _as_utc(activation_date) or datetime.now(UTC)
 
     # Get price info
