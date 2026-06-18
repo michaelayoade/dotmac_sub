@@ -123,10 +123,10 @@
                             rows="10"
                             required
                             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
-                            placeholder="Enter the message body. Use {{variable}} for dynamic content."
+                            placeholder="Enter the message body. Use {variable} for dynamic content."
                         >{{ template.body if template else '' }}</textarea>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Use <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">{{variable_name}}</code> for dynamic content. Supports HTML for email templates.
+                            Use single braces like <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">{subscriber_name}</code> for dynamic content (not double braces). Only the variables listed on the right are filled in real messages. Supports HTML for email templates.
                         </p>
                     </div>
                 </div>
@@ -172,7 +172,7 @@
                             name="test_variables_json"
                             rows="4"
                             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
-                            placeholder='{"customer_name":"Jane Doe","amount_due":"12500.00","due_date":"2026-03-01"}'
+                            placeholder='{"subscriber_name":"Jane Doe","amount":"₦12,500.00","due_date":"Mar 01, 2026"}'
                         ></textarea>
                     </div>
                     <button
@@ -200,15 +200,14 @@
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Template Variables</h3>
                 <div class="space-y-2 text-sm">
-                    <p class="text-slate-600 dark:text-slate-400">Common variables you can use:</p>
+                    <p class="text-slate-600 dark:text-slate-400">Use single braces. Only these variables are filled in real messages — anything else is rejected on save:</p>
                     <div class="space-y-1">
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{customer_name}}</code>
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{account_number}}</code>
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{invoice_number}}</code>
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{amount_due}}</code>
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{due_date}}</code>
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{technician_name}}</code>
-                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{eta_time}}</code>
+                        {% for name, sample, desc in (template_variables or []) %}
+                        <div class="flex items-center justify-between gap-2">
+                            <code class="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{ '{' ~ name ~ '}' }}</code>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ desc }}</span>
+                        </div>
+                        {% endfor %}
                     </div>
                 </div>
             </div>

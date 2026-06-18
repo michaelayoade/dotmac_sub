@@ -449,12 +449,14 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "subscription_suspended",
             "name": "Subscription Suspended",
             "channel": NotificationChannel.email,
-            "subject": "Service suspended — action required",
+            "subject": "Your service has been paused",
             "body": (
                 "Dear {subscriber_name},\n\n"
-                "Your {offer_name} subscription has been suspended. "
-                "This may be due to an outstanding balance or a policy violation.\n\n"
-                "Please contact our support team or make a payment to restore your service.\n\n"
+                "Your {offer_name} service has been paused. This is usually due "
+                "to an outstanding balance.\n\n"
+                "To restore it, you can make a payment from your account "
+                "({portal_url}/billing) or contact our support team — we're happy "
+                "to help.\n\n"
                 "Thank you."
             ),
         },
@@ -464,8 +466,8 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "channel": NotificationChannel.sms,
             "subject": None,
             "body": (
-                "Hi {subscriber_name}, your {offer_name} service is suspended. "
-                "Please pay outstanding invoices or contact support."
+                "Hi {subscriber_name}, your {offer_name} service has been paused. "
+                "Pay at {portal_url}/billing or contact support to restore it."
             ),
         },
         {
@@ -494,14 +496,15 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "suspension_warning",
             "name": "Suspension Warning",
             "channel": NotificationChannel.email,
-            "subject": "Payment reminder — suspension in {grace_hours} hours",
+            "subject": "A reminder about invoice #{invoice_number}",
             "body": (
                 "Dear {subscriber_name},\n\n"
-                "Invoice #{invoice_number} for {amount} is overdue. "
-                "Your service may be suspended if payment is not received within "
-                "{grace_hours} hours.\n\n"
-                "Pay now: {portal_url}/billing\n\n"
-                "If you have already paid, please disregard this message."
+                "Invoice #{invoice_number} for {amount} is currently unpaid. To "
+                "avoid any interruption to your service, please arrange payment "
+                "when you can.\n\n"
+                "Pay anytime: {portal_url}/billing\n\n"
+                "If you have already paid, please disregard this message. For any "
+                "questions, please contact our support team."
             ),
         },
         {
@@ -510,8 +513,8 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "channel": NotificationChannel.sms,
             "subject": None,
             "body": (
-                "Reminder: invoice #{invoice_number} for {amount} is overdue. "
-                "Pay within {grace_hours} hours to avoid suspension. {portal_url}/billing"
+                "Reminder: invoice #{invoice_number} for {amount} is unpaid. "
+                "Please pay to avoid any service interruption: {portal_url}/billing"
             ),
         },
         {
@@ -662,14 +665,16 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "invoice_overdue",
             "name": "Invoice Overdue",
             "channel": NotificationChannel.email,
-            "subject": "Overdue invoice #{invoice_number} — immediate payment required",
+            "subject": "Invoice #{invoice_number} is now due",
             "body": (
                 "Dear {subscriber_name},\n\n"
-                "Invoice #{invoice_number} for {amount} is now overdue. "
-                "Your service may be suspended if payment is not received promptly.\n\n"
-                "Please make your payment immediately to avoid disruption.\n\n"
-                "Pay online: {portal_url}/billing\n\n"
-                "If you have already paid, please disregard this notice."
+                "Our records show invoice #{invoice_number} for {amount} is now "
+                "past its due date of {due_date}.\n\n"
+                "If you have already paid, please disregard this message — thank "
+                "you. Otherwise you can pay anytime from your account: "
+                "{portal_url}/billing\n\n"
+                "If you have any questions or would like to discuss payment "
+                "options, please contact our support team."
             ),
         },
         {
@@ -678,8 +683,9 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "channel": NotificationChannel.sms,
             "subject": None,
             "body": (
-                "Invoice #{invoice_number} for {amount} is overdue. "
-                "Pay now to avoid service disruption: {portal_url}/billing"
+                "Invoice #{invoice_number} for {amount} is now past due. "
+                "If you have already paid, please ignore this. "
+                "Pay anytime: {portal_url}/billing"
             ),
         },
         {
@@ -837,50 +843,55 @@ def _seed_missing_notification_templates(db: Session) -> int:
         },
         {
             "code": "ont_offline",
-            "name": "ONT Offline Alert",
+            "name": "Connection Offline",
             "channel": NotificationChannel.email,
-            "subject": "Network device offline — {device_serial}",
+            "subject": "We've noticed an issue with your connection",
             "body": (
-                "ONT {device_serial} has gone offline.\n\n"
-                "Subscriber: {subscriber_name}\n"
-                "Location: {location}\n\n"
-                "Please investigate the connectivity issue."
+                "Dear {subscriber_name},\n\n"
+                "We've detected that your service may currently be offline, and "
+                "our team is looking into it.\n\n"
+                "If your equipment has lost power, please check that it is "
+                "switched on. If the issue continues, please contact our support "
+                "team."
             ),
         },
         {
             "code": "ont_online",
-            "name": "ONT Online Alert",
+            "name": "Connection Restored",
             "channel": NotificationChannel.email,
-            "subject": "Network device back online — {device_serial}",
+            "subject": "Your connection is back online",
             "body": (
-                "ONT {device_serial} is back online.\n\n"
-                "Subscriber: {subscriber_name}\n"
-                "Downtime resolved."
+                "Dear {subscriber_name},\n\n"
+                "Good news — your service is back online. Thank you for your "
+                "patience.\n\n"
+                "If you continue to experience any issues, please contact our "
+                "support team."
             ),
         },
         {
             "code": "ont_signal_degraded",
-            "name": "ONT Signal Degraded",
+            "name": "Connection Quality Check",
             "channel": NotificationChannel.email,
-            "subject": "Fiber signal degraded — {device_serial}",
+            "subject": "We're checking on your connection quality",
             "body": (
-                "ONT {device_serial} is reporting degraded optical signal levels.\n\n"
-                "Subscriber: {subscriber_name}\n"
-                "Signal level: {signal_level} dBm\n\n"
-                "Please check the fiber path for potential issues."
+                "Dear {subscriber_name},\n\n"
+                "Our monitoring suggests your connection quality may be reduced, "
+                "and our team is looking into it. There is nothing you need to do "
+                "right now.\n\n"
+                "If you notice any problems, please contact our support team."
             ),
         },
         {
             "code": "ont_discovered",
-            "name": "ONT Discovered",
+            "name": "ONT Discovered (internal)",
             "channel": NotificationChannel.email,
             "subject": "New ONT discovered — {device_serial}",
             "body": (
                 "A new ONT has been discovered on the network.\n\n"
                 "Serial: {device_serial}\n"
-                "OLT: {olt_name}\n"
-                "PON Port: {pon_port}\n\n"
-                "This device is awaiting assignment to a subscriber."
+                "OLT: {location}\n\n"
+                "This device is awaiting assignment to a subscriber. (Internal "
+                "notification — not customer-facing.)"
             ),
         },
     ]
