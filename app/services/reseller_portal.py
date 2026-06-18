@@ -957,6 +957,21 @@ def update_customer_account_status(
             subscription.status = SubscriptionStatus.disabled
             changed += 1
         db.flush()
+        # Forward fix: terminal service owns no service IPs (idempotent, guarded).
+        try:
+            from app.services.ip_lifecycle import (
+                release_service_ips_for_subscription,
+            )
+
+            for subscription in subscriptions:
+                if subscription.status == SubscriptionStatus.disabled:
+                    release_service_ips_for_subscription(db, subscription)
+        except Exception:
+            logger.warning(
+                "service-IP release on reseller disable failed for account %s",
+                account.id,
+                exc_info=True,
+            )
         compute_account_status(db, str(account.id))
 
     if not subscriptions:
