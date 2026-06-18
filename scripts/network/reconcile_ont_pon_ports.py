@@ -12,10 +12,10 @@ from __future__ import annotations
 import argparse
 import logging
 
+from app.db import SessionLocal
 from app.services.network.ont_topology_reconcile import (
     reconcile_ont_pon_ports_from_registrations,
 )
-from scripts.migration.db_connections import dotmac_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with dotmac_session() as db:
+    with SessionLocal() as db:
         result = reconcile_ont_pon_ports_from_registrations(
             db,
             olt_id=args.olt_id,

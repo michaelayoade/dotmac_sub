@@ -1161,6 +1161,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Autopay Charges Only Due Invoices",
     ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="customer_balance_notifications_enabled",
+        env_var="BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Customer Balance Notifications Enabled",
+    ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
         domain=SettingDomain.billing,

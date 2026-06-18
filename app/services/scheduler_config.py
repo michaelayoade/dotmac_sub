@@ -1561,28 +1561,6 @@ def build_beat_schedule() -> dict:
                     "args": [str(sync_job.id)],
                 }
 
-        # Splynx incremental sync (dual-run period only)
-        splynx_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.subscriber,
-            "splynx_sync_enabled",
-            "SPLYNX_SYNC_ENABLED",
-            False,
-        )
-        splynx_sync_interval = _effective_int(
-            session,
-            SettingDomain.subscriber,
-            "splynx_sync_interval_minutes",
-            "SPLYNX_SYNC_INTERVAL_MINUTES",
-            30,
-        )
-        splynx_sync_interval = max(splynx_sync_interval, 5)  # Min: 5 minutes
-        if splynx_sync_enabled:
-            schedule["splynx_incremental_sync"] = {
-                "task": "app.tasks.splynx_sync.run_incremental_sync",
-                "schedule": timedelta(minutes=splynx_sync_interval),
-            }
-
         # RADIUS refresh safety-net. radcheck/radreply rebuilds are normally
         # enqueued fire-and-forget on block/restore events; if that enqueue is
         # lost (worker down, broker hiccup, restart) a paid customer can stay
@@ -1607,33 +1585,8 @@ def build_beat_schedule() -> dict:
         radius_refresh_safety_interval = max(radius_refresh_safety_interval, 5)
         if radius_refresh_safety_enabled:
             schedule["radius_refresh_safety_net"] = {
-                "task": "app.tasks.splynx_sync.run_refresh_radius_from_subs",
+                "task": "app.tasks.radius_population.refresh_radius_from_subs",
                 "schedule": timedelta(minutes=radius_refresh_safety_interval),
-            }
-
-        # Splynx customer accounts/details sync only. This intentionally stays
-        # separate from invoice, payment, and service sync.
-        splynx_customer_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.subscriber,
-            "splynx_customer_sync_enabled",
-            "SPLYNX_CUSTOMER_SYNC_ENABLED",
-            False,
-        )
-        splynx_customer_sync_interval_hours = _effective_int(
-            session,
-            SettingDomain.subscriber,
-            "splynx_customer_sync_interval_hours",
-            "SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS",
-            24,
-        )
-        splynx_customer_sync_interval_hours = max(
-            splynx_customer_sync_interval_hours, 1
-        )
-        if splynx_customer_sync_enabled:
-            schedule["splynx_customer_accounts_details_sync"] = {
-                "task": "app.tasks.splynx_sync.run_customer_accounts_details_sync",
-                "schedule": timedelta(hours=splynx_customer_sync_interval_hours),
             }
 
         # CRM ticket pull: inbound CRM tickets/comments into local support tickets.

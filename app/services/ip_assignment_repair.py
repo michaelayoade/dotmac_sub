@@ -219,6 +219,12 @@ def _ensure_assignment(
     Returns True if anything changed; False (no write) if the target can't be
     safely claimed (reserved, or live contention)."""
     sub_uuid = coerce_uuid(subscriber_id)
+    target_subscription = db.scalars(
+        select(Subscription)
+        .where(Subscription.subscriber_id == sub_uuid)
+        .where(Subscription.status == SubscriptionStatus.active)
+        .where(Subscription.ipv4_address == desired_ip)
+    ).first()
     addr = db.scalars(
         select(IPv4Address).where(IPv4Address.address == desired_ip)
     ).first()
@@ -245,6 +251,9 @@ def _ensure_assignment(
             if owner_served == desired_ip:
                 return False  # live contention — refuse
             assignment.subscriber_id = sub_uuid  # reclaim the single address row
+            assignment.subscription_id = (
+                target_subscription.id if target_subscription else None
+            )
         pool = db.get(IpPool, addr.pool_id) if addr.pool_id else None
         prefix = None
         if pool:
@@ -255,6 +264,7 @@ def _ensure_assignment(
     if assignment is None:
         assignment = IPAssignment(
             subscriber_id=sub_uuid,
+            subscription_id=target_subscription.id if target_subscription else None,
             ip_version=IPVersion.ipv4,
             ipv4_address_id=addr.id,
             is_active=True,
@@ -265,6 +275,10 @@ def _ensure_assignment(
         )
         db.add(assignment)
     else:
+        assignment.subscriber_id = sub_uuid
+        assignment.subscription_id = (
+            target_subscription.id if target_subscription else None
+        )
         assignment.is_active = True
 
     # Deactivate the subscriber's OTHER active ipv4 assignments (the stale IP).

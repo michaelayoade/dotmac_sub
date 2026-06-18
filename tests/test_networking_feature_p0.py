@@ -1,4 +1,5 @@
 import importlib
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -386,6 +387,120 @@ def test_get_mikrotik_api_status_success(db_session, monkeypatch):
     assert status["platform"] == "MikroTik"
     assert status["board_name"] == "CCR"
     assert status["routeros_version"] == "7.15"
+
+
+def test_get_mikrotik_pppoe_live_bandwidth_maps_routeros_rates(monkeypatch):
+    from app.services.nas._mikrotik import get_mikrotik_pppoe_live_bandwidth
+
+    disconnected = {"called": False}
+
+    class _Resource:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get(self):
+            return self.rows
+
+        def call(self, command, params):
+            assert command == "monitor-traffic"
+            assert params == {"interface": "<pppoe-cust001>", "once": ""}
+            return [
+                {
+                    "rx-bits-per-second": "1kbps",
+                    "tx-bits-per-second": "9kbps",
+                }
+            ]
+
+    class _Api:
+        def get_resource(self, path):
+            if path == "/ppp/active":
+                return _Resource(
+                    [
+                        {
+                            "name": "cust001",
+                            "interface": "<pppoe-cust001>",
+                            "address": "10.0.0.2",
+                            "uptime": "1m",
+                        }
+                    ]
+                )
+            if path == "/interface":
+                return _Resource([])
+            raise AssertionError(path)
+
+    class _Pool:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_api(self):
+            return _Api()
+
+        def disconnect(self):
+            disconnected["called"] = True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "routeros_api",
+        SimpleNamespace(RouterOsApiPool=_Pool),
+    )
+    monkeypatch.setattr(
+        "app.services.nas._mikrotik._mikrotik_routeros_auth",
+        lambda _device: ("192.0.2.1", 8728, "admin", "secret"),
+    )
+
+    result = get_mikrotik_pppoe_live_bandwidth(
+        SimpleNamespace(id=uuid4(), name="Edge NAS"),
+        login="cust001",
+    )
+
+    assert result["online"] is True
+    assert result["interface"] == "<pppoe-cust001>"
+    assert result["download_bps"] == 9000.0
+    assert result["upload_bps"] == 1000.0
+    assert result["framed_ip_address"] == "10.0.0.2"
+    assert disconnected["called"] is True
+
+
+def test_get_mikrotik_pppoe_live_bandwidth_reports_offline_session(monkeypatch):
+    from app.services.nas._mikrotik import get_mikrotik_pppoe_live_bandwidth
+
+    class _Resource:
+        def get(self):
+            return []
+
+    class _Api:
+        def get_resource(self, path):
+            assert path == "/ppp/active"
+            return _Resource()
+
+    class _Pool:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_api(self):
+            return _Api()
+
+        def disconnect(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "routeros_api",
+        SimpleNamespace(RouterOsApiPool=_Pool),
+    )
+    monkeypatch.setattr(
+        "app.services.nas._mikrotik._mikrotik_routeros_auth",
+        lambda _device: ("192.0.2.1", 8728, "admin", "secret"),
+    )
+
+    result = get_mikrotik_pppoe_live_bandwidth(
+        SimpleNamespace(id=uuid4(), name="Edge NAS"),
+        login="cust001",
+    )
+
+    assert result["online"] is False
+    assert result["download_bps"] == 0.0
+    assert result["upload_bps"] == 0.0
 
 
 def test_nas_connection_rules_create_list_toggle_delete(db_session):
@@ -2049,21 +2164,8 @@ def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_ses
 
 
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
-    db_session, monkeypatch
+    db_session,
 ):
-    # The promoted NetworkDevice auto-creates an OLTDevice via
-    # ``resolve_olt_device_for_network_device``; the new active-OLT
-    # config-pack validator (olt_device_crud.py) would reject it because
-    # this fixture doesn't populate VLANs / ACS / mgmt pool. Bypass the
-    # validator -- the test is about promotion, not config-pack contract.
-    from app.services.network import olt_device_crud
-
-    monkeypatch.setattr(
-        olt_device_crud.OLTDevices,
-        "_require_authorization_ready",
-        staticmethod(lambda _db, _device: None),
-    )
-
     promoted = NetworkDevice(
         name="Aggregation OLT",
         hostname="agg-olt.local",
@@ -2093,11 +2195,14 @@ def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucke
     assert payload["stats"]["olt_total"] == 1
     assert [device.name for device in payload["core_devices"]] == ["Aggregation SW1"]
     assert [olt.name for olt in payload["olts"]] == ["Aggregation OLT"]
+    created_olt = db_session.scalars(
+        select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")
+    ).first()
+    assert created_olt is not None
+    assert created_olt.is_active is False
     assert (
-        db_session.scalars(
-            select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")
-        ).first()
-        is not None
+        "Auto-created from monitoring inventory"
+        in str(created_olt.notes or "")
     )
 
 

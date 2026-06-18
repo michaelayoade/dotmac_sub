@@ -147,11 +147,12 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         template_code="suspension_warning",
         category="billing",
         channels=(NotificationChannel.email, NotificationChannel.sms),
-        subject="Payment reminder — suspension in {grace_hours} hours",
+        subject="A reminder about invoice #{invoice_number}",
         body=(
             "Dear {subscriber_name},\n\n"
-            "Invoice #{invoice_number} for {amount} is overdue. "
-            "Your service may be suspended in {grace_hours} hours if payment is not received."
+            "Invoice #{invoice_number} for {amount} is currently unpaid. To avoid "
+            "any interruption to your service, please arrange payment when you "
+            "can. If you have already paid, please disregard this message."
         ),
     ),
     EventType.subscription_upgraded: EventNotificationSpec(
@@ -211,11 +212,12 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         template_code="invoice_overdue",
         category="billing",
         channels=(NotificationChannel.email, NotificationChannel.sms),
-        subject="Overdue invoice #{invoice_number}",
+        subject="Invoice #{invoice_number} is now due",
         body=(
             "Dear {subscriber_name},\n\n"
-            "Invoice #{invoice_number} for {amount} is overdue. "
-            "Please pay immediately to avoid service disruption."
+            "Our records show invoice #{invoice_number} for {amount} is now past "
+            "its due date. If you have already paid, please disregard this "
+            "message. Otherwise you can pay anytime at {portal_url}/billing."
         ),
     ),
     EventType.payment_received: EventNotificationSpec(
@@ -253,12 +255,13 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         template_code="arrangement_defaulted",
         category="billing",
         channels=(NotificationChannel.email, NotificationChannel.sms),
-        subject="Payment arrangement defaulted",
+        subject="Update on your payment arrangement",
         body=(
             "Dear {subscriber_name},\n\n"
-            "Your payment arrangement has missed multiple installments and is "
-            "now in default. The full outstanding balance of {total_amount} is "
-            "payable immediately. Please contact our billing team."
+            "It looks like your payment arrangement has fallen behind, and the "
+            "outstanding balance of {total_amount} is now due. If you've already "
+            "paid, please disregard this message. Otherwise, please contact our "
+            "billing team and we'll be happy to help."
         ),
     ),
     EventType.usage_warning: EventNotificationSpec(
@@ -368,29 +371,45 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
         template_code="ont_offline",
         category="service",
         channels=(NotificationChannel.email,),
-        subject="Network device offline — {device_serial}",
-        body="ONT {device_serial} has gone offline at {location}.",
+        subject="We've noticed an issue with your connection",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We've detected that your service may currently be offline, and our "
+            "team is looking into it. If your equipment has lost power, please "
+            "check that it is switched on. If the issue continues, please contact "
+            "our support team."
+        ),
     ),
     EventType.ont_online: EventNotificationSpec(
         template_code="ont_online",
         category="service",
         channels=(NotificationChannel.email,),
-        subject="Network device back online — {device_serial}",
-        body="ONT {device_serial} is back online.",
+        subject="Your connection is back online",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Good news — your service is back online. Thank you for your "
+            "patience. If you continue to experience any issues, please contact "
+            "our support team."
+        ),
     ),
     EventType.ont_signal_degraded: EventNotificationSpec(
         template_code="ont_signal_degraded",
         category="service",
         channels=(NotificationChannel.email,),
-        subject="Fiber signal degraded — {device_serial}",
-        body="ONT {device_serial} is reporting degraded optical signal levels.",
+        subject="We're checking on your connection quality",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Our monitoring suggests your connection quality may be reduced, and "
+            "our team is looking into it. There is nothing you need to do right "
+            "now. If you notice any problems, please contact our support team."
+        ),
     ),
     EventType.ont_discovered: EventNotificationSpec(
         template_code="ont_discovered",
         category="service",
         channels=(NotificationChannel.email,),
         subject="New ONT discovered — {device_serial}",
-        body="A new ONT has been discovered on the network.",
+        body="A new ONT has been discovered on the network (internal notification).",
     ),
 }
 
@@ -398,6 +417,16 @@ EVENT_TYPE_TO_TEMPLATE = {
     event_type: spec.template_code
     for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
 }
+
+BALANCE_NOTIFICATION_EVENTS: set[EventType] = {
+    EventType.invoice_created,
+    EventType.invoice_sent,
+    EventType.invoice_overdue,
+    EventType.subscription_suspension_warning,
+    EventType.arrangement_defaulted,
+}
+
+BILLING_SUSPENSION_REASONS = {"overdue", "dunning", "invoice_overdue"}
 
 
 class NotificationHandler:
@@ -417,6 +446,13 @@ class NotificationHandler:
         if notifications_suppressed():
             logger.info(
                 "Suppressed notification for event %s (back-office scope)",
+                event.event_type.value,
+            )
+            return
+
+        if self._customer_balance_notifications_suppressed(db, event):
+            logger.info(
+                "Suppressed customer balance notification for event %s",
                 event.event_type.value,
             )
             return
@@ -512,6 +548,41 @@ class NotificationHandler:
         subscriber = db.get(Subscriber, subscriber_id)
         status = subscriber.status if subscriber else None
         return status_allows_notification(status, category)
+
+    def _customer_balance_notifications_suppressed(
+        self, db: Session, event: Event
+    ) -> bool:
+        """Suppress customer-facing balance/debt notifications when disabled."""
+        from app.models.domain_settings import SettingDomain
+        from app.services import settings_spec
+
+        enabled = settings_spec.resolve_value(
+            db, SettingDomain.billing, "customer_balance_notifications_enabled"
+        )
+        if enabled is not False and str(enabled).lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "",
+        }:
+            return False
+
+        if event.event_type in BALANCE_NOTIFICATION_EVENTS:
+            return True
+        return self._is_billing_suspension_event(event)
+
+    def _is_billing_suspension_event(self, event: Event) -> bool:
+        if event.event_type != EventType.subscription_suspended:
+            return False
+
+        reason = str(event.payload.get("reason") or "").strip().lower()
+        source = str(event.payload.get("source") or "").strip().lower()
+        return (
+            reason in BILLING_SUSPENSION_REASONS
+            or source in BILLING_SUSPENSION_REASONS
+            or source.startswith("invoice:")
+        )
 
     def _load_templates(
         self,

@@ -86,9 +86,18 @@ def plan_subscription_ip(
     assign_ip = _active_assignment_ip(db, subscription)
     login = (subscription.login or "").strip()
 
-    # Source of truth: IPAM if present, else the column.
-    desired_ip = assign_ip or col_ip
-    source = "ipam" if assign_ip else ("column" if col_ip else "none")
+    # Source of truth: IPAM if present and trusted, else the served column.
+    # Before IPAM has been repaired, a column/IPAM mismatch must not plan a
+    # RADIUS refresh to the stale IPAM value.
+    if assign_ip and (trust_ipam or not col_ip or assign_ip == col_ip):
+        desired_ip = assign_ip
+        source = "ipam"
+    elif col_ip:
+        desired_ip = col_ip
+        source = "column"
+    else:
+        desired_ip = ""
+        source = "none"
 
     radreply_ip = ""
     provisioned = False
@@ -196,9 +205,9 @@ def converge_subscription_connectivity(
 
     if needs_refresh:
         try:
-            from app.tasks.splynx_sync import run_refresh_radius_from_subs
+            from app.tasks.radius_population import refresh_radius_from_subs
 
-            run_refresh_radius_from_subs.delay()
+            refresh_radius_from_subs.delay()
             applied.append("refresh_radius")
         except Exception as exc:
             logger.error(

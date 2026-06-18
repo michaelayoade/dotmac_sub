@@ -377,8 +377,15 @@ def test_subscription_form_context_uses_ipam_ranges_for_ipv4_blocks(
     option = next(item for item in options if item["cidr"] == "10.82.0.0/30")
     assert option["name"] == "Kubwa Fallback IP"
     assert option["id"] == f"pool:{pool.id}:10.82.0.0/30"
-    assert option["available_ips"] == ["10.82.0.2"]
-    assert option["display"] == "Kubwa Fallback IP - 10.82.0.0/30 (1 free)"
+    assert "available_ips" not in option
+    assert option["display"] == "Kubwa Fallback IP - 10.82.0.0/30"
+
+    available = web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
+        db_session,
+        selector=option["id"],
+    )
+    assert available["addresses"] == ["10.82.0.2"]
+    assert available["available_count"] == 1
 
 
 def test_parse_subscription_form_keeps_single_ipv4_row():
@@ -1398,6 +1405,146 @@ def test_update_subscription_rejects_additional_route_with_assigned_ipam_address
             None,
             None,
             additional_route_cidrs=["160.119.127.8/30"],
+            additional_route_metrics=["1"],
+        )
+
+
+def test_update_subscription_allows_existing_route_reserved_guard_rows(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="160.119.127.12/30",
+            prefix_length=30,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    for address, allocation_type in [
+        ("160.119.127.12", None),
+        ("160.119.127.13", "wan"),
+        ("160.119.127.14", "wan"),
+        ("160.119.127.15", None),
+    ]:
+        db_session.add(
+            IPv4Address(
+                address=address,
+                is_reserved=True,
+                allocation_type=allocation_type,
+            )
+        )
+    db_session.commit()
+
+    web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [],
+        [],
+        None,
+        None,
+        additional_route_cidrs=["160.119.127.12/30"],
+        additional_route_metrics=["1"],
+    )
+
+    route = (
+        db_session.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber.id)
+        .filter(SubscriberAdditionalRoute.cidr == "160.119.127.12/30")
+        .one()
+    )
+    assert route.is_active is True
+
+
+def test_update_subscription_rejects_additional_route_with_unrelated_reserved_ipam_row(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    db_session.add(
+        IPv4Address(
+            address="160.119.127.18",
+            is_reserved=True,
+        )
+    )
+    db_session.commit()
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="reserved or assigned in IPAM"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.16/30"],
+            additional_route_metrics=["1"],
+        )
+
+
+def test_update_subscription_rejects_existing_route_with_management_ipam_row(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="160.119.127.20/30",
+            prefix_length=30,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.add(
+        IPv4Address(
+            address="160.119.127.21",
+            is_reserved=True,
+            allocation_type="management",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="reserved or assigned in IPAM"):
+        web_catalog_subscriptions_service.update_subscription_with_audit(
+            db_session,
+            str(subscription.id),
+            {"login": "10004167"},
+            "",
+            [],
+            [],
+            None,
+            None,
+            additional_route_cidrs=["160.119.127.20/30"],
             additional_route_metrics=["1"],
         )
 

@@ -135,7 +135,7 @@ class EnforcementHandler:
                 exc,
             )
 
-        # External radcheck/radreply state: populate_radius_from_subs is the
+        # External radcheck/radreply state: radius_population is the
         # SOLE writer (single-writer decision, 2026-06-11). The previous
         # remove/block_external_radius_credentials calls here acted on the
         # WHOLE SUBSCRIBER — suspending one subscription wiped auth for the
@@ -144,9 +144,9 @@ class EnforcementHandler:
         # idempotent) so the status change reaches radcheck within seconds.
         if subscription:
             try:
-                from app.tasks.splynx_sync import run_refresh_radius_from_subs
+                from app.tasks.radius_population import refresh_radius_from_subs
 
-                run_refresh_radius_from_subs.delay()
+                refresh_radius_from_subs.delay()
             except Exception as exc:
                 logger.error(
                     "Failed to enqueue RADIUS refresh for subscriber %s: %s "
@@ -274,11 +274,11 @@ class EnforcementHandler:
         self._shadow_write_access_state(db, str(subscription_id))
 
         # Converge radcheck/radreply to the restored state within seconds
-        # via the single-writer sweep (populate_radius_from_subs).
+        # via the single-writer sweep.
         try:
-            from app.tasks.splynx_sync import run_refresh_radius_from_subs
+            from app.tasks.radius_population import refresh_radius_from_subs
 
-            run_refresh_radius_from_subs.delay()
+            refresh_radius_from_subs.delay()
         except Exception as exc:
             logger.error(
                 "Failed to enqueue RADIUS refresh on restore for %s: %s",

@@ -141,6 +141,8 @@ class TestPlan:
         ):
             plan = plan_subscription_ip(db_session, sub)
         kinds = {a["kind"] for a in plan["actions"]}
+        assert plan["desired_ip"] == "10.0.0.9"
+        assert plan["source"] == "column"
         assert "mismatch_adjudicate" in kinds
         assert "set_column" not in kinds
 
@@ -203,7 +205,7 @@ class TestConverge:
             col_ip="10.0.0.9",
             assign_ip="10.0.0.7",
         )
-        with patch("app.tasks.splynx_sync.run_refresh_radius_from_subs") as task:
+        with patch("app.tasks.radius_population.refresh_radius_from_subs") as task:
             result = _converge(db_session, sub.id, db_path, apply=False)
         db_session.refresh(sub)
         assert result["applied"] is False
@@ -228,7 +230,7 @@ class TestConverge:
         )
         fake_task = MagicMock()
         with (
-            patch("app.tasks.splynx_sync.run_refresh_radius_from_subs", fake_task),
+            patch("app.tasks.radius_population.refresh_radius_from_subs", fake_task),
             patch(
                 "app.services.ip_consistency_audit._active_external_sync_configs",
                 return_value=[_fake_config(db_path)],
@@ -258,7 +260,7 @@ class TestConverge:
             col_ip="10.0.0.7",
             assign_ip="10.0.0.7",
         )
-        with patch("app.tasks.splynx_sync.run_refresh_radius_from_subs") as task:
+        with patch("app.tasks.radius_population.refresh_radius_from_subs") as task:
             result = _converge(db_session, sub.id, db_path, apply=True)
         assert result["applied"] is False
         assert result["applied_actions"] == []

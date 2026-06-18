@@ -96,3 +96,8 @@ data/olt_samples/
 
 # Edge-case sweep generated artifacts (screenshots + json)
 docs/testing/results/
+
+# Post-cutover finance hand-off artifacts — reproducible, contain customer PII (regenerate from scripts/billing/)
+post_cutover_*.csv
+
+billing_violations_*.csv

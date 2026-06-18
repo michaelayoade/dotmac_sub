@@ -48,24 +48,6 @@
                     Here's what's happening with your account today.
                 </p>
             </div>
-            <div class="flex flex-col sm:flex-row gap-3">
-                {% if not (customer and customer.read_only) %}
-                <a href="/portal/billing/topup"
-                   class="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white transition-all hover:bg-emerald-400">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-                    </svg>
-                    Add Funds
-                </a>
-                {% endif %}
-                <a href="/portal/billing"
-                   class="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-5 py-3 text-sm font-semibold text-white backdrop-blur-sm transition-all hover:bg-white/20">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
-                    </svg>
-                    View Billing
-                </a>
-            </div>
         </div>
     </div>
 
@@ -89,7 +71,7 @@
                         <span class="text-base font-medium text-stone-400 sm:text-lg">NGN</span>
                     </p>
                     {% if account.balance < 0 %}
-                    <a href="/portal/billing" class="inline-flex items-center gap-1 text-sm font-medium text-red-600 transition-colors hover:text-red-700 dark:text-red-400">
+                    <a href="/portal/billing/topup{% if amount_due and amount_due > 0 %}?amount={{ amount_due | int }}{% endif %}" class="inline-flex items-center gap-1 text-sm font-medium text-red-600 transition-colors hover:text-red-700 dark:text-red-400">
                         Pay now
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
@@ -151,6 +133,14 @@
                         <p class="text-2xl font-display font-bold capitalize text-stone-900 dark:text-white">{{ service.status }}</p>
                     </div>
                     <p class="text-sm leading-6 text-stone-500 dark:text-stone-400">{{ service.plan_name }}</p>
+                    {% if service.status != 'active' %}
+                    <a href="/portal/support/new" class="inline-flex items-center gap-1 text-sm font-medium text-amber-600 transition-colors hover:text-amber-700 dark:text-amber-400">
+                        Get help
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                        </svg>
+                    </a>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -202,9 +192,9 @@
     </div>
 
     <!-- Main Content Grid -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- Active Services - 2/3 width -->
-        <div class="lg:col-span-2 rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
+    <div class="grid grid-cols-1 gap-6">
+        <!-- Active Services -->
+        <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
             <div class="border-b border-stone-100 px-6 py-4 dark:border-stone-700 flex items-center justify-between">
                 <div>
                     <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Your Services</h2>
@@ -261,74 +251,7 @@
                 {% endfor %}
             </div>
         </div>
-
-        <!-- Pay Now - 1/3 width -->
-        <div x-data="payNow()" class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
-            <div class="border-b border-stone-100 px-6 py-4 dark:border-stone-700">
-                <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Pay Now</h2>
-                <p class="text-sm text-stone-500 dark:text-stone-400">Top up or settle your balance in one step</p>
-            </div>
-            <div class="p-6 space-y-4">
-                {% if amount_due and amount_due > 0 %}
-                <button type="button" @click="amount = {{ amount_due | int }}"
-                        class="flex w-full items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left transition-colors hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-900/20 dark:hover:bg-amber-900/30">
-                    <span>
-                        <span class="block text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">Outstanding balance</span>
-                        <span class="block text-lg font-bold text-amber-900 dark:text-amber-200">&#8358;{{ "{:,.2f}".format(amount_due) }}</span>
-                    </span>
-                    <span class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white">Pay this</span>
-                </button>
-                {% endif %}
-
-                <div>
-                    <label for="paynow_amount" class="block text-sm font-semibold text-stone-900 dark:text-white">Amount</label>
-                    <div class="mt-1 flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 dark:border-stone-700 dark:bg-stone-900">
-                        <span class="text-lg font-semibold text-stone-400 dark:text-stone-500">&#8358;</span>
-                        <input id="paynow_amount" type="number" inputmode="numeric" min="0" step="100"
-                               x-model="amount" placeholder="Enter any amount"
-                               class="w-full border-0 bg-transparent p-0 text-lg font-semibold text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white">
-                    </div>
-                </div>
-
-                {% if not (customer and customer.read_only) %}
-                <a :href="payHref()" :class="canPay() ? '' : 'pointer-events-none opacity-50'"
-                   class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                    <span x-text="payLabel()"></span>
-                </a>
-                <p class="text-center text-xs text-stone-400 dark:text-stone-500">Choose card, bank transfer, or a saved card on the next step.</p>
-                {% endif %}
-
-                <div class="flex items-center justify-between border-t border-stone-100 pt-3 text-sm dark:border-stone-700">
-                    <a href="/portal/billing/payment-methods" class="font-medium text-stone-500 transition-colors hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200">Payment methods</a>
-                    <a href="/portal/billing" class="font-medium text-stone-500 transition-colors hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200">View invoices</a>
-                </div>
-            </div>
-        </div>
     </div>
-
-    <script>
-    function payNow() {
-        return {
-            amount: '',
-            currentAmount() {
-                const v = parseInt(this.amount, 10);
-                return Number.isFinite(v) && v > 0 ? v : null;
-            },
-            canPay() {
-                return this.currentAmount() !== null;
-            },
-            payHref() {
-                const v = this.currentAmount();
-                return v ? '/portal/billing/topup?amount=' + v : '/portal/billing/topup';
-            },
-            payLabel() {
-                const v = this.currentAmount();
-                return v ? 'Pay ₦' + v.toLocaleString('en-NG') : 'Enter an amount';
-            },
-        };
-    }
-    </script>
 
     <!-- Recent Activity Timeline -->
     <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">

@@ -20,7 +20,7 @@ def test_notification_template_test_uses_whatsapp_and_substitution(
             code="wa_invoice",
             channel=NotificationChannel.whatsapp,
             subject=None,
-            body="Hello {{customer_name}}, amount due is {amount_due}",
+            body="Hello {subscriber_name}, amount due is {amount}",
         ),
     )
     captured = {}
@@ -40,7 +40,7 @@ def test_notification_template_test_uses_whatsapp_and_substitution(
         request=_request(),
         template_id=template.id,
         test_recipient="+2348000000000",
-        test_variables_json='{"customer_name":"Ada","amount_due":"12500.00"}',
+        test_variables_json='{"subscriber_name":"Ada","amount":"12500.00"}',
         db=db_session,
     )
 
@@ -57,15 +57,15 @@ def test_notification_template_preview_renders_variables(db_session):
             name="Email Invoice",
             code="email_invoice",
             channel=NotificationChannel.email,
-            subject="Invoice {{invoice_number}}",
-            body="Hi {{customer_name}}",
+            subject="Invoice {invoice_number}",
+            body="Hi {subscriber_name}",
         ),
     )
 
     response = notifications_web.notification_template_preview(
         request=_request(),
         template_id=template.id,
-        test_variables_json='{"customer_name":"Jane","invoice_number":"INV-9"}',
+        test_variables_json='{"subscriber_name":"Jane","invoice_number":"INV-9"}',
         db=db_session,
     )
 

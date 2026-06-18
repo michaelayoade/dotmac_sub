@@ -58,6 +58,7 @@ from app.services.nas._mikrotik import (
     generate_mikrotik_bootstrap_script_for_device,
     get_mikrotik_api_status,
     get_mikrotik_api_telemetry,
+    get_mikrotik_pppoe_live_bandwidth,
     refresh_mikrotik_status_for_device,
 )
 from app.services.nas.backups import NasConfigBackups
@@ -162,6 +163,7 @@ __all__ = [
     # MikroTik
     "get_mikrotik_api_status",
     "get_mikrotik_api_telemetry",
+    "get_mikrotik_pppoe_live_bandwidth",
     "refresh_mikrotik_status_for_device",
     "generate_mikrotik_bootstrap_script_for_device",
     # Web builders

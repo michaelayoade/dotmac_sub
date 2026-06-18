@@ -227,6 +227,7 @@ BILLING_KEYS = [
     "billing_day",
     "use_creation_date",
     "payment_due_days",
+    "customer_balance_notifications_enabled",
     "auto_suspend_on_overdue",
     "suspension_grace_hours",
     "expiry_reminder_days",

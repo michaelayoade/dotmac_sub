@@ -253,7 +253,7 @@ final gate.
 - [ ] Uptime/error alerting for the portal itself (Zabbix watches network
       devices; who watches the app?)
 - [ ] Bulk onboarding path: import/create N subscribers + PPPoE creds, batch
-      portal invites, RADIUS sync (`scripts/migration/populate_radius_from_subs.py`)
+      portal invites, RADIUS sync (`app.services.radius_population`)
 - [ ] Full "new customer" dry run as the final gate: create → invite →
       login (web + mobile) → pay first invoice → consume data → raise
       ticket → receive notifications

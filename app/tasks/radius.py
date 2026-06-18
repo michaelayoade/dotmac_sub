@@ -162,54 +162,6 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     stats["reject_pool_sessions"] += 1
                     to_kick[(row[1], row[2])] = row
 
-        # Dual-run guard: while Splynx is still the authoritative biller
-        # (billing_enabled is false), never kick a login that is ACTIVE in
-        # Splynx. Sync gaps exist where a Splynx-active service has no dotmac
-        # subscription yet (e.g. 100025599 on 2026-06-11) — those users
-        # are missing from radcheck through no fault of their own, and
-        # kicking them is an outage for a paying customer. Surface them
-        # as sync-gap alerts instead.
-        #
-        # Once billing has cut over (billing_enabled true) sub is the
-        # authoritative biller, so the guard is skipped: enforcement runs
-        # purely on dotmac state and no longer depends on a reachable Splynx
-        # (which is decommissioned post-cutover — querying it would fail and
-        # the old fail-safe would wrongly suppress every kick).
-        from app.services.billing_settings import billing_enabled
-
-        kick_logins = sorted({row[0] for row in to_kick.values()})
-        splynx_active: set[str] = set()
-        if kick_logins and not billing_enabled(db, default=False):
-            try:
-                from scripts.migration.db_connections import splynx_connection
-
-                with splynx_connection() as sconn, sconn.cursor() as scur:
-                    placeholders = ",".join(["%s"] * len(kick_logins))
-                    scur.execute(
-                        "SELECT login FROM services_internet "  # nosec B608  # noqa: S608 — %s binds; values passed as params
-                        f"WHERE login IN ({placeholders}) "
-                        "AND deleted='0' AND status='active'",
-                        kick_logins,
-                    )
-                    for r in scur.fetchall():
-                        login = r["login"] if isinstance(r, dict) else r[0]
-                        splynx_active.add(str(login).strip())
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "enforcement reconciler: Splynx guard query failed (%s) — "
-                    "skipping ALL kicks this run (fail-safe)",
-                    exc,
-                )
-                splynx_active = {row[0] for row in to_kick.values()}
-        if splynx_active:
-            stats["sync_gap_logins"] = len(splynx_active)
-            logger.error(
-                "enforcement reconciler: %d logins are ACTIVE in Splynx but "
-                "missing from radcheck — dotmac sync gap, NOT kicking: %s",
-                len(splynx_active),
-                sorted(splynx_active)[:10],
-            )
-
         ghost_rows: list[tuple[int, str]] = []
         for (
             username,
@@ -219,8 +171,6 @@ def run_enforcement_reconciler() -> dict[str, int]:
             radacctid,
             stale,
         ) in to_kick.values():
-            if username in splynx_active:
-                continue
             if stats["kicked"] >= max_kicks:
                 stats["kicks_capped"] = len(to_kick) - stats["kicked"]
                 logger.error(
@@ -291,7 +241,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 )
             ).all()
         }
-        # Mirror populate_radius_from_subs's per-login slot policy: the
+        # Mirror radius_population's per-login slot policy: the
         # ACTIVE sub wins a shared login, so the tag is expected only if
         # the winner's subscriber is blocked — or if the login has no
         # active sub at all (then any blocked/suspended sub carries the
@@ -348,9 +298,9 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 len(drift),
                 sorted(drift)[:5],
             )
-            from app.tasks.splynx_sync import run_refresh_radius_from_subs
+            from app.tasks.radius_population import refresh_radius_from_subs
 
-            run_refresh_radius_from_subs.delay()
+            refresh_radius_from_subs.delay()
 
     logger.info("enforcement reconciler done: %s", stats)
     return stats

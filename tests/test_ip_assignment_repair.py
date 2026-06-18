@@ -206,7 +206,7 @@ class TestApply:
         _mk_sub(db_session, owner, catalog_offer, "10.0.0.51")
         stale, addr = _mk_assignment(db_session, owner, "10.0.0.60")
         other = _mk_subscriber(db_session, "real2@e.com")
-        _mk_sub(db_session, other, catalog_offer, "10.0.0.60")
+        other_sub = _mk_sub(db_session, other, catalog_offer, "10.0.0.60")
         db_session.commit()
         plan = plan_repair(db_session)
         result = apply_repair(db_session, plan)
@@ -214,6 +214,7 @@ class TestApply:
         db_session.refresh(stale)
         # the single address row was repointed to the real served owner
         assert str(stale.subscriber_id) == str(other.id)
+        assert str(stale.subscription_id) == str(other_sub.id)
         assert stale.is_active is True
 
     def test_live_contention_not_applied(self, db_session, catalog_offer):

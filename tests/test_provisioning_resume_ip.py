@@ -65,7 +65,7 @@ def test_activated_event_still_reprovisions(db_session, monkeypatch):
 
 
 def _attrs(ipv4_on_sub, framed_ipv4):
-    from scripts.migration.populate_radius_from_subs import _radreply_attrs
+    from app.services.radius_population import _radreply_attrs
 
     sub = SimpleNamespace(ipv4_address=ipv4_on_sub, status=SubscriptionStatus.active)
     offer = SimpleNamespace(name="O", speed_download_mbps=None, speed_upload_mbps=None)

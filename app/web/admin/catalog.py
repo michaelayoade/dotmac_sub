@@ -431,6 +431,25 @@ def catalog_subscription_new(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
+@router.get("/subscription-ipv4-addresses", response_class=JSONResponse)
+def catalog_subscription_ipv4_addresses(
+    selector: str = Query(...),
+    q: str = "",
+    limit: int = Query(1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        payload = web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
+            db,
+            selector=selector,
+            query=q,
+            limit=limit,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc), "addresses": []}, status_code=400)
+    return JSONResponse(payload)
+
+
 @router.post("/subscriptions", response_class=HTMLResponse)
 def catalog_subscription_create(
     request: Request,

@@ -1,0 +1,35 @@
+{% macro card_label(card) -%}
+{{ card.label or ((card.brand or "Card") ~ (" ending in " ~ card.last4 if card.last4 else "")) }}
+{%- endmacro %}
+
+{% macro card_expiry(card, fallback="Saved card") -%}
+{% if card.expires_month and card.expires_year %}Expires {{ "%02d"|format(card.expires_month) }}/{{ card.expires_year }}{% else %}{{ fallback }}{% endif %}
+{%- endmacro %}
+
+{% macro card_icon() -%}
+<svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+</svg>
+{%- endmacro %}
+
+{% macro bank_icon() -%}
+<svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M4 10h16M5 6l7-3 7 3M6 10v8m4-8v8m4-8v8m4-8v8"/>
+</svg>
+{%- endmacro %}
+
+{% macro default_badge(size="md") -%}
+{% if size == "sm" %}
+<span class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Default</span>
+{% else %}
+<span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Default</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro autopay_status_badge(enabled) -%}
+{% if enabled %}
+<span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">On</span>
+{% else %}
+<span class="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-300">Off</span>
+{% endif %}
+{%- endmacro %}

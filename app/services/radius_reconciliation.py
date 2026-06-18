@@ -39,7 +39,7 @@ _BLOCKED_STATUSES = (
     SubscriptionStatus.stopped,
 )
 
-# Per-user walled-garden marker written by populate_radius_from_subs.py and
+# Per-user walled-garden marker written by app.services.radius_population and
 # the enforcement address-list path (MikroTik filter rules allow only the
 # portal for IPs on this list).
 WALLED_GARDEN_ADDRESS_LIST = "suspended"

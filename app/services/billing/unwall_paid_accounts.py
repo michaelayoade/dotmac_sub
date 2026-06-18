@@ -195,7 +195,7 @@ def unwall_cohort(
                 coa_subscription_ids.update(_account_subscription_ids(db, account_id))
 
     if refresh_radius:
-        from scripts.migration.populate_radius_from_subs import populate
+        from app.services.radius_population import populate
 
         populate(dry_run=False)
         summary.radius_refreshed = True

@@ -110,10 +110,6 @@ ignore = [
 # use lambdas to define inline serializers (E731).
 "tests/**" = ["S101", "S104", "S105", "S106", "E731"]
 "scripts/**" = ["S101", "S105", "S106", "S108", "S608"]
-"scripts/migration/**" = ["S608"]
-# Incremental sync builds parameterised text() SQL from internal-int cursors
-# and pre-validated clauses by design (same as scripts/migration/**).
-"app/services/migrations/incremental_sync.py" = ["S608"]
 # Alembic migrations: data-shape SQL is by design ``text()``-built and
 # imports often sit below module-level helpers, so the standard ruff
 # rules don't apply cleanly.
@@ -153,7 +149,6 @@ module = [
     "app.services.scheduler_config",
     "app.services.service_intent_adapter",
     "app.services.service_intent_ui_adapter",
-    "app.services.splynx_customer_sync",
     "app.services.network.ont_tr069",
     "app.services.network.olt_targeted_sync",
     "app.services.network.authorization_executor",
@@ -235,13 +230,6 @@ module = [
     "app.web.admin.support_tickets",
     "app.web.admin.system",
     "app.websocket.manager",
-]
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = [
-    "scripts.migration",
-    "scripts.migration.*",
 ]
 ignore_errors = true
 
@@ -454,3 +442,15 @@ ignore_imports = [
 ]
 unmatched_ignore_imports_alerting = "none"
 allow_indirect_imports = "true"
+
+[[tool.importlinter.contracts]]
+name = "Application code must not import retired Splynx migration runtime"
+type = "forbidden"
+source_modules = [
+    "app",
+]
+forbidden_modules = [
+    "app.services.migrations",
+    "app.services.splynx_customer_sync",
+    "app.tasks.splynx_sync",
+]

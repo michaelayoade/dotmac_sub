@@ -903,6 +903,22 @@ class TestLifecycleHandler:
 
 
 class TestNotificationHandler:
+    def _set_customer_balance_notifications(self, db_session, enabled: bool) -> None:
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="customer_balance_notifications_enabled",
+                value_type=SettingValueType.boolean,
+                value_text="true" if enabled else "false",
+                value_json=enabled,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
     def test_event_type_to_template_mapping_exists(self):
         expected = {
             EventType.subscriber_updated,
@@ -1045,6 +1061,93 @@ class TestNotificationHandler:
         assert recipients[NotificationChannel.sms] == subscriber.phone
         assert all(row.subscriber_id == subscriber.id for row in notifications)
         assert all(row.category == "billing" for row in notifications)
+
+    def test_balance_notification_switch_suppresses_debt_events(
+        self, db_session, subscriber
+    ):
+        self._set_customer_balance_notifications(db_session, False)
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.invoice_overdue,
+            payload={"invoice_number": "INV-100", "amount": "5000"},
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        assert db_session.query(Notification).count() == 0
+
+    def test_balance_notification_switch_keeps_receipts(
+        self, db_session, subscriber
+    ):
+        self._set_customer_balance_notifications(db_session, False)
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.invoice_paid,
+            payload={"invoice_number": "INV-200", "amount": "5000"},
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        notifications = db_session.query(Notification).all()
+        assert len(notifications) == 1
+        assert notifications[0].event_type == "invoice_paid"
+
+    def test_balance_notification_switch_suppresses_billing_suspension(
+        self, db_session, subscriber
+    ):
+        subscriber.phone = "+2348000000100"
+        db_session.commit()
+        self._set_customer_balance_notifications(db_session, False)
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.subscription_suspended,
+            payload={
+                "reason": "overdue",
+                "source": "invoice:INV-100",
+                "offer_name": "Gold",
+            },
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        assert db_session.query(Notification).count() == 0
+
+    def test_balance_notification_switch_keeps_admin_suspension(
+        self, db_session, subscriber
+    ):
+        subscriber.phone = "+2348000000101"
+        db_session.commit()
+        self._set_customer_balance_notifications(db_session, False)
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.subscription_suspended,
+            payload={
+                "reason": "admin",
+                "source": "admin",
+                "offer_name": "Gold",
+            },
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        notifications = db_session.query(Notification).all()
+        assert len(notifications) == 2
+        assert {row.channel for row in notifications} == {
+            NotificationChannel.email,
+            NotificationChannel.sms,
+        }
 
     def test_handle_service_order_notifications(self, db_session, subscriber):
         subscriber.phone = "+2348000000003"

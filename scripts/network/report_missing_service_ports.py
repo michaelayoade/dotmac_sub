@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 
+from app.db import SessionLocal
 from app.services.network.olt_service_port_gaps import find_missing_service_ports
-from scripts.migration.db_connections import dotmac_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=50)
     args = parser.parse_args()
 
-    with dotmac_session() as db:
+    with SessionLocal() as db:
         missing = find_missing_service_ports(db, olt_id=args.olt_id)
 
     logger.info("Missing service-port bindings: %d", len(missing))

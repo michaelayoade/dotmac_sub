@@ -117,6 +117,10 @@ def _get_fup_status(
     if not offer_id:
         return None
     try:
+        offer = db.get(CatalogOffer, coerce_uuid(offer_id))
+        if str(getattr(offer, "plan_family", "") or "").strip().lower() == "unlimited":
+            return None
+
         from app.services.fup import FupPolicies
 
         policy = FupPolicies.get_by_offer(db, offer_id)

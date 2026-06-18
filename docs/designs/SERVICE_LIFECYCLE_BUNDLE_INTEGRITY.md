@@ -71,7 +71,7 @@ dunning: collections/_core.py:306 ─▶ account_lifecycle.suspend_subscription
    ─▶ emits subscription_suspended
    ─▶ events/handlers/enforcement.py:_enforce_subscription_block (:101)
         ├─ enforce_subscription_reject_ip  → disabled no-op, IP untouched
-        ├─ enqueue run_refresh_radius_from_subs  ← the SOLE writer of radcheck/radreply
+        ├─ enqueue refresh_radius_from_subs  ← the SOLE writer of radcheck/radreply
         ├─ _shadow_write_access_state (radusergroup; no-op unless group_routing_enabled)
         └─ disconnect_subscription_sessions + apply_subscription_address_list_block
 ```

@@ -1,0 +1,72 @@
+{% from "customer/billing/_payment_macros.html" import autopay_status_badge, card_label %}
+{% set autopay_cards = autopay_cards | default([]) %}
+{% set autopay_read_only = autopay_read_only | default(customer and customer.read_only) %}
+{% set autopay_description = autopay_description | default('Automatically charge your saved card when invoices fall due.') %}
+{% set autopay_empty_message = autopay_empty_message | default('Add a card first, then you can turn on autopay here.') %}
+{% set autopay_suspended_message = autopay_suspended_message | default('Set a new default card to retry.') %}
+{% set autopay_enable_helper = autopay_enable_helper | default('Uses your default saved card.') %}
+
+<section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+    <div class="flex items-start justify-between gap-4">
+        <div>
+            <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Autopay</h2>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                {{ autopay_description }}
+            </p>
+        </div>
+        {{ autopay_status_badge(autopay and autopay.enabled) }}
+    </div>
+
+    {% if autopay_success_message | default('') %}
+    <p class="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">{{ autopay_success_message }}</p>
+    {% endif %}
+    {% if autopay_error_message | default('') %}
+    <p class="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{{ autopay_error_message }}</p>
+    {% endif %}
+
+    {% if autopay and autopay.enabled %}
+        {% if autopay.suspended %}
+        <p class="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+            Autopay is paused after {{ autopay.failure_count }} failed charge attempts{% if autopay.last_failure_reason %} ({{ autopay.last_failure_reason }}){% endif %}.
+            {{ autopay_suspended_message }}
+        </p>
+        {% endif %}
+
+        {% set autopay_ns = namespace(card=none) %}
+        {% if autopay.payment_method_id %}
+            {% for card in autopay_cards %}
+                {% if card.id|string == autopay.payment_method_id %}
+                    {% set autopay_ns.card = card %}
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+        {% if autopay_ns.card %}
+        <p class="mt-4 text-sm text-stone-600 dark:text-stone-300">
+            Charging {{ card_label(autopay_ns.card) }}.
+        </p>
+        {% endif %}
+
+        {% if not autopay_read_only %}
+        <form method="post" action="/portal/billing/autopay/disable" class="mt-4">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="rounded-xl border border-stone-300 px-4 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700/50">
+                Turn off autopay
+            </button>
+        </form>
+        {% endif %}
+    {% elif not autopay_read_only %}
+        {% if autopay_cards %}
+        <form method="post" action="/portal/billing/autopay/enable" class="mt-4">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700">
+                Turn on autopay
+            </button>
+            <p class="mt-2 text-xs text-stone-500 dark:text-stone-400">{{ autopay_enable_helper }}</p>
+        </form>
+        {% else %}
+        <p class="mt-4 text-sm text-stone-500 dark:text-stone-400">
+            {{ autopay_empty_message }}
+        </p>
+        {% endif %}
+    {% endif %}
+</section>

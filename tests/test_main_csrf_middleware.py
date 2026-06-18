@@ -6,7 +6,11 @@ from concurrent.futures import ThreadPoolExecutor
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.main import csrf_middleware
+from app.main import (
+    csrf_middleware,
+    security_headers_middleware,
+    view_as_readonly_middleware,
+)
 
 
 def _build_request(
@@ -73,6 +77,38 @@ def test_csrf_middleware_returns_204_for_actual_disconnect(monkeypatch):
         raise RuntimeError("No response returned.")
 
     response = _run_async(csrf_middleware(request, call_next))
+
+    assert response.status_code == 204
+
+
+def test_view_as_readonly_middleware_returns_204_when_no_response(monkeypatch):
+    request = _build_request(path="/admin/customers")
+
+    async def _disconnected() -> bool:
+        return True
+
+    monkeypatch.setattr(request, "is_disconnected", _disconnected)
+
+    async def call_next(_request: Request) -> Response:
+        raise RuntimeError("No response returned.")
+
+    response = _run_async(view_as_readonly_middleware(request, call_next))
+
+    assert response.status_code == 204
+
+
+def test_security_headers_middleware_returns_204_when_no_response(monkeypatch):
+    request = _build_request(path="/admin/customers")
+
+    async def _disconnected() -> bool:
+        return True
+
+    monkeypatch.setattr(request, "is_disconnected", _disconnected)
+
+    async def call_next(_request: Request) -> Response:
+        raise RuntimeError("No response returned.")
+
+    response = _run_async(security_headers_middleware(request, call_next))
 
     assert response.status_code == 204
 

@@ -32,12 +32,10 @@ from app.models.network import CPEDevice, IPAssignment, OntAssignment
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import (
     ChannelType,
-    NINVerificationStatus,
     Reseller,
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
-    SubscriberNINVerification,
     UserType,
 )
 from app.models.support import Ticket
@@ -613,14 +611,14 @@ def _build_common_financials(db: Session, account_ids):
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
-            .order_by(Invoice.created_at.desc())
+            .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .limit(10)
             .all()
         )
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
-            .order_by(Payment.created_at.desc())
+            .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .limit(10)
             .all()
         )
@@ -1090,9 +1088,17 @@ def _build_network_connection_snapshot(
 def _build_network_access_cards(
     subscriptions: list, connection_by_subscription: dict[str, dict[str, object]]
 ) -> list[dict]:
-    """Build network access info cards from active subscriptions."""
+    """Build network access info cards from subscriptions with live access."""
     cards = []
     for sub in subscriptions:
+        raw_status = getattr(sub, "status", None)
+        status = (
+            raw_status.value
+            if getattr(raw_status, "value", None) is not None
+            else raw_status or "unknown"
+        )
+        if status == SubscriptionStatus.disabled.value:
+            continue
         if not sub.login and not sub.ipv4_address:
             continue
         sub_id = str(sub.id)
@@ -1102,7 +1108,7 @@ def _build_network_access_cards(
             {
                 "subscription_id": sub_id,
                 "offer_name": sub.offer.name if sub.offer else "Subscription",
-                "status": sub.status.value if sub.status else "unknown",
+                "status": status,
                 "connection_status": connection_by_subscription.get(sub_id, {}),
                 "login": sub.login,
                 "ipv4_address": sub.ipv4_address,
@@ -1359,12 +1365,6 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         subscriptions,
         connection_by_subscription,
     )
-    nin_verification = (
-        db.query(SubscriberNINVerification)
-        .filter(SubscriberNINVerification.subscriber_id == customer.id)
-        .order_by(SubscriberNINVerification.created_at.desc())
-        .first()
-    )
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)
         .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)
@@ -1404,10 +1404,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
-        "nin_verification": nin_verification,
         "pending_location_request": pending_location_request,
-        "nin_verified": bool((customer.metadata_ or {}).get("nin_verified")),
-        "nin_verification_statuses": NINVerificationStatus,
         **relationship_data,
     }
 

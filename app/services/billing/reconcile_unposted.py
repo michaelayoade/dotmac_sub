@@ -506,7 +506,7 @@ def reconcile_cohort(
         # subscription/subscriber status. This is what lifts the stale
         # walled-garden tag for the 'paid + active but still walled' accounts,
         # not just the ones whose debt we just settled.
-        from scripts.migration.populate_radius_from_subs import populate
+        from app.services.radius_population import populate
 
         populate(dry_run=False)
         summary["radius_refreshed"] = True

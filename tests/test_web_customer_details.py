@@ -25,7 +25,7 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
     )
 
 
-from app.models.catalog import AccessCredential, ConnectionType
+from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
 from app.models.subscription_engine import SettingValueType
@@ -150,6 +150,20 @@ def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
         "login": "100025929",
         "has_password": True,
     }
+
+
+def test_person_detail_hides_disabled_service_network_access(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.disabled
+    subscription.login = "disabled-login"
+    subscription.ipv4_address = "10.70.0.25"
+    db_session.commit()
+
+    context = build_person_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["network_access_cards"] == []
 
 
 def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscriber):

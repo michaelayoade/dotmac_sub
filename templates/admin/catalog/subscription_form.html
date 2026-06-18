@@ -478,11 +478,11 @@
                                 <input type="text" :name="'ipv4_addresses'" x-model="row.ip" :list="'ipv4-address-options-' + idx"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <datalist :id="'ipv4-address-options-' + idx">
-                                    <template x-for="ip in availableIpsForBlock(row.blockId)" :key="ip">
+                                    <template x-for="ip in availableIpsForRow(row)" :key="ip">
                                         <option :value="ip"></option>
                                     </template>
                                 </datalist>
-                                <p class="mt-1 text-xs text-slate-500">Auto-fills the next free IP. You can replace it with another free IP from the selected block.</p>
+                                <p class="mt-1 text-xs text-slate-500" x-text="ipHelperText(row)">Auto-fills the next free IP. You can replace it with another free IP from the selected block.</p>
                             </div>
                         </div>
                     </template>
@@ -672,6 +672,10 @@ function subscriptionProvisioning() {
         blockId: initialBlocks[idx] || "",
         blockQuery: blockLabel(initialBlocks[idx] || ""),
         ip: ip || "",
+        ipOptions: ip ? [ip] : [],
+        loadingIps: false,
+        ipError: "",
+        hasMoreIps: false,
     }));
     const routeRows = initialRouteCidrs.map((cidr, idx) => {
         const parent = routeRanges.find((range) => {
@@ -708,7 +712,7 @@ function subscriptionProvisioning() {
         routeRanges,
         ipAddonOptions,
         selectedAddonId: initialAddonId,
-        rows: rows.length ? rows : [{ blockId: "", blockQuery: "", ip: "" }],
+        rows: rows.length ? rows : [{ blockId: "", blockQuery: "", ip: "", ipOptions: [], loadingIps: false, ipError: "", hasMoreIps: false }],
         routeRows: initialRows,
         get selectedAddonPrefix() {
             const option = this.ipAddonOptions.find((item) => item.id === this.selectedAddonId);
@@ -725,33 +729,87 @@ function subscriptionProvisioning() {
             return [block.display, block.name, block.pool_name, block.cidr]
                 .some((value) => this.normalizeBlockQuery(value) === normalized);
         },
-        selectBlockForRow(row) {
+        async selectBlockForRow(row) {
             const block = this.blocks.find((item) => this.blockMatchesQuery(item, row.blockQuery));
             row.blockId = block ? block.id : "";
             if (block) {
                 row.blockQuery = block.display;
             }
-            this.populateIpFromBlock(row);
+            await this.loadAvailableIps(row, { autoSelect: true });
         },
-        syncTypedBlock(row) {
+        async syncTypedBlock(row) {
             if (!row.blockQuery) {
                 row.blockId = "";
                 row.ip = "";
+                row.ipOptions = [];
+                row.ipError = "";
+                row.hasMoreIps = false;
                 return;
             }
             const block = this.blocks.find((item) => this.blockMatchesQuery(item, row.blockQuery));
             if (block && block.id !== row.blockId) {
                 row.blockId = block.id;
                 row.blockQuery = block.display;
-                this.populateIpFromBlock(row);
+                await this.loadAvailableIps(row, { autoSelect: true });
             }
         },
-        availableIpsForBlock(blockId) {
-            const block = this.blocks.find((item) => item.id === blockId);
-            return block && Array.isArray(block.available_ips) ? block.available_ips : [];
+        availableIpsForRow(row) {
+            return Array.isArray(row.ipOptions) ? row.ipOptions : [];
+        },
+        ipHelperText(row) {
+            if (row.loadingIps) {
+                return 'Loading available IPs...';
+            }
+            if (row.ipError) {
+                return row.ipError;
+            }
+            if (!row.blockId) {
+                return 'Choose an IPv4 block first.';
+            }
+            if (row.hasMoreIps) {
+                return 'Showing the first available IPs. Type a specific free IP if needed.';
+            }
+            return 'Auto-fills the next free IP. You can replace it with another free IP from the selected block.';
+        },
+        async loadAvailableIps(row, options = {}) {
+            row.ipOptions = row.ip ? [row.ip] : [];
+            row.ipError = "";
+            row.hasMoreIps = false;
+            if (!row.blockId) {
+                if (options.autoSelect) {
+                    row.ip = "";
+                }
+                return;
+            }
+            row.loadingIps = true;
+            try {
+                const params = new URLSearchParams({
+                    selector: row.blockId,
+                    limit: '1000',
+                });
+                const response = await fetch(`/admin/catalog/subscription-ipv4-addresses?${params.toString()}`, {
+                    headers: { 'Accept': 'application/json' },
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.error || 'Unable to load available IPs.');
+                }
+                row.ipOptions = Array.isArray(payload.addresses) ? payload.addresses : [];
+                row.hasMoreIps = Boolean(payload.has_more);
+                if (options.preserveExisting && row.ip && !row.ipOptions.includes(row.ip)) {
+                    row.ipOptions = [row.ip, ...row.ipOptions];
+                }
+                if (options.autoSelect) {
+                    this.populateIpFromBlock(row);
+                }
+            } catch (error) {
+                row.ipError = error.message || 'Unable to load available IPs.';
+            } finally {
+                row.loadingIps = false;
+            }
         },
         populateIpFromBlock(row) {
-            const availableIps = this.availableIpsForBlock(row.blockId);
+            const availableIps = this.availableIpsForRow(row);
             if (!availableIps.length) {
                 row.ip = "";
                 return;
@@ -861,6 +919,11 @@ function subscriptionProvisioning() {
         },
         init() {
             this.syncRoutesForAddon();
+            this.rows.forEach((row) => {
+                if (row.blockId) {
+                    this.loadAvailableIps(row, { autoSelect: !row.ip, preserveExisting: true });
+                }
+            });
         },
     };
 }

@@ -90,14 +90,7 @@ from app.tasks.provisioning import (
     run_service_migration_job,
 )
 from app.tasks.radius import run_radius_sync_job
-from app.tasks.splynx_sync import (
-    run_customer_accounts_details_sync,
-    run_incremental_sync,
-    run_new_subscriptions_sync,
-    run_refresh_radius_from_subs,
-    run_subscriber_status_sync,
-    run_subscription_status_sync,
-)
+from app.tasks.radius_population import refresh_radius_from_subs
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
 from app.tasks.tr069 import (
@@ -222,12 +215,7 @@ __all__ = [
     "run_bulk_activation_job",
     "run_service_migration_job",
     "retry_pending_compensation_failures",
-    "run_incremental_sync",
-    "run_customer_accounts_details_sync",
-    "run_subscriber_status_sync",
-    "run_subscription_status_sync",
-    "run_refresh_radius_from_subs",
-    "run_new_subscriptions_sync",
+    "refresh_radius_from_subs",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",
