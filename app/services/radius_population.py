@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from typing import cast
 
 import psycopg
 from sqlalchemy import select
@@ -237,7 +238,11 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         # idle-in-transaction timeout on large fleets.
         by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus]] = {}
         for sub in rows:
-            cred = creds_by_username.get(sub.login)
+            login = cast(str | None, sub.login)
+            if not login:
+                stats["skipped_no_credential"] += 1
+                continue
+            cred = creds_by_username.get(login)
             if cred is None:
                 stats["skipped_no_credential"] += 1
                 continue
@@ -247,7 +252,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             try:
                 cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("decrypt failed for %s: %s", sub.login, exc)
+                logger.warning("decrypt failed for %s: %s", login, exc)
                 stats["skipped_decrypt_failed"] += 1
                 continue
             if not cleartext:
@@ -273,11 +278,11 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             # Duplicate logins: the ACTIVE sub wins the slot. Subscriber-level
             # block still dominates via sub_blocked, so a blocked customer stays
             # walled-gardened either way.
-            existing = by_login.get(sub.login)
+            existing = by_login.get(login)
             if existing is not None and existing[4] == SubscriptionStatus.active:
                 continue
-            by_login[sub.login] = (
-                sub.login,
+            by_login[login] = (
+                login,
                 cleartext,
                 attrs,
                 blocked_flag,

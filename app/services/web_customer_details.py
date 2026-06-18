@@ -1092,11 +1092,8 @@ def _build_network_access_cards(
     cards = []
     for sub in subscriptions:
         raw_status = getattr(sub, "status", None)
-        status = (
-            raw_status.value
-            if getattr(raw_status, "value", None) is not None
-            else raw_status or "unknown"
-        )
+        status_value = getattr(raw_status, "value", None)
+        status = str(status_value if status_value is not None else raw_status or "unknown")
         if status == SubscriptionStatus.disabled.value:
             continue
         if not sub.login and not sub.ipv4_address:

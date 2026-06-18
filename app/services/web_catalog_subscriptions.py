@@ -1307,16 +1307,21 @@ def available_ipv4_addresses_for_selector(
         block = db.get(IpBlock, block_uuid)
         if not block or not block.is_active:
             raise ValueError("Selected IPv4 block is not active.")
-        pool = db.get(IpPool, block.pool_id)
-        if not pool or not pool.is_active or pool.ip_version != IPVersion.ipv4:
+        block_pool = cast(IpPool | None, db.get(IpPool, block.pool_id))
+        if (
+            not block_pool
+            or not block_pool.is_active
+            or block_pool.ip_version != IPVersion.ipv4
+        ):
             raise ValueError("Selected IPv4 block is not active.")
+        pool = block_pool
         try:
-            network = ipaddress.ip_network(str(block.cidr), strict=False)
+            parsed_network = ipaddress.ip_network(str(block.cidr), strict=False)
         except ValueError as exc:
             raise ValueError("Invalid IPv4 block selected.") from exc
-        if network.version != 4:
+        if parsed_network.version != 4:
             raise ValueError("Selected IPv4 block is not IPv4.")
-        network = cast(ipaddress.IPv4Network, network)
+        network = cast(ipaddress.IPv4Network, parsed_network)
 
     available_ips = _available_ipv4_strings_for_network(
         db,

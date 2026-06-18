@@ -26,8 +26,11 @@ No ledger / money writes; pure service-state correction.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from importlib import import_module
+from typing import cast
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -198,11 +201,12 @@ def _default_refresh_radius() -> None:
     one file works before and after the Splynx-decommission relocation lands.
     """
     try:
-        from app.services.radius_population import populate
+        module = import_module("app.services.radius_population")
     except ImportError:
-        from scripts.migration.populate_radius_from_subs import populate
+        module = import_module("scripts.migration.populate_radius_from_subs")
 
-    populate(dry_run=False)
+    populate_radius = cast(Callable[..., object], module.populate)
+    populate_radius(dry_run=False)
 
 
 def _default_coa(db: Session, subscription_id: str, *, reason: str) -> int:
