@@ -4,6 +4,7 @@ import uuid
 from types import SimpleNamespace
 
 from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
+from app.models.network_monitoring import NetworkDevice
 from app.services import web_network_ip
 
 
@@ -266,4 +267,52 @@ def test_ipv4_block_detail_marks_ont_management_allocation(monkeypatch):
     assert state is not None
     rows = {row["ip_address"]: row["status"] for row in state["ip_rows"]}
     assert rows["10.20.31.1"] == "ont_management"
+    assert state["stats"]["assigned"] == 1
+
+
+def test_ipv4_block_detail_marks_network_device_management_ip(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Device Range Detail",
+        ip_version=IPVersion.ipv4,
+        cidr="10.20.32.0/30",
+        is_active=True,
+    )
+    block = IpBlock(
+        id=uuid.uuid4(),
+        pool_id=pool.id,
+        cidr="10.20.32.0/30",
+        is_active=True,
+    )
+    block.pool = pool
+    address = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.20.32.1",
+        pool_id=pool.id,
+        is_reserved=False,
+    )
+    address.assignment = None
+    device = NetworkDevice(
+        id=uuid.uuid4(),
+        name="Aggregation Switch",
+        mgmt_ip="10.20.32.1",
+        is_active=True,
+    )
+
+    db = FakeSession({IPv4Address: [address], NetworkDevice: [device]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_blocks,
+        "get",
+        lambda **_kwargs: block,
+    )
+
+    state = web_network_ip.build_ipv4_block_detail_data(
+        db, block_id=str(block.id), limit=10
+    )
+
+    assert state is not None
+    rows = {row["ip_address"]: row for row in state["ip_rows"]}
+    assert rows["10.20.32.1"]["status"] == "device"
+    assert rows["10.20.32.1"]["device"] == "Aggregation Switch"
+    assert rows["10.20.32.1"]["notes"] == "Network device"
     assert state["stats"]["assigned"] == 1

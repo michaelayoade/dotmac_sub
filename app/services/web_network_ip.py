@@ -11,7 +11,7 @@ from collections import defaultdict
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
 from app.models.catalog import NasDevice, Subscription
@@ -113,6 +113,132 @@ def _ipam_row_status(record) -> str:
     if getattr(record, "is_reserved", False):
         return "reserved"
     return "available"
+
+
+def _normalize_ipv4_host(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = ipaddress.ip_interface(text) if "/" in text else ipaddress.ip_address(text)
+    except ValueError:
+        return None
+    address = parsed.ip if hasattr(parsed, "ip") else parsed
+    if address.version != 4:
+        return None
+    return str(address)
+
+
+def _device_ip_references_by_ip(
+    db,
+    *,
+    ip_addresses: set[str],
+) -> dict[str, list[dict[str, str]]]:
+    if not ip_addresses:
+        return {}
+
+    from app.models.network import OLTDevice
+    from app.models.network_monitoring import NetworkDevice
+    from app.models.radius import RadiusClient
+    from app.models.router_management import Router
+
+    result: dict[str, list[dict[str, str]]] = defaultdict(list)
+    candidate_values = set(ip_addresses)
+    candidate_values.update(f"{ip}/32" for ip in ip_addresses)
+
+    def add_reference(ip_value: object, *, source: str, label: object, entity_id: object) -> None:
+        ip = _normalize_ipv4_host(ip_value)
+        if ip not in ip_addresses:
+            return
+        name = str(label or "").strip() or source
+        result[ip].append(
+            {
+                "source": source,
+                "label": name,
+                "entity_id": str(entity_id or ""),
+            }
+        )
+
+    def query_rows(model, *field_names: str):
+        try:
+            query = db.query(model)
+            filters = []
+            for field_name in field_names:
+                column = getattr(model, field_name, None)
+                if column is not None:
+                    filters.append(column.in_(candidate_values))
+            if filters:
+                query = query.filter(or_(*filters))
+            return query.all()
+        except Exception:
+            return []
+
+    for device in query_rows(NetworkDevice, "mgmt_ip"):
+        if getattr(device, "is_active", True) is False:
+            continue
+        add_reference(
+            getattr(device, "mgmt_ip", None),
+            source="Network device",
+            label=getattr(device, "name", None) or getattr(device, "hostname", None),
+            entity_id=getattr(device, "id", None),
+        )
+
+    for device in query_rows(NasDevice, "management_ip", "ip_address", "nas_ip"):
+        if getattr(device, "is_active", True) is False:
+            continue
+        label = getattr(device, "name", None) or getattr(device, "code", None)
+        for field, source in (
+            ("management_ip", "NAS management IP"),
+            ("ip_address", "NAS IP"),
+            ("nas_ip", "NAS RADIUS IP"),
+        ):
+            add_reference(
+                getattr(device, field, None),
+                source=source,
+                label=label,
+                entity_id=getattr(device, "id", None),
+            )
+
+    for device in query_rows(OLTDevice, "mgmt_ip"):
+        if getattr(device, "is_active", True) is False:
+            continue
+        add_reference(
+            getattr(device, "mgmt_ip", None),
+            source="OLT management IP",
+            label=getattr(device, "name", None) or getattr(device, "hostname", None),
+            entity_id=getattr(device, "id", None),
+        )
+
+    for router in query_rows(Router, "management_ip"):
+        add_reference(
+            getattr(router, "management_ip", None),
+            source="Router management IP",
+            label=getattr(router, "name", None) or getattr(router, "hostname", None),
+            entity_id=getattr(router, "id", None),
+        )
+
+    for client in query_rows(RadiusClient, "client_ip"):
+        if getattr(client, "is_active", True) is False:
+            continue
+        add_reference(
+            getattr(client, "client_ip", None),
+            source="RADIUS client IP",
+            label=getattr(client, "description", None),
+            entity_id=getattr(client, "id", None),
+        )
+
+    for ip, refs in result.items():
+        seen: set[tuple[str, str, str]] = set()
+        deduped: list[dict[str, str]] = []
+        for ref in refs:
+            key = (ref["source"], ref["label"], ref["entity_id"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(ref)
+        result[ip] = deduped
+
+    return result
 
 
 def _query_count(db, model, where_clause=None) -> int:
@@ -730,6 +856,10 @@ def _build_ipv4_range_rows(
     )
     limited_hosts = all_hosts[:limit] if limit > 0 else all_hosts
     subscriptions_by_ip = _subscriptions_by_ipv4(db, ip_addresses=limited_hosts)
+    device_refs_by_ip = _device_ip_references_by_ip(
+        db,
+        ip_addresses=set(limited_hosts),
+    )
 
     rows: list[dict[str, object]] = []
     assigned_count = 0
@@ -737,6 +867,7 @@ def _build_ipv4_range_rows(
     available_count = 0
     for ip in limited_hosts:
         record = address_records.get(ip)
+        device_refs = device_refs_by_ip.get(ip, [])
         assignment = _active_assignment(record) if record else None
         subscriber = getattr(assignment, "subscriber", None) if assignment else None
         subscription = _matching_subscription_for_assignment(
@@ -745,12 +876,22 @@ def _build_ipv4_range_rows(
             assignment=assignment,
         )
         status = _ipam_row_status(record)
-        if status in {"assigned", "ont_management"}:
+        if status in {"available", "reserved"} and device_refs:
+            status = "device"
+        if status in {"assigned", "ont_management", "device"}:
             assigned_count += 1
         elif status == "reserved":
             reserved_count += 1
         else:
             available_count += 1
+
+        device_label = ", ".join(ref["label"] for ref in device_refs) or None
+        device_sources = ", ".join(
+            sorted({ref["source"] for ref in device_refs})
+        ) or None
+        device_search = " ".join(
+            f"{ref['label']} {ref['source']}" for ref in device_refs
+        )
 
         rows.append(
             {
@@ -762,7 +903,8 @@ def _build_ipv4_range_rows(
                     f"{str(getattr(subscriber, 'first_name', '') or '').strip()} "
                     f"{str(getattr(subscriber, 'last_name', '') or '').strip()} "
                     f"{str(getattr(subscriber, 'email', '') or '').strip()} "
-                    f"{str(getattr(subscription, 'service_id', '') or '').strip()}"
+                    f"{str(getattr(subscription, 'service_id', '') or '').strip()} "
+                    f"{device_search}"
                 )
                 .strip()
                 .lower(),
@@ -781,8 +923,12 @@ def _build_ipv4_range_rows(
                     getattr(subscription, "service_id", "") or ""
                 ).strip()
                 or None,
-                "device": str(metadata.get("router") or "").strip() or None,
-                "notes": str(getattr(record, "notes", "") or "").strip() or None,
+                "device": device_label
+                or str(metadata.get("router") or "").strip()
+                or None,
+                "notes": str(getattr(record, "notes", "") or "").strip()
+                or device_sources
+                or None,
             }
         )
 
