@@ -53,6 +53,17 @@ def main() -> int:
         action="store_true",
         help="Skip the CoA session kick (status + RADIUS rebuild only).",
     )
+    parser.add_argument(
+        "--out",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Write the FULL result (every account_id + prior/new status), not "
+            "just the printed sample, to PATH as JSON — an audit artifact of "
+            "exactly which subscribers were reconciled. Recommended before the "
+            "full apply (export the dry-run and the --limit sample first)."
+        ),
+    )
     args = parser.parse_args()
 
     session = SessionLocal()
@@ -64,26 +75,27 @@ def main() -> int:
             send_coa=not args.no_coa,
         )
 
+        report = {
+            "mode": "dry_run" if summary.dry_run else "apply",
+            "candidates": summary.candidates,
+            "changed": summary.changed,
+            "errors": summary.errors,
+            "radius_refreshed": summary.radius_refreshed,
+            "sessions_kicked": summary.sessions_kicked,
+        }
         print("=== blocked-but-all-active subscriber drift ===")
-        print(
-            json.dumps(
-                {
-                    "candidates": summary.candidates,
-                    "changed": summary.changed,
-                    "errors": summary.errors,
-                    "dry_run": summary.dry_run,
-                    "radius_refreshed": summary.radius_refreshed,
-                    "sessions_kicked": summary.sessions_kicked,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        print(json.dumps(report, indent=2, sort_keys=True))
 
-        sample = [asdict(r) for r in summary.results[:SAMPLE]]
+        results = [asdict(r) for r in summary.results]
+        sample = results[:SAMPLE]
         if sample:
-            print(f"\n--- sample (showing {len(sample)}) ---")
+            print(f"\n--- sample (showing {len(sample)} of {len(results)}) ---")
             print(json.dumps(sample, indent=2))
+
+        if args.out:
+            with open(args.out, "w") as fh:
+                json.dump({**report, "results": results}, fh, indent=2, sort_keys=True)
+            print(f"\nFull audit artifact written: {args.out} ({len(results)} rows)")
 
         if summary.dry_run:
             print("\nDRY RUN — no changes written. Re-run with --apply to reconcile.")

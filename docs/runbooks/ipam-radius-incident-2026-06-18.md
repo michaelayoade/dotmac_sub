@@ -81,23 +81,31 @@ alongside the unchanged `Framed-IP-Address 160.119.126.18`.
 
 ## Step 4 — #296 subscriber-status drift reconcile
 
+**Export every step as an audit artifact** with `--out` (writes the FULL result —
+every `account_id` + prior/new status — not just the printed sample). Keep these
+JSON files; they are the record of exactly which subscribers were changed.
+
 ```
 docker compose exec -T -e PYTHONPATH=/app app \
-  python scripts/one_off/reconcile_blocked_subscriber_drift.py          # dry-run
+  python scripts/one_off/reconcile_blocked_subscriber_drift.py \
+    --out /tmp/drift-dryrun.json                                       # dry-run
 ```
 
 Before/after checks:
 
 1. **Dry-run `candidates` should equal 1,652** (the verified cohort) — or explain
-   the delta before proceeding (numbers move as customers transact).
-2. Sample apply:
+   the delta before proceeding (numbers move as customers transact). Archive
+   `drift-dryrun.json`.
+2. Sample apply (export the artifact first):
    ```
-   ... reconcile_blocked_subscriber_drift.py --apply --limit 25
+   ... reconcile_blocked_subscriber_drift.py --apply --limit 25 --out /tmp/drift-sample.json
    ```
    Then verify for those 25: `subscribers.status` flipped to `active`; their
    logins' `radreply` no longer has `Mikrotik-Address-List=suspended`; CoA /
-   session behaviour is correct (session re-auths un-walled).
-3. **Full apply only after the sample passes.**
+   session behaviour is correct (session re-auths un-walled). Archive
+   `drift-sample.json`.
+3. **Full apply only after the sample passes** — again with
+   `--out /tmp/drift-full.json` for the complete audit trail.
 4. The **1,095 mixed-status** accounts stay excluded — the cohort finder requires
    *all* subscriptions active, so they are never selected. Do not force them.
 
