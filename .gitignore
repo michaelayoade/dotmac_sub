@@ -96,3 +96,6 @@ data/olt_samples/
 
 # Edge-case sweep generated artifacts (screenshots + json)
 docs/testing/results/
+
+# Terminal-IP backlog apply manifests (subscriber/assignment ids) — runtime artifacts
+terminal_ip_*.json
