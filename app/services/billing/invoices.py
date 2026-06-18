@@ -110,19 +110,35 @@ class Invoices(ListResponseMixin):
         db: Session,
         subscriber_id: str,
         subscription_id: str,
+        *,
+        allow_prepaid: bool = False,
     ) -> Invoice:
         """Create an invoice with line items auto-populated from a subscription's offer price.
 
         Looks up the subscription's active offer price and creates an invoice
         with a single line item for the recurring charge.  Tax is applied
         according to the subscriber's tax rate if set.
+
+        Prepaid subscriptions draw down a deposit and are not normally invoiced;
+        this raises unless ``allow_prepaid=True`` is passed as a deliberate
+        credit/admin override.
         """
-        from app.models.catalog import CatalogOffer, OfferPrice, Subscription
+        from app.models.catalog import BillingMode, CatalogOffer, OfferPrice, Subscription
         from app.models.subscriber import Subscriber
 
         subscription = db.get(Subscription, coerce_uuid(subscription_id))
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+
+        if subscription.billing_mode == BillingMode.prepaid and not allow_prepaid:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This is a prepaid subscription (billed by deposit drawdown). "
+                    "Invoicing it would double-bill the customer. Use the explicit "
+                    "credit override only if service was deliberately delivered on credit."
+                ),
+            )
 
         subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
         if not subscriber:
