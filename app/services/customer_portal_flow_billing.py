@@ -109,7 +109,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         )
 
     ledger_entries = billing_service.ledger_entries.list(
-        db, account_id, None, None, True, "created_at", "desc", limit, 0
+        db, account_id, None, None, True, "effective_date", "desc", limit, 0
     )
     for entry in ledger_entries:
         source = _enum_value(entry.source)
@@ -125,7 +125,9 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
                 description=category or source.replace("_", " ").title(),
                 amount=entry.amount or Decimal("0.00"),
                 currency=entry.currency or "NGN",
-                occurred_at=_money_activity_timestamp(entry.created_at),
+                occurred_at=_money_activity_timestamp(
+                    entry.effective_date, entry.created_at
+                ),
                 reference=None,
             )
         )
@@ -198,7 +200,7 @@ def get_billing_page(
 
     # Backwards-compatible raw ledger rows for older templates.
     ledger_entries = billing_service.ledger_entries.list(
-        db, account_id_str, None, None, True, "created_at", "desc", 25, 0
+        db, account_id_str, None, None, True, "effective_date", "desc", 25, 0
     )
     billing_activity = _build_billing_activity(db, account_id_str)
 
