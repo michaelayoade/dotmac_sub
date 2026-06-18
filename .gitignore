@@ -103,3 +103,5 @@ post_cutover_*.csv
 billing_violations_*.csv
 # Billing dry-run snapshots (operational counts) — runtime artifacts
 billing_dryrun_*.json
+# Billing remediation manifests (invoice line ids, account refs) — runtime artifacts
+remediation_*.json
