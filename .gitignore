@@ -101,3 +101,5 @@ terminal_ip_*.json
 post_cutover_*.csv
 # Billing-violation finance decision packet — reproducible, customer PII (regenerate from scripts/billing/)
 billing_violations_*.csv
+# Billing dry-run snapshots (operational counts) — runtime artifacts
+billing_dryrun_*.json
