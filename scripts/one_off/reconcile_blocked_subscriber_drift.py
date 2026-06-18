@@ -46,7 +46,24 @@ def main() -> int:
         "--limit",
         type=int,
         default=None,
-        help="Cap the number of accounts reconciled.",
+        help="Cap the number of accounts reconciled. Ignored if --account-ids/"
+        "--account-id is given.",
+    )
+    parser.add_argument(
+        "--account-ids",
+        default=None,
+        help="Comma-separated subscriber UUIDs — a TARGETED sample instead of the "
+        "first-N cohort. Still filtered by eligibility (blocked + all-active); "
+        "ineligible ones are reported as skipped with a reason and never mutated. "
+        "Takes precedence over --limit.",
+    )
+    parser.add_argument(
+        "--account-id",
+        action="append",
+        default=[],
+        dest="account_id",
+        metavar="UUID",
+        help="Repeatable single subscriber UUID; combines with --account-ids.",
     )
     parser.add_argument(
         "--no-coa",
@@ -66,10 +83,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Collect targeted ids from both flags (precedence over --limit).
+    account_ids = [a.strip() for a in (args.account_ids or "").split(",") if a.strip()]
+    account_ids += [a.strip() for a in args.account_id if a.strip()]
+    account_ids = account_ids or None
+    if account_ids and args.limit is not None:
+        print("NOTE: --limit is ignored because --account-ids/--account-id was given.")
+
     session = SessionLocal()
     try:
         summary = reconcile_cohort(
             session,
+            account_ids=account_ids,
             limit=args.limit,
             dry_run=not args.apply,
             send_coa=not args.no_coa,
@@ -77,14 +102,20 @@ def main() -> int:
 
         report = {
             "mode": "dry_run" if summary.dry_run else "apply",
+            "targeted": account_ids is not None,
             "candidates": summary.candidates,
             "changed": summary.changed,
             "errors": summary.errors,
+            "skipped": len(summary.skipped),
             "radius_refreshed": summary.radius_refreshed,
             "sessions_kicked": summary.sessions_kicked,
         }
         print("=== blocked-but-all-active subscriber drift ===")
         print(json.dumps(report, indent=2, sort_keys=True))
+
+        if summary.skipped:
+            print(f"\n--- skipped (ineligible, {len(summary.skipped)}) ---")
+            print(json.dumps(summary.skipped, indent=2))
 
         results = [asdict(r) for r in summary.results]
         sample = results[:SAMPLE]
@@ -94,7 +125,12 @@ def main() -> int:
 
         if args.out:
             with open(args.out, "w") as fh:
-                json.dump({**report, "results": results}, fh, indent=2, sort_keys=True)
+                json.dump(
+                    {**report, "skipped_detail": summary.skipped, "results": results},
+                    fh,
+                    indent=2,
+                    sort_keys=True,
+                )
             print(f"\nFull audit artifact written: {args.out} ({len(results)} rows)")
 
         if summary.dry_run:

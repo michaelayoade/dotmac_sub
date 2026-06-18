@@ -58,6 +58,54 @@ class DriftSummary:
     radius_refreshed: bool = False
     sessions_kicked: int = 0
     results: list[DriftResult] = field(default_factory=list)
+    # Explicitly-requested accounts that failed the eligibility filter, with the
+    # reason. Only populated when ``account_ids`` is passed.
+    skipped: list[dict] = field(default_factory=list)
+
+
+def account_eligibility(db: Session, account_id: str) -> tuple[bool, str | None]:
+    """Per-account eligibility for the all-active reconcile.
+
+    Eligible = a ``blocked`` subscriber whose subscriptions are ALL active (the
+    same rule as ``find_blocked_all_active_account_ids``, but for one explicitly
+    named account). Returns ``(eligible, reason_if_not)``. This is the guard that
+    keeps a targeted ``--account-ids`` run from flipping a mixed/active account:
+    ``reconcile_account`` alone would still derive ``active`` for any account with
+    one active sub, so the eligibility filter — not the derivation — is the safety.
+    """
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if account is None:
+        return False, "not_found"
+    if account.status != SubscriberStatus.blocked:
+        status = account.status.value if account.status else "unknown"
+        return False, f"not_blocked (status={status})"
+    statuses = [
+        r[0]
+        for r in db.execute(
+            select(Subscription.status).where(Subscription.subscriber_id == account.id)
+        ).all()
+    ]
+    active = sum(1 for s in statuses if s == SubscriptionStatus.active)
+    if active == 0:
+        return False, "no_active_subscription"
+    if active != len(statuses):
+        return False, "mixed_status (has non-active subscriptions)"
+    return True, None
+
+
+def _partition_requested(
+    db: Session, account_ids: list[str]
+) -> tuple[list[str], list[dict]]:
+    """Split explicitly-requested account_ids into (eligible, skipped+reason)."""
+    eligible: list[str] = []
+    skipped: list[dict] = []
+    for aid in account_ids:
+        ok, reason = account_eligibility(db, aid)
+        if ok:
+            eligible.append(aid)
+        else:
+            skipped.append({"account_id": str(aid), "reason": reason})
+    return eligible, skipped
 
 
 def find_blocked_all_active_account_ids(
@@ -177,9 +225,13 @@ def reconcile_cohort(
 ) -> DriftSummary:
     """Reconcile blocked-but-all-active subscribers, then refresh RADIUS + CoA.
 
-    ``account_ids`` given → reconcile exactly those (still re-derived from their
-    subscriptions, so a genuinely-blocked account is left blocked). Otherwise
-    discover the cohort via ``find_blocked_all_active_account_ids``.
+    ``account_ids`` given → reconcile ONLY those that pass the same eligibility
+    filter (blocked subscriber, all subs active); ineligible ones are recorded in
+    ``summary.skipped`` with a reason and NEVER mutated (the filter — not the
+    derivation — is the safety, since ``reconcile_account`` would otherwise flip
+    any account with one active sub). ``limit`` is ignored when ``account_ids`` is
+    given. Otherwise discover the full cohort via
+    ``find_blocked_all_active_account_ids``.
 
     ``notify`` defaults False — this is a bulk catch-up, so suppress the
     "service resumed" burst. RADIUS is rebuilt ONCE after all status writes, then
@@ -190,11 +242,13 @@ def reconcile_cohort(
     ``coa_fn(db, subscription_id, reason=...)`` kicks a session and returns a
     count. Both default to the real implementations (lazily imported).
     """
+    skipped: list[dict] = []
     if account_ids is not None:
-        targets = list(account_ids)
+        targets, skipped = _partition_requested(db, account_ids)
     else:
         targets = find_blocked_all_active_account_ids(db, limit=limit)
     summary = DriftSummary(candidates=len(targets), dry_run=dry_run)
+    summary.skipped = skipped
 
     if dry_run:
         summary.results = [project_account(db, aid) for aid in targets]
