@@ -22,6 +22,22 @@ Rollout for the two incident PRs. Three distinct faults (see commit messages):
 3. c8739bc8 routed-`/30` repair — **only after #294 is live.**
 4. #296 subscriber-status drift reconcile.
 
+> **Release guard:** **merge #296 only after #294 is deployed.** The c8739bc8
+> repair (in #296) reactivates a routed `/30`, and the allocator's active-route
+> exclusion (in #294) must be live first — otherwise a routed host could be
+> handed to another subscriber between merge and deploy.
+
+## Artifact handling (audit)
+
+Every exported artifact is an immutable record — **do not overwrite or edit once
+written**. Beside each, capture the **exact command line** and the **deployed
+SHAs** (#294 and #296 commit SHAs that were live at run time). Artifacts to keep:
+
+- `drift-dryrun.json`, `drift-sample.json`, `drift-full.json` (reconciler `--out`)
+- the c8739bc8 dry-run and apply console output
+
+This makes rollback/audit straightforward if field reports come in later.
+
 ## Step 1 — deploy #294 (allocator)
 
 Merge #294, deploy, restart the app + celery workers (the bind-mount needs a
