@@ -1017,77 +1017,6 @@
             </div>
         </div>
 
-        <div class="grid gap-6 xl:grid-cols-4">
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Support Load</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.open_tickets | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Open tickets tied to this customer</p>
-                {% if support_tickets %}
-                <div class="mt-4 space-y-2">
-                    {% for ticket in support_tickets[:2] %}
-                    <a href="/admin/support/tickets/{{ ticket.id }}" class="block rounded-xl border border-slate-200/70 px-3 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40">
-                        <p class="font-medium text-slate-900 dark:text-white">{{ ticket.title }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ticket.status.value | replace('_', ' ') | title }} · {{ ticket.priority.value | title }}</p>
-                    </a>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Communications</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.recent_communications | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Recent logged messages and notifications</p>
-                {% if communication_logs %}
-                <div class="mt-4 space-y-2">
-                    {% for log in communication_logs[:2] %}
-                    <div class="rounded-xl border border-slate-200/70 px-3 py-2 dark:border-slate-700">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ (log.subject or log.body or log.recipient or log.channel.value)[:52] }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }}</p>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Network & Access</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.active_network_assets | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active ONTs, CPEs, and IP assignments</p>
-                <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">Credentials</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_credentials | default(0) }}</p>
-                    </div>
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">ONTs</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_onts | default(0) }}</p>
-                    </div>
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">CPEs</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_cpes | default(0) }}</p>
-                    </div>
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">IPs</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_ip_assignments | default(0) }}</p>
-                    </div>
-                </div>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Collections & Delivery</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_service_orders | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active service orders and dunning follow-up</p>
-                <div class="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
-                    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <span>Open dunning cases</span>
-                        <span class="font-semibold text-slate-900 dark:text-white">{{ relationship_summary.open_dunning_cases | default(0) }}</span>
-                    </div>
-                    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <span>Linked resellers</span>
-                        <span class="font-semibold text-slate-900 dark:text-white">{{ relationship_summary.linked_resellers | default(0) }}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Activity Timeline -->
         <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
@@ -1484,25 +1413,6 @@
 
     <!-- Tab Content: Support -->
     <div x-show="activeTab === 'support'" x-cloak class="space-y-6">
-        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Open Tickets</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.open_tickets | default(0) }}</p>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Communications</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.recent_communications | default(0) }}</p>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Active Credentials</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_credentials | default(0) }}</p>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Service Orders</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_service_orders | default(0) }}</p>
-            </div>
-        </div>
-
         <div class="grid gap-6 xl:grid-cols-2">
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
