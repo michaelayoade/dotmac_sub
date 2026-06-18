@@ -99,3 +99,5 @@ docs/testing/results/
 terminal_ip_*.json
 # Post-cutover finance hand-off artifacts — reproducible, contain customer PII (regenerate from scripts/billing/)
 post_cutover_*.csv
+# Billing-violation finance decision packet — reproducible, customer PII (regenerate from scripts/billing/)
+billing_violations_*.csv
