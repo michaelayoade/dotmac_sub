@@ -91,6 +91,7 @@ def template_form_context(
         if is_edit
         else "New Notification Template",
         "submit_label": "Update Template" if is_edit else "Create Template",
+        "template_variables": template_renderer.TEMPLATE_VARIABLES,
     }
     if template is not None:
         context["template"] = template
@@ -112,9 +113,11 @@ def create_template(
     subject: str | None,
     body: str,
 ):
+    normalized_code = _normalize_template_code(code)
+    template_renderer.validate_template_text(subject, body, code=normalized_code)
     payload = NotificationTemplateCreate(
         name=name.strip(),
-        code=_normalize_template_code(code),
+        code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
@@ -133,9 +136,11 @@ def update_template(
     body: str,
     is_active: bool,
 ):
+    normalized_code = _normalize_template_code(code)
+    template_renderer.validate_template_text(subject, body, code=normalized_code)
     payload = NotificationTemplateUpdate(
         name=name.strip(),
-        code=_normalize_template_code(code),
+        code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
