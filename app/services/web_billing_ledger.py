@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
@@ -101,7 +102,14 @@ def build_ledger_entries_data(
             )
         query = _apply_date_range(query)
         entries = (
-            query.order_by(LedgerEntry.created_at.desc()).limit(limit).offset(0).all()
+            query.order_by(
+                func.coalesce(
+                    LedgerEntry.effective_date, LedgerEntry.created_at
+                ).desc()
+            )
+            .limit(limit)
+            .offset(0)
+            .all()
         )
 
     credit_entries = [
