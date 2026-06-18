@@ -172,7 +172,6 @@ class TestCustomerTopupRoutes:
         assert context["active_page"] == "billing"
         assert context["payment_options"] == [
             {"provider_type": "paystack", "label": "Pay with Paystack"},
-            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
         ]
 
     def test_topup_intent_route_returns_json_payload(self) -> None:

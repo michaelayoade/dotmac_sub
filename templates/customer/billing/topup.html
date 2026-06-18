@@ -4,8 +4,7 @@
 
 {% block content %}
 {% set topup_options = payment_options|default([
-    {"provider_type": "paystack", "label": "Pay with Paystack"},
-    {"provider_type": "flutterwave", "label": "Pay with Flutterwave"}
+    {"provider_type": "paystack", "label": "Pay with Paystack"}
 ], true) %}
 <div class="space-y-6" x-data="topupPage()">
     <div>
@@ -103,19 +102,26 @@
             <div>
                 <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Payment method</h2>
                 <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Choose how you want to pay after setting the amount.</p>
+                <button
+                    type="button"
+                    @click="showTopupHelp = true"
+                    class="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
+                    <span>What happens after I pay?</span>
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white dark:bg-emerald-500">?</span>
+                </button>
             </div>
 
             <div class="mt-5 space-y-3">
                 {% for option in topup_options %}
                 <label
                     :class="selectedPaymentChoice === 'provider:{{ option.provider_type }}' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600'"
-                    class="flex cursor-pointer items-center gap-4 rounded-2xl border p-4 transition-colors">
+                    class="flex cursor-pointer items-start gap-4 rounded-2xl border p-4 transition-colors">
                     <input
                         type="radio"
                         name="payment_choice"
                         value="provider:{{ option.provider_type }}"
                         x-model="selectedPaymentChoice"
-                        class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
+                        class="mt-3 h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
                     <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
                         {% if option.provider_type == "direct_bank_transfer" %}
                         <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -135,6 +141,12 @@
                             {% else %}
                             Secure online checkout
                             {% endif %}
+                        </span>
+                        <span
+                            x-show="providerErrorFor('{{ option.provider_type }}')"
+                            x-cloak
+                            class="mt-2 block rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700 dark:bg-red-900/20 dark:text-red-300"
+                            x-text="providerErrorFor('{{ option.provider_type }}')">
                         </span>
                     </span>
                 </label>
@@ -284,15 +296,42 @@
                     </div>
                 </dl>
             </div>
+        </div>
+    </div>
 
-            <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
-                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">What happens next</h2>
-                <ol class="mt-4 space-y-3 text-sm text-stone-600 dark:text-stone-300">
-                    <li>1. Pay the amount you choose.</li>
-                    <li>2. We verify the payment when you return from the gateway.</li>
-                    <li>3. Any overdue invoices are paid first, then the remainder becomes account credit.</li>
-                </ol>
+    <div
+        x-show="showTopupHelp"
+        x-cloak
+        class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/50 px-4 py-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="topup-help-title"
+        @keydown.escape.window="showTopupHelp = false">
+        <div class="absolute inset-0" @click="showTopupHelp = false"></div>
+        <div
+            x-show="showTopupHelp"
+            x-transition
+            class="relative w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-2xl dark:border-stone-700 dark:bg-stone-900">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Top-up details</p>
+                    <h2 id="topup-help-title" class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">What happens next</h2>
+                </div>
+                <button
+                    type="button"
+                    @click="showTopupHelp = false"
+                    class="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-stone-200 text-stone-500 transition-colors hover:bg-stone-50 hover:text-stone-700 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800 dark:hover:text-white">
+                    <span class="sr-only">Close</span>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
             </div>
+            <ol class="mt-5 space-y-3 text-sm text-stone-600 dark:text-stone-300">
+                <li>1. Pay the amount you choose.</li>
+                <li>2. We verify the payment when you return from the gateway.</li>
+                <li>3. Any overdue invoices are paid first, then the remainder becomes account credit.</li>
+            </ol>
         </div>
     </div>
 </div>
@@ -304,12 +343,20 @@ function topupPage() {
         liveReference: '',
         customAmount: '{{ prefill_amount if prefill_amount else "" }}',
         validationError: '',
+        providerErrors: {},
+        showTopupHelp: false,
         saveCard: {{ 'true' if add_card else 'false' }},
         selectedPaymentChoice: 'provider:{{ provider_type }}',
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
         syncCustomAmount() {
             this.validationError = '';
+        },
+        providerErrorFor(providerType) {
+            return this.providerErrors[providerType] || '';
+        },
+        clearProviderErrors() {
+            this.providerErrors = {};
         },
         currentAmount() {
             const parsed = parseInt(this.customAmount, 10);
@@ -358,6 +405,7 @@ function topupPage() {
         },
         async startPayment() {
             const amount = this.currentAmount();
+            this.clearProviderErrors();
             if (!amount) {
                 this.validationError = 'Enter a valid amount before continuing.';
                 return;
@@ -373,10 +421,12 @@ function topupPage() {
 
             this.processing = true;
             this.validationError = '';
+            this.clearProviderErrors();
             const self = this;
             let intent;
             const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
-            const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : 'paystack';
+            const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
+            const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
             // Saved-card charges go server-side immediately, so guard against a
             // double-submit with an Idempotency-Key (one per charge attempt).
@@ -392,7 +442,7 @@ function topupPage() {
                     },
                     body: JSON.stringify({
                         amount: amount,
-                        provider: selectedProvider,
+                        provider: requestProvider,
                         payment_method_id: selectedPaymentMethodId,
                     }),
                 });
@@ -416,13 +466,23 @@ function topupPage() {
                 }
             } catch (error) {
                 this.processing = false;
-                this.validationError = error.message || 'Unable to start payment.';
+                if (selectedProvider) {
+                    this.providerErrors = {
+                        ...this.providerErrors,
+                        [selectedProvider]: error.message || 'Unable to start payment.',
+                    };
+                } else {
+                    this.validationError = error.message || 'Unable to start payment.';
+                }
                 return;
             }
 
             if (intent.provider_type === 'flutterwave') {
                 this.processing = false;
-                this.validationError = 'Unable to start Flutterwave checkout.';
+                this.providerErrors = {
+                    ...this.providerErrors,
+                    flutterwave: 'Unable to start Flutterwave checkout.',
+                };
                 return;
             }
 

@@ -1588,7 +1588,6 @@ def customer_billing_topup(
     if not page_data.get("payment_options"):
         page_data["payment_options"] = [
             {"provider_type": "paystack", "label": "Pay with Paystack"},
-            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
         ]
     return templates.TemplateResponse(
         "customer/billing/topup.html",
