@@ -5,8 +5,22 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services import settings_spec
+
+# A subscription in one of these states still represents a *live* service the
+# account can be billed for. Everything else — disabled (admin-terminated),
+# canceled, stopped, expired, blocked, archived, hidden — is terminal: a
+# terminated service must not keep generating reminders, dunning escalations,
+# or autopay charges. ``suspended``/``blocked`` differ here on purpose:
+# ``suspended`` is a recoverable non-payment hold we keep chasing, while
+# ``blocked`` is an enforcement endpoint that is not a live billable service.
+LIVE_SERVICE_STATUSES = (
+    SubscriptionStatus.active,
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.pending,
+)
 
 
 def billing_enabled(db: Session, *, default: bool = True) -> bool:
@@ -116,3 +130,41 @@ def resolve_payment_due_days(
         return max(_coerce_int(legacy_terms, default), 0)
 
     return default
+
+
+def accounts_with_live_service(db: Session) -> set:
+    """Subscriber IDs that have at least one subscription in a live service
+    state (see :data:`LIVE_SERVICE_STATUSES`).
+
+    Billing automation that *chases an existing balance* — invoice reminders,
+    dunning escalations, autopay charges — must skip accounts whose services
+    are all terminal: a disabled/canceled/expired service should not keep
+    pinging or charging the customer. This mirrors the eligibility gate in
+    ``collections.DunningWorkflow`` but spans every billing mode, since
+    reminders and autopay are not postpaid-specific.
+    """
+    return set(
+        db.scalars(
+            select(Subscription.subscriber_id)
+            .where(Subscription.status.in_(LIVE_SERVICE_STATUSES))
+            .distinct()
+        ).all()
+    )
+
+
+def account_has_live_service(db: Session, account_id) -> bool:
+    """Whether a single account still has a live (billable) service.
+
+    Single-account counterpart to :func:`accounts_with_live_service`, for hot
+    paths that already operate on one account (e.g. autopay) and only need a
+    cheap existence check rather than the full set.
+    """
+    return (
+        db.scalars(
+            select(Subscription.id)
+            .where(Subscription.subscriber_id == account_id)
+            .where(Subscription.status.in_(LIVE_SERVICE_STATUSES))
+            .limit(1)
+        ).first()
+        is not None
+    )
