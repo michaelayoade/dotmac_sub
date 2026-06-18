@@ -711,6 +711,14 @@ class LedgerEntry(Base):
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # The real-world date the entry represents (invoice issue / payment / txn
+    # date). NULL for native entries and any row the cutover backfill could not
+    # resolve; display/order should COALESCE(effective_date, created_at). The
+    # migrated ledger lost original dates — created_at is the import instant.
+    effective_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

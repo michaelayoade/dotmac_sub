@@ -282,7 +282,7 @@ def my_balance(
 def my_ledger(
     entry_type: str | None = None,
     source: str | None = None,
-    order_by: str = Query(default="created_at"),
+    order_by: str = Query(default="effective_date"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
