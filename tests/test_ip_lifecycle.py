@@ -6,6 +6,10 @@ docs/POST_CUTOVER_HARDENING.md.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
+
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
@@ -184,7 +188,13 @@ class TestBacklogPlanner:
 class TestLifecycleWiring:
     """Exercise the terminal transition APIs themselves — the PR's core claim is
     that they release service IPs, so a future path bypassing the helper fails
-    here, not silently."""
+    here, not silently. Event dispatch is stubbed (the release runs before emit)
+    so these stay fast and don't depend on downstream handlers."""
+
+    @pytest.fixture(autouse=True)
+    def _no_event_dispatch(self):
+        with patch("app.services.account_lifecycle.emit_event"):
+            yield
 
     def test_expire_subscription_releases_ip(self, db_session, catalog_offer):
         s = _subscriber(db_session, "w1@e.com")
