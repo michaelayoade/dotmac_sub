@@ -25,6 +25,7 @@ from sqlalchemy import Column, String, select
 
 from app.db import SessionLocal
 from app.models.catalog import (
+    AccessCredential,
     RadiusProfile,
     Subscription,
     SubscriptionStatus,
@@ -33,6 +34,7 @@ from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.radius import (
     _active_external_sync_configs,
+    _external_password_row,
     _external_radius_table,
     _get_external_engine,
 )
@@ -49,9 +51,28 @@ COLUMNS = [
     "ip_assignment",
     "radcheck_present",
     "radreply_present",
+    "credential_active",
+    "usable_password",
     "expected_radius_action",
     "classification",
 ]
+
+
+def _usable_password(db, subscriber_id, login: str) -> tuple[bool, bool]:
+    """(credential_active, has_usable_password) for the subscriber's credential
+    matching this login. A radcheck row cannot exist without a usable password,
+    so re-sync alone can't fix a credential whose secret is empty/unusable."""
+    cred = db.execute(
+        select(AccessCredential)
+        .where(AccessCredential.subscriber_id == subscriber_id)
+        .where(AccessCredential.username == login)
+    ).scalar()
+    if cred is None:
+        return False, False
+    row = _external_password_row(
+        cred, default_attribute="Cleartext-Password", default_op=":="
+    )
+    return bool(cred.is_active), row is not None
 
 
 def _radius_presence(db, logins: list[str]) -> tuple[set[str], set[str]]:
@@ -136,14 +157,25 @@ def main() -> int:
             ).scalar()
 
             qa = _is_qa(login)
-            classification = "qa_exclude" if qa else "provision"
-            if not offer_name and not qa:
+            cred_active, usable_pw = _usable_password(db, r.subscriber_id, login)
+
+            if qa:
+                classification = "qa_exclude"
+                action = "exclude from launch gate (document)"
+            elif not usable_pw:
+                # No usable PPPoE secret -> radcheck can't be written by ANY
+                # sync. Needs a password RESET (customer-impacting), not re-sync.
+                classification = "password_reset_required"
+                action = (
+                    "reset PPPoE password + notify customer (CPE update); "
+                    "re-sync alone cannot create radcheck"
+                )
+            elif not offer_name:
                 classification = "manual_review"
-            action = (
-                "exclude from launch gate (document)"
-                if qa
-                else "provision radcheck (+radreply for static IP) from current state"
-            )
+                action = "missing offer — investigate"
+            else:
+                classification = "provision"
+                action = "re-sync radcheck/radreply from current state"
             report.append(
                 {
                     "subscription_id": str(r.id),
@@ -161,6 +193,8 @@ def main() -> int:
                     "ip_assignment": assign or "",
                     "radcheck_present": login in in_radcheck,
                     "radreply_present": login in in_radreply,
+                    "credential_active": cred_active,
+                    "usable_password": usable_pw,
                     "expected_radius_action": action,
                     "classification": classification,
                 }
