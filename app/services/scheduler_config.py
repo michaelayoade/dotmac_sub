@@ -802,6 +802,32 @@ def build_beat_schedule() -> dict:
             enabled=suspension_audit_enabled,
             interval_seconds=suspension_audit_interval_seconds,
         )
+        # IPv4 consistency audit (read-only; quantifies column/IPAM/radreply
+        # drift). Shares cadence defaults with the suspension audit.
+        ip_consistency_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.radius,
+            "ip_consistency_audit_enabled",
+            "RADIUS_IP_CONSISTENCY_AUDIT_ENABLED",
+            True,
+        )
+        ip_consistency_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.radius,
+            "ip_consistency_audit_interval_seconds",
+            "RADIUS_IP_CONSISTENCY_AUDIT_INTERVAL_SECONDS",
+            21600,  # Every 6 hours
+        )
+        ip_consistency_audit_interval_seconds = max(
+            ip_consistency_audit_interval_seconds, 900
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_ip_consistency_audit",
+            task_name="app.tasks.radius.audit_ip_consistency",
+            enabled=ip_consistency_audit_enabled,
+            interval_seconds=ip_consistency_audit_interval_seconds,
+        )
         # Subscription expiration enforcement (runs daily)
         subscription_expiration_enabled = _effective_bool(
             session,
