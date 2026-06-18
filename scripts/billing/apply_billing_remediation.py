@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 
@@ -39,6 +40,13 @@ from app.services.billing_remediation import (
     plan_remediation,
     rollback_remediation,
 )
+
+
+def _csv_sha256(path: str) -> str:
+    """Fingerprint the approved CSV so the dry-run manifest is immutable approval
+    evidence: apply refuses if the CSV was edited after the reviewed dry run."""
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
 
 
 def _write(path, payload):
@@ -93,7 +101,10 @@ def main() -> int:
 
         if not args.apply:
             dry = apply_remediation(db, plan, dry_run=True)
-            _write(args.out, {**dry, "counts": c})
+            _write(
+                args.out,
+                {**dry, "counts": c, "input_csv_sha256": _csv_sha256(args.csv)},
+            )
             print("\nDRY RUN — nothing changed.")
             return 0
 
@@ -103,6 +114,14 @@ def main() -> int:
             return 2
         with open(args.expect) as fh:
             expected = json.load(fh)
+        # The CSV must be byte-identical to the one the dry-run manifest approved.
+        if expected.get("input_csv_sha256") != _csv_sha256(args.csv):
+            print(
+                "REFUSED: the --csv differs from the one the --expect manifest was "
+                "generated from. Re-run the dry run on the edited CSV and re-review. "
+                "No override."
+            )
+            return 3
         cur = _apply_before_map(i for i in plan["items"] if i["decision"] == "apply")
         exp = _apply_before_map(expected.get("applied", []))
         if cur != exp:
