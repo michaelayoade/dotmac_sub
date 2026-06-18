@@ -66,13 +66,13 @@ Before enabling any write, run the dry-run cycle daily and capture:
 
 - subscriptions scanned
 - subscriptions billed
-- invoice total (expected revenue)
-- skipped by reason
-- disabled/canceled billed count (must be 0)
-- duplicate-period count (must be 0)
+- skipped (count)
+- currency-skipped, pending-activated
+- disabled/canceled billed count (must be 0) — from the integrity audit
+- duplicate-period count (must be 0) — from the integrity audit
 
 ```bash
-# 1. operational counts — read-only; run_invoice_cycle(dry_run=True) commits nothing
+# 1. operational counts — read-only; the CLI rolls back after the dry run
 docker compose exec -T -e PYTHONPATH=/app app \
     python scripts/billing/billing_dry_run_snapshot.py \
         --out /app/billing_dryrun_$(date +%F).json --prev /app/billing_dryrun_prev.json
@@ -84,9 +84,16 @@ docker compose exec -T -e PYTHONPATH=/app app \
 
 Run it **daily, including on billing-cycle days** — `subscriptions_billed` is 0
 when nothing is due (e.g. between cycles, or a prepaid-dominant base), so a
-zero day is only meaningful next to a billing day. Reconcile
-`subscriptions_billed` to finance's expected count/revenue. **Any unexplained
-delta — or any non-zero disabled/duplicate gauge — is a stop.**
+zero day is only meaningful next to a billing day. **Any non-zero
+disabled/duplicate gauge is a stop.**
+
+> **Amount deltas (TODO before launch).** The snapshot records *counts only* —
+> `run_invoice_cycle(dry_run=True)` does not project an invoice total (the
+> dry-run branch counts without building line amounts, billing_automation.py:909).
+> Finance needs **amount** deltas, not just `subscriptions_billed`. A follow-up
+> must add a projected total to the dry-run summary (separate PR touching the
+> cycle); until then, reconcile `subscriptions_billed` × expected price to
+> finance's model manually. Do not treat count-only parity as revenue parity.
 
 ## Step 4 — launch in phases (least risky first)
 

@@ -1,10 +1,15 @@
 #!/usr/bin/env python
 """Daily dry-run billing snapshot (READ-ONLY).
 
-Runs ``run_invoice_cycle(dry_run=True)`` — which commits nothing (every write is
-gated behind ``if not dry_run``) and runs even while ``billing_enabled`` is
-false — and captures the operational counts for the launch discipline (see
-docs/BILLING_AUTOMATION_LAUNCH_RUNBOOK.md, Step 3).
+Runs ``run_invoice_cycle(dry_run=True)`` (which runs even while
+``billing_enabled`` is false) and captures the operational counts for the
+launch discipline (see docs/BILLING_AUTOMATION_LAUNCH_RUNBOOK.md, Step 3).
+
+The dry run does NOT commit, but it CAN dirty ORM objects in the session before
+the dry-run branch (notably fast-forwarding ``subscription.next_billing_at``,
+billing_automation.py:855). This CLI therefore ``db.rollback()`` after the run:
+its contract is that it leaves NO committed changes. Verified by
+``tests/test_billing_dry_run_snapshot.py``.
 
 Pair with the safety gauges from
 ``scripts/billing/billing_integrity_audit.py`` — disabled/canceled-billed and
