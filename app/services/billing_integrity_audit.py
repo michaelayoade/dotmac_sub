@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceLine
 from app.models.catalog import (
+    AccessCredential,
     AddOn,
     AddOnPrice,
     PriceType,
@@ -35,6 +36,7 @@ from app.services.ip_consistency_audit import (
     _external_ip_state,
     audit_ip_consistency,
 )
+from app.services.radius import _external_password_row
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +249,47 @@ def check_active_subscription_missing_radius(db: Session) -> dict[str, Any]:
     return res
 
 
+def check_active_subscription_with_unusable_radius_password(
+    db: Session,
+) -> dict[str, Any]:
+    """Active subscriptions whose credential has NO usable RADIUS password
+    (empty/unusable ``secret_hash``, or no/inactive credential). A radcheck row
+    cannot be written without one, so these are the subset of
+    ``active_subscription_missing_radius`` that re-sync CANNOT fix — they need a
+    customer PPPoE password RESET, not provisioning. App-DB only (no external
+    read): ``_external_password_row`` inspects the stored secret."""
+    active = db.execute(
+        select(Subscription.subscriber_id, Subscription.login)
+        .where(Subscription.status == SubscriptionStatus.active)
+        .where(Subscription.login.isnot(None))
+    ).all()
+    sub_ids = {sid for sid, _ in active if sid is not None}
+    if not sub_ids:
+        return {"count": 0, "samples": []}
+    creds = db.scalars(
+        select(AccessCredential).where(AccessCredential.subscriber_id.in_(sub_ids))
+    ).all()
+    cred_by = {(str(c.subscriber_id), c.username): c for c in creds}
+
+    leak: list[str] = []
+    for sid, login in active:
+        login = (login or "").strip()
+        if not login:
+            continue
+        cred = cred_by.get((str(sid), login))
+        usable = (
+            cred is not None
+            and cred.is_active
+            and _external_password_row(
+                cred, default_attribute="Cleartext-Password", default_op=":="
+            )
+            is not None
+        )
+        if not usable:
+            leak.append(login)
+    return _result(leak)
+
+
 # Registry of (name -> check fn).
 _CHECKS = {
     # Billing-line invariants
@@ -259,6 +302,9 @@ _CHECKS = {
     ),
     # Network / lifecycle invariants
     "active_subscription_missing_radius": check_active_subscription_missing_radius,
+    "active_subscription_with_unusable_radius_password": (
+        check_active_subscription_with_unusable_radius_password
+    ),
     "terminal_subscription_active_ip_assignment": (
         check_terminal_subscription_active_ip_assignment
     ),
