@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
+from app.services.account_lifecycle import cancel_subscription, expire_subscription
 from app.services.ip_lifecycle import (
     plan_terminal_ip_backlog,
     release_service_ips_for_subscription,
@@ -178,3 +179,58 @@ class TestBacklogPlanner:
         db_session.commit()
         plan = plan_terminal_ip_backlog(db_session)
         assert all(v == 0 for v in plan["counts"].values())
+
+
+class TestLifecycleWiring:
+    """Exercise the terminal transition APIs themselves — the PR's core claim is
+    that they release service IPs, so a future path bypassing the helper fails
+    here, not silently."""
+
+    def test_expire_subscription_releases_ip(self, db_session, catalog_offer):
+        s = _subscriber(db_session, "w1@e.com")
+        sub = _sub(
+            db_session,
+            s,
+            catalog_offer,
+            status=SubscriptionStatus.active,
+            ipv4="10.3.0.1",
+        )
+        a = _assign(db_session, s, "10.3.0.1")
+        db_session.commit()
+        assert a.is_active is True
+        expire_subscription(db_session, str(sub.id))
+        db_session.refresh(a)
+        db_session.refresh(sub)
+        assert sub.status == SubscriptionStatus.expired
+        assert a.is_active is False
+
+    def test_cancel_subscription_releases_ip(self, db_session, catalog_offer):
+        s = _subscriber(db_session, "w2@e.com")
+        sub = _sub(
+            db_session,
+            s,
+            catalog_offer,
+            status=SubscriptionStatus.active,
+            ipv4="10.3.0.2",
+        )
+        a = _assign(db_session, s, "10.3.0.2")
+        db_session.commit()
+        cancel_subscription(
+            db_session, str(sub.id), cancel_reason="test", source="test"
+        )
+        db_session.refresh(a)
+        db_session.refresh(sub)
+        assert sub.status == SubscriptionStatus.canceled
+        assert a.is_active is False
+
+    def test_cancel_keeps_ip_with_active_sibling(self, db_session, catalog_offer):
+        s = _subscriber(db_session, "w3@e.com")
+        to_cancel = _sub(db_session, s, catalog_offer, status=SubscriptionStatus.active)
+        _sub(db_session, s, catalog_offer, status=SubscriptionStatus.active)  # sibling
+        a = _assign(db_session, s, "10.3.0.3")
+        db_session.commit()
+        cancel_subscription(
+            db_session, str(to_cancel.id), cancel_reason="t", source="t"
+        )
+        db_session.refresh(a)
+        assert a.is_active is True  # active sibling → IP not released
