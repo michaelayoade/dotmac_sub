@@ -34,16 +34,36 @@ _SINGLE_NAME_RE = re.compile(r"(?<!\{)\{\s*([a-zA-Z0-9_]+)\s*\}(?!\})")
 # braces, which is what actually leaked to customers.)
 _EVENT_VARIABLES: frozenset[str] = frozenset(
     {
-        "subscriber_name", "offer_name", "plan_name", "invoice_number", "amount",
-        "due_date", "portal_url", "device_serial", "location", "updated_fields",
-        "service_order_id", "old_offer_name", "new_offer_name", "grace_hours",
-        "usage_percent", "total_amount",
+        "subscriber_name",
+        "offer_name",
+        "plan_name",
+        "invoice_number",
+        "amount",
+        "due_date",
+        "portal_url",
+        "device_serial",
+        "location",
+        "updated_fields",
+        "service_order_id",
+        "old_offer_name",
+        "new_offer_name",
+        "grace_hours",
+        "usage_percent",
+        "total_amount",
     }
 )
 _BULK_VARIABLES: frozenset[str] = frozenset(
     {
-        "customer_name", "account_number", "subscriber_number", "email", "phone",
-        "status", "pppoe_login", "ipv4_address", "nas_name", "location",
+        "customer_name",
+        "account_number",
+        "subscriber_number",
+        "email",
+        "phone",
+        "status",
+        "pppoe_login",
+        "ipv4_address",
+        "nas_name",
+        "location",
     }
 )
 KNOWN_PLACEHOLDERS: frozenset[str] = _EVENT_VARIABLES | _BULK_VARIABLES
@@ -141,9 +161,7 @@ def allowed_variables_for_code(code: str | None) -> tuple[frozenset[str], str]:
     return _BULK_VARIABLES, "bulk message"
 
 
-def validate_template_text(
-    *texts: str | None, code: str | None = None
-) -> None:
+def validate_template_text(*texts: str | None, code: str | None = None) -> None:
     """Reject unsafe placeholder syntax at save time.
 
     Raises ``ValueError`` if any text contains double-brace ``{{var}}`` tokens or

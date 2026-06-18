@@ -73,7 +73,9 @@ def main() -> None:
                 sneaky.append((t.code, chan, label, sorted(ctx_unknown)))
 
         marker = f"  <-- {', '.join(flags)}" if flags else ""
-        print(f"[{chan:5}] {t.code:32} ({label}) | {(t.subject or '(no subject)')[:45]}{marker}")
+        print(
+            f"[{chan:5}] {t.code:32} ({label}) | {(t.subject or '(no subject)')[:45]}{marker}"
+        )
 
     def section(title, items):
         print(f"\n=== {title} ===")

@@ -22,7 +22,9 @@ def test_render_template_text_single_brace_contract():
 def test_render_template_text_does_not_substitute_double_braces():
     # Double-brace is not the supported syntax; the live renderer only fills
     # single braces, so a {{var}} token must not render cleanly.
-    rendered = render_template_text("Hi {{subscriber_name}}", {"subscriber_name": "Ada"})
+    rendered = render_template_text(
+        "Hi {{subscriber_name}}", {"subscriber_name": "Ada"}
+    )
     assert rendered != "Hi Ada"
 
 
@@ -50,7 +52,8 @@ def test_validate_template_text_rejects_double_brace_and_unknown():
 def test_validate_is_context_aware_for_automated_codes():
     # Automated event template: event variables OK, bulk-only var rejected.
     validate_template_text(
-        "Invoice {invoice_number}", "Hi {subscriber_name}, pay {amount}",
+        "Invoice {invoice_number}",
+        "Hi {subscriber_name}, pay {amount}",
         code="invoice_overdue",
     )
     with pytest.raises(ValueError):
@@ -61,7 +64,8 @@ def test_validate_is_context_aware_for_automated_codes():
 def test_validate_is_context_aware_for_bulk_codes():
     # Bulk/custom template: bulk variables OK, event-only var rejected.
     validate_template_text(
-        "Hi {customer_name}, login {pppoe_login}", code="outage_blast_2026",
+        "Hi {customer_name}, login {pppoe_login}",
+        code="outage_blast_2026",
     )
     with pytest.raises(ValueError):
         # {amount} is not available to the bulk-message context.

@@ -57,9 +57,16 @@ SUPPORTED = set(KNOWN_PLACEHOLDERS)
 # flows and were the bulk-blast vector for the incident. Disposition: DELETE.
 DELETE_CODES: frozenset[str] = frozenset(
     {
-        "invoice_issued", "invoice_due_7d", "invoice_due_1d", "invoice_due_1d_sms",
-        "invoice_overdue_sms", "dunning_notice", "dunning_notice_sms",
-        "suspension_warning_sms", "service_suspended", "service_suspended_sms",
+        "invoice_issued",
+        "invoice_due_7d",
+        "invoice_due_1d",
+        "invoice_due_1d_sms",
+        "invoice_overdue_sms",
+        "dunning_notice",
+        "dunning_notice_sms",
+        "suspension_warning_sms",
+        "service_suspended",
+        "service_suspended_sms",
     }
 )
 
@@ -205,7 +212,9 @@ def plan(t: NotificationTemplate) -> tuple[str | None, str | None]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
+    ap.add_argument(
+        "--apply", action="store_true", help="write changes (default: dry-run)"
+    )
     ap.add_argument("--code", help="restrict to a single template code")
     args = ap.parse_args()
 
