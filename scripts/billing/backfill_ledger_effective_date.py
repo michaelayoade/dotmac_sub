@@ -149,15 +149,15 @@ GROUP BY tier ORDER BY tier;
 
 # Of the migrated, unlinked, non-adjustment rows (tier-3 candidates), how many
 # stay NULL because the positional match did not align on type+amount.
-_UNMATCHED = """
+_UNMATCHED = f"""
 SELECT count(*) AS tier3_candidates_left_null
 FROM ledger_entries l
 LEFT JOIN _eff e ON e.id = l.id
 WHERE l.source <> 'adjustment'
-  AND l.created_at::date <= DATE '%s'
+  AND l.created_at::date <= DATE '{_CUTOVER}'
   AND l.invoice_id IS NULL AND l.payment_id IS NULL
   AND e.id IS NULL;
-""" % _CUTOVER
+"""
 
 
 def main(execute: bool) -> None:
@@ -175,10 +175,7 @@ def main(execute: bool) -> None:
         print(f"left NULL (-> created_at fallback) : {tot.left_null:,}")
         print("\nby tier:")
         for r in conn.execute(text(_BY_TIER)):
-            print(
-                f"  {r.tier:28s} {r.rows:>8,}   "
-                f"[{r.earliest} .. {r.latest}]"
-            )
+            print(f"  {r.tier:28s} {r.rows:>8,}   [{r.earliest} .. {r.latest}]")
         u = conn.execute(text(_UNMATCHED)).one()
         print(
             f"\ntier-3 candidates left NULL (no aligned match): "

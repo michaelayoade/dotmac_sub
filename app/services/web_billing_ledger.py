@@ -103,9 +103,7 @@ def build_ledger_entries_data(
         query = _apply_date_range(query)
         entries = (
             query.order_by(
-                func.coalesce(
-                    LedgerEntry.effective_date, LedgerEntry.created_at
-                ).desc()
+                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at).desc()
             )
             .limit(limit)
             .offset(0)
