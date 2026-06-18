@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
 from app.models.catalog import (
+    AccessCredential,
     AddOn,
     AddOnPrice,
     AddOnType,
@@ -246,6 +247,59 @@ class TestNetworkLifecycleInvariants:
             assert (
                 bia.check_active_subscription_missing_radius(db_session)["count"] == 0
             )
+
+
+class TestUnusableRadiusPassword:
+    def _cred(self, db, subscriber, login, *, secret_hash, active=True):
+        db.add(
+            AccessCredential(
+                subscriber_id=subscriber.id,
+                username=login,
+                secret_hash=secret_hash,
+                is_active=active,
+            )
+        )
+        db.flush()
+
+    def test_usable_password_not_flagged(self, db_session, catalog_offer):
+        s, _ = _sub(db_session, catalog_offer, login="ok1")
+        self._cred(db_session, s, "ok1", secret_hash="$6$salt$abcdef")  # crypt
+        db_session.commit()
+        assert (
+            bia.check_active_subscription_with_unusable_radius_password(db_session)[
+                "count"
+            ]
+            == 0
+        )
+
+    def test_empty_secret_flagged(self, db_session, catalog_offer):
+        s, _ = _sub(db_session, catalog_offer, login="bad1")
+        self._cred(db_session, s, "bad1", secret_hash="")
+        db_session.commit()
+        res = bia.check_active_subscription_with_unusable_radius_password(db_session)
+        assert res["count"] == 1
+        assert res["samples"] == ["bad1"]
+
+    def test_inactive_credential_flagged(self, db_session, catalog_offer):
+        s, _ = _sub(db_session, catalog_offer, login="bad2")
+        self._cred(db_session, s, "bad2", secret_hash="$6$salt$x", active=False)
+        db_session.commit()
+        assert (
+            bia.check_active_subscription_with_unusable_radius_password(db_session)[
+                "count"
+            ]
+            == 1
+        )
+
+    def test_no_credential_flagged(self, db_session, catalog_offer):
+        _sub(db_session, catalog_offer, login="bad3")  # active sub, no credential
+        db_session.commit()
+        assert (
+            bia.check_active_subscription_with_unusable_radius_password(db_session)[
+                "count"
+            ]
+            == 1
+        )
 
 
 class TestAggregation:
