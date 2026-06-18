@@ -42,7 +42,6 @@ build/
 logs/
 
 # Secrets
-.env
 .env.bak.*
 .env.local
 .env.*.local
@@ -73,7 +72,6 @@ screenshots/
 uploads/
 *.zip
 mypy_errors.txt
-wifi_credentials.csv
 scripts/export_wifi_credentials.py
 
 # OLT CLI capture samples (auto-generated)
@@ -99,3 +97,5 @@ docs/testing/results/
 
 # Terminal-IP backlog apply manifests (subscriber/assignment ids) — runtime artifacts
 terminal_ip_*.json
+# Post-cutover finance hand-off artifacts — reproducible, contain customer PII (regenerate from scripts/billing/)
+post_cutover_*.csv
