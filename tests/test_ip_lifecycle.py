@@ -15,7 +15,9 @@ from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import cancel_subscription, expire_subscription
 from app.services.ip_lifecycle import (
+    apply_backlog_cleanup,
     plan_terminal_ip_backlog,
+    reactivate_assignments,
     release_service_ips_for_subscription,
 )
 
@@ -244,3 +246,49 @@ class TestLifecycleWiring:
         )
         db_session.refresh(a)
         assert a.is_active is True  # active sibling → IP not released
+
+
+class TestApplyBacklog:
+    def test_dry_run_changes_nothing(self, db_session, catalog_offer):
+        s = _subscriber(db_session, "a1@e.com")
+        _sub(db_session, s, catalog_offer, status=SubscriptionStatus.canceled)
+        a = _assign(db_session, s, "10.2.0.1")
+        db_session.commit()
+        res = apply_backlog_cleanup(db_session, dry_run=True)
+        assert res["dry_run"] is True
+        assert res["target_count"] == 1
+        assert res["released"] == 0
+        db_session.refresh(a)
+        assert a.is_active is True  # untouched
+
+    def test_apply_releases_only_safe(self, db_session, catalog_offer):
+        # safe_release_terminal target
+        terminal = _subscriber(db_session, "a2t@e.com")
+        _sub(db_session, terminal, catalog_offer, status=SubscriptionStatus.canceled)
+        safe = _assign(db_session, terminal, "10.2.0.2")
+        # manual_review (active dup, served not determinable cleanly) must be kept
+        active = _subscriber(db_session, "a2a@e.com")
+        _sub(db_session, active, catalog_offer, status=SubscriptionStatus.active)
+        keep1 = _assign(db_session, active, "10.2.0.3")
+        keep2 = _assign(db_session, active, "10.2.0.4")
+        db_session.commit()
+        res = apply_backlog_cleanup(db_session, dry_run=False)
+        assert res["released"] == 1
+        db_session.refresh(safe)
+        db_session.refresh(keep1)
+        db_session.refresh(keep2)
+        assert safe.is_active is False  # released
+        assert keep1.is_active is True  # manual_review untouched
+        assert keep2.is_active is True
+
+    def test_rollback_reactivates(self, db_session, catalog_offer):
+        s = _subscriber(db_session, "a3@e.com")
+        _sub(db_session, s, catalog_offer, status=SubscriptionStatus.canceled)
+        a = _assign(db_session, s, "10.2.0.5")
+        db_session.commit()
+        res = apply_backlog_cleanup(db_session, dry_run=False)
+        ids = res["released_assignment_ids"]
+        assert len(ids) == 1
+        assert reactivate_assignments(db_session, ids) == 1
+        db_session.refresh(a)
+        assert a.is_active is True

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
+from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -247,3 +248,69 @@ def _classify_assignment(
         if owned_served and address in owned_served:
             return "manual_review"  # the served one — keep it, not a release target
     return "manual_review"
+
+
+# --- Backlog cleanup apply (Track 3 part 2) ---------------------------------
+
+# Only these planner classes are ever auto-applied. conflict_* and manual_review
+# are NEVER touched by this tool.
+APPLY_CLASSES = ("safe_release_terminal", "safe_dedupe_duplicate")
+
+
+def apply_backlog_cleanup(
+    db: Session,
+    *,
+    dry_run: bool = True,
+    allowed_classes: tuple[str, ...] = APPLY_CLASSES,
+) -> dict[str, Any]:
+    """Deactivate the assignments the planner classifies as safe to release.
+
+    DEFAULT IS DRY-RUN. Only ``allowed_classes`` (safe_release_terminal,
+    safe_dedupe_duplicate) are ever applied; conflict_* and manual_review are
+    never touched. Re-derives the plan at call time and re-validates each target
+    is still active before deactivating. Returns before/after counts and the
+    exact affected assignment ids (the rollback list)."""
+    plan = plan_terminal_ip_backlog(db)
+    counts_before = plan["counts"]
+    targets = [it for it in plan["plan"] if it["classification"] in allowed_classes]
+    target_ids = [it["assignment_id"] for it in targets]
+
+    result: dict[str, Any] = {
+        "dry_run": dry_run,
+        "allowed_classes": list(allowed_classes),
+        "counts_before": counts_before,
+        "target_count": len(targets),
+        "target_assignment_ids": target_ids,
+        "targets": targets,
+        "released_assignment_ids": [],
+        "released": 0,
+    }
+    if dry_run:
+        return result
+
+    released: list[str] = []
+    for item in targets:
+        assignment = db.get(IPAssignment, coerce_uuid(item["assignment_id"]))
+        if assignment is not None and assignment.is_active:
+            assignment.is_active = False
+            released.append(str(assignment.id))
+    if released:
+        db.commit()
+    result["released"] = len(released)
+    result["released_assignment_ids"] = released
+    result["counts_after"] = plan_terminal_ip_backlog(db)["counts"]
+    return result
+
+
+def reactivate_assignments(db: Session, assignment_ids: list[str]) -> int:
+    """Rollback: restore ``is_active = True`` for the exact assignment ids from
+    an apply manifest. Returns the number reactivated."""
+    n = 0
+    for aid in assignment_ids:
+        assignment = db.get(IPAssignment, coerce_uuid(aid))
+        if assignment is not None and not assignment.is_active:
+            assignment.is_active = True
+            n += 1
+    if n:
+        db.commit()
+    return n
