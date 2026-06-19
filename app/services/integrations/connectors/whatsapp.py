@@ -198,8 +198,7 @@ def fetch_template_details(
         },
         headers={"Authorization": f"Bearer {config['api_key']}"},
         timeout=int(
-            resolve_value(db, SettingDomain.comms, "whatsapp_api_timeout_seconds")
-            or 10
+            resolve_value(db, SettingDomain.comms, "whatsapp_api_timeout_seconds") or 10
         ),
     )
     if response.status_code >= 400:
