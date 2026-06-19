@@ -32,6 +32,7 @@ from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services.audit_helpers import log_audit_event
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -40,7 +41,6 @@ from app.services.customer_portal_context import (
     resolve_allowed_subscriber_ids,
     resolve_customer_subscription,
 )
-from app.services.audit_helpers import log_audit_event
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -82,9 +82,7 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "phone": subscriber.phone,
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
-        "preferred_contact_method": _profile_value(
-            subscriber.preferred_contact_method
-        ),
+        "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
         "address_line1": subscriber.address_line1,
         "address_line2": subscriber.address_line2,
         "city": subscriber.city,
@@ -1193,8 +1191,8 @@ def customer_update_profile(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id:
-        from app.services.web_customer_actions import update_customer_profile
         from app.models.subscriber import Subscriber
+        from app.services.web_customer_actions import update_customer_profile
 
         subscriber_before = db.get(Subscriber, subscriber_id)
         before_snapshot = (

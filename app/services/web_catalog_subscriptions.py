@@ -25,8 +25,8 @@ from app.models.catalog import (
     BillingMode,
     ContractTerm,
     NasDevice,
-    OfferStatus,
     OfferPrice,
+    OfferStatus,
     PriceType,
     RadiusProfile,
     Subscription,
@@ -954,7 +954,7 @@ def available_ipv4_options_for_selector(
     if not selector:
         return []
     if selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
-        pool, network = _resolve_pool_ipv4_selector(db, selector)
+        resolved_pool, resolved_network = _resolve_pool_ipv4_selector(db, selector)
     else:
         try:
             block_uuid = UUID(selector)
@@ -963,22 +963,27 @@ def available_ipv4_options_for_selector(
         block = db.get(IpBlock, block_uuid)
         if not block or not block.is_active:
             raise ValueError("Selected IPv4 block is not active.")
-        pool = db.get(IpPool, block.pool_id)
-        if not pool or not pool.is_active or pool.ip_version != IPVersion.ipv4:
+        block_pool = db.get(IpPool, block.pool_id)
+        if (
+            not block_pool
+            or not block_pool.is_active
+            or block_pool.ip_version != IPVersion.ipv4
+        ):
             raise ValueError("Selected IPv4 block is not active.")
         try:
-            network = ipaddress.ip_network(str(block.cidr), strict=False)
+            parsed_network = ipaddress.ip_network(str(block.cidr), strict=False)
         except ValueError as exc:
             raise ValueError("Selected IPv4 block is invalid.") from exc
-        if network.version != 4:
+        if parsed_network.version != 4:
             raise ValueError("Selected IPv4 block is invalid.")
-        network = cast(ipaddress.IPv4Network, network)
+        resolved_pool = block_pool
+        resolved_network = cast(ipaddress.IPv4Network, parsed_network)
 
     available = _available_ipv4_strings_for_network(
         db,
-        network=network,
-        pool_id=pool.id,
-        pool=pool,
+        network=resolved_network,
+        pool_id=resolved_pool.id,
+        pool=resolved_pool,
     )
     current = str(current_ip or "").strip()
     if current:
@@ -986,7 +991,11 @@ def available_ipv4_options_for_selector(
             current_addr = ipaddress.ip_address(current)
         except ValueError:
             current_addr = None
-        if current_addr and current_addr.version == 4 and current_addr in network:
+        if (
+            current_addr
+            and current_addr.version == 4
+            and current_addr in resolved_network
+        ):
             if current not in available:
                 available.insert(0, current)
     return available
@@ -3218,9 +3227,7 @@ def _additional_route_rows_for_subscription(
             {
                 "cidr": route.cidr,
                 "prefix_length": prefix,
-                "type_label": "Additional IP"
-                if prefix == 32
-                else "Routed IP Block",
+                "type_label": "Additional IP" if prefix == 32 else "Routed IP Block",
                 "billing_ok": billing_ok,
                 "billing_label": f"Billed /{prefix} IP x{qty}"
                 if billing_ok
@@ -3475,15 +3482,18 @@ def subscription_form_context(
         subscription["additional_route_cidrs"] = [""]
     if not isinstance(subscription.get("additional_route_metrics"), list):
         subscription["additional_route_metrics"] = [""]
+    additional_route_cidrs = cast(
+        list[object],
+        subscription.get("additional_route_cidrs", []),
+    )
+    additional_route_metrics = cast(
+        list[object],
+        subscription.get("additional_route_metrics", []),
+    )
     initial_route_rows = initial_route_rows_for_form(
         db,
-        cidrs=[
-            str(value or "") for value in subscription.get("additional_route_cidrs", [])
-        ],
-        metrics=[
-            str(value or "")
-            for value in subscription.get("additional_route_metrics", [])
-        ],
+        cidrs=[str(value or "") for value in additional_route_cidrs],
+        metrics=[str(value or "") for value in additional_route_metrics],
     )
 
     ip_addon_options = _public_ip_addon_options(db)
