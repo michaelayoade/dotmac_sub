@@ -211,6 +211,66 @@ def _validate_invoice_currency(invoice: Invoice, currency: str | None):
         raise HTTPException(status_code=400, detail="Currency does not match invoice")
 
 
+# Allowed manual invoice status transitions (the raw ``Invoices.update`` /
+# PATCH path). ``void`` is a terminal sink; ``paid`` may only move to ``void``
+# (write-off) — the ledger-driven reopen (paid→issued/overdue on refund) goes
+# through ``_recalculate_invoice_totals``, not this path. This blocks the
+# resurrection edges the review found reachable via the API: void→anything and
+# paid→draft/issued.
+ALLOWED_INVOICE_TRANSITIONS: dict[InvoiceStatus, set[InvoiceStatus]] = {
+    InvoiceStatus.draft: {InvoiceStatus.issued, InvoiceStatus.void},
+    InvoiceStatus.issued: {
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.paid,
+        InvoiceStatus.overdue,
+        InvoiceStatus.void,
+    },
+    InvoiceStatus.partially_paid: {
+        InvoiceStatus.paid,
+        InvoiceStatus.overdue,
+        InvoiceStatus.issued,
+        InvoiceStatus.void,
+    },
+    InvoiceStatus.overdue: {
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.paid,
+        InvoiceStatus.issued,
+        InvoiceStatus.void,
+    },
+    InvoiceStatus.paid: {InvoiceStatus.void},
+    InvoiceStatus.void: set(),
+}
+
+
+def assert_legal_invoice_transition(
+    from_status: InvoiceStatus | None, to_status: InvoiceStatus | None
+) -> None:
+    """Reject an illegal manual invoice status transition (409)."""
+    if to_status is None or from_status is None or from_status == to_status:
+        return
+    if to_status not in ALLOWED_INVOICE_TRANSITIONS.get(from_status, set()):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Illegal invoice transition {from_status.value} → {to_status.value}"
+            ),
+        )
+
+
+def _assert_invoice_allocatable(invoice: Invoice) -> None:
+    """Reject allocating a payment to a void or draft invoice.
+
+    A void invoice is terminal (settling money against it would resurrect it to
+    'paid' — see ``_recalculate_invoice_totals``); a draft is pre-issue and not
+    yet a payable obligation. Both must refuse allocations.
+    """
+    if invoice.status in (InvoiceStatus.void, InvoiceStatus.draft):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot allocate a payment to a {invoice.status.value} invoice",
+        )
+
+
 def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     """Recalculate invoice totals from lines and payments."""
     # Serialize concurrent recalculation of the same invoice. The summary
@@ -309,9 +369,18 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         .scalar()
     )
     credit_amount = round_money(to_decimal(credit_amount))
+    # Void is terminal: never recompute its balance or derive a status — a void
+    # invoice carries balance_due 0, and the paid-branch below would otherwise
+    # resurrect it to 'paid' (the void→paid bug). Leave it exactly as voided.
+    if invoice.status == InvoiceStatus.void:
+        return
     invoice.balance_due = max(
         Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount)
     )
+    # A draft is pre-issue: keep its computed balance for display but do NOT
+    # auto-advance it to paid/partially_paid (it must be explicitly issued).
+    if invoice.status == InvoiceStatus.draft:
+        return
     if invoice.balance_due <= 0:
         invoice.status = InvoiceStatus.paid
         if not invoice.paid_at:

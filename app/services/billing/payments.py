@@ -47,6 +47,7 @@ from app.schemas.billing import (
 )
 from app.services import settings_spec
 from app.services.billing._common import (
+    _assert_invoice_allocatable,
     _recalculate_invoice_totals,
     _resolve_collection_account,
     _resolve_payment_channel,
@@ -71,6 +72,28 @@ from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+
+
+# Allowed payment status transitions for the gateway/webhook-driven
+# ``mark_status`` path. Gateways re-deliver and deliver out of order, so a late
+# ``charge.success`` after a refund, or a late ``charge.failed`` after success,
+# must NOT regress committed financial state. ``refunded``/``canceled`` are
+# sinks; ``succeeded`` cannot go to ``failed`` here (use ``reverse_payment``).
+_ALLOWED_PAYMENT_TRANSITIONS: dict[PaymentStatus, set[PaymentStatus]] = {
+    PaymentStatus.pending: {
+        PaymentStatus.succeeded,
+        PaymentStatus.failed,
+        PaymentStatus.canceled,
+    },
+    PaymentStatus.failed: {PaymentStatus.succeeded, PaymentStatus.canceled},
+    PaymentStatus.succeeded: {
+        PaymentStatus.refunded,
+        PaymentStatus.partially_refunded,
+    },
+    PaymentStatus.partially_refunded: {PaymentStatus.refunded},
+    PaymentStatus.refunded: set(),
+    PaymentStatus.canceled: set(),
+}
 
 
 class PaymentMethods(ListResponseMixin):
@@ -638,6 +661,7 @@ class Payments(ListResponseMixin):
                     status_code=400, detail="Invoice does not belong to account"
                 )
             _validate_invoice_currency(invoice, payment.currency)
+            _assert_invoice_allocatable(invoice)
 
             # Cap the allocation at the invoice's outstanding balance so an
             # overpayment cannot over-allocate (allocations summing above the
@@ -781,6 +805,7 @@ class Payments(ListResponseMixin):
                 invoice = get_by_id(db, Invoice, alloc.invoice_id)
                 if invoice:
                     _validate_invoice_currency(invoice, data.get("currency"))
+                    _assert_invoice_allocatable(invoice)
         payment = Payment(**data)
         db.add(payment)
         db.flush()
@@ -837,6 +862,11 @@ class Payments(ListResponseMixin):
                 invoice_id=allocation_invoice_id,
             )
 
+        # The payment_received handlers (resolve dunning case, restore service)
+        # run inline on this session with commit=False. The payment itself is
+        # already committed above; commit again so those resolve/restore
+        # mutations are durable instead of left pending for the caller to drop.
+        db.commit()
         return payment
 
     @staticmethod
@@ -1152,6 +1182,22 @@ class Payments(ListResponseMixin):
         normalized = validate_enum(status, PaymentStatus, "status")
         if not normalized:
             raise HTTPException(status_code=400, detail="Invalid status")
+        # Guard against out-of-order / replayed gateway webhooks regressing
+        # committed financial state (e.g. success after refunded, late failed
+        # after success). An illegal transition is a no-op that still returns
+        # the payment so the webhook gets a 200 and stops retrying.
+        if (
+            previous_status != normalized
+            and normalized
+            not in _ALLOWED_PAYMENT_TRANSITIONS.get(previous_status, set())
+        ):
+            logger.warning(
+                "Ignoring illegal payment transition %s -> %s for payment %s",
+                previous_status.value if previous_status else None,
+                normalized.value,
+                payment_id,
+            )
+            return payment
         payment.status = normalized
         if normalized == PaymentStatus.succeeded:
             payment.paid_at = datetime.now(UTC)
@@ -1208,6 +1254,9 @@ class Payments(ListResponseMixin):
                     account_id=payment.account_id,
                     invoice_id=allocation_invoice_id,
                 )
+            # Persist the inline payment_received handlers' resolve/restore work
+            # (run with commit=False); the payment is already committed above.
+            db.commit()
 
         return payment
 
@@ -1231,6 +1280,7 @@ class PaymentAllocations(ListResponseMixin):
                 status_code=400, detail="Invoice does not belong to account"
             )
         _validate_invoice_currency(invoice, payment.currency)
+        _assert_invoice_allocatable(invoice)
         # Idempotency check: return existing allocation for same (payment_id, invoice_id)
         existing = (
             db.query(PaymentAllocation)
@@ -1582,6 +1632,12 @@ class Refunds:
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
+        # Lock the payment row so the "sum already-refunded, then add" below is
+        # serialized. Without it two concurrent refunds both read the same
+        # already_refunded total, both compute the full refundable amount, and
+        # both insert a refund — refunding up to N× the captured amount. The
+        # lock forces the second caller to re-read the first's committed refund.
+        db.refresh(payment, with_for_update=True)
 
         if payment.status == PaymentStatus.refunded:
             raise HTTPException(
@@ -1606,9 +1662,20 @@ class Refunds:
             )
             .scalar()
         )
-        refundable_amount = payment.amount - already_refunded
+        already_refunded = round_money(to_decimal(already_refunded))
+        refundable_amount = round_money(to_decimal(payment.amount) - already_refunded)
 
-        amount_to_refund = refund_amount or refundable_amount
+        # ``refund_amount or ...`` would treat 0 as "refund everything"; be
+        # explicit and reject non-positive amounts (incl. a negative that would
+        # otherwise pass the upper-bound check and INCREASE the payment).
+        if refund_amount is None:
+            amount_to_refund = refundable_amount
+        else:
+            amount_to_refund = round_money(to_decimal(refund_amount))
+        if amount_to_refund <= 0:
+            raise HTTPException(
+                status_code=400, detail="Refund amount must be positive"
+            )
         if amount_to_refund > refundable_amount:
             raise HTTPException(
                 status_code=400,
