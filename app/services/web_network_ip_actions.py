@@ -372,7 +372,7 @@ def release_ipv4_address_from_form(request: Request, db, form) -> IpWebActionRes
         # Nothing assigned — releasing is a no-op; return to the range view.
         return IpWebActionResult(success=True, redirect_url=return_to)
 
-    assignment_id = str(assignment.id)
+    assignment_id = str(getattr(assignment, "id", ""))
     old_subscriber_id = str(getattr(assignment, "subscriber_id", "") or "") or None
     old_subscription_id = str(getattr(assignment, "subscription_id", "") or "") or None
 
@@ -431,9 +431,7 @@ def _resolve_bulk_subscriber(db, identifier: str):
             return subscriber
     except (ValueError, AttributeError):
         pass
-    subscriber = (
-        db.query(Subscriber).filter(Subscriber.account_number == ident).first()
-    )
+    subscriber = db.query(Subscriber).filter(Subscriber.account_number == ident).first()
     if subscriber is not None:
         return subscriber
     return (
@@ -616,15 +614,19 @@ def bulk_assign_ipv4(db, rows: list[dict[str, str]]) -> dict[str, object]:
 def bulk_assign_ipv4_from_form(request: Request, db, form) -> IpWebActionResult:
     csv_text = str(form.get("csv_data") or "")
     summary = bulk_assign_ipv4(db, _parse_bulk_assign_csv(csv_text))
-    for event in summary.pop("audit"):
-        _log_ip_audit_event(
-            db,
-            request,
-            action=event["action"],
-            entity_type="ip_assignment",
-            entity_id=event["entity_id"],
-            metadata=event["metadata"],
-        )
+    audit_events = summary.pop("audit")
+    if isinstance(audit_events, list):
+        for event in audit_events:
+            if not isinstance(event, dict):
+                continue
+            _log_ip_audit_event(
+                db,
+                request,
+                action=event["action"],
+                entity_type="ip_assignment",
+                entity_id=event["entity_id"],
+                metadata=event["metadata"],
+            )
     return IpWebActionResult(
         success=True,
         form_context={"csv_data": csv_text, "result": summary, "error": None},
