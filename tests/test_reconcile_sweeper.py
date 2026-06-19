@@ -151,9 +151,7 @@ def _stub_result(success: bool) -> ReconcileResult:
 # ── run_sweep_once ──────────────────────────────────────────────────────────
 
 
-def test_sweep_skips_onts_under_non_active_olt(
-    db_session, db_factory, monkeypatch
-):
+def test_sweep_skips_onts_under_non_active_olt(db_session, db_factory, monkeypatch):
     """ONTs whose parent OLT is in maintenance (or draining/retired/inactive)
     must not be reconciled — the operator took the device down (#17)."""
     from app.models.network import DeviceStatus

@@ -336,8 +336,7 @@ def _enforce_or_record_connectivity_gap(
         "on",
     }
     logger.warning(
-        "connectivity gap: subscription=%s status=%s would_disconnect=True "
-        "enforce=%s",
+        "connectivity gap: subscription=%s status=%s would_disconnect=True enforce=%s",
         subscription.id,
         to_status.value,
         enforce_on,

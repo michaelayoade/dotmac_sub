@@ -82,9 +82,7 @@ def test_run_advance_does_not_override_terminal_order(
     assert order.status == ServiceOrderStatus.canceled
 
 
-def test_reaper_fails_stale_running_runs(
-    db_session, subscriber_account, subscription
-):
+def test_reaper_fails_stale_running_runs(db_session, subscriber_account, subscription):
     """A run stuck in 'running' past the timeout is reaped to failed (#8)."""
     from app.models.provisioning import ProvisioningWorkflow
     from app.services.provisioning_managers import ProvisioningRuns

@@ -59,9 +59,7 @@ def test_suspend_resume_payloads_carry_from_and_to_status(
         reason=EnforcementReason.admin,
         source="test",
     )
-    suspended = next(
-        p for et, p in captured if et == EventType.subscription_suspended
-    )
+    suspended = next(p for et, p in captured if et == EventType.subscription_suspended)
     assert suspended["from_status"] == "active"
     assert suspended["to_status"] == "suspended"
 

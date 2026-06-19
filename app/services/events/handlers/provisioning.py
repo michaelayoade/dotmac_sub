@@ -278,9 +278,7 @@ class ProvisioningHandler:
         from sqlalchemy import select as _select
 
         service_order = db.execute(
-            _select(ServiceOrder)
-            .where(ServiceOrder.id == order_uuid)
-            .with_for_update()
+            _select(ServiceOrder).where(ServiceOrder.id == order_uuid).with_for_update()
         ).scalar_one_or_none()
         if not service_order:
             logger.warning(

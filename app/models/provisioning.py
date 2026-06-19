@@ -94,8 +94,7 @@ def assert_legal_service_state_transition(
         return
     if to_state not in ALLOWED_SERVICE_STATE_TRANSITIONS.get(from_state, set()):
         raise ValueError(
-            f"Illegal service-state transition "
-            f"{from_state.value} → {to_state.value}"
+            f"Illegal service-state transition {from_state.value} → {to_state.value}"
         )
 
 

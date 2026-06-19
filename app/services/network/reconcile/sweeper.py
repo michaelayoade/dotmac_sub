@@ -179,9 +179,7 @@ def run_sweep_once(
         # reconciler to stop touching it — previously the sweep ran full
         # SSH/NBI reconciles against a device in maintenance. ONTs with no
         # parent OLT (olt_device_id NULL) are still swept.
-        stmt = stmt.outerjoin(
-            OLTDevice, OLTDevice.id == OntUnit.olt_device_id
-        ).where(
+        stmt = stmt.outerjoin(OLTDevice, OLTDevice.id == OntUnit.olt_device_id).where(
             or_(
                 OntUnit.olt_device_id.is_(None),
                 OLTDevice.status == DeviceStatus.active,

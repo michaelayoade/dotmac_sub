@@ -494,9 +494,7 @@ class ServiceStateTransitions(CRUDManager[ServiceStateTransition]):
         # the order's actual current state, and ``from_state → to_state`` must
         # be a legal edge. Without this the transition log can record histories
         # that never happened (canceled → active, active → pending, …).
-        current = ServiceStateTransitions._current_state(
-            db, payload.service_order_id
-        )
+        current = ServiceStateTransitions._current_state(db, payload.service_order_id)
         from_state = payload.from_state if payload.from_state is not None else current
         if from_state != current:
             raise HTTPException(
