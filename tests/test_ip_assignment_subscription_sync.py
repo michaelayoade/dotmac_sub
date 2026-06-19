@@ -256,3 +256,45 @@ def test_bulk_assign_ipv4_isolates_bad_rows(db_session):
     assert "Subscriber not found" in error_msgs
     assert "No active IPv4 pool" in error_msgs
     assert "required" in error_msgs
+
+
+def test_ip_pool_utilization_snapshot_counts(db_session):
+    from app.models.network import IpPoolUtilizationSnapshot
+    from app.services.ip_pool_utilization_snapshot import (
+        ip_pool_utilization_snapshots,
+    )
+
+    pool = _make_pool(db_session, "100.64.40.0/24")
+    s1 = _make_subscriber(db_session)
+    s2 = _make_subscriber(db_session)
+    a1 = IPv4Address(address="100.64.40.10", pool_id=pool.id)
+    a2 = IPv4Address(address="100.64.40.11", pool_id=pool.id)
+    a3 = IPv4Address(address="100.64.40.12", pool_id=pool.id, is_reserved=True)
+    db_session.add_all([a1, a2, a3])
+    db_session.flush()
+    for subscriber, address in ((s1, a1), (s2, a2)):
+        network_service.ip_assignments.create(
+            db_session,
+            IPAssignmentCreate(
+                subscriber_id=subscriber.id,
+                ip_version=IPVersion.ipv4,
+                ipv4_address_id=address.id,
+            ),
+        )
+
+    result = ip_pool_utilization_snapshots.take_snapshot(db_session)
+    assert result["created"] >= 1
+
+    snap = (
+        db_session.query(IpPoolUtilizationSnapshot)
+        .filter(IpPoolUtilizationSnapshot.pool_id == pool.id)
+        .one()
+    )
+    assert snap.used == 2
+    assert snap.reserved == 1
+    assert snap.total == 254  # /24 minus network + broadcast
+    assert snap.available == 254 - 2 - 1
+    assert snap.percent == round(2 / 254 * 100)
+
+    history = ip_pool_utilization_snapshots.history(db_session, str(pool.id))
+    assert len(history) == 1

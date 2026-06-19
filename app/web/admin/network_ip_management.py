@@ -10,6 +10,7 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_ip_actions as web_network_ip_actions_service
 from app.services import web_network_vlans as web_network_vlans_service
 from app.services.auth_dependencies import require_permission
+from app.services.ip_pool_utilization_snapshot import ip_pool_utilization_snapshots
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -267,14 +268,28 @@ def ip_pool_detail(request: Request, pool_id: str, db: Session = Depends(get_db)
             {"request": request, "message": "IP Pool not found"},
             status_code=404,
         )
-    state["pool"]
     activities = web_network_ip_actions_service.activity_for_entity(
         db, "ip_pool", str(pool_id)
     )
+    utilization_history = [
+        {
+            "t": snap.captured_at.isoformat() if snap.captured_at else None,
+            "percent": snap.percent,
+            "used": snap.used,
+            "total": snap.total,
+        }
+        for snap in ip_pool_utilization_snapshots.history(db, str(pool_id))
+    ]
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
-    context.update({**state, "activities": activities})
+    context.update(
+        {
+            **state,
+            "activities": activities,
+            "utilization_history": utilization_history,
+        }
+    )
     return templates.TemplateResponse(
         "admin/network/ip-management/pool_detail.html", context
     )
