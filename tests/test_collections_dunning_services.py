@@ -331,6 +331,127 @@ def test_dunning_run_skips_paused_case(
     assert logs == []
 
 
+def test_payment_resolves_open_but_not_paused_cases(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """An incoming payment auto-resolves OPEN dunning cases but must leave a
+    PAUSED case (operator hold) untouched (#A7 paused-policy)."""
+    open_case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    paused_case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.paused,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add_all([open_case, paused_case])
+    db_session.commit()
+
+    collections_service.dunning_workflow.resolve_cases_for_account(
+        db_session, str(subscriber.id), None, commit=False
+    )
+    db_session.flush()
+
+    db_session.refresh(open_case)
+    db_session.refresh(paused_case)
+    assert open_case.status == DunningCaseStatus.resolved
+    assert paused_case.status == DunningCaseStatus.paused  # operator hold kept
+
+
+def test_suspend_proceeds_when_overdue_and_unshielded(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """Control: an overdue, unshielded account is actually suspended."""
+    from app.services.account_lifecycle import get_active_locks
+    from app.services.collections._core import _execute_dunning_action
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(case)
+    db_session.commit()
+
+    outcome = _execute_dunning_action(
+        db_session, case, DunningAction.suspend, day_offset=7, note=None
+    )
+    assert outcome == "suspended"
+    assert get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
+def test_suspend_skipped_when_balance_cleared_mid_run(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """The dunning-after-payment race: if the balance cleared since the run's
+    snapshot, the re-read under lock cancels the suspend (#A1)."""
+    from app.models.billing import Invoice, InvoiceStatus
+    from app.services.account_lifecycle import get_active_locks
+    from app.services.collections._core import _execute_dunning_action
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    # Simulate the payment landing after the run snapshotted balances.
+    inv = db_session.query(Invoice).filter(Invoice.account_id == subscriber.id).one()
+    inv.balance_due = 0
+    inv.status = InvoiceStatus.paid
+    db_session.commit()
+
+    case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(case)
+    db_session.commit()
+
+    outcome = _execute_dunning_action(
+        db_session, case, DunningAction.suspend, day_offset=7, note=None
+    )
+    assert outcome == "balance_cleared"
+    assert not get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
+def test_suspend_shielded_by_active_arrangement(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """A customer with an active payment arrangement must not be dunned (#A2)."""
+    from datetime import date
+    from decimal import Decimal
+
+    from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
+    from app.services.account_lifecycle import get_active_locks
+    from app.services.collections._core import _execute_dunning_action
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    db_session.add(
+        PaymentArrangement(
+            subscriber_id=subscriber.id,
+            status=ArrangementStatus.active,
+            is_active=True,
+            total_amount=Decimal("100.00"),
+            installment_amount=Decimal("50.00"),
+            installments_total=2,
+            start_date=date(2026, 1, 1),
+        )
+    )
+    case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(case)
+    db_session.commit()
+
+    outcome = _execute_dunning_action(
+        db_session, case, DunningAction.suspend, day_offset=7, note=None
+    )
+    assert outcome == "shielded"
+    assert not get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
 def test_dunning_run_executes_step_for_active_case(
     db_session, subscriber, subscription, catalog_offer
 ):
