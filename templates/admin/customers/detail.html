@@ -906,6 +906,16 @@
                                     <p class="font-mono font-medium text-slate-900 dark:text-white">{{ card.ipv4_address }}</p>
                                 </div>
                                 {% endif %}
+                                {% if card.additional_routes %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Routed IP Blocks</p>
+                                    <div class="space-y-0.5">
+                                        {% for route in card.additional_routes %}
+                                        <p class="font-mono font-medium text-slate-900 dark:text-white">{{ route.cidr }}{% if route.metric %} <span class="text-xs font-normal text-slate-500 dark:text-slate-400">metric {{ route.metric }}</span>{% endif %}</p>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
                                 {% if card.nas_name %}
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">NAS Device</p>

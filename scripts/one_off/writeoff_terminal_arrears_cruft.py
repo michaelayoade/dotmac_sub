@@ -144,10 +144,14 @@ def main() -> None:
         done = Decimal("0.00")
         for r in rows:
             invoice_service.write_off(
-                db, str(r["id"]), memo=_memo(r["bucket"], r["svc_status"], r["splynx_invoice_id"])
+                db,
+                str(r["id"]),
+                memo=_memo(r["bucket"], r["svc_status"], r["splynx_invoice_id"]),
             )
             done += r["balance_due"]
-            print(f"  written off {r['invoice_number'] or r['id']}  NGN {r['balance_due']:,.2f}")
+            print(
+                f"  written off {r['invoice_number'] or r['id']}  NGN {r['balance_due']:,.2f}"
+            )
         print(f"\nDONE: wrote off {len(rows)} invoices, NGN {done:,.2f}\n")
     finally:
         db.close()

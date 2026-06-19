@@ -439,11 +439,13 @@ def catalog_subscription_ipv4_addresses(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     try:
-        payload = web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
-            db,
-            selector=selector,
-            query=q,
-            limit=limit,
+        payload = (
+            web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
+                db,
+                selector=selector,
+                query=q,
+                limit=limit,
+            )
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc), "addresses": []}, status_code=400)

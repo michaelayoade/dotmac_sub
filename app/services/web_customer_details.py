@@ -1151,15 +1151,43 @@ def _build_network_connection_snapshot(
     )
 
 
+def _active_additional_routes_by_subscriber(
+    db: Session, account_ids: list[UUID]
+) -> dict[UUID, list[dict[str, object]]]:
+    if not account_ids:
+        return {}
+    rows = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id.in_(account_ids))
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .order_by(SubscriberAdditionalRoute.cidr.asc())
+        .all()
+    )
+    routes_by_subscriber: dict[UUID, list[dict[str, object]]] = {}
+    for route in rows:
+        routes_by_subscriber.setdefault(route.subscriber_id, []).append(
+            {
+                "cidr": route.cidr,
+                "metric": route.metric,
+            }
+        )
+    return routes_by_subscriber
+
+
 def _build_network_access_cards(
-    subscriptions: list, connection_by_subscription: dict[str, dict[str, object]]
+    subscriptions: list,
+    connection_by_subscription: dict[str, dict[str, object]],
+    additional_routes_by_subscriber: dict[UUID, list[dict[str, object]]] | None = None,
 ) -> list[dict]:
     """Build network access info cards from subscriptions with live access."""
     cards = []
+    additional_routes_by_subscriber = additional_routes_by_subscriber or {}
     for sub in subscriptions:
         raw_status = getattr(sub, "status", None)
         status_value = getattr(raw_status, "value", None)
-        status = str(status_value if status_value is not None else raw_status or "unknown")
+        status = str(
+            status_value if status_value is not None else raw_status or "unknown"
+        )
         if status == SubscriptionStatus.disabled.value:
             continue
         if not sub.login and not sub.ipv4_address:
@@ -1175,6 +1203,11 @@ def _build_network_access_cards(
                 "connection_status": connection_by_subscription.get(sub_id, {}),
                 "login": sub.login,
                 "ipv4_address": sub.ipv4_address,
+                "additional_routes": additional_routes_by_subscriber.get(
+                    sub.subscriber_id, []
+                )
+                if status == SubscriptionStatus.active.value
+                else [],
                 "ipv6_address": getattr(sub, "ipv6_address", None),
                 "mac_address": getattr(sub, "mac_address", None),
                 "nas_name": nas.name if nas else None,
@@ -1424,9 +1457,13 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     network_connection_status, connection_by_subscription = (
         _build_network_connection_snapshot(db, subscriptions)
     )
+    additional_routes_by_subscriber = _active_additional_routes_by_subscriber(
+        db, account_ids
+    )
     network_access_cards = _build_network_access_cards(
         subscriptions,
         connection_by_subscription,
+        additional_routes_by_subscriber,
     )
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)

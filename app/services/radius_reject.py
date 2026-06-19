@@ -47,12 +47,13 @@ REJECT_REASON_ALIASES: dict[str, str] = {
 _RUNTIME_STATE_KEY = "reject_ip_runtime_state"
 _RUNTIME_STATE_VERSION = 1
 _INITIAL_PUSH_KEY = "reject_ip_initial_push_done_at"
-_STATUS_BLOCKED = {
-    SubscriptionStatus.blocked,
-    SubscriptionStatus.suspended,
-    SubscriptionStatus.canceled,
-    SubscriptionStatus.expired,
-}
+# Canonical "no normal access" set (blocked + terminated). Previously this was
+# a local copy that had drifted — it omitted ``stopped`` and ``disabled`` — so
+# those statuses were silently excluded from reject handling. Reference the
+# single source of truth instead.
+from app.services.radius_access_state import (  # noqa: E402
+    NO_ACCESS_STATUSES as _STATUS_BLOCKED,
+)
 
 
 def _get_setting(db: Session, key: str) -> DomainSetting | None:

@@ -30,6 +30,12 @@ class InvoiceStatus(enum.Enum):
     paid = "paid"
     void = "void"
     overdue = "overdue"
+    # Closed-but-not-collected: the obligation was written off as bad debt.
+    # Materially distinct from ``paid`` (obligation satisfied) and ``void``
+    # (invoice should never have existed). The loss is recorded as a credit
+    # adjustment in the ledger (the financial source of truth); the invoice
+    # stays on record, excluded from outstanding/aging but NOT counted as cash.
+    written_off = "written_off"
 
 
 class InvoicePdfExportStatus(enum.Enum):

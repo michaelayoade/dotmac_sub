@@ -85,9 +85,7 @@ def main() -> int:
         }
         open_inv = {
             aid: Decimal(str(bal or 0))
-            for aid, bal in db.query(
-                Invoice.account_id, func.sum(Invoice.balance_due)
-            )
+            for aid, bal in db.query(Invoice.account_id, func.sum(Invoice.balance_due))
             .filter(Invoice.is_active.is_(True))
             .filter(
                 Invoice.status.in_(
@@ -158,20 +156,28 @@ def main() -> int:
             print(f"  {str(status):12s} {n:>4}")
         print()
         print("-- proposed seed shape (delta = deposit − ledger_net) --")
-        print(f"  credit (deposit > ledger) : {seed_shape['credit']:>4}  "
-              f"total {_money(delta_credit_total)}")
-        print(f"  debit  (deposit < ledger) : {seed_shape['debit']:>4}  "
-              f"total {_money(delta_debit_total)}")
+        print(
+            f"  credit (deposit > ledger) : {seed_shape['credit']:>4}  "
+            f"total {_money(delta_credit_total)}"
+        )
+        print(
+            f"  debit  (deposit < ledger) : {seed_shape['debit']:>4}  "
+            f"total {_money(delta_debit_total)}"
+        )
         print(f"  marker (already equal)    : {seed_shape['marker']:>4}")
-        print(f"  net ledger impact         : "
-              f"{_money(delta_credit_total - delta_debit_total)}")
+        print(
+            f"  net ledger impact         : "
+            f"{_money(delta_credit_total - delta_debit_total)}"
+        )
         print()
         print("-- sample (first 15) --")
         for aid, mode, status, deposit, delta in [
             (r[0], r[1], r[2], r[3], r[4]) for recs in by_reason.values() for r in recs
         ][:15]:
-            print(f"  {str(aid)[:8]}  mode={mode:10s} status={status:10s} "
-                  f"deposit={_money(deposit):>16}  seed_delta={_money(delta):>16}")
+            print(
+                f"  {str(aid)[:8]}  mode={mode:10s} status={status:10s} "
+                f"deposit={_money(deposit):>16}  seed_delta={_money(delta):>16}"
+            )
         return 0
     finally:
         db.close()

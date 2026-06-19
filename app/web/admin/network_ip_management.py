@@ -10,6 +10,7 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_ip_actions as web_network_ip_actions_service
 from app.services import web_network_vlans as web_network_vlans_service
 from app.services.auth_dependencies import require_permission
+from app.services.ip_pool_utilization_snapshot import ip_pool_utilization_snapshots
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -267,14 +268,28 @@ def ip_pool_detail(request: Request, pool_id: str, db: Session = Depends(get_db)
             {"request": request, "message": "IP Pool not found"},
             status_code=404,
         )
-    state["pool"]
     activities = web_network_ip_actions_service.activity_for_entity(
         db, "ip_pool", str(pool_id)
     )
+    utilization_history = [
+        {
+            "t": snap.captured_at.isoformat() if snap.captured_at else None,
+            "percent": snap.percent,
+            "used": snap.used,
+            "total": snap.total,
+        }
+        for snap in ip_pool_utilization_snapshots.history(db, str(pool_id))
+    ]
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
-    context.update({**state, "activities": activities})
+    context.update(
+        {
+            **state,
+            "activities": activities,
+            "utilization_history": utilization_history,
+        }
+    )
     return templates.TemplateResponse(
         "admin/network/ip-management/pool_detail.html", context
     )
@@ -605,6 +620,69 @@ def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
             "admin/network/ip-management/ipv4_assignment_form.html", context
         )
     return RedirectResponse("/admin/network/ip-management", status_code=303)
+
+
+@router.get(
+    "/ip-management/ipv4-bulk-assign",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ipv4_bulk_assign_form(request: Request, db: Session = Depends(get_db)):
+    context = _base_context(
+        request, db, active_page="ip-management", active_menu="ip-address"
+    )
+    context.update({"csv_data": "", "result": None, "error": None})
+    return templates.TemplateResponse(
+        "admin/network/ip-management/ipv4_bulk_assign.html", context
+    )
+
+
+@router.post(
+    "/ip-management/ipv4-bulk-assign",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ipv4_bulk_assign_submit(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    context = _base_context(
+        request, db, active_page="ip-management", active_menu="ip-address"
+    )
+    if not str(form.get("csv_data") or "").strip():
+        context.update(
+            {"csv_data": "", "result": None, "error": "CSV data is required."}
+        )
+        return templates.TemplateResponse(
+            "admin/network/ip-management/ipv4_bulk_assign.html", context
+        )
+    result = web_network_ip_actions_service.bulk_assign_ipv4_from_form(
+        request, db, form
+    )
+    context.update(result.form_context or {})
+    return templates.TemplateResponse(
+        "admin/network/ip-management/ipv4_bulk_assign.html", context
+    )
+
+
+@router.post(
+    "/ip-management/ipv4-release",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ipv4_release_submit(request: Request, db: Session = Depends(get_db)):
+    result = web_network_ip_actions_service.release_ipv4_address_from_form(
+        request,
+        db,
+        parse_form_data_sync(request),
+    )
+    if result.not_found_message:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": result.not_found_message},
+            status_code=404,
+        )
+    return RedirectResponse(
+        result.redirect_url or "/admin/network/ip-management", status_code=303
+    )
 
 
 @router.get(

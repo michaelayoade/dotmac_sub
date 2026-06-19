@@ -420,7 +420,11 @@ def get_payment_page(
     ):
         return None
 
-    if invoice.status in (InvoiceStatus.paid, InvoiceStatus.void):
+    if invoice.status in (
+        InvoiceStatus.paid,
+        InvoiceStatus.void,
+        InvoiceStatus.written_off,
+    ):
         return None
 
     provider_type = _resolve_payment_provider(db)

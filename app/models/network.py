@@ -768,6 +768,46 @@ class IPv6Address(Base):
     pool = relationship("IpPool", back_populates="ipv6_addresses")
 
 
+class IpPoolUtilizationSnapshot(Base):
+    """Point-in-time utilization of an IP pool, captured periodically.
+
+    Utilization is otherwise computed live (current counts only). A periodic
+    Celery task writes one row per pool so the admin pool detail can chart
+    usage over time rather than just the instantaneous bar.
+    """
+
+    __tablename__ = "ip_pool_utilization_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_ip_pool_util_snap_pool_time",
+            "pool_id",
+            "captured_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ip_pools.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    pool = relationship("IpPool")
+
+
 class OLTDevice(Base):
     __tablename__ = "olt_devices"
     __table_args__ = (
@@ -3685,7 +3725,17 @@ class VerificationStatus(enum.Enum):
 
 
 class CircuitState(enum.Enum):
-    """Circuit breaker state for OLT SSH connections."""
+    """Circuit breaker state for OLT SSH connections.
+
+    DEPRECATED / INERT: the OLT SSH circuit-breaker + deferred-queue subsystem
+    was removed (it was never wired — the queue had no producers and the real
+    write paths bypassed the breaker). This enum, ``QueuedOltOperation``, and
+    the ``OLTDevice.circuit_state``/``circuit_failure_count``/``backoff_until``
+    columns are retained only to avoid a schema migration under the current
+    alembic-head divergence; nothing reads or writes them. Drop them in a
+    dedicated migration once the heads are merged. OLT writes happen directly;
+    cleanup is the ONT reconcile sweeper's job.
+    """
 
     closed = "closed"  # Normal operation
     open = "open"  # Failing, reject requests
@@ -3694,6 +3744,8 @@ class CircuitState(enum.Enum):
 
 class QueuedOltOperation(Base):
     """Operations queued while OLT circuit is open.
+
+    DEPRECATED / INERT — see :class:`CircuitState`. No producers remain.
 
     When an OLT's circuit breaker is open, provisioning operations are
     queued here for later execution when the circuit recovers.

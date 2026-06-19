@@ -36,6 +36,7 @@ from app.services.account_lifecycle import (
     get_active_locks,
     resolve_all_locks,
     restore_subscription,
+    suspend_subscription,
 )
 from app.services.common import coerce_uuid
 from app.services.session_store import (
@@ -901,13 +902,24 @@ def update_customer_account_status(
                 SubscriptionStatus.blocked,
                 SubscriptionStatus.stopped,
             }:
-                before = subscription.status
                 if get_active_locks(db, subscription_id=str(subscription.id)):
                     skipped += 1
                     continue
-                subscription.status = SubscriptionStatus.stopped
-                if before != subscription.status:
-                    changed += 1
+                # Route through the domain op so deactivation creates an
+                # enforcement lock (single writer). A bare ``status = stopped``
+                # produced a lock-less state that the domain ``restore`` path
+                # could not reactivate (resolved_count == 0) — the split-brain
+                # this fixes. active/pending → suspended; an already-down
+                # blocked/stopped keeps its status but gains the missing lock.
+                suspend_subscription(
+                    db,
+                    str(subscription.id),
+                    reason=EnforcementReason.admin,
+                    source=source,
+                    notes="Deactivated from reseller portal.",
+                    emit=False,
+                )
+                changed += 1
             else:
                 skipped += 1
         db.flush()

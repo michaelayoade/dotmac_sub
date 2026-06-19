@@ -988,6 +988,85 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
     return count
 
 
+def lift_fup_enforcement(db: Session, subscription_id: str) -> dict[str, Any]:
+    """Undo whatever FUP enforcement is active, then clear the FUP state row.
+
+    Called at the quota period boundary (and on a qualifying top-up). The old
+    reset path only nulled the ``FupState`` row, leaving the throttle profile /
+    address-list block / suspension in place on the wire — so a subscriber
+    stayed throttled or blocked indefinitely. This reverses the action recorded
+    in the state *before* clearing it:
+
+    - ``throttled`` → re-apply the captured original (or offer-effective)
+      RADIUS profile and re-sync to RADIUS.
+    - ``blocked``   → remove the address-list block AND resume any FUP
+      suspension (both idempotent; ``blocked`` covers both apply paths).
+    """
+    from app.models.fup_state import FupActionStatus
+    from app.services.fup_state import fup_state
+
+    state = fup_state.get(db, subscription_id)
+    if not state:
+        return {"lifted": False, "reason": "no_state", "actions": []}
+
+    prior = state.action_status
+    actions: list[str] = []
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+
+    if prior == FupActionStatus.throttled:
+        target = str(state.original_profile_id) if state.original_profile_id else None
+        if not target and subscription is not None:
+            prof = _resolve_effective_profile(db, subscription)
+            target = str(prof.id) if prof else None
+        if target and subscription is not None:
+            try:
+                apply_radius_profile_to_account(
+                    db, str(subscription.subscriber_id), target
+                )
+                actions.append("restore_profile")
+            except Exception as exc:
+                logger.warning(
+                    "FUP lift: profile restore failed for %s: %s",
+                    subscription_id,
+                    exc,
+                )
+    elif prior == FupActionStatus.blocked:
+        try:
+            remove_subscription_address_list_block(db, subscription_id)
+            actions.append("remove_block")
+        except Exception as exc:
+            logger.warning(
+                "FUP lift: address-list unblock failed for %s: %s",
+                subscription_id,
+                exc,
+            )
+        # Resume only if a FUP suspension actually flipped the status.
+        from app.services.account_lifecycle import SUSPENDED_EQUIVALENT
+
+        if subscription is not None and subscription.status in SUSPENDED_EQUIVALENT:
+            try:
+                from app.models.enforcement_lock import EnforcementReason
+                from app.services.account_lifecycle import restore_subscription
+
+                restored = restore_subscription(
+                    db,
+                    subscription_id,
+                    trigger="cap_reset",
+                    resolved_by="fup_cap_reset",
+                    reason=EnforcementReason.fup,
+                )
+                if restored:
+                    actions.append("resume")
+            except Exception as exc:
+                logger.warning(
+                    "FUP lift: resume failed for %s: %s", subscription_id, exc
+                )
+
+    fup_state.clear(db, subscription_id)
+    db.flush()
+    return {"lifted": True, "prior": prior.value, "actions": actions}
+
+
 # ---------------------------------------------------------------------------
 # Subscription cancellation cleanup
 # ---------------------------------------------------------------------------

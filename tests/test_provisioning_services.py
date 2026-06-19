@@ -2,6 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from fastapi import HTTPException
+
 from app.models.provisioning import (
     AppointmentStatus,
     ProvisioningStepType,
@@ -376,6 +379,95 @@ def test_list_transitions_by_service_order(
     )
     assert len(transitions) >= 2
     assert all(t.service_order_id == order.id for t in transitions)
+
+
+def test_illegal_state_transition_rejected(
+    db_session, subscriber_account, subscription
+):
+    """An illegal edge (active → pending) must be rejected, not recorded."""
+    order = provisioning_service.service_orders.create(
+        db_session,
+        ServiceOrderCreate(
+            account_id=subscriber_account.id, subscription_id=subscription.id
+        ),
+    )
+    provisioning_service.service_state_transitions.create(
+        db_session,
+        ServiceStateTransitionCreate(
+            service_order_id=order.id,
+            from_state=ServiceState.pending,
+            to_state=ServiceState.active,
+        ),
+    )
+    with pytest.raises(HTTPException) as exc:
+        provisioning_service.service_state_transitions.create(
+            db_session,
+            ServiceStateTransitionCreate(
+                service_order_id=order.id,
+                from_state=ServiceState.active,
+                to_state=ServiceState.pending,
+            ),
+        )
+    assert exc.value.status_code == 409
+
+
+def test_terminal_state_cannot_be_resurrected(
+    db_session, subscriber_account, subscription
+):
+    """canceled is a sink: canceled → active is rejected."""
+    order = provisioning_service.service_orders.create(
+        db_session,
+        ServiceOrderCreate(
+            account_id=subscriber_account.id, subscription_id=subscription.id
+        ),
+    )
+    provisioning_service.service_state_transitions.create(
+        db_session,
+        ServiceStateTransitionCreate(
+            service_order_id=order.id,
+            from_state=ServiceState.pending,
+            to_state=ServiceState.canceled,
+        ),
+    )
+    with pytest.raises(HTTPException) as exc:
+        provisioning_service.service_state_transitions.create(
+            db_session,
+            ServiceStateTransitionCreate(
+                service_order_id=order.id,
+                from_state=ServiceState.canceled,
+                to_state=ServiceState.active,
+            ),
+        )
+    assert exc.value.status_code == 409
+
+
+def test_stale_from_state_rejected(db_session, subscriber_account, subscription):
+    """from_state that doesn't match the order's current state is rejected."""
+    order = provisioning_service.service_orders.create(
+        db_session,
+        ServiceOrderCreate(
+            account_id=subscriber_account.id, subscription_id=subscription.id
+        ),
+    )
+    provisioning_service.service_state_transitions.create(
+        db_session,
+        ServiceStateTransitionCreate(
+            service_order_id=order.id,
+            from_state=ServiceState.pending,
+            to_state=ServiceState.provisioning,
+        ),
+    )
+    # Order is now in `provisioning`; claiming from_state=pending is stale.
+    with pytest.raises(HTTPException) as exc:
+        provisioning_service.service_state_transitions.create(
+            db_session,
+            ServiceStateTransitionCreate(
+                service_order_id=order.id,
+                from_state=ServiceState.pending,
+                to_state=ServiceState.active,
+            ),
+        )
+    assert exc.value.status_code == 409
 
 
 def test_get_service_order(db_session, subscriber_account, subscription):

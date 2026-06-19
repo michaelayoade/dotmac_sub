@@ -223,7 +223,8 @@ class TestInvoiceWriteOffVoid:
         )
         result = billing_service.invoices.write_off(db_session, str(invoice.id))
         assert result.balance_due == Decimal("0.00")
-        assert result.status == InvoiceStatus.void
+        # Bad-debt write-off is closed-but-not-collected, NOT void/paid.
+        assert result.status == InvoiceStatus.written_off
 
     def test_write_off_invoice_zero_balance(self, db_session, subscriber):
         invoice = _make_invoice(
