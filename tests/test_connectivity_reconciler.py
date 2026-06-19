@@ -10,12 +10,17 @@ from __future__ import annotations
 import sqlite3
 from unittest.mock import MagicMock, patch
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import AccessState, Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
 from app.services.connectivity_reconciler import (
+    connectivity_shadow_diff,
     converge_subscription_connectivity,
+    current_write_source,
+    derive_desired_connectivity,
+    note_connectivity_write,
     plan_subscription_ip,
+    reconciler_write_scope,
 )
 
 
@@ -281,3 +286,123 @@ class TestConverge:
         db_session.refresh(sub)
         assert result["reason"] == "not_active"
         assert sub.ipv4_address == "10.0.0.9"  # untouched
+
+
+class TestDesiredConnectivity:
+    """Pure transition table — CONNECTIVITY_STATE_MACHINE.md §2 invariants."""
+
+    def test_active_full_access_no_kick(self):
+        d = derive_desired_connectivity(SubscriptionStatus.active)
+        assert d.access_state is AccessState.active
+        assert d.credentials_active and d.ip_active and d.ip_retained
+        assert d.kick_live_session is False
+
+    def test_pending_unprovisioned(self):
+        d = derive_desired_connectivity(SubscriptionStatus.pending)
+        assert d.access_state is None
+        assert not d.credentials_active and not d.ip_active and not d.ip_retained
+        assert d.kick_live_session is False
+
+    def test_hidden_and_archived_unprovisioned(self):
+        for status in (SubscriptionStatus.hidden, SubscriptionStatus.archived):
+            d = derive_desired_connectivity(status)
+            assert d.access_state is None and not d.ip_active
+
+    def test_blocked_family_retains_ip_and_creds(self):
+        # INV-1 (IP retained across suspend) + INV-3 (creds survive suspend).
+        for status in (
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.blocked,
+            SubscriptionStatus.stopped,
+        ):
+            d = derive_desired_connectivity(status)
+            assert d.access_state is AccessState.captive  # default = walled-garden
+            assert d.credentials_active is True
+            assert d.ip_active is True and d.ip_retained is True
+            assert d.kick_live_session is True  # INV-5: disconnect once
+
+    def test_hard_reject_is_suspended_tier_still_retains_ip(self):
+        d = derive_desired_connectivity(
+            SubscriptionStatus.suspended, hard_reject=True
+        )
+        assert d.access_state is AccessState.suspended
+        assert d.credentials_active is True
+        assert d.ip_retained is True  # even hard block keeps the address (INV-1)
+
+    def test_terminal_releases_everything(self):
+        # INV-3/INV-4: creds inactive, IP released + cache cleared, kick once.
+        for status in (
+            SubscriptionStatus.canceled,
+            SubscriptionStatus.expired,
+            SubscriptionStatus.disabled,
+        ):
+            d = derive_desired_connectivity(status)
+            assert d.access_state is AccessState.terminated
+            assert d.credentials_active is False
+            assert d.ip_active is False and d.ip_retained is False
+            assert d.kick_live_session is True
+
+
+class TestWriteSourceMarker:
+    """The legacy-write detector must NOT flag reconciler-originated writes."""
+
+    @staticmethod
+    def _count(field, source):
+        from app.metrics import CONNECTIVITY_DIRECT_WRITE
+
+        return CONNECTIVITY_DIRECT_WRITE.labels(field=field, source=source)._value.get()
+
+    def test_default_source_is_legacy(self):
+        assert current_write_source() == "legacy"
+
+    def test_scope_marks_reconciler_and_restores(self):
+        with reconciler_write_scope():
+            assert current_write_source() == "reconciler"
+        assert current_write_source() == "legacy"
+
+    def test_note_attributes_to_correct_source(self):
+        field = "subscription.ipv4_address"
+        before_legacy = self._count(field, "legacy")
+        before_recon = self._count(field, "reconciler")
+
+        note_connectivity_write(field, "test_legacy_caller")  # outside scope
+        with reconciler_write_scope():
+            note_connectivity_write(field, "test_reconciler_caller")
+
+        assert self._count(field, "legacy") == before_legacy + 1
+        assert self._count(field, "reconciler") == before_recon + 1
+
+
+class TestShadowDiff:
+    def test_active_unprovisioned_flags_access_and_credentials(
+        self, db_session, catalog_offer
+    ):
+        # Active sub, no access_state set, no credentials, but IP present.
+        sub = _seed_sub(
+            db_session,
+            login="sd1",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.5",
+            assign_ip="10.0.0.5",
+        )
+        report = connectivity_shadow_diff(db_session, sub.subscriber_id)
+        assert "access_state" in report["diffs"]  # desired active, actual None
+        assert "credentials_active" in report["diffs"]  # desired True, none exist
+        assert "ip_active" not in report["diffs"]  # active IPAssignment present
+        assert report["ip"]["match"] is True
+
+    def test_terminal_consistent_has_no_diffs(self, db_session, catalog_offer):
+        sub = _seed_sub(
+            db_session,
+            login="sd2",
+            offer=catalog_offer,
+            status=SubscriptionStatus.canceled,
+        )
+        sub.access_state = AccessState.terminated.value  # actual matches desired
+        db_session.commit()
+        report = connectivity_shadow_diff(db_session, sub.subscriber_id)
+        # Terminal desires no creds, no IP, terminated access — and the seed has
+        # exactly that, so nothing disagrees.
+        assert report["diffs"] == []
+        assert report["credentials"]["match"] and report["ip"]["match"]
