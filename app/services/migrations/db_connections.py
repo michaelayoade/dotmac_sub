@@ -32,6 +32,9 @@ SPLYNX_MYSQL_USER = os.environ.get("SPLYNX_MYSQL_USER", "migration")
 SPLYNX_MYSQL_PASS = os.environ.get(
     "SPLYNX_MYSQL_PASS", os.environ.get("SPLYNX_MYSQL_PASSWORD", "")
 )
+SPLYNX_MYSQL_CONNECT_TIMEOUT = int(os.environ.get("SPLYNX_MYSQL_CONNECT_TIMEOUT", "10"))
+SPLYNX_MYSQL_READ_TIMEOUT = int(os.environ.get("SPLYNX_MYSQL_READ_TIMEOUT", "300"))
+SPLYNX_MYSQL_WRITE_TIMEOUT = int(os.environ.get("SPLYNX_MYSQL_WRITE_TIMEOUT", "30"))
 
 # SSH tunnel settings (used when SPLYNX_MYSQL_HOST is not set)
 SPLYNX_SSH_HOST = os.environ.get("SPLYNX_SSH_HOST", "138.68.165.175")
@@ -83,8 +86,9 @@ def splynx_connection(
             database=SPLYNX_MYSQL_DB,
             charset="utf8mb4",
             cursorclass=cursor_class,
-            connect_timeout=30,
-            read_timeout=300,
+            connect_timeout=SPLYNX_MYSQL_CONNECT_TIMEOUT,
+            read_timeout=SPLYNX_MYSQL_READ_TIMEOUT,
+            write_timeout=SPLYNX_MYSQL_WRITE_TIMEOUT,
         )
         try:
             yield conn
@@ -114,8 +118,9 @@ def splynx_connection(
         database=SPLYNX_MYSQL_DB,
         charset="utf8mb4",
         cursorclass=cursor_class,
-        connect_timeout=30,
-        read_timeout=300,
+        connect_timeout=SPLYNX_MYSQL_CONNECT_TIMEOUT,
+        read_timeout=SPLYNX_MYSQL_READ_TIMEOUT,
+        write_timeout=SPLYNX_MYSQL_WRITE_TIMEOUT,
     )
     try:
         yield conn
