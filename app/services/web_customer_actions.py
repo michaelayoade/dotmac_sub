@@ -556,7 +556,9 @@ def _parse_whatsapp_registry_template_id(template_id: str) -> tuple[str, str] | 
     return parts[1].strip(), parts[2].strip() or "en"
 
 
-def _whatsapp_registry_template(db: Session, template_id: str) -> dict[str, str] | None:
+def _whatsapp_registry_template(
+    db: Session, template_id: str
+) -> dict[str, str] | None:
     parsed = _parse_whatsapp_registry_template_id(template_id)
     if not parsed:
         return None
