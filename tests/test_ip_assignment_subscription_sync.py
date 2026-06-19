@@ -204,3 +204,55 @@ def test_reassign_after_release_reactivates_same_row(db_session):
         .all()
     )
     assert len(rows) == 1
+
+
+def test_bulk_assign_ipv4_resolves_owner_and_pool(db_session):
+    from app.services import web_network_ip_actions as actions
+
+    pool = _make_pool(db_session, "100.64.30.0/24")
+    by_id = _make_subscriber(db_session)
+    by_account = _make_subscriber(db_session)
+    by_account.account_number = "ACC-BULK-1"
+    by_email = _make_subscriber(db_session)
+    db_session.flush()
+    for octet in (10, 11, 12):
+        ip = IPv4Address(address=f"100.64.30.{octet}", pool_id=pool.id)
+        db_session.add(ip)
+    db_session.flush()
+
+    rows = [
+        {"ip_address": "100.64.30.10", "subscriber": str(by_id.id)},
+        {"ip_address": "100.64.30.11", "subscriber": "ACC-BULK-1"},
+        {"ip_address": "100.64.30.12", "subscriber": by_email.email.upper()},
+    ]
+    summary = actions.bulk_assign_ipv4(db_session, rows)
+
+    assert summary["assigned"] == 3
+    assert summary["reassigned"] == 0
+    assert summary["errors"] == []
+    assert len(summary["audit"]) == 3
+
+
+def test_bulk_assign_ipv4_isolates_bad_rows(db_session):
+    from app.services import web_network_ip_actions as actions
+
+    pool = _make_pool(db_session, "100.64.31.0/24")
+    good = _make_subscriber(db_session)
+    db_session.add(IPv4Address(address="100.64.31.5", pool_id=pool.id))
+    db_session.flush()
+
+    rows = [
+        {"ip_address": "100.64.31.5", "subscriber": str(good.id)},  # ok
+        {"ip_address": "100.64.31.6", "subscriber": "nobody@nowhere"},  # bad subscriber
+        {"ip_address": "10.255.255.1", "subscriber": str(good.id)},  # no pool
+        {"ip_address": "", "subscriber": str(good.id)},  # missing ip
+    ]
+    summary = actions.bulk_assign_ipv4(db_session, rows)
+
+    assert summary["assigned"] == 1
+    assert summary["total_rows"] == 4
+    assert len(summary["errors"]) == 3
+    error_msgs = " ".join(e["error"] for e in summary["errors"])
+    assert "Subscriber not found" in error_msgs
+    assert "No active IPv4 pool" in error_msgs
+    assert "required" in error_msgs

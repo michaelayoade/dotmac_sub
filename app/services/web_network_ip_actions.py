@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import ipaddress
+import uuid
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 
 from fastapi import Request
+from sqlalchemy import func
 
 from app.services import network as network_service
 from app.services import web_network_ip as ip_service
@@ -391,6 +396,239 @@ def release_ipv4_address_from_form(request: Request, db, form) -> IpWebActionRes
         },
     )
     return IpWebActionResult(success=True, redirect_url=return_to)
+
+
+def _parse_bulk_assign_csv(csv_text: str) -> list[dict[str, str]]:
+    """Parse bulk-assign CSV into lowercased-key rows.
+
+    Recognised columns: ip_address (or ip), subscriber (or subscriber_id /
+    account / email), subscription (or subscription_id, optional).
+    """
+    text = (csv_text or "").strip()
+    if not text:
+        return []
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return []
+    rows: list[dict[str, str]] = []
+    for raw in reader:
+        rows.append(
+            {str(k or "").strip().lower(): str(v or "").strip() for k, v in raw.items()}
+        )
+    return rows
+
+
+def _resolve_bulk_subscriber(db, identifier: str):
+    """Resolve a CSV subscriber identifier to a Subscriber (id, account#, email)."""
+    from app.models.subscriber import Subscriber
+
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    try:
+        subscriber = db.get(Subscriber, uuid.UUID(ident))
+        if subscriber is not None:
+            return subscriber
+    except (ValueError, AttributeError):
+        pass
+    subscriber = (
+        db.query(Subscriber).filter(Subscriber.account_number == ident).first()
+    )
+    if subscriber is not None:
+        return subscriber
+    return (
+        db.query(Subscriber)
+        .filter(func.lower(Subscriber.email) == ident.lower())
+        .first()
+    )
+
+
+def _find_ipv4_pool_for_address(db, ip: str):
+    """Return the active IPv4 pool whose CIDR contains ``ip``, else None."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if addr.version != 4:
+        return None
+    for pool in ip_service.list_active_ip_pools(db):
+        cidr = str(getattr(pool, "cidr", "") or "")
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if network.version == 4 and addr in network:
+            return pool
+    return None
+
+
+def _subscriber_label(subscriber) -> str:
+    name = " ".join(
+        part
+        for part in [
+            getattr(subscriber, "first_name", "") or "",
+            getattr(subscriber, "last_name", "") or "",
+        ]
+        if part
+    ).strip()
+    account = getattr(subscriber, "account_number", "") or ""
+    if name and account:
+        return f"{name} ({account})"
+    return name or account or str(getattr(subscriber, "id", ""))
+
+
+def bulk_assign_ipv4(db, rows: list[dict[str, str]]) -> dict[str, object]:
+    """Assign each CSV row, reusing single-IP semantics (assign_ipv4_address).
+
+    Each row is independent: a failure records an error and moves on so a
+    bad row never blocks the rest. Returns a summary plus an ``audit`` list
+    the caller emits as audit events (kept separate so this stays testable
+    without a Request).
+    """
+    assigned = 0
+    reassigned = 0
+    errors: list[dict[str, object]] = []
+    details: list[dict[str, object]] = []
+    audit: list[dict[str, object]] = []
+
+    for index, row in enumerate(rows, start=2):  # header is line 1
+        ip = (row.get("ip_address") or row.get("ip") or "").strip()
+        subscriber_ident = (
+            row.get("subscriber")
+            or row.get("subscriber_id")
+            or row.get("account")
+            or row.get("email")
+            or ""
+        ).strip()
+        subscription_ident = (
+            row.get("subscription") or row.get("subscription_id") or ""
+        ).strip()
+
+        if not ip or not subscriber_ident:
+            errors.append(
+                {
+                    "line": index,
+                    "ip": ip,
+                    "subscriber": subscriber_ident,
+                    "error": "ip_address and subscriber are required",
+                }
+            )
+            continue
+
+        subscriber = _resolve_bulk_subscriber(db, subscriber_ident)
+        if subscriber is None:
+            errors.append(
+                {
+                    "line": index,
+                    "ip": ip,
+                    "subscriber": subscriber_ident,
+                    "error": "Subscriber not found",
+                }
+            )
+            continue
+
+        pool = _find_ipv4_pool_for_address(db, ip)
+        if pool is None:
+            errors.append(
+                {
+                    "line": index,
+                    "ip": ip,
+                    "subscriber": subscriber_ident,
+                    "error": "No active IPv4 pool contains this address",
+                }
+            )
+            continue
+
+        subscription_id = None
+        if subscription_ident:
+            try:
+                subscription_id = str(uuid.UUID(subscription_ident))
+            except ValueError:
+                errors.append(
+                    {
+                        "line": index,
+                        "ip": ip,
+                        "subscriber": subscriber_ident,
+                        "error": "subscription must be a UUID",
+                    }
+                )
+                continue
+
+        try:
+            result = ip_service.assign_ipv4_address(
+                db,
+                pool_id=str(pool.id),
+                ip_address=ip,
+                subscriber_id=str(subscriber.id),
+                subscription_id=subscription_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - row-level isolation
+            db.rollback()
+            errors.append(
+                {
+                    "line": index,
+                    "ip": ip,
+                    "subscriber": subscriber_ident,
+                    "error": str(exc),
+                }
+            )
+            continue
+
+        was_reassign = bool(result.get("reassigned"))
+        if was_reassign:
+            reassigned += 1
+        else:
+            assigned += 1
+        details.append(
+            {
+                "line": index,
+                "ip": ip,
+                "subscriber": _subscriber_label(subscriber),
+                "action": "reassigned" if was_reassign else "assigned",
+            }
+        )
+        audit.append(
+            {
+                "action": "reassign" if was_reassign else "assign",
+                "entity_id": str(getattr(result.get("assignment"), "id", "") or ""),
+                "metadata": {
+                    "pool_id": str(pool.id),
+                    "ip_address": ip,
+                    "subscriber_id": str(subscriber.id),
+                    "subscription_id": subscription_id,
+                    "old_subscriber_id": result.get("previous_subscriber_id"),
+                    "old_subscription_id": result.get("previous_subscription_id"),
+                    "source": "bulk_csv",
+                },
+            }
+        )
+
+    return {
+        "assigned": assigned,
+        "reassigned": reassigned,
+        "errors": errors,
+        "details": details,
+        "total_rows": len(rows),
+        "audit": audit,
+    }
+
+
+def bulk_assign_ipv4_from_form(request: Request, db, form) -> IpWebActionResult:
+    csv_text = str(form.get("csv_data") or "")
+    summary = bulk_assign_ipv4(db, _parse_bulk_assign_csv(csv_text))
+    for event in summary.pop("audit"):
+        _log_ip_audit_event(
+            db,
+            request,
+            action=event["action"],
+            entity_type="ip_assignment",
+            entity_id=event["entity_id"],
+            metadata=event["metadata"],
+        )
+    return IpWebActionResult(
+        success=True,
+        form_context={"csv_data": csv_text, "result": summary, "error": None},
+    )
 
 
 def ipv6_network_form_values(form) -> dict[str, object]:

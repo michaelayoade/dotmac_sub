@@ -607,6 +607,47 @@ def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse("/admin/network/ip-management", status_code=303)
 
 
+@router.get(
+    "/ip-management/ipv4-bulk-assign",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ipv4_bulk_assign_form(request: Request, db: Session = Depends(get_db)):
+    context = _base_context(
+        request, db, active_page="ip-management", active_menu="ip-address"
+    )
+    context.update({"csv_data": "", "result": None, "error": None})
+    return templates.TemplateResponse(
+        "admin/network/ip-management/ipv4_bulk_assign.html", context
+    )
+
+
+@router.post(
+    "/ip-management/ipv4-bulk-assign",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ipv4_bulk_assign_submit(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    context = _base_context(
+        request, db, active_page="ip-management", active_menu="ip-address"
+    )
+    if not str(form.get("csv_data") or "").strip():
+        context.update(
+            {"csv_data": "", "result": None, "error": "CSV data is required."}
+        )
+        return templates.TemplateResponse(
+            "admin/network/ip-management/ipv4_bulk_assign.html", context
+        )
+    result = web_network_ip_actions_service.bulk_assign_ipv4_from_form(
+        request, db, form
+    )
+    context.update(result.form_context or {})
+    return templates.TemplateResponse(
+        "admin/network/ip-management/ipv4_bulk_assign.html", context
+    )
+
+
 @router.post(
     "/ip-management/ipv4-release",
     response_class=HTMLResponse,
