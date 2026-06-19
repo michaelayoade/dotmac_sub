@@ -7,8 +7,9 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
+from app.services.connectivity_reconciler import connectivity_shadow_diff
 from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP, Event
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,31 @@ def _parse_subscription_status(value: str | None) -> SubscriptionStatus | None:
 
 class LifecycleHandler:
     """Handler that records subscription lifecycle events."""
+
+    def _observe_connectivity_shadow_diff(self, db: Session, event: Event) -> None:
+        """Record desired-vs-actual connectivity drift after a lifecycle event.
+
+        Step 2d is observability only: lifecycle transitions trigger the
+        read-only shadow diff so production can show what the reconciler would
+        change before any legacy writer is absorbed. Failures are swallowed so
+        lifecycle auditing is never blocked by metrics/logging.
+        """
+        if not event.subscription_id:
+            return
+        try:
+            # Savepoint-isolated: the lifecycle record is already flushed by the
+            # caller, so even a DB-level failure inside the read-only diff rolls
+            # back only to here and never discards the audit write.
+            with db.begin_nested():
+                subscription = db.get(Subscription, event.subscription_id)
+                if subscription and subscription.subscriber_id:
+                    connectivity_shadow_diff(db, subscription.subscriber_id)
+        except Exception as exc:
+            logger.warning(
+                "connectivity shadow-diff observation failed for subscription %s: %s",
+                event.subscription_id,
+                exc,
+            )
 
     def handle(self, db: Session, event: Event) -> None:
         """Process an event by creating lifecycle records.
@@ -80,6 +106,10 @@ class LifecycleHandler:
             actor=event.actor,
         )
         db.add(lifecycle_event)
+        # Flush the audit record before the read-only shadow observation so the
+        # savepoint in _observe_connectivity_shadow_diff cannot roll it back.
+        db.flush()
+        self._observe_connectivity_shadow_diff(db, event)
 
         logger.info(
             f"Recorded lifecycle event {lifecycle_type.value} for "
