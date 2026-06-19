@@ -105,6 +105,8 @@
                         <td class="px-4 py-3">
                             {% if row.status == 'assigned' %}
                             <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Assigned</span>
+                            {% elif row.status == 'routed' %}
+                            <span class="inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Routed</span>
                             {% elif row.status == 'device' %}
                             <span class="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">Device</span>
                             {% elif row.status == 'ont_management' %}
@@ -124,6 +126,8 @@
                             <span class="text-xs text-slate-400">Reserved</span>
                             {% elif row.status == 'device' %}
                             <span class="text-xs text-slate-400">Managed by device inventory</span>
+                            {% elif row.status == 'routed' %}
+                            <span class="text-xs text-slate-400">Routed block</span>
                             {% elif row.status == 'ont_management' %}
                             <span class="text-xs text-slate-400">Managed by IPAM</span>
                             {% elif row.status == 'assigned' %}

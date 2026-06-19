@@ -193,17 +193,23 @@
                             </thead>
                             <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                                 {% for addr in assignments %}
+                                {% set route_owner = addr.additional_route_owner if addr.additional_route_owner is defined else none %}
                                 <tr>
                                     <td class="px-3 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ addr.address }}</td>
                                     <td class="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">
                                         {% if addr.assignment and addr.assignment.is_active and addr.assignment.subscriber %}
                                             {{ addr.assignment.subscriber.display_name or addr.assignment.subscriber.email or addr.assignment.subscriber.id }}
+                                        {% elif route_owner %}
+                                            <div class="font-medium text-slate-700 dark:text-slate-200">{{ route_owner.subscriber_name }}</div>
+                                            <div class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ route_owner.cidr }}</div>
                                         {% else %}
                                             Unassigned
                                         {% endif %}
                                     </td>
                                     <td class="px-3 py-2">
-                                        {% if addr.is_reserved %}
+                                        {% if route_owner and not (addr.assignment and addr.assignment.is_active) %}
+                                        <span class="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">Routed</span>
+                                        {% elif addr.is_reserved %}
                                         <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
                                         {% elif addr.assignment and addr.assignment.is_active %}
                                         <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Assigned</span>
