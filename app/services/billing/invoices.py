@@ -32,6 +32,7 @@ from app.services.billing._common import (
     _validate_account,
     _validate_invoice_line_amount,
     _validate_invoice_totals,
+    assert_legal_invoice_transition,
 )
 from app.services.common import (
     apply_ordering,
@@ -324,6 +325,8 @@ class Invoices(ListResponseMixin):
             "balance_due": data.get("balance_due", invoice.balance_due),
         }
         _validate_invoice_totals(merged)
+        if "status" in data:
+            assert_legal_invoice_transition(previous_status, data["status"])
         for key, value in data.items():
             setattr(invoice, key, value)
         db.commit()
@@ -521,7 +524,14 @@ class Invoices(ListResponseMixin):
             raise HTTPException(
                 status_code=404, detail="One or more invoices not found"
             )
+        skipped = 0
         for invoice in invoices:
+            # Don't void a paid or already-void invoice — the single-invoice
+            # void() rejects this, but bulk_void previously voided paid
+            # invoices unconditionally, stranding their payments. Skip them.
+            if invoice.status in (InvoiceStatus.paid, InvoiceStatus.void):
+                skipped += 1
+                continue
             # Reverse active debit ledger entries
             active_debits = (
                 db.query(LedgerEntry)
@@ -548,7 +558,7 @@ class Invoices(ListResponseMixin):
             if payload.memo:
                 invoice.memo = payload.memo
         db.commit()
-        return len(invoices)
+        return len(invoices) - skipped
 
     @staticmethod
     def bulk_void_response(db: Session, payload: InvoiceBulkVoidRequest) -> dict:
