@@ -125,6 +125,33 @@ def meter_usage_into_quota():
         session.close()
 
 
+def _fup_should_enforce(
+    *,
+    prior_status: str,
+    target_status: str,
+    cooldown_minutes: int,
+    state,
+    now,
+) -> bool:
+    """Transition-driven FUP enforcement to stop per-tick RADIUS churn.
+
+    Enforce when *entering* the throttled/blocked state; once already in it,
+    re-assert only after ``cooldown_minutes`` has elapsed (0 = never re-assert).
+    Previously the task re-emitted ``usage_exhausted`` and re-applied the RADIUS
+    profile / SSH address-list on every single tick.
+    """
+    from datetime import UTC
+
+    if prior_status != target_status:
+        return True
+    if cooldown_minutes and state is not None and state.last_evaluated_at is not None:
+        last = state.last_evaluated_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        return (now - last).total_seconds() / 60 >= cooldown_minutes
+    return False
+
+
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
 def evaluate_fup_rules() -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
@@ -226,34 +253,16 @@ def evaluate_fup_rules() -> dict[str, int]:
 
             triggered = [r for r in results if r.get("triggered")]
 
-            def _should_enforce(target_status: str, cooldown_minutes: int) -> bool:
-                """Transition-driven enforcement to stop per-tick RADIUS churn.
-
-                Enforce when *entering* the state; once already in it, re-assert
-                only after ``cooldown_minutes`` has elapsed (0 = never re-assert).
-                Previously the task re-emitted usage_exhausted and re-applied the
-                RADIUS profile / SSH address-list on every single tick.
-                """
-                if prior_status != target_status:
-                    return True
-                if (
-                    cooldown_minutes
-                    and state is not None
-                    and state.last_evaluated_at is not None
-                ):
-                    last = state.last_evaluated_at
-                    if last.tzinfo is None:
-                        last = last.replace(tzinfo=UTC)
-                    elapsed_min = (now - last).total_seconds() / 60
-                    return elapsed_min >= cooldown_minutes
-                return False
-
             if triggered:
                 # Find the highest-severity triggered rule
                 for rule_result in reversed(triggered):
                     if rule_result.get("action") == "block":
-                        if _should_enforce(
-                            "blocked", rule_result.get("cooldown_minutes") or 0
+                        if _fup_should_enforce(
+                            prior_status=prior_status,
+                            target_status="blocked",
+                            cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
+                            state=state,
+                            now=now,
                         ):
                             emit_event(
                                 session,
@@ -291,8 +300,12 @@ def evaluate_fup_rules() -> dict[str, int]:
                         )
                         break
                     elif rule_result.get("action") == "reduce_speed":
-                        if _should_enforce(
-                            "throttled", rule_result.get("cooldown_minutes") or 0
+                        if _fup_should_enforce(
+                            prior_status=prior_status,
+                            target_status="throttled",
+                            cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
+                            state=state,
+                            now=now,
                         ):
                             emit_event(
                                 session,

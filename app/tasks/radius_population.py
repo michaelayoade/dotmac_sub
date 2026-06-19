@@ -28,7 +28,8 @@ def refresh_radius_from_subs() -> dict[str, int]:
     logger.info("RADIUS refresh-from-subs starting")
     lock_db = SessionLocal()
     try:
-        is_pg = lock_db.bind.dialect.name == "postgresql"
+        bind = lock_db.bind
+        is_pg = bind is not None and bind.dialect.name == "postgresql"
         if is_pg:
             acquired = lock_db.execute(
                 select(func.pg_try_advisory_lock(_POPULATE_LOCK_KEY))
