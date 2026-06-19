@@ -4,7 +4,12 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.provisioning import ProvisioningRun, ProvisioningRunStatus, ServiceOrder
+from app.models.provisioning import (
+    ProvisioningRun,
+    ProvisioningRunStatus,
+    ServiceOrder,
+    ServiceOrderStatus,
+)
 from app.schemas.provisioning import ProvisioningRunStart
 from app.services import provisioning as provisioning_service
 from app.services.common import coerce_uuid
@@ -23,6 +28,49 @@ class ProvisioningHandler:
             self._handle_subscription_resumed(db, event)
         elif event.event_type == EventType.service_order_assigned:
             self._handle_service_order_assigned(db, event)
+        elif event.event_type == EventType.provisioning_completed:
+            self._advance_order_on_run(db, event, ServiceOrderStatus.active)
+        elif event.event_type == EventType.provisioning_failed:
+            self._advance_order_on_run(db, event, ServiceOrderStatus.failed)
+
+    def _advance_order_on_run(
+        self, db: Session, event: Event, target_status: "ServiceOrderStatus"
+    ) -> None:
+        """Advance the linked service order when its provisioning run finishes.
+
+        A successful ``ProvisioningRuns.run`` previously left the order stuck in
+        ``provisioning`` forever — the only thing that flipped it to ``active``
+        was the unrelated ``subscription_activated`` event. Now the run's own
+        completion/failure advances the order, so an order whose workflow runs
+        to success (or fails) reaches a terminal status instead of starving.
+        """
+        service_order_id = event.service_order_id or event.payload.get(
+            "service_order_id"
+        )
+        if not service_order_id:
+            return
+        try:
+            order = db.get(ServiceOrder, coerce_uuid(service_order_id))
+        except (TypeError, ValueError):
+            return
+        if not order:
+            return
+        # Only advance an in-flight order; never override a terminal/manual
+        # status (active/canceled/failed already set, or a draft not yet run).
+        in_flight = {
+            ServiceOrderStatus.submitted,
+            ServiceOrderStatus.scheduled,
+            ServiceOrderStatus.provisioning,
+        }
+        if order.status in in_flight:
+            order.status = target_status
+            db.flush()
+            logger.info(
+                "Service order %s advanced to %s on run %s",
+                service_order_id,
+                target_status.value,
+                event.payload.get("provisioning_run_id"),
+            )
 
     def _handle_subscription_resumed(self, db: Session, event: Event) -> None:
         """Re-provision IP on reactivation.
@@ -222,7 +270,16 @@ class ProvisioningHandler:
                 service_order_id,
             )
             return
-        service_order = db.get(ServiceOrder, order_uuid)
+        # Lock the order row so two concurrent ``service_order_assigned``
+        # events serialize through the existing-run check below — otherwise
+        # both see zero runs and both kick off a run against the same OLT/NAS
+        # (double-provisioning). On SQLite (tests) FOR UPDATE is a harmless
+        # no-op.
+        from sqlalchemy import select as _select
+
+        service_order = db.execute(
+            _select(ServiceOrder).where(ServiceOrder.id == order_uuid).with_for_update()
+        ).scalar_one_or_none()
         if not service_order:
             logger.warning(
                 "Skipping provisioning run: service order %s not found.",

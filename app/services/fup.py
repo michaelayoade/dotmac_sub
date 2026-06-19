@@ -540,6 +540,12 @@ def evaluate_rules(
                 "usage_percent": round(current_usage_gb / threshold * 100, 1)
                 if threshold > 0
                 else 0,
+                "consumption_period": (
+                    rule.consumption_period.value
+                    if rule.consumption_period
+                    else "monthly"
+                ),
+                "cooldown_minutes": rule.cooldown_minutes or 0,
             }
         )
 

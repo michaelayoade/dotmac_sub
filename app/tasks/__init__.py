@@ -64,10 +64,6 @@ from app.tasks.olt_health_retry import (
     retry_single_olt,
     trigger_immediate_retry,
 )
-from app.tasks.olt_queue import (
-    process_deferred_olt_operations,
-    retry_failed_operations,
-)
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_provisioning import (
     authorize_ont as authorize_ont_task,
@@ -85,6 +81,7 @@ from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
 from app.tasks.provisioning import (
+    reap_stale_provisioning_runs,
     retry_pending_compensation_failures,
     run_bulk_activation_job,
     run_service_migration_job,
@@ -197,6 +194,7 @@ __all__ = [
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",
+    "reap_stale_provisioning_runs",
     "notify_expiring_data_bundles",
     "cleanup_nas_backups",
     "refresh_expiring_tokens",
@@ -255,8 +253,6 @@ __all__ = [
     "sync_single_nas_to_zabbix",
     "remove_device_from_zabbix_task",
     # OLT queue processing (Phase 4)
-    "process_deferred_olt_operations",
-    "retry_failed_operations",
     "execute_due_profile_sync_tasks",
     "warm_monitoring_caches",
 ]

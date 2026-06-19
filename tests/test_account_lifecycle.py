@@ -507,6 +507,55 @@ class TestComputeAccountStatus:
         status = compute_account_status(db_session, str(subscriber.id))
         assert status == SubscriberStatus.active
 
+    def test_active_with_open_dunning_is_delinquent(self, db_session):
+        """Active subscription + open dunning case → delinquent (durable,
+        survives re-derivation). Resolving the case → back to active."""
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+
+        case = DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        db_session.add(case)
+        db_session.flush()
+
+        status = compute_account_status(db_session, str(subscriber.id))
+        assert status == SubscriberStatus.delinquent
+        # delinquent keeps portal access to pay
+        db_session.refresh(subscriber)
+        assert subscriber.is_active is True
+
+        # Re-deriving does not erase it (the previous bug).
+        status = compute_account_status(db_session, str(subscriber.id))
+        assert status == SubscriberStatus.delinquent
+
+        case.status = DunningCaseStatus.resolved
+        db_session.flush()
+        status = compute_account_status(db_session, str(subscriber.id))
+        assert status == SubscriberStatus.active
+
+    def test_suspended_takes_precedence_over_dunning(self, db_session):
+        """A suspended subscription outranks delinquent even with open dunning."""
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        sub = _make_subscription(db_session, subscriber, offer)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+        suspend_subscription(
+            db_session,
+            str(sub.id),
+            reason=EnforcementReason.overdue,
+            source="test",
+            emit=False,
+        )
+        status = compute_account_status(db_session, str(subscriber.id))
+        assert status == SubscriberStatus.suspended
+
     def test_no_subscriptions(self, db_session):
         """Subscriber with no subscriptions → new."""
         subscriber = _make_subscriber(db_session)

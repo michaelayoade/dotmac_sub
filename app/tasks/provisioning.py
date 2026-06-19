@@ -12,6 +12,22 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(name="app.tasks.provisioning.reap_stale_provisioning_runs")
+def reap_stale_provisioning_runs(*, older_than_minutes: int = 30) -> dict[str, int]:
+    """Fail provisioning runs stuck in 'running' past a timeout.
+
+    A synchronous ``ProvisioningRuns.run`` whose worker died mid-loop leaves
+    the row ``running`` forever. This beat task converges those to ``failed``.
+    """
+    from app.services.provisioning_managers import ProvisioningRuns
+
+    with db_session_adapter.session() as session:
+        reaped = ProvisioningRuns.reap_stale_runs(
+            session, older_than_minutes=older_than_minutes
+        )
+    return {"reaped": reaped}
+
+
 @celery_app.task(name="app.tasks.provisioning.run_bulk_activation_job")
 def run_bulk_activation_job(*, job_id: str):
     with db_session_adapter.session() as session:

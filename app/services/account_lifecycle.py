@@ -93,6 +93,44 @@ _TERMINAL = {
     SubscriptionStatus.archived,
 }
 
+# Public alias for callers outside this module (e.g. the catalog write path)
+# that need to reason about terminal subscription states.
+TERMINAL_STATUSES = frozenset(_TERMINAL)
+
+
+def is_terminal_status(status: SubscriptionStatus | None) -> bool:
+    """True if ``status`` is a terminal (sink) subscription status."""
+    return status in _TERMINAL
+
+
+def assert_legal_subscription_transition(
+    from_status: SubscriptionStatus | None,
+    to_status: SubscriptionStatus | None,
+) -> None:
+    """Guard the subscription state machine against illegal transitions.
+
+    Terminal statuses (canceled/expired/disabled/hidden/archived) are sinks:
+    once a subscription enters one, the only legal "transition" is to stay put.
+    This is the single rule the raw catalog write path
+    (``Subscriptions.update``) must not bypass — without it an admin/web edit
+    can resurrect a dead service straight back to ``active`` (the domain
+    operations in this module already reject these edges; the form path did
+    not). Re-activation of a terminal service must go through a deliberate new
+    subscription, never a status flip.
+
+    Raises:
+        ValueError: if ``from_status`` is terminal and differs from
+            ``to_status``.
+    """
+    if to_status is None or from_status == to_status:
+        return
+    if from_status in _TERMINAL:
+        raise ValueError(
+            f"Illegal subscription transition "
+            f"{from_status.value} → {to_status.value}: "
+            f"{from_status.value} is terminal and cannot be reactivated"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Domain operations
@@ -138,6 +176,7 @@ def suspend_subscription(
     if not subscription:
         raise ValueError(f"Subscription {subscription_id} not found")
 
+    prev_status = subscription.status
     was_already_suspended = subscription.status in SUSPENDED_EQUIVALENT
 
     if subscription.status not in _SUSPENDABLE and not was_already_suspended:
@@ -191,6 +230,8 @@ def suspend_subscription(
                     "subscription_id": str(subscription.id),
                     "reason": reason.value,
                     "source": source,
+                    "from_status": prev_status.value if prev_status else None,
+                    "to_status": SubscriptionStatus.suspended.value,
                     "offer_name": subscription.offer.name
                     if subscription.offer
                     else None,
@@ -287,6 +328,7 @@ def restore_subscription(
 
     restored = False
     if remaining is None:
+        prev_status = subscription.status
         subscription.status = SubscriptionStatus.active
         db.flush()
         restored = True
@@ -299,6 +341,8 @@ def restore_subscription(
                     "subscription_id": str(subscription.id),
                     "trigger": trigger,
                     "resolved_by": resolved_by,
+                    "from_status": prev_status.value if prev_status else None,
+                    "to_status": SubscriptionStatus.active.value,
                     "offer_name": subscription.offer.name
                     if subscription.offer
                     else None,
@@ -352,6 +396,7 @@ def activate_subscription(
             f"Cannot activate subscription in status {subscription.status.value}"
         )
 
+    prev_status = subscription.status
     subscription.status = SubscriptionStatus.active
     if start_at and not subscription.start_at:
         subscription.start_at = start_at
@@ -366,6 +411,8 @@ def activate_subscription(
             EventType.subscription_activated,
             {
                 "subscription_id": str(subscription.id),
+                "from_status": prev_status.value if prev_status else None,
+                "to_status": SubscriptionStatus.active.value,
                 "offer_name": subscription.offer.name if subscription.offer else None,
             },
             subscription_id=subscription.id,
@@ -416,6 +463,7 @@ def expire_subscription(
 
     resolved_count = resolve_all_locks(db, subscription, "expired")
 
+    prev_status = subscription.status
     subscription.status = SubscriptionStatus.expired
     db.flush()
 
@@ -427,6 +475,9 @@ def expire_subscription(
             EventType.subscription_expired,
             {
                 "subscription_id": str(subscription.id),
+                "reason": "expired",
+                "from_status": prev_status.value if prev_status else None,
+                "to_status": SubscriptionStatus.expired.value,
                 "offer_name": subscription.offer.name if subscription.offer else None,
             },
             subscription_id=subscription.id,
@@ -469,6 +520,7 @@ def cancel_subscription(
 
     resolved_count = resolve_all_locks(db, subscription, "canceled")
 
+    prev_status = subscription.status
     subscription.status = SubscriptionStatus.canceled
     subscription.canceled_at = datetime.now(UTC)
     subscription.cancel_reason = cancel_reason
@@ -509,7 +561,10 @@ def cancel_subscription(
             {
                 "subscription_id": str(subscription.id),
                 "cancel_reason": cancel_reason,
+                "reason": cancel_reason,
                 "source": source,
+                "from_status": prev_status.value if prev_status else None,
+                "to_status": SubscriptionStatus.canceled.value,
                 "offer_name": subscription.offer.name if subscription.offer else None,
             },
             subscription_id=subscription.id,
@@ -532,17 +587,47 @@ def cancel_subscription(
 # ---------------------------------------------------------------------------
 
 
+def _has_open_dunning_case(db: Session, subscriber_id: str) -> bool:
+    """True if the subscriber has an open dunning case.
+
+    An open ``DunningCase`` is the durable, explicit "past due" signal (the
+    dunning runner opens one when an account goes overdue and resolves it on
+    payment). It is the source of truth for the derived ``delinquent`` status
+    so that signal survives re-derivation instead of being a volatile
+    side-channel that the next lifecycle op erases.
+    """
+    from app.models.collections import DunningCase, DunningCaseStatus
+
+    return (
+        db.scalars(
+            select(DunningCase.id).where(
+                DunningCase.account_id == subscriber_id,
+                DunningCase.status == DunningCaseStatus.open,
+            )
+        ).first()
+        is not None
+    )
+
+
 def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     """Derive subscriber status from subscription states.
 
     Priority order:
-      1. Any subscription active → active
-      2. Any subscription pending → new
-      3. Any subscription suspended → suspended
-      4. Any subscription blocked/stopped → blocked
+      1. Any subscription active →
+            ``delinquent`` if an open dunning case exists (past due, service
+            still running, pre-suspension), else ``active``
+      2. Any subscription suspended → suspended
+      3. Any subscription blocked/stopped → blocked
+      4. Any subscription pending → new
       5. All remaining subscriptions disabled → disabled
       6. All terminal (canceled/expired/disabled/hidden/archived) → canceled
       7. No subscriptions → new
+
+    ``delinquent`` is only reachable from the active branch by design: once a
+    subscription is suspended/blocked the stronger status wins, and once all
+    are terminal the account is canceled/disabled. This makes the derivation
+    the single producer of ``delinquent`` (it was previously written
+    out-of-band and silently clobbered here).
 
     Updates ``subscriber.status`` and flushes.
     """
@@ -559,7 +644,11 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     if not subs:
         new_status = SubscriberStatus.new
     elif any(s.status == SubscriptionStatus.active for s in subs):
-        new_status = SubscriberStatus.active
+        new_status = (
+            SubscriberStatus.delinquent
+            if _has_open_dunning_case(db, str(subscriber.id))
+            else SubscriberStatus.active
+        )
     elif any(s.status == SubscriptionStatus.suspended for s in subs):
         new_status = SubscriberStatus.suspended
     elif any(
@@ -592,6 +681,9 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
         SubscriberStatus.new,
         SubscriberStatus.blocked,
         SubscriberStatus.suspended,
+        # Delinquent = past due but service still running; keep portal access
+        # so they can log in and pay down the balance.
+        SubscriberStatus.delinquent,
     }
     if subscriber.is_active != should_be_active:
         subscriber.is_active = should_be_active
