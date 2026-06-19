@@ -46,9 +46,7 @@ def refresh_radius_from_subs() -> dict[str, int]:
             result = populate(dry_run=False)
         finally:
             if is_pg:
-                lock_db.execute(
-                    select(func.pg_advisory_unlock(_POPULATE_LOCK_KEY))
-                )
+                lock_db.execute(select(func.pg_advisory_unlock(_POPULATE_LOCK_KEY)))
                 lock_db.commit()
     finally:
         lock_db.close()
