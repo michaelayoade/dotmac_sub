@@ -232,12 +232,13 @@ def build_create_error_context(
     deps: dict[str, object],
     resolved_invoice,
     invoice_id: str | None,
+    payment_method_id: str | None = None,
 ) -> dict[str, object]:
     selected_account = cast(Subscriber | None, deps.get("selected_account"))
     return {
         "accounts": None,
-        "payment_methods": [],
-        "payment_method_types": [],
+        "payment_methods": deps["payment_methods"],
+        "payment_method_types": deps["payment_method_types"],
         "collection_accounts": deps["collection_accounts"],
         "invoices": deps["invoices"],
         "action_url": "/admin/billing/payments/create",
@@ -253,6 +254,7 @@ def build_create_error_context(
         "currency_locked": bool(resolved_invoice),
         "show_invoice_typeahead": not bool(selected_account),
         "selected_invoice_id": invoice_id,
+        "selected_payment_method_id": payment_method_id,
     }
 
 
@@ -318,7 +320,17 @@ def load_create_error_dependencies(
         offset=0,
     )
     invoices = []
+    payment_methods = []
     if selected_account:
+        payment_methods = billing_service.payment_methods.list(
+            db=db,
+            account_id=str(selected_account.id),
+            is_active=None,
+            order_by="created_at",
+            order_dir="desc",
+            limit=500,
+            offset=0,
+        )
         invoices = billing_service.invoices.list(
             db=db,
             account_id=str(selected_account.id),
@@ -332,9 +344,22 @@ def load_create_error_dependencies(
         invoices = filter_open_invoices(invoices)
     return {
         "selected_account": selected_account,
+        "payment_methods": payment_methods,
+        "payment_method_types": payment_method_type_options(),
         "collection_accounts": collection_accounts,
         "invoices": invoices,
     }
+
+
+def payment_method_type_options() -> list[str]:
+    return [
+        "cash",
+        "transfer",
+        "card",
+        "bank_account",
+        "check",
+        "other",
+    ]
 
 
 def load_edit_dependencies(
@@ -353,14 +378,7 @@ def load_edit_dependencies(
         limit=500,
         offset=0,
     )
-    payment_method_types = [
-        "cash",
-        "bank_transfer",
-        "card",
-        "mobile_money",
-        "wallet",
-        "other",
-    ]
+    payment_method_types = payment_method_type_options()
     if payment.payment_method_id and all(
         str(method.id) != str(payment.payment_method_id) for method in payment_methods
     ):
