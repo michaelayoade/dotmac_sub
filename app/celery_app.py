@@ -21,9 +21,30 @@ from app.services.scheduler_config import (
 
 logger = logging.getLogger(__name__)
 
+
+def _running_under_pytest() -> bool:
+    return bool(os.getenv("PYTEST_VERSION") or os.getenv("PYTEST_CURRENT_TEST"))
+
+
+def _test_celery_config() -> dict:
+    broker = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "memory://"
+    backend = os.getenv("CELERY_RESULT_BACKEND") or os.getenv("REDIS_URL") or "cache+memory://"
+    return {
+        "broker_url": broker,
+        "result_backend": backend,
+        "timezone": os.getenv("CELERY_TIMEZONE", "UTC"),
+        "task_always_eager": os.getenv("CELERY_TASK_ALWAYS_EAGER", "false").lower()
+        in {"1", "true", "yes"},
+    }
+
+
 celery_app = Celery("dotmac_sm")
-celery_app.conf.update(get_celery_config())
-celery_app.conf.beat_schedule = build_beat_schedule()
+if _running_under_pytest():
+    celery_app.conf.update(_test_celery_config())
+    celery_app.conf.beat_schedule = {}
+else:
+    celery_app.conf.update(get_celery_config())
+    celery_app.conf.beat_schedule = build_beat_schedule()
 celery_app.conf.beat_scheduler = "app.celery_scheduler.DbScheduler"
 # How often DbScheduler rebuilds the schedule from the DB. The default 30s
 # meant ~2,880 full build_beat_schedule() passes/day (dozens of settings

@@ -10,6 +10,13 @@ import os
 # circuit breaker keeps subsequent lookups cheap.
 os.environ["REDIS_URL"] = "redis://127.0.0.1:9/0"
 os.environ["SESSION_REDIS_URL"] = "redis://127.0.0.1:9/0"
+# Keep import-time globals such as Celery scheduler configuration from touching
+# the deployment database URL loaded from .env. Tests that need a real database
+# use TEST_DATABASE_URL or explicit SQLite engines below.
+os.environ["DATABASE_URL"] = (
+    "postgresql+psycopg://postgres:postgres@127.0.0.1:9/dotmac_sub_test"
+    "?connect_timeout=1"
+)
 # Likewise the radacct importer: .env carries real FreeRADIUS DB credentials
 # and the code has fallbacks; blank both so import_radius_accounting no-ops
 # unless a test explicitly points it at a fixture database.
