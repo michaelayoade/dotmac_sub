@@ -607,6 +607,28 @@ def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse("/admin/network/ip-management", status_code=303)
 
 
+@router.post(
+    "/ip-management/ipv4-release",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ipv4_release_submit(request: Request, db: Session = Depends(get_db)):
+    result = web_network_ip_actions_service.release_ipv4_address_from_form(
+        request,
+        db,
+        parse_form_data_sync(request),
+    )
+    if result.not_found_message:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": result.not_found_message},
+            status_code=404,
+        )
+    return RedirectResponse(
+        result.redirect_url or "/admin/network/ip-management", status_code=303
+    )
+
+
 @router.get(
     "/ip-management/ipv6",
     response_class=HTMLResponse,

@@ -7,6 +7,7 @@ from urllib.parse import quote_plus
 
 from fastapi import Request
 
+from app.services import network as network_service
 from app.services import web_network_ip as ip_service
 from app.services.audit_helpers import (
     build_audit_activities,
@@ -309,6 +310,10 @@ def assign_ipv4_address_from_form(request: Request, db, form) -> IpWebActionResu
             error=str(exc),
         )
 
+    # The ip_assignments row is patched in place on reassignment (one row per
+    # address, enforced by uq_ip_assignments_ipv4_address_id). Ownership
+    # history therefore lives in the audit log: record the prior owner so the
+    # transfer is reconstructable.
     _log_ip_audit_event(
         db,
         request,
@@ -321,6 +326,68 @@ def assign_ipv4_address_from_form(request: Request, db, form) -> IpWebActionResu
             "ip_address": ip_address,
             "subscriber_id": subscriber_id,
             "subscription_id": subscription_id,
+            "old_subscriber_id": result.get("previous_subscriber_id"),
+            "old_subscription_id": result.get("previous_subscription_id"),
+        },
+    )
+    return IpWebActionResult(success=True, redirect_url=return_to)
+
+
+def release_ipv4_address_from_form(request: Request, db, form) -> IpWebActionResult:
+    """Release (unassign) an IPv4 address from its current subscriber.
+
+    Soft-deletes the assignment row (is_active=False) via the service layer,
+    which also clears the subscription's cached ipv4_address. The row is kept
+    so a later re-assignment reactivates it in place — a fresh insert would
+    collide with uq_ip_assignments_ipv4_address_id. The released owner is
+    recorded in the audit log as the ownership history.
+    """
+    pool_id = str(form.get("pool_id") or "").strip()
+    block_id = str(form.get("block_id") or "").strip() or None
+    ip_address = str(form.get("ip_address") or "").strip()
+    return_to = (
+        str(form.get("return_to") or "").strip()
+        or f"/admin/network/ip-management/ipv4-networks/{pool_id}"
+    )
+
+    state = ip_service.build_ipv4_assignment_form_data(
+        db,
+        pool_id=pool_id,
+        ip_address=ip_address,
+        block_id=block_id,
+    )
+    if state is None:
+        return IpWebActionResult(
+            success=False,
+            not_found_message="IPv4 address not found for this range",
+        )
+
+    assignment = state.get("assignment")
+    if assignment is None:
+        # Nothing assigned — releasing is a no-op; return to the range view.
+        return IpWebActionResult(success=True, redirect_url=return_to)
+
+    assignment_id = str(assignment.id)
+    old_subscriber_id = str(getattr(assignment, "subscriber_id", "") or "") or None
+    old_subscription_id = str(getattr(assignment, "subscription_id", "") or "") or None
+
+    try:
+        network_service.ip_assignments.delete(db, assignment_id)
+    except Exception as exc:
+        return IpWebActionResult(success=False, error=str(exc))
+
+    _log_ip_audit_event(
+        db,
+        request,
+        action="release",
+        entity_type="ip_assignment",
+        entity_id=assignment_id,
+        metadata={
+            "pool_id": pool_id,
+            "block_id": block_id,
+            "ip_address": ip_address,
+            "old_subscriber_id": old_subscriber_id,
+            "old_subscription_id": old_subscription_id,
         },
     )
     return IpWebActionResult(success=True, redirect_url=return_to)
