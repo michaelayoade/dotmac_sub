@@ -385,6 +385,10 @@
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Contact Information</h3>
                         <div class="flex items-center gap-3">
+                            {% if map_data %}
+                            <a href="/admin/network/map" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full Map</a>
+                            {% endif %}
+                            <button type="button" @click="showAddressModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Address</button>
                             <button type="button" @click="showContactModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Contact</button>
                             <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Edit</a>
                         </div>
@@ -427,15 +431,99 @@
                                 {% endif %}
                             </div>
                         </div>
-                        {% if customer.address %}
                         <div class="flex items-start gap-3">
                             <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-50 text-slate-600 dark:bg-slate-700 dark:text-slate-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                             </div>
                             <div>
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Address</p>
+                                {% if customer.address %}
                                 <p class="text-sm text-slate-900 dark:text-white">{{ customer.address }}</p>
+                                {% elif geocode_target %}
+                                <p class="text-sm text-slate-900 dark:text-white">{{ geocode_target.address_line1 }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">
+                                    {{ geocode_target.city | default('') }}{% if geocode_target.region %}, {{ geocode_target.region }}{% endif %} {{ geocode_target.postal_code or '' }}
+                                </p>
+                                {% else %}
+                                <p class="text-sm text-slate-400 dark:text-slate-500">No address on file</p>
+                                {% endif %}
                             </div>
+                        </div>
+
+                        {% if map_data %}
+                        <div class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-900/30">
+                            <div id="customer-mini-map" class="overflow-hidden rounded-xl"></div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <button type="button"
+                                        id="customer-map-click-toggle"
+                                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                                    Set by map click
+                                </button>
+                                <span id="customer-map-edit-status" class="text-xs text-slate-500 dark:text-slate-400"></span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label for="customer-map-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                                    <input id="customer-map-latitude"
+                                           type="number"
+                                           step="0.000001"
+                                           value="{{ map_data.center[0] if map_data and map_data.center else '' }}"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="customer-map-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                                    <input id="customer-map-longitude"
+                                           type="number"
+                                           step="0.000001"
+                                           value="{{ map_data.center[1] if map_data and map_data.center else '' }}"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                            </div>
+                            <button type="button"
+                                    id="customer-map-save-btn"
+                                    data-address-id="{{ primary_address.id if primary_address and primary_address.id else '' }}"
+                                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                                Save coordinates
+                            </button>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">
+                                <div id="customer-map-nearby-assets"></div>
+                            </div>
+                        </div>
+                        {% elif geocode_target %}
+                        <div class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-900/30">
+                            <button type="button"
+                                    id="customer-geocode-btn"
+                                    data-address-id="{{ geocode_target.id or '' }}"
+                                    data-address='{{ geocode_target.payload_json }}'
+                                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                Geocode address
+                            </button>
+                            <p id="customer-geocode-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
+                            <div id="customer-geocode-results" class="space-y-2"></div>
+                            <div class="grid grid-cols-2 gap-2 pt-2">
+                                <div>
+                                    <label for="customer-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                                    <input id="customer-latitude"
+                                           type="number"
+                                           step="0.000001"
+                                           placeholder="0.000000"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="customer-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                                    <input id="customer-longitude"
+                                           type="number"
+                                           step="0.000001"
+                                           placeholder="0.000000"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                            </div>
+                            <button type="button"
+                                    id="customer-coords-save-btn"
+                                    class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                                Save coordinates
+                            </button>
                         </div>
                         {% endif %}
                     </div>
@@ -880,112 +968,6 @@
                 </div>
                 {% endif %}
 
-                <!-- Location -->
-                <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                        <div class="flex items-center gap-2">
-                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            </div>
-                            <h3 class="font-semibold text-slate-900 dark:text-white">Location</h3>
-                        </div>
-                        <div class="flex items-center gap-3">
-                            {% if map_data %}
-                            <a href="/admin/network/map" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full Map</a>
-                            {% endif %}
-                            <button type="button" @click="showAddressModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Address</button>
-                        </div>
-                    </div>
-                    {% if map_data %}
-                    <div class="p-2">
-                        <div id="customer-mini-map" class="rounded-xl overflow-hidden"></div>
-                    </div>
-                    <div class="px-5 pb-2">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <button type="button"
-                                    id="customer-map-click-toggle"
-                                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
-                                Set by map click
-                            </button>
-                            <span id="customer-map-edit-status" class="text-xs text-slate-500 dark:text-slate-400"></span>
-                        </div>
-                        <div class="mt-2 grid grid-cols-2 gap-2">
-                            <div>
-                                <label for="customer-map-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
-                                <input id="customer-map-latitude"
-                                       type="number"
-                                       step="0.000001"
-                                       value="{{ map_data.center[0] if map_data and map_data.center else '' }}"
-                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                            </div>
-                            <div>
-                                <label for="customer-map-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
-                                <input id="customer-map-longitude"
-                                       type="number"
-                                       step="0.000001"
-                                       value="{{ map_data.center[1] if map_data and map_data.center else '' }}"
-                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                            </div>
-                        </div>
-                        <button type="button"
-                                id="customer-map-save-btn"
-                                data-address-id="{{ primary_address.id if primary_address and primary_address.id else '' }}"
-                                class="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
-                            Save coordinates
-                        </button>
-                    </div>
-                    <div class="px-5 pb-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
-                        <div id="customer-map-nearby-assets"></div>
-                    </div>
-                    {% elif geocode_target %}
-                    <div class="p-5 space-y-3">
-                        <div>
-                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Address</p>
-                            <p class="text-sm text-slate-900 dark:text-white">{{ geocode_target.address_line1 }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">
-                                {{ geocode_target.city | default('') }}{% if geocode_target.region %}, {{ geocode_target.region }}{% endif %} {{ geocode_target.postal_code or '' }}
-                            </p>
-                        </div>
-                        <button type="button"
-                                id="customer-geocode-btn"
-                                data-address-id="{{ geocode_target.id or '' }}"
-                                data-address='{{ geocode_target.payload_json }}'
-                                class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                            Geocode address
-                        </button>
-                        <p id="customer-geocode-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
-                        <div id="customer-geocode-results" class="space-y-2"></div>
-                        <div class="grid grid-cols-2 gap-2 pt-2">
-                            <div>
-                                <label for="customer-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
-                                <input id="customer-latitude"
-                                       type="number"
-                                       step="0.000001"
-                                       placeholder="0.000000"
-                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                            </div>
-                            <div>
-                                <label for="customer-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
-                                <input id="customer-longitude"
-                                       type="number"
-                                       step="0.000001"
-                                       placeholder="0.000000"
-                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                            </div>
-                        </div>
-                        <button type="button"
-                                id="customer-coords-save-btn"
-                                class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
-                            Save coordinates
-                        </button>
-                    </div>
-                    {% else %}
-                    <div class="px-5 py-8 text-center">
-                        <p class="text-sm text-slate-500 dark:text-slate-400">No address on file.</p>
-                    </div>
-                    {% endif %}
-                </div>
             </div>
         </div>
 
@@ -1573,6 +1555,20 @@
                         </div>
                     </div>
                     {% endif %}
+                    {% if active_additional_route_rows %}
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Additional IPs</p>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            {% for route in active_additional_route_rows[:4] %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-xs font-medium ring-1 ring-inset {% if route.billing_ok %}bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:ring-indigo-800{% else %}bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800{% endif %}">
+                                {{ route.cidr }}
+                                <span class="font-sans text-[10px] uppercase tracking-wide">{{ route.type_label }}</span>
+                                <span class="font-sans text-[10px] uppercase tracking-wide">{{ route.billing_label }}</span>
+                            </span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
 
@@ -1770,6 +1766,29 @@
                 <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No IP addresses assigned.</div>
                 {% endif %}
             </div>
+            {% if active_additional_route_rows %}
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Additional IPs</h3>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ active_additional_route_rows | length }}</span>
+                </div>
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for route in active_additional_route_rows %}
+                    <div class="px-5 py-4">
+                        <div class="flex items-center justify-between gap-4">
+                            <div class="min-w-0">
+                                <p class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ route.cidr }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ route.type_label }}</p>
+                            </div>
+                            <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset {% if route.billing_ok %}bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:ring-indigo-800{% else %}bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800{% endif %}">
+                                {{ route.billing_label }}
+                            </span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Access Credentials -->

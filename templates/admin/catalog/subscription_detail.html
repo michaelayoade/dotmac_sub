@@ -482,6 +482,20 @@
                         </p>
                         {% endif %}
                     </div>
+                    {% if active_additional_route_rows %}
+                    <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Additional IPs</p>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            {% for route in active_additional_route_rows %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-xs font-medium ring-1 ring-inset {% if route.billing_ok %}bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:ring-indigo-800{% else %}bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800{% endif %}">
+                                {{ route.cidr }}
+                                <span class="font-sans text-[10px] uppercase tracking-wide">{{ route.type_label }}</span>
+                                <span class="font-sans text-[10px] uppercase tracking-wide">{{ route.billing_label }}</span>
+                            </span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
                     {% set conn = connection_status or {} %}
                     {% set conn_state = conn.state | default('offline') %}
                     <div class="rounded-lg p-4

@@ -27,6 +27,7 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
@@ -128,6 +129,37 @@ def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber
         json.loads(context["geocode_target"]["payload_json"])
         == context["geocode_target"]["payload"]
     )
+
+
+def test_customer_detail_includes_active_additional_routes(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="102.220.189.10/32",
+            prefix_length=32,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="160.119.125.24/30",
+            prefix_length=30,
+            metric=1,
+            is_active=False,
+            source="test",
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert [route.cidr for route in context["active_additional_routes"]] == [
+        "102.220.189.10/32"
+    ]
 
 
 def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):

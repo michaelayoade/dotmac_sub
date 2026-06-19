@@ -11,52 +11,61 @@
         "title": "Core",
         "description": "Foundational network inventory, access, and subscriber-edge systems.",
         "items": [
-            {"label": "Topology", "href": "/admin/network/topology", "desc": "Device-to-device links, bundles, and traffic flow.", "color": "indigo", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01M7 7l10 10M17 7L7 17"/></svg>'},
-            {"label": "Network Map", "href": "/admin/network/map", "desc": "Infrastructure and subscriber topology.", "color": "sky", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>'},
-            {"label": "Devices", "href": "/admin/network/network-devices", "desc": "Core devices and infrastructure inventory.", "color": "slate", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>'},
-            {"label": "Device Groups", "href": "/admin/network/device-groups", "desc": "Batch ONT/CPE cohorts for actions and audits.", "color": "emerald", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-5-4M9 20H4v-2a4 4 0 015-4m8-4a4 4 0 100-8 4 4 0 000 8zM9 10a4 4 0 100-8 4 4 0 000 8z"/></svg>'},
-            {"label": "OLTs", "href": "/admin/network/olts", "desc": "Optical line terminals and uplinks.", "color": "violet", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'},
-            {"label": "Profile Sync Tasks", "href": "/admin/network/profile-sync-tasks", "desc": "Review tariff-driven OLT profile sync requests.", "color": "sky", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5h6M9 12h6M9 19h6M5 5h.01M5 12h.01M5 19h.01"/></svg>'},
-            {"label": "ONTs", "href": "/admin/network/onts", "desc": "Subscriber endpoint optics and diagnostics.", "color": "blue", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
-            {"label": "NAS", "href": "/admin/network/nas", "desc": "Network access servers and provisioning.", "color": "indigo", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>'},
-            {"label": "RADIUS", "href": "/admin/network/radius", "desc": "Authentication, authorization, and accounting.", "color": "amber", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-8 4h5m6 3H5a2 2 0 01-2-2V7a2 2 0 012-2h3.586A1 1 0 019.293 5.293l1.414 1.414A1 1 0 0011.414 7H19a2 2 0 012 2v8a2 2 0 01-2 2z"/></svg>'},
-            {"label": "CPE", "href": "/admin/network/cpes", "desc": "Customer premises equipment and integrations.", "color": "emerald", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'},
-            {"label": "TR-069", "href": "/admin/network/tr069", "desc": "ACS servers, discovery, and remote actions.", "color": "cyan", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 6h14M5 18h14"/></svg>'}
+            {"label": "Topology", "href": "/admin/network/topology", "desc": "Device-to-device links, bundles, and traffic flow.", "color": "indigo", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01M7 7l10 10M17 7L7 17"/></svg>'},
+            {"label": "Network Map", "href": "/admin/network/map", "desc": "Infrastructure and subscriber topology.", "color": "sky", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>'},
+            {"label": "Devices", "href": "/admin/network/network-devices", "desc": "Core devices and infrastructure inventory.", "color": "slate", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>'},
+            {"label": "Device Groups", "href": "/admin/network/device-groups", "desc": "Batch ONT/CPE cohorts for actions and audits.", "color": "emerald", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-5-4M9 20H4v-2a4 4 0 015-4m8-4a4 4 0 100-8 4 4 0 000 8zM9 10a4 4 0 100-8 4 4 0 000 8z"/></svg>'},
+            {"label": "OLTs", "href": "/admin/network/olts", "desc": "Optical line terminals and uplinks.", "color": "violet", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'},
+            {"label": "Profile Sync Tasks", "href": "/admin/network/profile-sync-tasks", "desc": "Review tariff-driven OLT profile sync requests.", "color": "sky", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5h6M9 12h6M9 19h6M5 5h.01M5 12h.01M5 19h.01"/></svg>'},
+            {"label": "ONTs", "href": "/admin/network/onts", "desc": "Subscriber endpoint optics and diagnostics.", "color": "blue", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
+            {"label": "NAS", "href": "/admin/network/nas", "desc": "Network access servers and provisioning.", "color": "indigo", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>'},
+            {"label": "RADIUS", "href": "/admin/network/radius", "desc": "Authentication, authorization, and accounting.", "color": "amber", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-8 4h5m6 3H5a2 2 0 01-2-2V7a2 2 0 012-2h3.586A1 1 0 019.293 5.293l1.414 1.414A1 1 0 0011.414 7H19a2 2 0 012 2v8a2 2 0 01-2 2z"/></svg>'},
+            {"label": "CPE", "href": "/admin/network/cpes", "desc": "Customer premises equipment and integrations.", "color": "emerald", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'},
+            {"label": "TR-069", "href": "/admin/network/tr069", "desc": "ACS servers, discovery, and remote actions.", "color": "cyan", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 6h14M5 18h14"/></svg>'}
         ]
     },
     {
         "title": "Services",
         "description": "Service validation and threat visibility tools.",
         "items": [
-            {"label": "Speed Tests", "href": "/admin/network/speedtests", "desc": "Link verification and SLA result history.", "color": "cyan", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>'},
-            {"label": "DNS Threats", "href": "/admin/network/dns-threats", "desc": "Threat events and blocked domain monitoring.", "color": "rose", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>'}
+            {"label": "Speed Tests", "href": "/admin/network/speedtests", "desc": "Link verification and SLA result history.", "color": "cyan", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>'},
+            {"label": "DNS Threats", "href": "/admin/network/dns-threats", "desc": "Threat events and blocked domain monitoring.", "color": "rose", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>'}
         ]
     },
     {
         "title": "Infrastructure",
         "description": "Physical plant, configuration baselines, and supporting network catalogs.",
         "items": [
-            {"label": "Backups", "href": "/admin/network/backups", "desc": "Configuration backup coverage across devices.", "color": "slate", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>'},
-            {"label": "Fiber Plant", "href": "/admin/network/fiber-plant", "desc": "Outside plant cabinets, closures, strands, and requests.", "color": "orange", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'},
-            {"label": "IP Management", "href": "/admin/network/ip-management", "desc": "Pools, blocks, assignments, and address inventory.", "color": "indigo", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>'},
-            {"label": "POP Sites", "href": "/admin/network/pop-sites", "desc": "Points of presence and infrastructure locations.", "color": "teal", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>'},
-            {"label": "ONU Types", "href": "/admin/network/onu-types", "desc": "Hardware catalog for ONU and ONT models.", "color": "blue", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
-            {"label": "Speed Profiles", "href": "/admin/network/speed-profiles", "desc": "Bandwidth profile catalog for provisioning.", "color": "cyan", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>'},
-            {"label": "Authorization Presets", "href": "/admin/network/authorization-presets", "desc": "Quick-apply templates for ONT authorization.", "color": "violet", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>'},
-            {"label": "Vendor Capabilities", "href": "/admin/network/vendor-capabilities", "desc": "Capability matrix for supported vendor models.", "color": "slate", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'}
+            {"label": "Backups", "href": "/admin/network/backups", "desc": "Configuration backup coverage across devices.", "color": "slate", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>'},
+            {"label": "Fiber Plant", "href": "/admin/network/fiber-plant", "desc": "Outside plant cabinets, closures, strands, and requests.", "color": "orange", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'},
+            {"label": "IP Management", "href": "/admin/network/ip-management", "desc": "Pools, blocks, assignments, and address inventory.", "color": "indigo", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>'},
+            {"label": "POP Sites", "href": "/admin/network/pop-sites", "desc": "Points of presence and infrastructure locations.", "color": "teal", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>'},
+            {"label": "ONU Types", "href": "/admin/network/onu-types", "desc": "Hardware catalog for ONU and ONT models.", "color": "blue", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
+            {"label": "Speed Profiles", "href": "/admin/network/speed-profiles", "desc": "Bandwidth profile catalog for provisioning.", "color": "cyan", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>'},
+            {"label": "Authorization Presets", "href": "/admin/network/authorization-presets", "desc": "Quick-apply templates for ONT authorization.", "color": "violet", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>'},
+            {"label": "Vendor Capabilities", "href": "/admin/network/vendor-capabilities", "desc": "Capability matrix for supported vendor models.", "color": "slate", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'}
         ]
     },
     {
         "title": "Operations",
         "description": "Ongoing monitoring and secure remote connectivity.",
         "items": [
-            {"label": "Monitoring", "href": "/admin/network/monitoring", "desc": "Health checks, alarms, and performance visibility.", "color": "blue", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>'},
-            {"label": "VPN", "href": "/admin/network/vpn", "desc": "WireGuard and OpenVPN tunnel management.", "color": "violet", "icon": '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>'}
+            {"label": "Monitoring", "href": "/admin/network/monitoring", "desc": "Health checks, alarms, and performance visibility.", "color": "blue", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>'},
+            {"label": "VPN", "href": "/admin/network/vpn", "desc": "WireGuard and OpenVPN tunnel management.", "color": "violet", "icon": '<svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>'}
         ]
     }
 ] %}
 
-<div class="relative space-y-8">
+{% set quick_links = [
+    {"label": "Devices", "href": "/admin/network/network-devices"},
+    {"label": "OLTs", "href": "/admin/network/olts"},
+    {"label": "ONTs", "href": "/admin/network/onts"},
+    {"label": "NAS", "href": "/admin/network/nas"},
+    {"label": "Monitoring", "href": "/admin/network/monitoring"},
+    {"label": "Map", "href": "/admin/network/map"}
+] %}
+
+<div class="relative space-y-5">
     {% call page_header(
         title="Network",
         subtitle="Choose a network area from the hub instead of navigating a crowded sidebar.",
@@ -65,29 +74,45 @@
         color2="cyan"
     ) %}{% endcall %}
 
-    <div class="space-y-8">
+    <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex flex-wrap gap-2">
+                {% for item in quick_links %}
+                <a href="{{ item.href }}" data-network-quick data-search="{{ item.label|lower }}" class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-sky-500 dark:hover:bg-slate-700">
+                    {{ item.label }}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="relative">
+            <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z"/></svg>
+            <input type="search" id="network-hub-search" placeholder="Search network tools..." autocomplete="off"
+                class="block h-full min-h-[3.5rem] w-full rounded-lg border border-slate-200 bg-white py-3 pl-9 pr-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500">
+        </div>
+    </div>
+
+    <div class="space-y-5">
         {% for section in sections %}
-        <section class="space-y-4">
+        <section class="space-y-2.5" data-network-section>
             <div class="flex items-end justify-between gap-4">
                 <div>
-                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">{{ section.title }}</p>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ section.description }}</p>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ section.title }}</p>
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ section.description }}</p>
                 </div>
             </div>
-            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div class="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                 {% for item in section["items"] %}
-                <a href="{{ item.href }}" class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm transition-all hover:-translate-y-1 hover:border-slate-300 hover:shadow-lg dark:border-slate-700/70 dark:bg-slate-800 dark:hover:border-slate-600">
-                    <div class="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-{{ item.color }}-500/10 blur-2xl transition-transform group-hover:scale-150"></div>
-                    <div class="relative flex items-start gap-4">
-                        <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ item.color }}-500 to-{{ item.color }}-600 shadow-lg shadow-{{ item.color }}-500/25">
+                <a href="{{ item.href }}" data-network-card data-search="{{ (section.title ~ ' ' ~ item.label ~ ' ' ~ item.desc)|lower }}" class="group rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition hover:border-{{ item.color }}-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-{{ item.color }}-500 dark:hover:bg-slate-700/40">
+                    <div class="flex items-start gap-3">
+                        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-{{ item.color }}-600 shadow-sm">
                             {{ item.icon|safe }}
                         </div>
                         <div class="min-w-0 flex-1">
-                            <div class="flex items-center justify-between gap-3">
-                                <h2 class="text-base font-semibold text-slate-900 transition-colors group-hover:text-{{ item.color }}-600 dark:text-white dark:group-hover:text-{{ item.color }}-400">{{ item.label }}</h2>
-                                <svg class="h-4 w-4 text-slate-400 transition-transform group-hover:translate-x-1 group-hover:text-{{ item.color }}-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                            <div class="flex items-center justify-between gap-2">
+                                <h2 class="truncate text-sm font-semibold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-white dark:group-hover:text-slate-100">{{ item.label }}</h2>
+                                <svg class="h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 dark:group-hover:text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </div>
-                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ item.desc }}</p>
+                            <p class="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{{ item.desc }}</p>
                         </div>
                     </div>
                 </a>
@@ -95,6 +120,49 @@
             </div>
         </section>
         {% endfor %}
+        <div id="network-hub-empty" class="hidden rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+            No matching network tools.
+        </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const input = document.getElementById('network-hub-search');
+    const cards = Array.from(document.querySelectorAll('[data-network-card]'));
+    const sections = Array.from(document.querySelectorAll('[data-network-section]'));
+    const quickLinks = Array.from(document.querySelectorAll('[data-network-quick]'));
+    const empty = document.getElementById('network-hub-empty');
+    if (!input || !cards.length) return;
+
+    const matches = (el, query) => !query || (el.dataset.search || '').includes(query);
+
+    const sync = () => {
+        const query = input.value.trim().toLowerCase();
+        let visibleCards = 0;
+
+        quickLinks.forEach((link) => {
+            link.classList.toggle('hidden', !matches(link, query));
+        });
+
+        cards.forEach((card) => {
+            const visible = matches(card, query);
+            card.classList.toggle('hidden', !visible);
+            if (visible) visibleCards += 1;
+        });
+
+        sections.forEach((section) => {
+            const hasVisibleCard = section.querySelector('[data-network-card]:not(.hidden)');
+            section.classList.toggle('hidden', !hasVisibleCard);
+        });
+
+        if (empty) empty.classList.toggle('hidden', visibleCards > 0);
+    };
+
+    input.addEventListener('input', sync);
+    sync();
+})();
+</script>
 {% endblock %}
