@@ -224,21 +224,26 @@ ALLOWED_INVOICE_TRANSITIONS: dict[InvoiceStatus, set[InvoiceStatus]] = {
         InvoiceStatus.paid,
         InvoiceStatus.overdue,
         InvoiceStatus.void,
+        InvoiceStatus.written_off,
     },
     InvoiceStatus.partially_paid: {
         InvoiceStatus.paid,
         InvoiceStatus.overdue,
         InvoiceStatus.issued,
         InvoiceStatus.void,
+        InvoiceStatus.written_off,
     },
     InvoiceStatus.overdue: {
         InvoiceStatus.partially_paid,
         InvoiceStatus.paid,
         InvoiceStatus.issued,
         InvoiceStatus.void,
+        InvoiceStatus.written_off,
     },
     InvoiceStatus.paid: {InvoiceStatus.void},
     InvoiceStatus.void: set(),
+    # Bad debt is closed; no transitions out (the ledger records any recovery).
+    InvoiceStatus.written_off: set(),
 }
 
 
@@ -369,10 +374,12 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         .scalar()
     )
     credit_amount = round_money(to_decimal(credit_amount))
-    # Void is terminal: never recompute its balance or derive a status — a void
-    # invoice carries balance_due 0, and the paid-branch below would otherwise
-    # resurrect it to 'paid' (the void→paid bug). Leave it exactly as voided.
-    if invoice.status == InvoiceStatus.void:
+    # Void and written_off are terminal: never recompute their balance or
+    # derive a status — both carry balance_due 0, and the paid-branch below
+    # would otherwise resurrect them to 'paid' (the void→paid bug; the same
+    # would silently turn a bad-debt write-off into a cash payment). Leave them
+    # exactly as set.
+    if invoice.status in (InvoiceStatus.void, InvoiceStatus.written_off):
         return
     invoice.balance_due = max(
         Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount)
