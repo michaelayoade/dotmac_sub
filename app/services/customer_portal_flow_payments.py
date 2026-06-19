@@ -83,11 +83,7 @@ def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str,
         rows = db.scalars(
             select(PaymentProvider.provider_type)
             .where(PaymentProvider.is_active.is_(True))
-            .where(
-                PaymentProvider.provider_type.in_(
-                    [PaymentProviderType.paystack]
-                )
-            )
+            .where(PaymentProvider.provider_type.in_([PaymentProviderType.paystack]))
             .order_by(PaymentProvider.name)
         ).all()
         for provider_type in rows:

@@ -39,7 +39,9 @@ def _tax_rate_snapshot(rate: TaxRate | None) -> dict[str, object | None]:
     }
 
 
-def _created_changes(snapshot: dict[str, object | None]) -> dict[str, dict[str, object | None]]:
+def _created_changes(
+    snapshot: dict[str, object | None],
+) -> dict[str, dict[str, object | None]]:
     return {key: {"from": None, "to": value} for key, value in snapshot.items()}
 
 

@@ -826,9 +826,7 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
             {
                 "cidr": route.cidr,
                 "prefix_length": prefix,
-                "type_label": "Additional IP"
-                if prefix == 32
-                else "Routed IP Block",
+                "type_label": "Additional IP" if prefix == 32 else "Routed IP Block",
                 "billing_ok": billing_ok,
                 "billing_label": f"Billed /{prefix} IP x{qty}"
                 if billing_ok

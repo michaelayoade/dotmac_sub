@@ -28,7 +28,11 @@ def _running_under_pytest() -> bool:
 
 def _test_celery_config() -> dict:
     broker = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "memory://"
-    backend = os.getenv("CELERY_RESULT_BACKEND") or os.getenv("REDIS_URL") or "cache+memory://"
+    backend = (
+        os.getenv("CELERY_RESULT_BACKEND")
+        or os.getenv("REDIS_URL")
+        or "cache+memory://"
+    )
     return {
         "broker_url": broker,
         "result_backend": backend,

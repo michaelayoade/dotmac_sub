@@ -100,7 +100,9 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
     return web_customer_actions_service.billing_form_defaults(customer)
 
 
-def _customer_audit_items(db: Session, customer, limit: int = 5) -> list[dict[str, Any]]:
+def _customer_audit_items(
+    db: Session, customer, limit: int = 5
+) -> list[dict[str, Any]]:
     if not customer:
         return []
     try:
