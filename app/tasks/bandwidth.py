@@ -35,6 +35,8 @@ _DEFAULT_BATCH_SIZE = 1000
 _DEFAULT_HOT_RETENTION_HOURS = 24
 _DEFAULT_REDIS_STREAM_MAX_LENGTH = 100000
 _DEFAULT_REDIS_READ_TIMEOUT_MS = 1000
+_POSTGRES_INTEGER_MAX = 2_147_483_647
+_POSTGRES_INTEGER_MIN = -2_147_483_648
 
 
 def _parse_int_setting(value: object | None, default: int) -> int:
@@ -154,7 +156,7 @@ def process_bandwidth_stream():
         nas_device_ids: set[UUID] = set()
 
         # Parse and insert samples
-        samples = []
+        samples: list[tuple[BandwidthSample, dict]] = []
         message_ids = []
 
         for msg_id, data in all_messages:
@@ -165,13 +167,29 @@ def process_bandwidth_stream():
                 nas_device_id_raw = data.get(b"nas_device_id")
                 if nas_device_id_raw:
                     nas_device_ids.add(UUID(nas_device_id_raw.decode()))
+                rx_bps = int(data[b"rx_bps"])
+                tx_bps = int(data[b"tx_bps"])
+                if not (
+                    _POSTGRES_INTEGER_MIN <= rx_bps <= _POSTGRES_INTEGER_MAX
+                    and _POSTGRES_INTEGER_MIN <= tx_bps <= _POSTGRES_INTEGER_MAX
+                ):
+                    logger.warning(
+                        "Skipped bandwidth sample %s with out-of-range rate rx=%s tx=%s",
+                        msg_id,
+                        rx_bps,
+                        tx_bps,
+                    )
+                    continue
                 samples.append(
-                    BandwidthSample(
-                        subscription_id=UUID(data[b"subscription_id"].decode()),
-                        device_id=None,
-                        rx_bps=int(data[b"rx_bps"]),
-                        tx_bps=int(data[b"tx_bps"]),
-                        sample_at=sample_at,
+                    (
+                        BandwidthSample(
+                            subscription_id=UUID(data[b"subscription_id"].decode()),
+                            device_id=None,
+                            rx_bps=rx_bps,
+                            tx_bps=tx_bps,
+                            sample_at=sample_at,
+                        ),
+                        data,
                     )
                 )
             except Exception as e:
@@ -186,7 +204,7 @@ def process_bandwidth_stream():
                 ).all()
             }
 
-        for sample, (_msg_id, data) in zip(samples, all_messages, strict=False):
+        for sample, data in samples:
             nas_device_id_raw = data.get(b"nas_device_id")
             if not nas_device_id_raw:
                 continue
@@ -203,9 +221,9 @@ def process_bandwidth_stream():
         if samples:
             adapter = get_bandwidth_metrics_adapter()
             valid_ids = adapter.filter_valid_subscription_ids(
-                db, {s.subscription_id for s in samples}
+                db, {s.subscription_id for s, _ in samples}
             )
-            valid_samples = [s for s in samples if s.subscription_id in valid_ids]
+            valid_samples = [s for s, _ in samples if s.subscription_id in valid_ids]
             skipped = len(samples) - len(valid_samples)
             if skipped:
                 logger.warning(
