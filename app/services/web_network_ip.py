@@ -1188,6 +1188,21 @@ def assign_ipv4_address(
                 "reassigned": False,
             }
 
+    # Snapshot the prior owner BEFORE update() mutates the existing row in
+    # place. The ip_assignments row carries only current state; ownership
+    # history lives in the audit log, so the caller needs these values to
+    # record the transition (see release_ipv4_address_from_form / reassign).
+    previous_subscriber_id = (
+        str(previous_assignment.subscriber_id)
+        if previous_assignment and previous_assignment.subscriber_id
+        else None
+    )
+    previous_subscription_id = (
+        str(previous_assignment.subscription_id)
+        if previous_assignment and previous_assignment.subscription_id
+        else None
+    )
+
     assignment_payload = {
         "account_id": UUID(normalized_subscriber_id),
         "subscription_id": UUID(normalized_subscription_id)
@@ -1213,6 +1228,8 @@ def assign_ipv4_address(
         "address": address_record,
         "assignment": assignment,
         "previous_assignment": previous_assignment,
+        "previous_subscriber_id": previous_subscriber_id,
+        "previous_subscription_id": previous_subscription_id,
         "created": previous_assignment is None,
         "reassigned": previous_assignment is not None,
     }

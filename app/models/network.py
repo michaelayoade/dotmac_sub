@@ -768,6 +768,46 @@ class IPv6Address(Base):
     pool = relationship("IpPool", back_populates="ipv6_addresses")
 
 
+class IpPoolUtilizationSnapshot(Base):
+    """Point-in-time utilization of an IP pool, captured periodically.
+
+    Utilization is otherwise computed live (current counts only). A periodic
+    Celery task writes one row per pool so the admin pool detail can chart
+    usage over time rather than just the instantaneous bar.
+    """
+
+    __tablename__ = "ip_pool_utilization_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_ip_pool_util_snap_pool_time",
+            "pool_id",
+            "captured_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ip_pools.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    pool = relationship("IpPool")
+
+
 class OLTDevice(Base):
     __tablename__ = "olt_devices"
     __table_args__ = (
