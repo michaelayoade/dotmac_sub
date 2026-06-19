@@ -117,6 +117,7 @@ class TestEventType:
             EventType.subscription_canceled,
             EventType.subscription_upgraded,
             EventType.subscription_downgraded,
+            EventType.subscription_expired,
         }
         assert set(SUBSCRIPTION_LIFECYCLE_MAP.keys()) == expected_keys
 

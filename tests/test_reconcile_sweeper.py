@@ -151,6 +151,54 @@ def _stub_result(success: bool) -> ReconcileResult:
 # ── run_sweep_once ──────────────────────────────────────────────────────────
 
 
+def test_sweep_skips_onts_under_non_active_olt(
+    db_session, db_factory, monkeypatch
+):
+    """ONTs whose parent OLT is in maintenance (or draining/retired/inactive)
+    must not be reconciled — the operator took the device down (#17)."""
+    from app.models.network import DeviceStatus
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.desired_from_ont_unit",
+        lambda db, ont: _make_desired(ont),
+    )
+    olt = OLTDevice(
+        name="OLT-MAINT",
+        mgmt_ip="172.20.100.99",
+        is_active=True,
+        status=DeviceStatus.maintenance,
+    )
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+    db_session.add(
+        OntUnit(
+            serial_number="HWTCMAINT1",
+            olt_device_id=olt.id,
+            board="0/1",
+            port="1",
+            external_id="9",
+            is_active=True,
+            sync_status=OntSyncStatus.synced,
+        )
+    )
+    db_session.commit()
+
+    calls: list = []
+
+    def _fake_reconcile(*a, **k):
+        calls.append(1)
+        return _stub_result(True)
+
+    stats = run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: True,
+        reconcile_fn=_fake_reconcile,
+    )
+    assert stats.total_onts == 0
+    assert calls == []
+
+
 def test_sweep_skips_unreachable_ont_without_invoking_reconcile(
     db_session, two_onts, db_factory, monkeypatch
 ):

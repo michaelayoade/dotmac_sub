@@ -849,6 +849,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="enforce_stopped_disabled",
+        env_var="RADIUS_ENFORCE_STOPPED_DISABLED",
+        value_type=SettingValueType.boolean,
+        # Default OFF: enabling it makes a transition to stopped/disabled
+        # actively disconnect the subscriber (walled-garden / removed) instead
+        # of waiting for the orphan sweep. Roll out deliberately after checking
+        # the would-disconnect audit log + suspension audit.
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="auth_shared_secret",
         env_var="RADIUS_AUTH_SHARED_SECRET",
         value_type=SettingValueType.string,

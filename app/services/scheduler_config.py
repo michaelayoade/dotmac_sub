@@ -1053,6 +1053,17 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_health_retry_minutes * 60, 60),
         )
 
+        # Reap provisioning runs stuck in 'running' (worker died mid-run) so
+        # they reach a terminal status instead of blocking dedup + order
+        # advancement forever.
+        _sync_scheduled_task(
+            session,
+            name="provisioning_run_reaper",
+            task_name="app.tasks.provisioning.reap_stale_provisioning_runs",
+            enabled=True,
+            interval_seconds=600,
+        )
+
         # ONT telemetry ingest from centralized monitoring data.
         ont_signal_minutes = _resolve_int(
             session,
@@ -1644,51 +1655,12 @@ def build_beat_schedule() -> dict:
                 "schedule": crontab(hour=4, minute=10),
             }
 
-        # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
-        olt_queue_enabled = _effective_bool(
-            session,
-            SettingDomain.provisioning,
-            "olt_queue_processing_enabled",
-            "OLT_QUEUE_PROCESSING_ENABLED",
-            True,
-        )
-        olt_queue_interval = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "olt_queue_processing_interval_seconds",
-            30,  # 30 seconds
-        )
-        olt_queue_interval = max(olt_queue_interval, 10)  # Min: 10 seconds
-        _sync_scheduled_task(
-            session,
-            name="olt_deferred_queue_processor",
-            task_name="app.tasks.olt_queue.process_deferred_olt_operations",
-            enabled=olt_queue_enabled,
-            interval_seconds=olt_queue_interval,
-        )
-
-        # OLT failed operations retry (Phase 4 - Circuit Breaker recovery)
-        olt_retry_enabled = _effective_bool(
-            session,
-            SettingDomain.provisioning,
-            "olt_failed_retry_enabled",
-            "OLT_FAILED_RETRY_ENABLED",
-            True,
-        )
-        olt_retry_interval = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "olt_failed_retry_interval_seconds",
-            3600,  # 1 hour
-        )
-        olt_retry_interval = max(olt_retry_interval, 300)  # Min: 5 minutes
-        _sync_scheduled_task(
-            session,
-            name="olt_failed_operations_retry",
-            task_name="app.tasks.olt_queue.retry_failed_operations",
-            enabled=olt_retry_enabled,
-            interval_seconds=olt_retry_interval,
-        )
+        # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
+        # subsystem was removed (it was never wired — the queue had no
+        # producers and the real write paths bypassed the breaker, so it gave
+        # false confidence). OLT writes happen directly; reconciliation/cleanup
+        # is handled by the ONT reconcile sweeper. See the model note on
+        # QueuedOltOperation for the inert schema pending a drop migration.
 
         # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
         zabbix_sync_enabled_by_default = _zabbix_configured_default()

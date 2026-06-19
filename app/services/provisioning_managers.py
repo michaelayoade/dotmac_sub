@@ -22,8 +22,10 @@ from app.models.provisioning import (
     ProvisioningWorkflow,
     ServiceOrder,
     ServiceOrderStatus,
+    ServiceState,
     ServiceStateTransition,
     TaskStatus,
+    assert_legal_service_state_transition,
 )
 from app.schemas.provisioning import (
     InstallAppointmentCreate,
@@ -469,11 +471,49 @@ class ServiceStateTransitions(CRUDManager[ServiceStateTransition]):
     not_found_detail = "State transition not found"
 
     @staticmethod
+    def _current_state(db: Session, service_order_id) -> ServiceState:
+        """The order's current ServiceState = the most recent transition's
+        ``to_state``, or ``pending`` if no transition has been recorded yet."""
+        last = db.execute(
+            select(ServiceStateTransition)
+            .where(ServiceStateTransition.service_order_id == service_order_id)
+            .order_by(
+                ServiceStateTransition.changed_at.desc(),
+                ServiceStateTransition.id.desc(),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        return last.to_state if last else ServiceState.pending
+
+    @staticmethod
     def create(db: Session, payload: ServiceStateTransitionCreate):
         provisioning_validators.validate_state_transition_links(
             db, str(payload.service_order_id)
         )
-        transition = ServiceStateTransition(**payload.model_dump())
+        # Enforce the state machine: the transition's ``from_state`` must match
+        # the order's actual current state, and ``from_state → to_state`` must
+        # be a legal edge. Without this the transition log can record histories
+        # that never happened (canceled → active, active → pending, …).
+        current = ServiceStateTransitions._current_state(
+            db, payload.service_order_id
+        )
+        from_state = payload.from_state if payload.from_state is not None else current
+        if from_state != current:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Stale service-state transition: order is in "
+                    f"{current.value}, not {from_state.value}"
+                ),
+            )
+        try:
+            assert_legal_service_state_transition(from_state, payload.to_state)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        data = payload.model_dump()
+        data["from_state"] = from_state
+        transition = ServiceStateTransition(**data)
         db.add(transition)
         db.commit()
         db.refresh(transition)
@@ -865,6 +905,19 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                         "payload": result.payload,
                     }
                 )
+                # A step that reports failure by RETURN VALUE (not by raising)
+                # must fail the run. Previously only a raised exception did, so
+                # a step returning ProvisioningResult(status="failed", ...) left
+                # the whole run marked ``success`` — a real failure masquerading
+                # as a completed provision.
+                if result.status not in ("ok", "success"):
+                    status = ProvisioningRunStatus.failed
+                    step_error_message = (
+                        result.detail
+                        or f"step {step.step_type.value} returned status "
+                        f"{result.status!r}"
+                    )
+                    break
                 if result.payload:
                     context.update(result.payload)
             except Exception as exc:
@@ -924,6 +977,61 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             )
 
         return run
+
+    @staticmethod
+    def reap_stale_runs(db: Session, older_than_minutes: int = 30) -> int:
+        """Fail provisioning runs stuck in ``running`` past a timeout.
+
+        ``run`` is synchronous; if the worker dies mid-loop the row stays
+        ``running`` forever, indistinguishable from an in-flight run and
+        blocking the duplicate-run guard and order advancement. This reaper
+        (run on a beat schedule) marks such runs ``failed`` and emits
+        ``provisioning_failed`` so the linked order advances to ``failed`` too.
+        Returns the number of runs reaped.
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
+        stale = list(
+            db.scalars(
+                select(ProvisioningRun).where(
+                    ProvisioningRun.status == ProvisioningRunStatus.running,
+                    ProvisioningRun.started_at.is_not(None),
+                    ProvisioningRun.started_at < cutoff,
+                )
+            ).all()
+        )
+        for run in stale:
+            run.status = ProvisioningRunStatus.failed
+            run.completed_at = datetime.now(UTC)
+            run.error_message = (
+                f"Run exceeded {older_than_minutes}m in 'running' and was "
+                "reaped as stale (worker likely died mid-run)."
+            )
+        if stale:
+            db.commit()
+            for run in stale:
+                emit_event(
+                    db,
+                    EventType.provisioning_failed,
+                    {
+                        "provisioning_run_id": str(run.id),
+                        "workflow_id": str(run.workflow_id),
+                        "status": run.status.value,
+                        "service_order_id": str(run.service_order_id)
+                        if run.service_order_id
+                        else None,
+                        "subscription_id": str(run.subscription_id)
+                        if run.subscription_id
+                        else None,
+                        "error_message": run.error_message,
+                        "reaped": True,
+                    },
+                    service_order_id=run.service_order_id,
+                    subscription_id=run.subscription_id,
+                )
+            logger.warning("Reaped %d stale provisioning run(s)", len(stale))
+        return len(stale)
 
 
 service_orders = ServiceOrders()

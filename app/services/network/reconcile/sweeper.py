@@ -37,10 +37,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntUnit
+from app.models.network import DeviceStatus, OLTDevice, OntUnit
 from app.services.network.reconcile.readers.reachability import (
     PingFunction,
     is_pingable,
@@ -174,6 +174,19 @@ def run_sweep_once(
         stmt = select(OntUnit.id)
         if only_active:
             stmt = stmt.where(OntUnit.is_active.is_(True))
+        # Skip ONTs whose parent OLT is not active (maintenance / draining /
+        # retired / inactive). An operator who took the OLT down expects the
+        # reconciler to stop touching it — previously the sweep ran full
+        # SSH/NBI reconciles against a device in maintenance. ONTs with no
+        # parent OLT (olt_device_id NULL) are still swept.
+        stmt = stmt.outerjoin(
+            OLTDevice, OLTDevice.id == OntUnit.olt_device_id
+        ).where(
+            or_(
+                OntUnit.olt_device_id.is_(None),
+                OLTDevice.status == DeviceStatus.active,
+            )
+        )
         ont_ids = [row[0] for row in catalog_db.execute(stmt).all()]
 
     stats.total_onts = len(ont_ids)

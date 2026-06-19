@@ -3685,7 +3685,17 @@ class VerificationStatus(enum.Enum):
 
 
 class CircuitState(enum.Enum):
-    """Circuit breaker state for OLT SSH connections."""
+    """Circuit breaker state for OLT SSH connections.
+
+    DEPRECATED / INERT: the OLT SSH circuit-breaker + deferred-queue subsystem
+    was removed (it was never wired — the queue had no producers and the real
+    write paths bypassed the breaker). This enum, ``QueuedOltOperation``, and
+    the ``OLTDevice.circuit_state``/``circuit_failure_count``/``backoff_until``
+    columns are retained only to avoid a schema migration under the current
+    alembic-head divergence; nothing reads or writes them. Drop them in a
+    dedicated migration once the heads are merged. OLT writes happen directly;
+    cleanup is the ONT reconcile sweeper's job.
+    """
 
     closed = "closed"  # Normal operation
     open = "open"  # Failing, reject requests
@@ -3694,6 +3704,8 @@ class CircuitState(enum.Enum):
 
 class QueuedOltOperation(Base):
     """Operations queued while OLT circuit is open.
+
+    DEPRECATED / INERT — see :class:`CircuitState`. No producers remain.
 
     When an OLT's circuit breaker is open, provisioning operations are
     queued here for later execution when the circuit recovers.

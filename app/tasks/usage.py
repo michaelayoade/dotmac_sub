@@ -191,9 +191,14 @@ def evaluate_fup_rules() -> dict[str, int]:
             # Check if FUP state needs reset (period boundary crossed)
             state = fup_state.get(session, str(sub.id))
             if state and state.cap_resets_at and now >= state.cap_resets_at:
-                fup_state.clear(session, str(sub.id))
+                # Lift the actual enforcement (RADIUS profile / address-list
+                # block / suspension), not just the state row — otherwise the
+                # subscriber stays throttled/blocked forever past the reset.
+                from app.services.enforcement import lift_fup_enforcement
+
+                lift_fup_enforcement(session, str(sub.id))
                 reset += 1
-                logger.info("Reset FUP state for subscription %s", sub.id)
+                logger.info("Lifted FUP enforcement for subscription %s", sub.id)
                 session.commit()
                 continue
 
@@ -220,31 +225,57 @@ def evaluate_fup_rules() -> dict[str, int]:
             )
 
             triggered = [r for r in results if r.get("triggered")]
+
+            def _should_enforce(target_status: str, cooldown_minutes: int) -> bool:
+                """Transition-driven enforcement to stop per-tick RADIUS churn.
+
+                Enforce when *entering* the state; once already in it, re-assert
+                only after ``cooldown_minutes`` has elapsed (0 = never re-assert).
+                Previously the task re-emitted usage_exhausted and re-applied the
+                RADIUS profile / SSH address-list on every single tick.
+                """
+                if prior_status != target_status:
+                    return True
+                if (
+                    cooldown_minutes
+                    and state is not None
+                    and state.last_evaluated_at is not None
+                ):
+                    last = state.last_evaluated_at
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=UTC)
+                    elapsed_min = (now - last).total_seconds() / 60
+                    return elapsed_min >= cooldown_minutes
+                return False
+
             if triggered:
                 # Find the highest-severity triggered rule
                 for rule_result in reversed(triggered):
                     if rule_result.get("action") == "block":
-                        emit_event(
-                            session,
-                            EventType.usage_exhausted,
-                            {
-                                "subscription_id": str(sub.id),
-                                "offer_id": str(sub.offer_id),
-                                "rule_id": rule_result.get("rule_id"),
-                                "current_usage_gb": current_usage,
-                                "threshold_gb": rule_result.get("threshold_gb"),
-                                # cap resets at the quota period boundary — lets
-                                # enforcement auto-lift the throttle/block then.
-                                "cap_resets_at": (
-                                    bucket.period_end.isoformat()
-                                    if bucket.period_end
-                                    else None
-                                ),
-                            },
-                            subscription_id=sub.id,
-                            account_id=sub.subscriber_id,
-                        )
-                        enforced += 1
+                        if _should_enforce(
+                            "blocked", rule_result.get("cooldown_minutes") or 0
+                        ):
+                            emit_event(
+                                session,
+                                EventType.usage_exhausted,
+                                {
+                                    "subscription_id": str(sub.id),
+                                    "offer_id": str(sub.offer_id),
+                                    "rule_id": rule_result.get("rule_id"),
+                                    "current_usage_gb": current_usage,
+                                    "threshold_gb": rule_result.get("threshold_gb"),
+                                    # cap resets at the quota period boundary —
+                                    # lets enforcement auto-lift the block then.
+                                    "cap_resets_at": (
+                                        bucket.period_end.isoformat()
+                                        if bucket.period_end
+                                        else None
+                                    ),
+                                },
+                                subscription_id=sub.id,
+                                account_id=sub.subscriber_id,
+                            )
+                            enforced += 1
                         if prior_status != "blocked":
                             pending_notifs.append(
                                 {
@@ -260,27 +291,30 @@ def evaluate_fup_rules() -> dict[str, int]:
                         )
                         break
                     elif rule_result.get("action") == "reduce_speed":
-                        emit_event(
-                            session,
-                            EventType.usage_exhausted,
-                            {
-                                "subscription_id": str(sub.id),
-                                "offer_id": str(sub.offer_id),
-                                "rule_id": rule_result.get("rule_id"),
-                                "current_usage_gb": current_usage,
-                                "threshold_gb": rule_result.get("threshold_gb"),
-                                # cap resets at the quota period boundary — lets
-                                # enforcement auto-lift the throttle/block then.
-                                "cap_resets_at": (
-                                    bucket.period_end.isoformat()
-                                    if bucket.period_end
-                                    else None
-                                ),
-                            },
-                            subscription_id=sub.id,
-                            account_id=sub.subscriber_id,
-                        )
-                        enforced += 1
+                        if _should_enforce(
+                            "throttled", rule_result.get("cooldown_minutes") or 0
+                        ):
+                            emit_event(
+                                session,
+                                EventType.usage_exhausted,
+                                {
+                                    "subscription_id": str(sub.id),
+                                    "offer_id": str(sub.offer_id),
+                                    "rule_id": rule_result.get("rule_id"),
+                                    "current_usage_gb": current_usage,
+                                    "threshold_gb": rule_result.get("threshold_gb"),
+                                    # cap resets at the quota period boundary —
+                                    # lets enforcement auto-lift the throttle then.
+                                    "cap_resets_at": (
+                                        bucket.period_end.isoformat()
+                                        if bucket.period_end
+                                        else None
+                                    ),
+                                },
+                                subscription_id=sub.id,
+                                account_id=sub.subscriber_id,
+                            )
+                            enforced += 1
                         if prior_status != "throttled":
                             pending_notifs.append(
                                 {
