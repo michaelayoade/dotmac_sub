@@ -33,7 +33,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
-from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
@@ -157,43 +156,8 @@ def _system_actor_id(request: Request) -> str | None:
     return str(principal_id) if principal_id else None
 
 
-def _labels_by_uuid(db: Session, model, label_attr: str, ids: set[str]) -> list[str]:
-    values: list[UUID] = []
-    for item in ids:
-        try:
-            values.append(UUID(str(item)))
-        except (TypeError, ValueError):
-            continue
-    if not values:
-        return []
-    rows = db.query(model).filter(model.id.in_(values)).all()
-    labels = [str(getattr(row, label_attr, row.id)) for row in rows]
-    return sorted(labels)
-
-
 def _system_user_audit_snapshot(db: Session, user) -> dict[str, object]:
-    role_ids = {
-        str(role_id)
-        for (role_id,) in db.query(SystemUserRole.role_id)
-        .filter(SystemUserRole.system_user_id == user.id)
-        .all()
-    }
-    permission_ids = {
-        str(permission_id)
-        for (permission_id,) in db.query(SystemUserPermission.permission_id)
-        .filter(SystemUserPermission.system_user_id == user.id)
-        .all()
-    }
-    return {
-        "first_name": user.first_name,
-        "last_name": user.last_name,
-        "display_name": user.display_name,
-        "email": user.email,
-        "phone": user.phone,
-        "is_active": user.is_active,
-        "roles": _labels_by_uuid(db, Role, "name", role_ids),
-        "direct_permissions": _labels_by_uuid(db, Permission, "key", permission_ids),
-    }
+    return web_system_users_service.build_user_audit_snapshot(db, user)
 
 
 def _diff_audit_snapshots(before: dict, after: dict) -> dict[str, dict[str, object]]:
