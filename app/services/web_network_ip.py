@@ -120,7 +120,9 @@ def _normalize_ipv4_host(value: object) -> str | None:
     if not text:
         return None
     try:
-        parsed = ipaddress.ip_interface(text) if "/" in text else ipaddress.ip_address(text)
+        parsed = (
+            ipaddress.ip_interface(text) if "/" in text else ipaddress.ip_address(text)
+        )
     except ValueError:
         return None
     address = parsed.ip if hasattr(parsed, "ip") else parsed
@@ -146,7 +148,9 @@ def _device_ip_references_by_ip(
     candidate_values = set(ip_addresses)
     candidate_values.update(f"{ip}/32" for ip in ip_addresses)
 
-    def add_reference(ip_value: object, *, source: str, label: object, entity_id: object) -> None:
+    def add_reference(
+        ip_value: object, *, source: str, label: object, entity_id: object
+    ) -> None:
         ip = _normalize_ipv4_host(ip_value)
         if ip not in ip_addresses:
             return
@@ -886,9 +890,9 @@ def _build_ipv4_range_rows(
             available_count += 1
 
         device_label = ", ".join(ref["label"] for ref in device_refs) or None
-        device_sources = ", ".join(
-            sorted({ref["source"] for ref in device_refs})
-        ) or None
+        device_sources = (
+            ", ".join(sorted({ref["source"] for ref in device_refs})) or None
+        )
         device_search = " ".join(
             f"{ref['label']} {ref['source']}" for ref in device_refs
         )

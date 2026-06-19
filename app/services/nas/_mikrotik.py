@@ -400,11 +400,7 @@ def get_mikrotik_pppoe_live_bandwidth(
         api = pool.get_api()
         ppp_active = _as_dict_list(cast(Any, api.get_resource("/ppp/active")).get())
         session = next(
-            (
-                row
-                for row in ppp_active
-                if str(row.get("name") or "").strip() == login
-            ),
+            (row for row in ppp_active if str(row.get("name") or "").strip() == login),
             None,
         )
         if not session:

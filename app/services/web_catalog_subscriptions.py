@@ -833,12 +833,8 @@ def _service_ipv4_block_options(
             )
             option["available_count"] = len(available_ips)
             option["available_ips"] = available_ips
-            option["display"] = (
-                f"{pool_name} - {network} ({len(available_ips)} free)"
-            )
-        options.append(
-            option
-        )
+            option["display"] = f"{pool_name} - {network} ({len(available_ips)} free)"
+        options.append(option)
     return options
 
 
@@ -1645,7 +1641,9 @@ def _validate_additional_routes_available(
     current_subscriber_routes: list[ipaddress.IPv4Network] = []
     current_routes = (
         db.query(SubscriberAdditionalRoute)
-        .filter(SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id)
+        .filter(
+            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
+        )
         .filter(SubscriberAdditionalRoute.is_active.is_(True))
         .all()
     )
