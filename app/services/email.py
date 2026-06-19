@@ -64,6 +64,11 @@ SMTP_ACTIVITY_CHOICES: list[tuple[str, str]] = [
     ("auth_user_invite", "User Invite"),
 ]
 
+DOTMAC_RED = "#FF0000"
+DOTMAC_GREEN = "#008000"
+DOTMAC_WHITE = "#F4F4F9"
+DOTMAC_BUTTON_TEXT = "#ffffff"
+
 
 def _env_value(name: str) -> str | None:
     value = os.getenv(name)
@@ -563,7 +568,7 @@ def _get_company_name(db: Session | None) -> str:
 
 
 def _brand_accent_color() -> str:
-    return get_brand().get("primary_color") or "#3b82f6"
+    return DOTMAC_RED
 
 
 def _absolute_asset_url(app_url: str, asset_url: str | None) -> str:
@@ -578,28 +583,29 @@ def _absolute_asset_url(app_url: str, asset_url: str | None) -> str:
 
 
 def _get_email_branding_logo_url(db: Session | None) -> str:
-    if db is None:
-        return ""
     app_url = _get_app_url(db)
-    try:
-        logo_raw = resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
-        logo_url = _absolute_asset_url(
-            app_url, str(logo_raw).strip() if logo_raw else ""
-        )
-        if logo_url:
-            return logo_url
-    except Exception:
-        logger.debug("Failed to load primary branding logo for email", exc_info=True)
-    try:
-        dark_logo_raw = resolve_value(db, SettingDomain.comms, "sidebar_logo_dark_url")
-        dark_logo_url = _absolute_asset_url(
-            app_url, str(dark_logo_raw).strip() if dark_logo_raw else ""
-        )
-        if dark_logo_url:
-            return dark_logo_url
-    except Exception:
-        logger.debug("Failed to load dark branding logo for email", exc_info=True)
-    return ""
+    if db is not None:
+        try:
+            logo_raw = resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
+            logo_url = _absolute_asset_url(
+                app_url, str(logo_raw).strip() if logo_raw else ""
+            )
+            if logo_url:
+                return logo_url
+        except Exception:
+            logger.debug("Failed to load primary branding logo for email", exc_info=True)
+        try:
+            dark_logo_raw = resolve_value(
+                db, SettingDomain.comms, "sidebar_logo_dark_url"
+            )
+            dark_logo_url = _absolute_asset_url(
+                app_url, str(dark_logo_raw).strip() if dark_logo_raw else ""
+            )
+            if dark_logo_url:
+                return dark_logo_url
+        except Exception:
+            logger.debug("Failed to load dark branding logo for email", exc_info=True)
+    return _absolute_asset_url(app_url, "/static/branding/favicon/icon-192.png")
 
 
 def _render_action_email_html(
@@ -616,24 +622,63 @@ def _render_action_email_html(
     details_html: str,
     closing_html: str,
     support_email: str,
+    secondary_color: str | None = None,
+    boxed: bool = False,
+    details_suffix_html: str = "",
 ) -> str:
     logo_block = ""
     if logo_url:
         logo_block = f"""
-  <div style="position: absolute; top: 15px; right: 15px;">
-    <img src="{html.escape(logo_url)}" alt="{html.escape(company_name)} logo" style="max-width: 150px; height: auto;">
+  <div style="text-align: center; margin: 0 0 18px;">
+    <img src="{html.escape(logo_url)}" alt="{html.escape(company_name)} logo" style="max-width: 160px; max-height: 64px; width: auto; height: auto;">
+  </div>
+"""
+    else:
+        logo_block = f"""
+  <div style="text-align: center; margin: 0 0 18px;">
+    <div style="display: inline-block; color: {DOTMAC_RED}; font-size: 22px; font-weight: 700;">{html.escape(company_name)}</div>
   </div>
 """
     support_href = html.escape(support_email)
     safe_company_name = html.escape(company_name)
+    secondary_color = secondary_color or DOTMAC_GREEN
+    body_background = DOTMAC_WHITE
+    container_style = (
+        "font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; "
+        f"line-height: 1.8; color: #333; background-color: {DOTMAC_WHITE}; "
+        "padding: 25px; position: relative; max-width: 680px; margin: 0 auto;"
+    )
+    if boxed:
+        container_style += (
+            " border: 1px solid #ccc; border-radius: 10px;"
+            " box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);"
+        )
+    details_style = (
+        f"background-color: {DOTMAC_WHITE}; border: 2px solid #e2e2e2; "
+        "border-radius: 8px; padding: 20px; margin-bottom: 20px;"
+        if boxed
+        else f"background-color: {DOTMAC_WHITE}; padding: 0; margin: 22px 0;"
+    )
     return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <style>
+    @media (prefers-color-scheme: dark) {{
+      .email-body {{ background-color: #111827 !important; }}
+      .email-container {{ background-color: #111827 !important; color: #e5e7eb !important; }}
+      .email-text {{ color: #d1d5db !important; }}
+      .email-muted {{ color: #d1d5db !important; }}
+      .email-details {{ background-color: #111827 !important; border-color: #374151 !important; }}
+      .email-highlight-box {{ background-color: #1f2937 !important; border-color: #008000 !important; }}
+    }}
+  </style>
 </head>
-<body style="margin: 0; padding: 24px; background-color: #f4f4f9;">
-  <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.8; color: #333; background-color: #f4f4f9; padding: 25px; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); position: relative; max-width: 680px; margin: 0 auto;">
+<body class="email-body" style="margin: 0; padding: 24px; background-color: {body_background};">
+  <div class="email-container" style="{container_style}">
 {logo_block}
     <div style="text-align: center; margin-bottom: 20px;">
       <h1 style="color: {accent_color}; font-size: 24px; margin: 0;">{html.escape(title)}</h1>
@@ -641,31 +686,32 @@ def _render_action_email_html(
 
     <p style="font-size: 16px; color: {accent_color}; margin-top: 20px;">{html.escape(greeting)}</p>
 
-    <div style="font-size: 15px; color: #555; margin: 15px 0;">
+    <div class="email-text" style="font-size: 15px; color: #555; margin: 15px 0;">
       {intro_html}
     </div>
 
-    <div style="background-color: #fff; border: 2px solid #e2e2e2; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+    <div class="email-details" style="{details_style}">
       {details_html}
       <p style="margin: 18px 0 0;">
-        <a href="{html.escape(action_url)}" style="display: inline-block; padding: 12px 24px; background-color: {accent_color}; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">{html.escape(action_label)}</a>
+        <a href="{html.escape(action_url)}" style="display: inline-block; padding: 12px 24px; background-color: {accent_color}; color: {DOTMAC_BUTTON_TEXT}; text-decoration: none; border-radius: 6px; font-weight: 600;">{html.escape(action_label)}</a>
       </p>
-      <p style="font-size: 14px; color: #666; margin: 16px 0 0;">If the button does not work, copy and paste this link into your browser:</p>
-      <p style="font-size: 14px; margin: 8px 0 0; word-break: break-all;"><a href="{html.escape(action_url)}" style="color: {accent_color}; text-decoration: none;">{html.escape(action_url)}</a></p>
+      <p class="email-muted" style="font-size: 14px; color: #666; margin: 16px 0 0;">If the button does not work, copy and paste this link into your browser:</p>
+      <p style="font-size: 14px; margin: 8px 0 0; word-break: break-all;"><a href="{html.escape(action_url)}" style="color: {secondary_color}; text-decoration: none;">{html.escape(action_url)}</a></p>
+      {details_suffix_html}
     </div>
 
-    <div style="font-size: 15px; color: #555; margin: 15px 0;">
+    <div class="email-text" style="font-size: 15px; color: #555; margin: 15px 0;">
       {closing_html}
-      <p style="margin: 0;">For help, contact us via <a href="mailto:{support_href}" style="color: {accent_color}; text-decoration: none;">{support_href}</a>.</p>
+      <p style="margin: 0;">For help, contact us via <a href="mailto:{support_href}" style="color: {secondary_color}; text-decoration: none;">{support_href}</a>.</p>
     </div>
 
-    <p style="font-size: 15px; color: #555; margin-bottom: 20px;">
-      Thank you for choosing <strong style="color: {accent_color}; font-size: 18px;">{safe_company_name}</strong>.
+    <p class="email-text" style="font-size: 15px; color: #555; margin-bottom: 20px;">
+      Thank you for choosing <strong style="color: {secondary_color}; font-size: 18px;">{safe_company_name}</strong>.
     </p>
 
     <p style="font-size: 15px; color: {accent_color}; text-align: right; font-style: italic;">
       Best regards,<br>
-      <span style="color: {accent_color}; font-weight: bold;">{safe_company_name} Support Team</span>
+      <span style="color: {secondary_color}; font-weight: bold;">{safe_company_name} Support Team</span>
     </p>
   </div>
 </body>
@@ -777,6 +823,12 @@ def send_email(
     if body_text:
         msg.attach(MIMEText(body_text, "plain"))
     msg.attach(MIMEText(body_html, "html"))
+    if body_text is not None:
+        tracked_body = body_text
+    else:
+        from app.services.email_template import html_to_text
+
+        tracked_body = html_to_text(body_html)
 
     notification = None
     if notification_id and db is not None:
@@ -786,7 +838,7 @@ def send_email(
             channel=NotificationChannel.email,
             recipient=to_email,
             subject=subject,
-            body=body_html,
+            body=tracked_body,
             status=NotificationStatus.sending,
         )
         db.add(notification)
@@ -796,7 +848,7 @@ def send_email(
         notification.channel = NotificationChannel.email
         notification.recipient = to_email
         notification.subject = subject
-        notification.body = body_html
+        notification.body = tracked_body
         notification.status = NotificationStatus.sending
         notification.last_error = None
         db.commit()
@@ -991,12 +1043,11 @@ def send_password_reset_email(
 
     subject = "Password Reset Request"
 
-    accent_color = _brand_accent_color()
     body_html = _render_action_email_html(
         company_name=company_name,
         logo_url=logo_url,
         title="Password Reset Request",
-        accent_color=accent_color,
+        accent_color=DOTMAC_RED,
         greeting=greeting,
         intro_html="""
 <p style="margin: 0 0 12px;">We received a request to reset your password for your portal access.</p>
@@ -1006,17 +1057,21 @@ def send_password_reset_email(
         action_label="Reset Password",
         expiry_minutes=expiry_minutes,
         details_html=f"""
-<p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: {accent_color};">Action:</strong> <span style="color: #555;">Reset your account password</span><br>
-  <strong style="color: {accent_color};">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: {accent_color};">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
-</p>
+<div class="email-highlight-box" style="background-color: #f8fafc; border: 1px solid {DOTMAC_GREEN}; border-left: 5px solid {DOTMAC_RED}; border-radius: 8px; padding: 18px;">
+  <p style="font-size: 15px; margin: 0; line-height: 1.6;">
+    <strong style="color: {DOTMAC_GREEN};">Action:</strong> <span class="email-muted" style="color: #555;">Reset your account password</span><br>
+    <strong style="color: {DOTMAC_GREEN};">Email:</strong> <span class="email-muted" style="color: #555;">{html.escape(to_email)}</span><br>
+    <strong style="color: {DOTMAC_GREEN};">Expires In:</strong> <span class="email-muted" style="color: #555;">{expiry_duration}</span>
+  </p>
 """.strip(),
         closing_html="""
 <p style="margin: 0 0 12px;">If you did not request this password reset, you can safely ignore this email and your current password will remain unchanged.</p>
 <p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
 """.strip(),
         support_email=support_email,
+        secondary_color=DOTMAC_GREEN,
+        boxed=False,
+        details_suffix_html="</div>",
     )
 
     body_text = f"""{greeting}
@@ -1100,9 +1155,9 @@ def send_email_verification_email(
         expiry_minutes=expiry_minutes,
         details_html=f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: {accent_color};">Action:</strong> <span style="color: #555;">Verify your email address</span><br>
-  <strong style="color: {accent_color};">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: {accent_color};">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
+  <strong style="color: {DOTMAC_GREEN};">Action:</strong> <span class="email-muted" style="color: #555;">Verify your email address</span><br>
+  <strong style="color: {DOTMAC_GREEN};">Email:</strong> <span class="email-muted" style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: {DOTMAC_GREEN};">Expires In:</strong> <span class="email-muted" style="color: #555;">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
@@ -1110,6 +1165,7 @@ def send_email_verification_email(
 <p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
 """.strip(),
         support_email=support_email,
+        secondary_color=DOTMAC_GREEN,
     )
 
     body_text = f"""{greeting}
@@ -1194,9 +1250,9 @@ def send_user_invite_email(
         expiry_minutes=expiry_minutes,
         details_html=f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: {accent_color};">Portal:</strong> <span style="color: #555;">{html.escape(company_name)}</span><br>
-  <strong style="color: {accent_color};">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: {accent_color};">Expires In:</strong> <span style="color: #555;">{expiry_duration}</span>
+  <strong style="color: {DOTMAC_GREEN};">Portal:</strong> <span class="email-muted" style="color: #555;">{html.escape(company_name)}</span><br>
+  <strong style="color: {DOTMAC_GREEN};">Email:</strong> <span class="email-muted" style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: {DOTMAC_GREEN};">Expires In:</strong> <span class="email-muted" style="color: #555;">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
@@ -1204,6 +1260,7 @@ def send_user_invite_email(
 <p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
 """.strip(),
         support_email=support_email,
+        secondary_color=DOTMAC_GREEN,
     )
 
     body_text = f"""{greeting}

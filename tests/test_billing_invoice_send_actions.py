@@ -15,6 +15,7 @@ from app.services.web_billing_invoice_bulk import (
     bulk_send,
     list_invoices_by_ids,
 )
+from app.services.web_billing_invoices import maybe_send_invoice_notification
 
 
 def test_bulk_send_calls_invoice_notification_helper(
@@ -45,6 +46,66 @@ def test_bulk_send_calls_invoice_notification_helper(
 
     assert queued == [str(invoice.id)]
     assert called["count"] == 1
+
+
+def test_invoice_notification_email_includes_payment_summary_and_steps(
+    db_session, subscriber, monkeypatch
+):
+    subscriber.account_number = "ACC-1001"
+    subscriber.display_name = "Jane Customer"
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-1001",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=Decimal("15000.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("15000.00"),
+        balance_due=Decimal("15000.00"),
+        due_at=datetime(2026, 6, 24, tzinfo=UTC),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    db_session.refresh(invoice)
+
+    captured: dict[str, str] = {}
+
+    def _fake_send_email(
+        db, to_email, subject, body_html, body_text, activity, **kwargs
+    ):
+        captured["to_email"] = to_email
+        captured["subject"] = subject
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        captured["activity"] = activity
+        return True
+
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices.email_service.send_email",
+        _fake_send_email,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.services.email.send_email",
+        _fake_send_email,
+    )
+    monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.ng")
+
+    maybe_send_invoice_notification(
+        db_session, invoice=invoice, send_notification="1"
+    )
+
+    assert captured["subject"] == "Invoice INV-1001 — payment due 2026-06-24"
+    assert captured["activity"] == "billing_invoice"
+    assert "Invoice Summary" in captured["body_html"]
+    assert "ACC-1001" in captured["body_html"]
+    assert "INV-1001" in captured["body_html"]
+    assert "NGN 15,000.00" in captured["body_html"]
+    assert "2026-06-24" in captured["body_html"]
+    assert "How to pay through the portal" in captured["body_html"]
+    assert "/portal/billing/pay?invoice=" in captured["body_html"]
+    assert "Pay Invoice in Portal" in captured["body_html"]
+    assert "1. Open the customer portal" in captured["body_text"]
 
 
 def test_list_invoices_by_ids_preserves_order_and_deduplicates(db_session, subscriber):
