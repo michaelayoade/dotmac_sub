@@ -1,6 +1,7 @@
 """Celery tasks for notification delivery."""
 
 import logging
+import json
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
@@ -157,12 +158,40 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     notification_id=str(notification.id),
                 )
             elif notification.channel == NotificationChannel.whatsapp:
-                result = whatsapp_service.send_text_message(
-                    db=db,
-                    recipient=notification.recipient,
-                    body=body,
-                    dry_run=False,
-                )
+                whatsapp_payload = None
+                if body:
+                    try:
+                        parsed_body = json.loads(body)
+                        if isinstance(parsed_body, dict) and parsed_body.get(
+                            "__whatsapp_template__"
+                        ):
+                            whatsapp_payload = parsed_body
+                    except json.JSONDecodeError:
+                        whatsapp_payload = None
+                if whatsapp_payload:
+                    result = whatsapp_service.send_template_message(
+                        db=db,
+                        recipient=notification.recipient,
+                        template_name=str(whatsapp_payload.get("name") or ""),
+                        language=str(whatsapp_payload.get("language") or "") or None,
+                        variables=whatsapp_payload.get("variables") or {},
+                        dry_run=False,
+                    )
+                elif notification.template:
+                    result = whatsapp_service.send_template_message(
+                        db=db,
+                        recipient=notification.recipient,
+                        template_name=notification.template.code,
+                        variables={},
+                        dry_run=False,
+                    )
+                else:
+                    result = whatsapp_service.send_text_message(
+                        db=db,
+                        recipient=notification.recipient,
+                        body=body,
+                        dry_run=False,
+                    )
                 success = bool(result.get("ok"))
                 db.add(
                     NotificationDelivery(
