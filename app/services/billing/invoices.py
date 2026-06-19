@@ -406,10 +406,14 @@ class Invoices(ListResponseMixin):
         try:
             db.flush()
             _recalculate_invoice_totals(db, invoice)
-            # Write-offs are authoritative adjustments and should close
-            # any remaining balance even when no payment allocations exist.
+            # Write-offs are authoritative adjustments and should close any
+            # remaining balance even when no payment allocations exist. The
+            # invoice becomes ``written_off`` (closed, bad debt) — NOT ``void``
+            # (which means "never existed" and vanishes from AR/aging) and NOT
+            # ``paid`` (no cash was collected). The adjustment ledger entry
+            # above is the financial record of the loss.
             invoice.balance_due = Decimal("0.00")
-            invoice.status = InvoiceStatus.void
+            invoice.status = InvoiceStatus.written_off
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -429,6 +433,12 @@ class Invoices(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Invoice not found")
         if invoice.status == InvoiceStatus.void:
             raise HTTPException(status_code=400, detail="Invoice is already void")
+        if invoice.status == InvoiceStatus.written_off:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot void a written-off invoice (it is already closed "
+                "as bad debt).",
+            )
         if invoice.status == InvoiceStatus.paid:
             # Voiding a paid invoice would reverse its AR debits while leaving
             # the customer's payment allocated to it (stranded money / AR
@@ -501,6 +511,10 @@ class Invoices(ListResponseMixin):
             db.flush()
             for invoice in affected_invoices:
                 _recalculate_invoice_totals(db, invoice)
+                # Close as bad debt (written_off), consistent with single
+                # write_off — not the recalc-derived 'paid' (no cash collected).
+                invoice.balance_due = Decimal("0.00")
+                invoice.status = InvoiceStatus.written_off
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -529,7 +543,11 @@ class Invoices(ListResponseMixin):
             # Don't void a paid or already-void invoice — the single-invoice
             # void() rejects this, but bulk_void previously voided paid
             # invoices unconditionally, stranding their payments. Skip them.
-            if invoice.status in (InvoiceStatus.paid, InvoiceStatus.void):
+            if invoice.status in (
+                InvoiceStatus.paid,
+                InvoiceStatus.void,
+                InvoiceStatus.written_off,
+            ):
                 skipped += 1
                 continue
             # Reverse active debit ledger entries

@@ -95,6 +95,7 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
             if invoice and invoice.status not in [
                 InvoiceStatus.paid,
                 InvoiceStatus.void,
+                InvoiceStatus.written_off,
             ]:
                 # Use the canonical void so debit ledger entries are reversed
                 # (previously bulk void only flipped the status, leaving the AR
