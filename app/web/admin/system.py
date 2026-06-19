@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
+from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
@@ -87,7 +88,11 @@ from app.services import web_system_user_mutations as web_system_user_mutations_
 from app.services import web_system_users as web_system_users_service
 from app.services import web_system_webhook_forms as web_system_webhook_forms_service
 from app.services import web_system_webhooks as web_system_webhooks_service
-from app.services.audit_helpers import log_audit_event
+from app.services.audit_helpers import (
+    build_audit_activities,
+    build_audit_activities_for_types,
+    log_audit_event,
+)
 from app.services.auth_dependencies import require_permission
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
@@ -141,6 +146,172 @@ def _require_system_user_principal(request: Request) -> dict:
             detail="This action requires a system user principal",
         )
     return auth
+
+
+def _system_actor_id(request: Request) -> str | None:
+    actor_id = getattr(request.state, "actor_id", None)
+    if actor_id:
+        return str(actor_id)
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = auth.get("principal_id")
+    return str(principal_id) if principal_id else None
+
+
+def _labels_by_uuid(db: Session, model, label_attr: str, ids: set[str]) -> list[str]:
+    values: list[UUID] = []
+    for item in ids:
+        try:
+            values.append(UUID(str(item)))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return []
+    rows = db.query(model).filter(model.id.in_(values)).all()
+    labels = [str(getattr(row, label_attr, row.id)) for row in rows]
+    return sorted(labels)
+
+
+def _system_user_audit_snapshot(db: Session, user) -> dict[str, object]:
+    role_ids = {
+        str(role_id)
+        for (role_id,) in db.query(SystemUserRole.role_id)
+        .filter(SystemUserRole.system_user_id == user.id)
+        .all()
+    }
+    permission_ids = {
+        str(permission_id)
+        for (permission_id,) in db.query(SystemUserPermission.permission_id)
+        .filter(SystemUserPermission.system_user_id == user.id)
+        .all()
+    }
+    return {
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "display_name": user.display_name,
+        "email": user.email,
+        "phone": user.phone,
+        "is_active": user.is_active,
+        "roles": _labels_by_uuid(db, Role, "name", role_ids),
+        "direct_permissions": _labels_by_uuid(db, Permission, "key", permission_ids),
+    }
+
+
+def _diff_audit_snapshots(before: dict, after: dict) -> dict[str, dict[str, object]]:
+    changes: dict[str, dict[str, object]] = {}
+    for key in sorted(set(before) | set(after)):
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if before_value != after_value:
+            changes[key] = {"from": before_value, "to": after_value}
+    return changes
+
+
+def _system_user_audit_items(db: Session, user_id: str, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(db, "system_user", str(user_id), limit=limit)
+    except Exception:
+        logger.exception("Unable to load system user audit items for %s", user_id)
+        db.rollback()
+        return []
+
+
+def _log_system_user_event(
+    db: Session,
+    request: Request,
+    *,
+    action: str,
+    user_id: str,
+    metadata: dict | None = None,
+) -> None:
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="system_user",
+        entity_id=str(user_id),
+        actor_id=_system_actor_id(request),
+        metadata=metadata,
+    )
+
+
+def _billing_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(db, "billing_config", "billing", limit=limit)
+    except Exception:
+        logger.exception("Unable to load billing config audit items")
+        db.rollback()
+        return []
+
+
+def _direct_bank_transfer_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(
+            db, "direct_bank_transfer_config", "direct_bank_transfer", limit=limit
+        )
+    except Exception:
+        logger.exception("Unable to load direct bank transfer audit items")
+        db.rollback()
+        return []
+
+
+def _billing_reminder_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(
+            db, "billing_reminder_config", "reminders", limit=limit
+        )
+    except Exception:
+        logger.exception("Unable to load billing reminder audit items")
+        db.rollback()
+        return []
+
+
+def _billing_notification_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(
+            db, "billing_notification_config", "billing_notifications", limit=limit
+        )
+    except Exception:
+        logger.exception("Unable to load billing notification audit items")
+        db.rollback()
+        return []
+
+
+def _tax_rate_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities_for_types(db, ["tax_rate"], limit=limit)
+    except Exception:
+        logger.exception("Unable to load tax rate audit items")
+        db.rollback()
+        return []
+
+
+def _plan_change_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(
+            db, "plan_change_config", "plan_change", limit=limit
+        )
+    except Exception:
+        logger.exception("Unable to load plan change audit items")
+        db.rollback()
+        return []
+
+
+def _radius_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(db, "radius_config", "radius", limit=limit)
+    except Exception:
+        logger.exception("Unable to load RADIUS config audit items")
+        db.rollback()
+        return []
+
+
+def _cpe_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        return build_audit_activities(db, "cpe_config", "cpe", limit=limit)
+    except Exception:
+        logger.exception("Unable to load CPE config audit items")
+        db.rollback()
+        return []
 
 
 @router.get("/health", response_class=HTMLResponse)
@@ -1368,6 +1539,7 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
             "roles": detail_data["roles"],
             "credential": detail_data["credential"],
             "mfa_methods": detail_data["mfa_methods"],
+            "audit_items": _system_user_audit_items(db, user_id),
             "active_page": "users",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -1401,6 +1573,7 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
             "current_role_ids": edit_data["current_role_ids"],
             "all_permissions": edit_data["all_permissions"],
             "direct_permission_ids": edit_data["direct_permission_ids"],
+            "audit_items": _system_user_audit_items(db, user_id),
             "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
             "can_update_password": web_system_common_service.is_admin_request(request),
             "active_page": "users",
@@ -1441,6 +1614,7 @@ def user_edit_submit(
     new_password = cast(str | None, parsed["new_password"])
     confirm_password = cast(str | None, parsed["confirm_password"])
     require_password_change = cast(str | None, parsed["require_password_change"])
+    before_snapshot = _system_user_audit_snapshot(db, system_user)
 
     try:
         web_system_user_edit_service.apply_user_edit(
@@ -1463,6 +1637,22 @@ def user_edit_submit(
             is_admin=web_system_common_service.is_admin_request(request),
             actor_id=getattr(request.state, "actor_id", None),
         )
+        after_snapshot = _system_user_audit_snapshot(db, system_user)
+        changes = _diff_audit_snapshots(before_snapshot, after_snapshot)
+        if new_password or confirm_password:
+            changes["password"] = {"from": "unchanged", "to": "updated"}
+            changes["require_password_change"] = {
+                "from": None,
+                "to": web_system_common_service.form_bool(require_password_change),
+            }
+        if changes:
+            _log_system_user_event(
+                db,
+                request,
+                action="update",
+                user_id=user_id,
+                metadata={"changes": changes},
+            )
     except Exception as exc:
         db.rollback()
         edit_data = web_system_user_edit_service.build_edit_state(
@@ -1477,6 +1667,7 @@ def user_edit_submit(
                 "current_role_ids": edit_data["current_role_ids"],
                 "all_permissions": edit_data["all_permissions"],
                 "direct_permission_ids": edit_data["direct_permission_ids"],
+                "audit_items": _system_user_audit_items(db, user_id),
                 "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
                 "can_update_password": web_system_common_service.is_admin_request(
                     request
@@ -1501,6 +1692,13 @@ def user_activate(request: Request, user_id: str, db: Session = Depends(get_db))
     web_system_user_mutations_service.set_user_active(
         db, user_id=user_id, is_active=True
     )
+    _log_system_user_event(
+        db,
+        request,
+        action="activate",
+        user_id=user_id,
+        metadata={"changes": {"is_active": {"from": False, "to": True}}},
+    )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
@@ -1515,6 +1713,13 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
     web_system_user_mutations_service.set_user_active(
         db, user_id=user_id, is_active=False
     )
+    _log_system_user_event(
+        db,
+        request,
+        action="deactivate",
+        user_id=user_id,
+        metadata={"changes": {"is_active": {"from": True, "to": False}}},
+    )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
@@ -1526,12 +1731,8 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
     web_system_user_mutations_service.disable_user_mfa(
-        db, user_id=user_id, actor_id=actor_id
+        db, user_id=user_id, actor_id=_system_actor_id(request)
     )
     return Response(status_code=204)
 
@@ -1547,6 +1748,14 @@ def user_reset_password(request: Request, user_id: str, db: Session = Depends(ge
             db,
             user_id=user_id,
         )
+        if "sent" in note.lower():
+            _log_system_user_event(
+                db,
+                request,
+                action="password_reset_sent",
+                user_id=user_id,
+                metadata={"delivery": note},
+            )
     except Exception as exc:
         note = str(exc)
     success = "success" if "sent" in note.lower() else "error"
@@ -1584,6 +1793,14 @@ def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_d
             db,
             user_id=user_id,
         )
+        if "sent" in note.lower():
+            _log_system_user_event(
+                db,
+                request,
+                action="invite_sent",
+                user_id=user_id,
+                metadata={"delivery": note},
+            )
     except Exception as exc:
         note = str(exc)
     success = "success" if "sent" in note.lower() else "error"
@@ -1637,6 +1854,17 @@ def user_create(
                 user_type="system_user",
             )
         )
+        _log_system_user_event(
+            db,
+            request,
+            action="create",
+            user_id=str(system_user.id),
+            metadata={
+                "email": system_user.email,
+                "display_name": system_user.display_name,
+                "role_id": role_id,
+            },
+        )
     except IntegrityError as exc:
         db.rollback()
         return web_system_common_service.error_banner(
@@ -1649,6 +1877,14 @@ def user_create(
             db,
             user_id=str(system_user.id),
         )
+        if "sent" in note.lower():
+            _log_system_user_event(
+                db,
+                request,
+                action="invite_sent",
+                user_id=str(system_user.id),
+                metadata={"delivery": note},
+            )
     return HTMLResponse(
         '<div class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">'
         f"{note}"
@@ -1669,8 +1905,20 @@ def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
         return web_system_common_service.blocked_delete_response(
             request, [], detail="Deactivate user before deleting."
         )
+    deleted_metadata = {
+        "email": system_user.email,
+        "display_name": system_user.display_name
+        or f"{system_user.first_name or ''} {system_user.last_name or ''}".strip(),
+    }
     try:
         web_system_user_mutations_service.delete_user_records(db, user_id=user_id)
+        _log_system_user_event(
+            db,
+            request,
+            action="delete",
+            user_id=user_id,
+            metadata=deleted_metadata,
+        )
     except IntegrityError:
         db.rollback()
         return web_system_common_service.blocked_delete_response(
@@ -3731,14 +3979,35 @@ def config_billing_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_billing_config_context(db)
     return templates.TemplateResponse(
         "admin/system/config/billing.html",
-        _config_context(request, db, {"active_page": "config-billing", **data}),
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-billing",
+                "audit_items": _billing_config_audit_items(db),
+                **data,
+            },
+        ),
     )
 
 
 @router.post("/config/billing", response_class=HTMLResponse)
 def config_billing_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before = dict(web_system_config_service.get_billing_config_context(db)["billing"])
     web_system_config_service.save_billing_config(db, form)
+    after = dict(web_system_config_service.get_billing_config_context(db)["billing"])
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="billing_config",
+            entity_id="billing",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
     return RedirectResponse(url="/admin/system/config/billing", status_code=303)
 
 
@@ -3752,6 +4021,7 @@ def config_direct_bank_transfer_page(request: Request, db: Session = Depends(get
             db,
             {
                 "active_page": "config-direct-bank-transfer",
+                "audit_items": _direct_bank_transfer_audit_items(db),
                 "saved": request.query_params.get("saved") == "1",
                 **data,
             },
@@ -3762,7 +4032,30 @@ def config_direct_bank_transfer_page(request: Request, db: Session = Depends(get
 @router.post("/config/direct-bank-transfer", response_class=HTMLResponse)
 def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before_context = web_system_config_service.get_direct_bank_transfer_context(db)
+    before = {
+        **dict(before_context["direct_bank_transfer"]),
+        "direct_bank_transfer_accounts": before_context[
+            "direct_bank_transfer_accounts"
+        ],
+    }
     web_system_config_service.save_direct_bank_transfer_config(db, form)
+    after_context = web_system_config_service.get_direct_bank_transfer_context(db)
+    after = {
+        **dict(after_context["direct_bank_transfer"]),
+        "direct_bank_transfer_accounts": after_context["direct_bank_transfer_accounts"],
+    }
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="direct_bank_transfer_config",
+            entity_id="direct_bank_transfer",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
     return RedirectResponse(
         url="/admin/system/config/direct-bank-transfer?saved=1", status_code=303
     )
@@ -3784,7 +4077,15 @@ def config_tax_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_tax_config_context(db)
     return templates.TemplateResponse(
         "admin/system/config/tax.html",
-        _config_context(request, db, {"active_page": "config-tax", **data}),
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-tax",
+                "audit_items": _tax_rate_audit_items(db),
+                **data,
+            },
+        ),
     )
 
 
@@ -3794,14 +4095,35 @@ def config_reminders_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_reminders_context(db)
     return templates.TemplateResponse(
         "admin/system/config/reminders.html",
-        _config_context(request, db, {"active_page": "config-reminders", **data}),
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-reminders",
+                "audit_items": _billing_reminder_audit_items(db),
+                **data,
+            },
+        ),
     )
 
 
 @router.post("/config/reminders", response_class=HTMLResponse)
 def config_reminders_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before = dict(web_system_config_service.get_reminders_context(db)["reminders"])
     web_system_config_service.save_reminders(db, form)
+    after = dict(web_system_config_service.get_reminders_context(db)["reminders"])
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="billing_reminder_config",
+            entity_id="reminders",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
     return RedirectResponse(url="/admin/system/config/reminders", status_code=303)
 
 
@@ -3811,14 +4133,43 @@ def config_billing_notif_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_billing_notifications_context(db)
     return templates.TemplateResponse(
         "admin/system/config/billing_notifications.html",
-        _config_context(request, db, {"active_page": "config-billing-notif", **data}),
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-billing-notif",
+                "audit_items": _billing_notification_audit_items(db),
+                **data,
+            },
+        ),
     )
 
 
 @router.post("/config/billing-notifications", response_class=HTMLResponse)
 def config_billing_notif_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before = dict(
+        web_system_config_service.get_billing_notifications_context(db)[
+            "billing_notif"
+        ]
+    )
     web_system_config_service.save_billing_notifications(db, form)
+    after = dict(
+        web_system_config_service.get_billing_notifications_context(db)[
+            "billing_notif"
+        ]
+    )
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="billing_notification_config",
+            entity_id="billing_notifications",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
     return RedirectResponse(
         url="/admin/system/config/billing-notifications", status_code=303
     )
@@ -3830,13 +4181,22 @@ def config_plan_change_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_plan_change_context(db)
     return templates.TemplateResponse(
         "admin/system/config/plan_change.html",
-        _config_context(request, db, {"active_page": "config-plan-change", **data}),
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-plan-change",
+                "audit_items": _plan_change_audit_items(db),
+                **data,
+            },
+        ),
     )
 
 
 @router.post("/config/plan-change", response_class=HTMLResponse)
 def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before = dict(web_system_config_service.get_plan_change_context(db)["plan_change"])
     try:
         web_system_config_service.save_plan_change(db, form)
     except ValueError as exc:
@@ -3848,10 +4208,23 @@ def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
                 {
                     "active_page": "config-plan-change",
                     "plan_change": form,
+                    "audit_items": _plan_change_audit_items(db),
                     "error": str(exc),
                 },
             ),
             status_code=400,
+        )
+    after = dict(web_system_config_service.get_plan_change_context(db)["plan_change"])
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="plan_change_config",
+            entity_id="plan_change",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
         )
     return RedirectResponse(url="/admin/system/config/plan-change", status_code=303)
 
@@ -3871,6 +4244,7 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
                 "active_page": "config-radius",
                 "push_status": push_status,
                 "push_message": push_message,
+                "audit_items": _radius_config_audit_items(db),
                 **data,
             },
         ),
@@ -3880,7 +4254,20 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
 @router.post("/config/radius", response_class=HTMLResponse)
 def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before = dict(web_system_config_service.get_radius_config_context(db)["radius"])
     web_system_config_service.save_radius_config(db, form)
+    after = dict(web_system_config_service.get_radius_config_context(db)["radius"])
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="radius_config",
+            entity_id="radius",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
     try:
         radius_reject_service.push_reject_rules_once(db)
     except Exception:
@@ -3896,6 +4283,24 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
     result = radius_reject_service.push_reject_rules_to_radius_nas(db)
     status = "success" if result.get("ok") else "error"
     message = quote_plus(str(result.get("message") or "Reject rule push failed."))
+    log_audit_event(
+        db=db,
+        request=request,
+        action="push_reject_rules",
+        entity_type="radius_config",
+        entity_id="radius",
+        actor_id=_system_actor_id(request),
+        metadata={
+            "changes": {
+                "reject_rules_push": {
+                    "from": None,
+                    "to": str(result.get("message") or status),
+                }
+            },
+            "success": bool(result.get("ok")),
+        },
+        is_success=bool(result.get("ok")),
+    )
     return RedirectResponse(
         url=f"/admin/system/config/radius?push_status={status}&push_message={message}",
         status_code=303,
@@ -3908,14 +4313,35 @@ def config_cpe_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_cpe_config_context(db)
     return templates.TemplateResponse(
         "admin/system/config/cpe.html",
-        _config_context(request, db, {"active_page": "config-cpe", **data}),
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-cpe",
+                "audit_items": _cpe_config_audit_items(db),
+                **data,
+            },
+        ),
     )
 
 
 @router.post("/config/cpe", response_class=HTMLResponse)
 def config_cpe_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
+    before = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
     web_system_config_service.save_cpe_config(db, form)
+    after = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
+    changes = _diff_audit_snapshots(before, after)
+    if changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="cpe_config",
+            entity_id="cpe",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": changes},
+        )
     return RedirectResponse(url="/admin/system/config/cpe", status_code=303)
 
 

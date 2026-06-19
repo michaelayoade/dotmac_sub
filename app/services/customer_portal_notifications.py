@@ -17,6 +17,7 @@ from app.services.customer_notification_policy import (
     is_notification_enabled_for_subscriber,
     resolve_notification_category,
 )
+from app.services.email_template import html_to_text
 
 
 def _normalize_portal_notification(item: object) -> SimpleNamespace:
@@ -39,6 +40,11 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
         "code",
         None,
     )
+    message = (
+        getattr(notification, "body", None)
+        or getattr(notification, "subject", "")
+        or ""
+    )
     return SimpleNamespace(
         channel=getattr(
             getattr(notification, "channel", None),
@@ -49,9 +55,7 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
         entity_type=event_type or "notification",
         category=getattr(notification, "category", None)
         or resolve_notification_category(event_type),
-        message=getattr(notification, "body", None)
-        or getattr(notification, "subject", "")
-        or "",
+        message=html_to_text(message),
         recipient=getattr(notification, "recipient", ""),
         status=SimpleNamespace(value="sent"),
         subscriber_id=getattr(notification, "subscriber_id", None),
