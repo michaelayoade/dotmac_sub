@@ -678,6 +678,8 @@ def queue_bulk_message_from_payload(
                 }
             )
         else:
+            if template is None:
+                raise HTTPException(status_code=404, detail="Template not found")
             subject = render_template_text(
                 template.subject or "Service Update", variables
             )
