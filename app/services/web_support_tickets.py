@@ -40,6 +40,8 @@ DEFAULT_VISIBLE_COLUMNS = [
     "priority",
     "status",
     "customer",
+    "technician",
+    "due_at",
     "created_at",
 ]
 TICKET_COLUMNS = [

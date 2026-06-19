@@ -133,6 +133,33 @@
         <input type="hidden" name="customer_type" value="{{ customer_type }}">
         {% endif %}
 
+        {% if customer %}
+        <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex w-full min-w-max items-center gap-2 md:min-w-0">
+                <button type="button" @click="activeSection = 'basic'"
+                        :class="activeSection === 'basic' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60'"
+                        class="min-w-32 flex-1 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition">
+                    Basic Information
+                </button>
+                <button type="button" x-show="customerType === 'person'" @click="activeSection = 'address'"
+                        :class="activeSection === 'address' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60'"
+                        class="min-w-32 flex-1 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition">
+                    Address
+                </button>
+                <button type="button" x-show="customerType === 'person'" @click="activeSection = 'status'"
+                        :class="activeSection === 'status' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60'"
+                        class="min-w-32 flex-1 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition">
+                    Status
+                </button>
+                <button type="button" @click="activeSection = 'billing'"
+                        :class="activeSection === 'billing' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60'"
+                        class="min-w-32 flex-1 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition">
+                    Billing
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Person Form Fields -->
         <div x-show="customerType === 'person'" x-cloak class="space-y-6">
             {% set current_gender = customer.gender.value if customer and customer.gender is not string and customer.gender else (customer.gender | default('')) if customer else '' %}
@@ -140,8 +167,9 @@
             {% set current_contact_method = customer.preferred_contact_method.value if customer and customer.preferred_contact_method is not string and customer.preferred_contact_method else (customer.preferred_contact_method | default('')) if customer else '' %}
 
             <!-- Basic Information Section -->
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
-                <button type="button" @click="sections.basic = !sections.basic"
+            <div x-show="!isEdit || activeSection === 'basic'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="isEdit ? activeSection = 'basic' : sections.basic = !sections.basic"
+                        :class="isEdit ? 'cursor-default' : ''"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
@@ -152,9 +180,9 @@
                             <p class="text-sm text-slate-500 dark:text-slate-400">Name, email, and contact details</p>
                         </div>
                     </div>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.basic ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg x-show="!isEdit" class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.basic ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="sections.basic" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div x-show="isEdit || sections.basic" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                             <div>
@@ -244,8 +272,9 @@
             </div>
 
             <!-- Address Section -->
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
-                <button type="button" @click="sections.address = !sections.address"
+            <div x-show="!isEdit || activeSection === 'address'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="isEdit ? activeSection = 'address' : sections.address = !sections.address"
+                        :class="isEdit ? 'cursor-default' : ''"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
@@ -256,9 +285,9 @@
                             <p class="text-sm text-slate-500 dark:text-slate-400">Physical address information</p>
                         </div>
                     </div>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.address ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg x-show="!isEdit" class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.address ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="sections.address" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div x-show="isEdit || sections.address" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div>
                             <label for="address_line1" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Address Line 1</label>
@@ -318,8 +347,9 @@
             </div>
 
             <!-- Status Section -->
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
-                <button type="button" @click="sections.status = !sections.status"
+            <div x-show="!isEdit || activeSection === 'status'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="isEdit ? activeSection = 'status' : sections.status = !sections.status"
+                        :class="isEdit ? 'cursor-default' : ''"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
@@ -330,9 +360,9 @@
                             <p class="text-sm text-slate-500 dark:text-slate-400">Account status and settings</p>
                         </div>
                     </div>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.status ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg x-show="!isEdit" class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.status ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="sections.status" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div x-show="isEdit || sections.status" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                             <div>
@@ -398,8 +428,9 @@
                 </div>
             </div>
 
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
-                <button type="button" @click="sections.billing = !sections.billing"
+            <div x-show="!isEdit || activeSection === 'billing'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="isEdit ? activeSection = 'billing' : sections.billing = !sections.billing"
+                        :class="isEdit ? 'cursor-default' : ''"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
@@ -410,9 +441,9 @@
                             <p class="text-sm text-slate-500 dark:text-slate-400">Leave blank to inherit global defaults.</p>
                         </div>
                     </div>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.billing ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg x-show="!isEdit" class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.billing ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="sections.billing" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div x-show="isEdit || sections.billing" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                             <div>
@@ -478,8 +509,9 @@
         <!-- Business Form Fields -->
         <div x-show="customerType === 'business'" x-cloak class="space-y-6">
             <!-- Business Information Section -->
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
-                <button type="button" @click="sections.orgBasic = !sections.orgBasic"
+            <div x-show="!isEdit || activeSection === 'basic'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="isEdit ? activeSection = 'basic' : sections.orgBasic = !sections.orgBasic"
+                        :class="isEdit ? 'cursor-default' : ''"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
@@ -490,9 +522,9 @@
                             <p class="text-sm text-slate-500 dark:text-slate-400">Company name, legal info, and website</p>
                         </div>
                     </div>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.orgBasic ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg x-show="!isEdit" class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.orgBasic ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="sections.orgBasic" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div x-show="isEdit || sections.orgBasic" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div>
                             <label for="name" class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
@@ -551,8 +583,9 @@
                 </div>
             </div>
 
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
-                <button type="button" @click="sections.orgBilling = !sections.orgBilling"
+            <div x-show="!isEdit || activeSection === 'billing'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="isEdit ? activeSection = 'billing' : sections.orgBilling = !sections.orgBilling"
+                        :class="isEdit ? 'cursor-default' : ''"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
@@ -563,9 +596,9 @@
                             <p class="text-sm text-slate-500 dark:text-slate-400">Applies the same override set to all linked subscriber accounts.</p>
                         </div>
                     </div>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.orgBilling ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg x-show="!isEdit" class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.orgBilling ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="sections.orgBilling" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div x-show="isEdit || sections.orgBilling" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
                             If linked accounts currently have mixed billing overrides, the fields below start blank. Saving will standardize them across the business account.
@@ -715,6 +748,55 @@
             {% endif %}
         </div>
 
+        {% if customer %}
+        <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </div>
+                    <div>
+                        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Recent changes</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Latest audit trail for this {{ entity_label | lower }}</p>
+                    </div>
+                </div>
+                <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}" class="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 transition hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">
+                    Full profile
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+            </div>
+            <div class="px-5 py-4">
+                {% if customer_audit_items %}
+                <div class="grid gap-3 lg:grid-cols-2">
+                    {% for activity in customer_audit_items[:4] %}
+                    <div class="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
+                                {% if activity.description %}
+                                <p class="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
+                                {% endif %}
+                            </div>
+                            <span class="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">
+                                {{ activity.timestamp.strftime('%b %d') if activity.timestamp else 'Recent' }}
+                            </span>
+                        </div>
+                        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                            {% if activity.actor_name %}
+                            <span>By {{ activity.actor_name }}</span>
+                            {% endif %}
+                            <span>{{ activity.timestamp.strftime('%I:%M %p') if activity.timestamp else 'Unknown time' }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No profile update audit entries yet.</p>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+
         {% if form_mode == 'subscriber' %}
         <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
             <button type="button" @click="sections.subscriber = !sections.subscriber"
@@ -783,7 +865,9 @@
 <script>
 function customerForm() {
     return {
+        isEdit: {{ 'true' if customer else 'false' }},
         customerType: '{{ customer_type | default("person") }}',
+        activeSection: 'basic',
         sections: {
             basic: true,
             address: {{ 'true' if customer else 'false' }},

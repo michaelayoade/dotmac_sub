@@ -12,7 +12,7 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.auth import MFAMethod, UserCredential
-from app.models.rbac import Role, SystemUserRole
+from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.services.dynamic_filters import (
@@ -40,6 +40,49 @@ USER_LIST_TYPE_OPTIONS = [
 ]
 USER_TYPE_LABELS = {key: label for key, label in USER_LIST_TYPE_OPTIONS}
 USER_DOCTYPE = "User"
+
+
+def _labels_by_uuid(db: Session, model, label_attr: str, ids: set[str]) -> list[str]:
+    values: list[UUID] = []
+    for item in ids:
+        try:
+            values.append(UUID(str(item)))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return []
+    rows = db.execute(select(model).where(model.id.in_(values))).scalars().all()
+    labels = [str(getattr(row, label_attr, row.id)) for row in rows]
+    return sorted(labels)
+
+
+def build_user_audit_snapshot(db: Session, user: SystemUser) -> dict[str, object]:
+    role_ids = {
+        str(role_id)
+        for role_id in db.execute(
+            select(SystemUserRole.role_id).where(
+                SystemUserRole.system_user_id == user.id
+            )
+        ).scalars()
+    }
+    permission_ids = {
+        str(permission_id)
+        for permission_id in db.execute(
+            select(SystemUserPermission.permission_id).where(
+                SystemUserPermission.system_user_id == user.id
+            )
+        ).scalars()
+    }
+    return {
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "display_name": user.display_name,
+        "email": user.email,
+        "phone": user.phone,
+        "is_active": user.is_active,
+        "roles": _labels_by_uuid(db, Role, "name", role_ids),
+        "direct_permissions": _labels_by_uuid(db, Permission, "key", permission_ids),
+    }
 
 
 def _pending_credential_expression():

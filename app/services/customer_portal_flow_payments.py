@@ -75,26 +75,25 @@ def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
 
 def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str, str]]:
     """Return active online provider options for customer top-ups."""
-    provider_types: list[str] = [default_provider]
+    allowed_provider_types = {"paystack"}
+    provider_types: list[str] = (
+        [default_provider] if default_provider in allowed_provider_types else []
+    )
     try:
         rows = db.scalars(
             select(PaymentProvider.provider_type)
             .where(PaymentProvider.is_active.is_(True))
-            .where(
-                PaymentProvider.provider_type.in_(
-                    [PaymentProviderType.paystack, PaymentProviderType.flutterwave]
-                )
-            )
+            .where(PaymentProvider.provider_type.in_([PaymentProviderType.paystack]))
             .order_by(PaymentProvider.name)
         ).all()
         for provider_type in rows:
             value = getattr(provider_type, "value", str(provider_type))
-            if value not in provider_types:
+            if value in allowed_provider_types and value not in provider_types:
                 provider_types.append(value)
     except Exception:
         logger.debug("Failed to resolve active payment providers", exc_info=True)
 
-    for provider_type in ("paystack", "flutterwave"):
+    for provider_type in ("paystack",):
         if provider_type not in provider_types:
             provider_types.append(provider_type)
 

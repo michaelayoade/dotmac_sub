@@ -222,6 +222,7 @@ def build_create_payload(
     *,
     account_id,
     collection_account_id: str | None,
+    payment_method_id,
     amount,
     currency: str,
     status: str | None,
@@ -244,6 +245,7 @@ def build_create_payload(
         collection_account_id=UUID(collection_account_id)
         if collection_account_id
         else None,
+        payment_method_id=payment_method_id,
         amount=amount,
         currency=currency.strip().upper(),
         status=PaymentStatus(status) if status else PaymentStatus.pending,
@@ -919,6 +921,7 @@ def process_payment_create(
     status: str | None,
     invoice_id: str | None,
     collection_account_id: str | None,
+    payment_method_id: str | None,
     memo: str | None,
 ) -> dict[str, object]:
     """Validate inputs, create a payment, and return result dict."""
@@ -946,6 +949,9 @@ def process_payment_create(
     payload = build_create_payload(
         account_id=parsed_account_id,
         collection_account_id=collection_account_id,
+        payment_method_id=resolve_payment_method_id(
+            db, parsed_account_id, payment_method_id
+        ),
         amount=parsed_amount,
         currency=effective_currency,
         status=status,
@@ -982,6 +988,7 @@ def process_payment_create_with_audit(
     status: str | None,
     invoice_id: str | None,
     collection_account_id: str | None,
+    payment_method_id: str | None,
     memo: str | None,
 ) -> dict[str, object]:
     result = process_payment_create(
@@ -992,6 +999,7 @@ def process_payment_create_with_audit(
         status=status,
         invoice_id=invoice_id,
         collection_account_id=collection_account_id,
+        payment_method_id=payment_method_id,
         memo=memo,
     )
     payment = cast(Payment, result["payment"])
