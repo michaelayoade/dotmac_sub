@@ -9,16 +9,78 @@ from __future__ import annotations
 import logging
 import re
 from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 from app.services.branding_config import get_brand
 
 logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+DOTMAC_RED = "#FF0000"
+DOTMAC_GREEN = "#008000"
+DOTMAC_WHITE = "#F4F4F9"
 
 
 def looks_like_html(body: str | None) -> bool:
     return bool(_HTML_TAG_RE.search(body or ""))
+
+
+class _HTMLTextExtractor(HTMLParser):
+    _BLOCK_TAGS = {
+        "br",
+        "div",
+        "li",
+        "ol",
+        "p",
+        "table",
+        "tr",
+        "ul",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag in {"script", "style"}:
+            self._skip_depth += 1
+            return
+        if tag in self._BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if tag in self._BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        self._parts.append(data)
+
+    def text(self) -> str:
+        text = "".join(self._parts)
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        text = re.sub(r" *\n *", "\n", text)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def html_to_text(body: str | None) -> str:
+    """Return readable text for an HTML email body."""
+    if not body:
+        return ""
+    if not looks_like_html(body):
+        return body
+    parser = _HTMLTextExtractor()
+    parser.feed(body)
+    parser.close()
+    return parser.text()
 
 
 def render_email_bodies(
@@ -34,7 +96,7 @@ def render_email_bodies(
     Plain-text input is escaped, converted to paragraphs (blank line =
     paragraph break), and wrapped in the branded template; the original text
     is kept as the text/plain part. Input that already contains HTML is
-    wrapped as-is with no text part.
+    wrapped as-is and converted to a readable text/plain part.
     """
     if looks_like_html(body):
         html = wrap_email_html(
@@ -44,7 +106,7 @@ def render_email_bodies(
             company_name=company_name,
             support_email=support_email,
         )
-        return html, None
+        return html, html_to_text(body)
 
     paragraphs = [
         f'<p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6;">'
@@ -62,18 +124,8 @@ def render_email_bodies(
     return html, body
 
 
-def _darken(hex_color: str, factor: float = 0.78) -> str:
-    """Return a darker shade of a #rrggbb colour, for an on-brand gradient end
-    stop. Falls back to the input if it isn't a 6-digit hex."""
-    h = hex_color.lstrip("#")
-    if len(h) != 6:
-        return hex_color
-    try:
-        r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
-    except ValueError:
-        return hex_color
-    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
-    return f"#{r:02x}{g:02x}{b:02x}"
+def _asset_url(base_url: str, path: str) -> str:
+    return urljoin(f"{base_url.rstrip('/')}/", path.lstrip("/"))
 
 
 def wrap_email_html(
@@ -100,8 +152,9 @@ def wrap_email_html(
 
     brand = get_brand()
     base = base_url or brand["app_url"]
-    primary = brand["primary_color"]
-    primary_dark = _darken(primary)
+    primary = DOTMAC_RED
+    secondary = DOTMAC_GREEN
+    logo_url = _asset_url(base, "/static/branding/favicon/icon-192.png")
     safe_subject = escape(subject)
     safe_company = escape(
         company_name if company_name is not None else brand["legal_name"]
@@ -115,33 +168,41 @@ def wrap_email_html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
 <title>{safe_subject}</title>
 <style>
-body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; color: #1e293b; }}
-.wrapper {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-.header {{ background: linear-gradient(135deg, {primary} 0%, {primary_dark} 100%); border-radius: 12px 12px 0 0; padding: 24px 32px; text-align: center; }}
-.header img {{ height: 40px; width: auto; }}
-.header-fallback {{ color: #ffffff; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }}
-.content {{ background: #ffffff; padding: 32px; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; }}
-.footer {{ background: #f1f5f9; border-radius: 0 0 12px 12px; padding: 24px 32px; text-align: center; border: 1px solid #e2e8f0; border-top: none; }}
-.footer p {{ margin: 4px 0; font-size: 12px; color: #64748b; }}
-.footer a {{ color: {primary}; text-decoration: none; }}
+body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: {DOTMAC_WHITE}; color: #1f2937; }}
+.wrapper {{ max-width: 600px; margin: 0 auto; padding: 24px 20px; }}
+.header {{ background: {DOTMAC_WHITE}; padding: 0 0 22px; text-align: center; border-bottom: 3px solid {primary}; }}
+.header img {{ max-height: 64px; max-width: 160px; width: auto; height: auto; }}
+.header-fallback {{ color: {primary}; font-size: 20px; font-weight: 700; margin-top: 8px; }}
+.content {{ background: {DOTMAC_WHITE}; padding: 30px 0; color: #374151; }}
+.content a {{ color: {secondary}; text-decoration: none; }}
+.footer {{ background: {DOTMAC_WHITE}; padding: 20px 0 0; text-align: center; border-top: 1px solid #e5e7eb; }}
+.footer p {{ margin: 4px 0; font-size: 12px; color: #6b7280; }}
+.footer a {{ color: {secondary}; text-decoration: none; }}
+.brand-accent {{ color: {primary}; }}
+@media (prefers-color-scheme: dark) {{
+  body {{ background-color: #111827 !important; color: #e5e7eb !important; }}
+  .wrapper, .header, .content, .footer {{ background-color: #111827 !important; }}
+  .content {{ color: #d1d5db !important; }}
+  .footer {{ border-top-color: #374151 !important; }}
+  .footer p {{ color: #d1d5db !important; }}
+}}
 </style>
 </head>
 <body>
 <div class="wrapper">
-    <!-- Header with branded banner -->
     <div class="header">
-        <img src="{base}/static/illustrations/email-header.png" alt="" style="max-width: 100%; height: 40px; object-fit: contain;">
+        <img src="{escape(logo_url)}" alt="{safe_company} logo">
         <div class="header-fallback" style="margin-top: 8px;">{safe_company}</div>
     </div>
 
-    <!-- Email body -->
     <div class="content">
         {body_html}
     </div>
 
-    <!-- Footer -->
     <div class="footer">
         <p>&copy; {safe_company}</p>
         <p>Need help? <a href="mailto:{safe_support}">{safe_support}</a></p>

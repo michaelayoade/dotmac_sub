@@ -102,8 +102,42 @@ def test_deliver_notification_queue_brands_plain_text_email(db_session, monkeypa
     assert email.status == NotificationStatus.delivered
     # Plain text is wrapped in the branded template with a text/plain part.
     assert "<!DOCTYPE html>" in captured["body_html"]
+    assert "#FF0000" in captured["body_html"]
+    assert "#008000" in captured["body_html"]
+    assert "/static/branding/favicon/icon-192.png" in captured["body_html"]
+    assert "static/illustrations/email-header.png" not in captured["body_html"]
     assert "Your invoice is overdue.<br>Please pay soon." in captured["body_html"]
     assert captured["body_text"] == email.body
+
+
+def test_deliver_notification_queue_sends_html_email_with_text_part(
+    db_session, monkeypatch
+):
+    email = _queued_notification(
+        channel=NotificationChannel.email,
+        recipient="cust@example.com",
+        body="<p>Your <strong>invoice</strong> is ready.</p>",
+    )
+    db_session.add(email)
+    db_session.commit()
+
+    captured: dict = {}
+
+    def _fake_send_email(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email", _fake_send_email
+    )
+
+    delivered = _deliver_notification_queue(db_session, batch_size=10)
+
+    db_session.refresh(email)
+    assert delivered == 1
+    assert email.status == NotificationStatus.delivered
+    assert "<p>Your <strong>invoice</strong> is ready.</p>" in captured["body_html"]
+    assert captured["body_text"] == "Your invoice is ready."
 
 
 def test_deliver_notification_queue_processes_push_channel(db_session, monkeypatch):
