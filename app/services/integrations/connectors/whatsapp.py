@@ -131,7 +131,9 @@ def _ordered_template_parameters(variables: dict[str, Any] | None) -> list[str]:
             ordered.append((int(key_text), value_text))
         else:
             trailing.append(value_text)
-    ordered_values = [value for _index, value in sorted(ordered, key=lambda item: item[0])]
+    ordered_values = [
+        value for _index, value in sorted(ordered, key=lambda item: item[0])
+    ]
     return ordered_values + trailing
 
 
