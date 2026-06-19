@@ -151,7 +151,7 @@
         </div>
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-3">
+    <div class="grid gap-4 sm:grid-cols-1">
         <div class="{{ usage_card_class }}">
             <div class="absolute inset-0 bg-gradient-to-br from-brand-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="relative">
@@ -162,36 +162,6 @@
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Total Usage</p>
                         <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:.2f}".format(totals.amount) }} <span class="text-sm font-semibold text-stone-500">GB</span></p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="{{ usage_card_class }}">
-            <div class="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
-            <div class="relative">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    </div>
-                    <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Period</p>
-                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ period | default('Current') | title }}</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="{{ usage_card_class }}">
-            <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
-            <div class="relative">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                    </div>
-                    <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Records</p>
-                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ usage_records | length }}</p>
                     </div>
                 </div>
             </div>
