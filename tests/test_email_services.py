@@ -477,7 +477,7 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
     )
     assert "background-color: #FF0000" in captured["body_html"]
     assert "color: #008000" in captured["body_html"]
-    assert 'background-color: #F4F4F9' in captured["body_html"]
+    assert "background-color: #F4F4F9" in captured["body_html"]
     assert "email-highlight-box" in captured["body_html"]
     assert "background-color: #f8fafc" in captured["body_html"]
     assert "border: 1px solid #008000" in captured["body_html"]

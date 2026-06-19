@@ -91,9 +91,7 @@ def test_invoice_notification_email_includes_payment_summary_and_steps(
     )
     monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.ng")
 
-    maybe_send_invoice_notification(
-        db_session, invoice=invoice, send_notification="1"
-    )
+    maybe_send_invoice_notification(db_session, invoice=invoice, send_notification="1")
 
     assert captured["subject"] == "Invoice INV-1001 — payment due 2026-06-24"
     assert captured["activity"] == "billing_invoice"

@@ -278,7 +278,9 @@ def maybe_send_invoice_notification(
     due_date = due_at.strftime("%Y-%m-%d") if due_at else "Not set"
     app_url = email_service._get_app_url(db)  # noqa: SLF001 - shared email URL logic
     invoice_url = f"{app_url}/portal/billing/invoices/{invoice.id}"
-    payment_url = f"{app_url}/portal/billing/pay?{urlencode({'invoice': str(invoice.id)})}"
+    payment_url = (
+        f"{app_url}/portal/billing/pay?{urlencode({'invoice': str(invoice.id)})}"
+    )
     amount_label = f"{currency} {Decimal(str(amount_due or 0)):,.2f}".strip()
     subject = f"Invoice {inv_num} — payment due {due_date}"
     body_html = wrap_email_html(
@@ -302,11 +304,11 @@ def maybe_send_invoice_notification(
             '<div style="margin-top: 24px;">'
             '<p style="margin: 0 0 10px; color: #008000; font-size: 15px; font-weight: 700;">How to pay through the portal</p>'
             '<ol style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7;">'
-            '<li>Open the customer portal and sign in to your account.</li>'
-            '<li>Go to <strong>Billing</strong>, then select <strong>Invoices</strong>.</li>'
+            "<li>Open the customer portal and sign in to your account.</li>"
+            "<li>Go to <strong>Billing</strong>, then select <strong>Invoices</strong>.</li>"
             f"<li>Open invoice <strong>{escape(str(inv_num))}</strong> and confirm the amount due.</li>"
-            '<li>Click <strong>Pay invoice</strong>, choose your payment method, and complete the payment.</li>'
-            '<li>Wait for the payment confirmation page before closing the browser.</li>'
+            "<li>Click <strong>Pay invoice</strong>, choose your payment method, and complete the payment.</li>"
+            "<li>Wait for the payment confirmation page before closing the browser.</li>"
             "</ol>"
             "</div>"
             f'<p style="margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: #555;">You can also view the invoice here: <a href="{escape(invoice_url)}" style="color: #008000;">{escape(invoice_url)}</a></p>'

@@ -593,7 +593,9 @@ def _get_email_branding_logo_url(db: Session | None) -> str:
             if logo_url:
                 return logo_url
         except Exception:
-            logger.debug("Failed to load primary branding logo for email", exc_info=True)
+            logger.debug(
+                "Failed to load primary branding logo for email", exc_info=True
+            )
         try:
             dark_logo_raw = resolve_value(
                 db, SettingDomain.comms, "sidebar_logo_dark_url"
