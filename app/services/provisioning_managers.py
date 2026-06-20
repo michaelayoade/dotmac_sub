@@ -285,6 +285,30 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             str(subscription_id) if subscription_id else None,
             str(requested_by_contact_id) if requested_by_contact_id else None,
         )
+        # Terminal guard: a canceled/active (completed) order is done — block a
+        # raw status edit (e.g. an uncancel via the restore tool) from silently
+        # reviving it. Same-status writes and non-status edits are unaffected.
+        if "status" in data:
+            target_status = data["status"]
+            if not isinstance(target_status, ServiceOrderStatus):
+                try:
+                    target_status = ServiceOrderStatus(target_status)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=400, detail="Invalid service order status"
+                    ) from exc
+            if (
+                previous_status
+                in (ServiceOrderStatus.canceled, ServiceOrderStatus.active)
+                and target_status != previous_status
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot change a {previous_status.value} service order "
+                        f"to {target_status.value}"
+                    ),
+                )
         for key, value in data.items():
             setattr(order, key, value)
         db.commit()
