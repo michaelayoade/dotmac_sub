@@ -89,7 +89,9 @@ def _capture_render(module):
         resp.status_code = k.get("status_code", 200)
         return resp
 
-    return patch.object(module.templates, "TemplateResponse", side_effect=_fake), captured
+    return patch.object(
+        module.templates, "TemplateResponse", side_effect=_fake
+    ), captured
 
 
 # --- Profile + MFA --------------------------------------------------------
@@ -97,10 +99,13 @@ def _capture_render(module):
 
 def test_profile_page_renders_for_reseller_user(db_session, reseller_user_ctx):
     p, captured = _capture_render(web_reseller_routes)
-    with p, patch.object(
-        web_reseller_routes,
-        "_require_reseller_context",
-        return_value=reseller_user_ctx,
+    with (
+        p,
+        patch.object(
+            web_reseller_routes,
+            "_require_reseller_context",
+            return_value=reseller_user_ctx,
+        ),
     ):
         web_reseller_routes.reseller_profile(_request(), db_session)
     assert captured["context"]["active_page"] == "profile"
@@ -112,8 +117,13 @@ def test_reseller_user_mfa_setup_and_confirm(db_session, reseller_user_ctx):
     ru_id = reseller_user_ctx["principal_id"]
     # Setup
     p, _ = _capture_render(web_reseller_routes)
-    with p, patch.object(
-        web_reseller_routes, "_require_reseller_context", return_value=reseller_user_ctx
+    with (
+        p,
+        patch.object(
+            web_reseller_routes,
+            "_require_reseller_context",
+            return_value=reseller_user_ctx,
+        ),
     ):
         web_reseller_routes.reseller_mfa_setup(_request(), db_session)
     method = (
@@ -129,8 +139,13 @@ def test_reseller_user_mfa_setup_and_confirm(db_session, reseller_user_ctx):
     secret = auth_flow_service._decrypt_secret(db_session, method.secret)
     code = pyotp.TOTP(secret).now()
     p2, _ = _capture_render(web_reseller_routes)
-    with p2, patch.object(
-        web_reseller_routes, "_require_reseller_context", return_value=reseller_user_ctx
+    with (
+        p2,
+        patch.object(
+            web_reseller_routes,
+            "_require_reseller_context",
+            return_value=reseller_user_ctx,
+        ),
     ):
         web_reseller_routes.reseller_mfa_confirm(
             _request(), db_session, str(method.id), code
@@ -159,10 +174,13 @@ def test_resend_email_verification_is_noop_for_reseller_user(
 
 def test_billing_overview_empty_cards_for_reseller_user(db_session, reseller_user_ctx):
     p, captured = _capture_render(web_reseller_billing)
-    with p, patch.object(
-        web_reseller_billing,
-        "_require_reseller_context",
-        return_value=reseller_user_ctx,
+    with (
+        p,
+        patch.object(
+            web_reseller_billing,
+            "_require_reseller_context",
+            return_value=reseller_user_ctx,
+        ),
     ):
         web_reseller_billing.billing_overview(_request(), db_session)
     assert captured["context"]["saved_cards"] == []
@@ -177,10 +195,13 @@ def test_login_subscriber_id_none_for_reseller_user(reseller_user_ctx):
 
 def test_contacts_page_degrades_for_reseller_user(db_session, reseller_user_ctx):
     p, captured = _capture_render(web_reseller_contacts)
-    with p, patch.object(
-        web_reseller_contacts,
-        "_require_reseller_context",
-        return_value=reseller_user_ctx,
+    with (
+        p,
+        patch.object(
+            web_reseller_contacts,
+            "_require_reseller_context",
+            return_value=reseller_user_ctx,
+        ),
     ):
         web_reseller_contacts.reseller_contacts(_request(), db_session)
     assert captured["context"]["contacts"] == []
@@ -189,10 +210,13 @@ def test_contacts_page_degrades_for_reseller_user(db_session, reseller_user_ctx)
 
 def test_contacts_create_rejected_for_reseller_user(db_session, reseller_user_ctx):
     p, captured = _capture_render(web_reseller_contacts)
-    with p, patch.object(
-        web_reseller_contacts,
-        "_require_reseller_context",
-        return_value=reseller_user_ctx,
+    with (
+        p,
+        patch.object(
+            web_reseller_contacts,
+            "_require_reseller_context",
+            return_value=reseller_user_ctx,
+        ),
     ):
         resp = web_reseller_contacts.reseller_contacts_create(
             _request(), db_session, full_name="X", contact_type="billing"
@@ -205,6 +229,9 @@ def test_contacts_create_rejected_for_reseller_user(db_session, reseller_user_ct
 
 
 def test_mfa_methods_helper_subscriber_path(db_session):
-    ctx = {"principal_type": "subscriber", "principal_id": "00000000-0000-0000-0000-000000000001"}
+    ctx = {
+        "principal_type": "subscriber",
+        "principal_id": "00000000-0000-0000-0000-000000000001",
+    }
     # Just must not raise and must scope by subscriber_id.
     assert web_reseller_routes._reseller_mfa_methods(db_session, ctx) == []

@@ -46,13 +46,12 @@ def _scoped_customer(context) -> dict | None:
     return {"subscriber_id": str(subscriber.id)}
 
 
-_NO_CONTACTS_NOTICE = (
-    "Contact management isn't available for this reseller login yet."
-)
+_NO_CONTACTS_NOTICE = "Contact management isn't available for this reseller login yet."
 
 
 def _page_context(request: Request, context, db: Session, **extra) -> dict:
     customer = _scoped_customer(context)
+    contacts_page: dict
     if customer is None:
         contacts_page = {
             "subscriber": None,
