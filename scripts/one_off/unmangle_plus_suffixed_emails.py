@@ -102,9 +102,7 @@ def main() -> None:
 
         # Candidate mangled rows.
         candidates = (
-            db.query(Subscriber)
-            .filter(Subscriber.email.op("~")(r"\+[0-9]+@"))
-            .all()
+            db.query(Subscriber).filter(Subscriber.email.op("~")(r"\+[0-9]+@")).all()
         )
         # Postgres regex above pre-filters; re-validate in Python for portability
         # and to compute the stripped address.

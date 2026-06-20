@@ -29,7 +29,7 @@ def _sub(db, email: str, **kw) -> Subscriber:
     return sub
 
 
-def _local_cred(db, *, subscriber=None, system_user=None, username, password="secret"):
+def _local_cred(db, *, subscriber=None, system_user=None, username, password="secret"):  # noqa: S107  # test fixture credential, not a real secret
     cred = UserCredential(
         subscriber_id=subscriber.id if subscriber else None,
         system_user_id=system_user.id if system_user else None,
@@ -52,11 +52,7 @@ def test_two_subscribers_can_share_an_email(db_session):
     a = _sub(db_session, shared)
     b = _sub(db_session, shared)
     assert a.id != b.id
-    rows = (
-        db_session.query(Subscriber)
-        .filter(Subscriber.email == shared)
-        .all()
-    )
+    rows = db_session.query(Subscriber).filter(Subscriber.email == shared).all()
     assert {r.id for r in rows} == {a.id, b.id}
 
 

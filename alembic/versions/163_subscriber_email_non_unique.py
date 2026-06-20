@@ -51,9 +51,7 @@ def _unique_indexes_on_email(inspector) -> list[str]:
     return [
         ix["name"]
         for ix in inspector.get_indexes(TABLE)
-        if ix.get("name")
-        and ix.get("unique")
-        and ix.get("column_names") == [COLUMN]
+        if ix.get("name") and ix.get("unique") and ix.get("column_names") == [COLUMN]
     ]
 
 

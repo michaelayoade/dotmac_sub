@@ -917,9 +917,7 @@ def test_waived_installment_is_not_double_counted(db_session, subscriber):
     db_session.refresh(arrangement)
     before = arrangement.installments_paid
 
-    payment_arrangements.record_installment_payment(
-        db_session, str(installments[0].id)
-    )
+    payment_arrangements.record_installment_payment(db_session, str(installments[0].id))
 
     db_session.refresh(arrangement)
     db_session.refresh(installments[0])

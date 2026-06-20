@@ -54,11 +54,7 @@ def _has_index(table: str, name: str) -> bool:
 
 
 def _check_names(table: str) -> set[str]:
-    return {
-        c["name"]
-        for c in _insp().get_check_constraints(table)
-        if c.get("name")
-    }
+    return {c["name"] for c in _insp().get_check_constraints(table) if c.get("name")}
 
 
 def upgrade() -> None:

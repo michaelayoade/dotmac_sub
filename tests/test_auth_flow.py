@@ -96,7 +96,9 @@ def test_login_rejects_unsupported_provider(db_session, person):
     assert exc.value.status_code == 400
 
 
-def test_login_local_uses_username_not_subscriber_email(db_session, person, monkeypatch):
+def test_login_local_uses_username_not_subscriber_email(
+    db_session, person, monkeypatch
+):
     # Subscriber email is non-unique contact info, not a login key. Login must
     # use the credential username; the subscriber email must NOT authenticate.
     monkeypatch.setenv("JWT_SECRET", "test-secret")
@@ -124,7 +126,9 @@ def test_login_local_uses_username_not_subscriber_email(db_session, person, monk
     assert exc.value.status_code == 401
 
 
-def test_login_radius_uses_username_not_subscriber_email(monkeypatch, db_session, person):
+def test_login_radius_uses_username_not_subscriber_email(
+    monkeypatch, db_session, person
+):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     person.email = "radius-login@example.com"
     called = {"username": None}
