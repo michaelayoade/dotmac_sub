@@ -2004,6 +2004,8 @@ def _priced_public_ip_addon_by_prefix(db: Session, prefix_length: int) -> AddOn 
 def _priced_public_ip_addons_for_routes(
     db: Session,
     desired: list[tuple[str, int, int]],
+    *,
+    require: bool = True,
 ) -> dict[int, AddOn]:
     addons: dict[int, AddOn] = {}
     for cidr, prefix_length, _metric in desired:
@@ -2011,6 +2013,11 @@ def _priced_public_ip_addons_for_routes(
             continue
         add_on = _priced_public_ip_addon_by_prefix(db, prefix_length)
         if add_on is None:
+            if not require:
+                # Grandfathered/existing route with no priced add-on: resolve
+                # what exists, skip what doesn't (the new-route requirement is
+                # enforced earlier in sync_additional_routes_for_subscription).
+                continue
             raise ValueError(
                 f"Additional routed IP block {cidr} requires an active "
                 f"/{prefix_length} public IP add-on with a recurring price."
@@ -2046,7 +2053,6 @@ def sync_additional_routes_for_subscription(
         subscription_obj=subscription_obj,
         desired_cidrs=list(desired_map),
     )
-    _priced_public_ip_addons_for_routes(db, desired)
     existing = (
         db.query(SubscriberAdditionalRoute)
         .filter(
@@ -2055,6 +2061,16 @@ def sync_additional_routes_for_subscription(
         .all()
     )
     existing_by_cidr = {str(route.cidr): route for route in existing}
+    # Only NEW routes require a priced /30 public IP add-on. Existing routes
+    # (already provisioned, possibly migrated/legacy reserved guard rows) are
+    # grandfathered so an admin can re-save the subscription form without an
+    # add-on being required for a route that already exists.
+    new_desired = [
+        (cidr, prefix_length, metric)
+        for cidr, prefix_length, metric in desired
+        if cidr not in existing_by_cidr
+    ]
+    _priced_public_ip_addons_for_routes(db, new_desired)
 
     for cidr, (prefix_length, metric) in desired_map.items():
         route = existing_by_cidr.get(cidr)
@@ -2095,7 +2111,7 @@ def sync_public_ip_addons_for_routes(
     desired_counts: dict[int, int] = {}
     for _cidr, prefix_length, _metric in routes:
         desired_counts[prefix_length] = desired_counts.get(prefix_length, 0) + 1
-    desired_addons = _priced_public_ip_addons_for_routes(db, routes)
+    desired_addons = _priced_public_ip_addons_for_routes(db, routes, require=False)
     active_rows = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
