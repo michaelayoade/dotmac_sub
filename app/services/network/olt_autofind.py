@@ -20,6 +20,7 @@ from app.services import tr069 as tr069_service
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
+from app.services.network.ont_status import set_authorization_status
 from app.services.web_network_ont_autofind import _find_ont_by_serial
 
 
@@ -82,7 +83,7 @@ def persist_authorized_ont_inventory(
     ont.port = port
     ont.external_id = str(ont_id)
     ont.olt_status = OnuOnlineStatus.offline
-    ont.authorization_status = OntAuthorizationStatus.authorized
+    set_authorization_status(ont, OntAuthorizationStatus.authorized, strict=False)
     acs_server_id = tr069_service.resolve_acs_server_for_ont(
         db, ont=ont, olt_id=str(olt.id)
     )

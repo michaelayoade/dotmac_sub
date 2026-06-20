@@ -339,10 +339,14 @@ def decommission_ont(
 
     # Step 6: Mark ONT as decommissioned
     from app.models.network import OnuOnlineStatus
+    from app.services.network.ont_status import (
+        clear_authorization_status,
+        clear_provisioning_status,
+    )
 
     ont.is_active = False
-    ont.authorization_status = None  # type: ignore[assignment]  # Clear status
-    ont.provisioning_status = None  # type: ignore[assignment]
+    clear_authorization_status(ont, reason="decommission")
+    clear_provisioning_status(ont, reason="decommission")
     ont.olt_status = OnuOnlineStatus.offline
     ont.external_id = None  # Clear OLT registration ID
     # Store decommission metadata in notes
