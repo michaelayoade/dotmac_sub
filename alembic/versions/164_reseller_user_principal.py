@@ -1,13 +1,11 @@
 """Layer 3 phase 0 — reseller_user as a first-class auth principal (additive).
 
-Revision ID: 163_reseller_user_principal
-Revises: 161_ip_pool_utilization_snapshots
+Revision ID: 164_reseller_user_principal
+Revises: 163_subscriber_email_non_unique
 Create Date: 2026-06-20
 
-DEPLOY NOTE — chain after #316: if PR #316's `162_subscriber_email_non_unique`
-lands first, this revision and that one both descend from 161 → two heads.
-Re-point this `down_revision` to 162 (or add a merge revision) before deploy.
-Run `alembic current` / `alembic heads` IN THE CONTAINER first.
+Chained after #316's 163_subscriber_email_non_unique (live main head), giving a
+single linear alembic head.
 
 Additive only — no behaviour change. Reseller portal logins can become a
 first-class `ResellerUser` principal instead of a fake `Subscriber`; the
@@ -30,8 +28,8 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision = "163_reseller_user_principal"
-down_revision = "161_ip_pool_utilization_snapshots"
+revision = "164_reseller_user_principal"
+down_revision = "163_subscriber_email_non_unique"
 branch_labels = None
 depends_on = None
 
