@@ -41,7 +41,10 @@ from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
-from app.tasks.ip_utilization import snapshot_ip_pool_utilization
+from app.tasks.ip_utilization import (
+    prune_ip_pool_utilization_snapshots,
+    snapshot_ip_pool_utilization,
+)
 from app.tasks.monitoring_cleanup import (
     cleanup_old_device_metrics as cleanup_device_metrics,
 )
@@ -222,6 +225,7 @@ __all__ = [
     "deliver_notification_queue",
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",
+    "prune_ip_pool_utilization_snapshots",
     "run_topology_reconcile",
     "warm_topology_status",
     "run_lldp_topology_poll",
