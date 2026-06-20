@@ -471,6 +471,44 @@ def catalog_subscription_create(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
+@router.get("/subscriptions/ipam/ipv4-available")
+def catalog_subscription_ipv4_available(
+    selector: str = Query(...),
+    current_ip: str | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        available_ips = (
+            web_catalog_subscriptions_service.available_ipv4_options_for_selector(
+                db,
+                selector=selector,
+                current_ip=current_ip,
+            )
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"available_ips": available_ips})
+
+
+@router.get("/subscriptions/ipam/route-children")
+def catalog_subscription_route_children(
+    parent_cidr: str = Query(...),
+    prefix: int = Query(...),
+    subscriber_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        children = web_catalog_subscriptions_service.route_child_options_for_parent(
+            db,
+            parent_cidr=parent_cidr,
+            prefix=prefix,
+            current_subscriber_id=subscriber_id,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"children": children})
+
+
 @router.get("/subscriptions/{subscription_id}/edit", response_class=HTMLResponse)
 def catalog_subscription_edit(
     request: Request, subscription_id: str, db: Session = Depends(get_db)

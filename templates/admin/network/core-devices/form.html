@@ -115,9 +115,10 @@
                         <select name="vendor" id="vendor"
                             class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select vendor</option>
-                            <option value="Huawei" {% if device and device.vendor == 'Huawei' %}selected{% endif %}>Huawei</option>
-                            <option value="Cisco" {% if device and device.vendor == 'Cisco' %}selected{% endif %}>Cisco</option>
-                            <option value="MikroTik" {% if device and device.vendor == 'MikroTik' %}selected{% endif %}>MikroTik</option>
+                            {% set selected_vendor = form_data.vendor if form_data else (device.vendor if device else '') %}
+                            {% for option in ['Huawei', 'Cisco', 'MikroTik', 'Ubiquiti'] %}
+                            <option value="{{ option }}" {% if selected_vendor == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
                         </select>
                     </div>
 

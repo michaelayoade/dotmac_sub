@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
+    AddOn,
     ConnectionType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.collections import DunningCase, DunningCaseStatus
@@ -394,6 +396,17 @@ def _build_audit_activity_items(
     return items
 
 
+def get_customer_audit_activity_items(
+    db: Session, customer_id: str, limit: int = 5
+) -> list[dict[str, object]]:
+    """Return recent structured audit activity for a customer edit surface."""
+    return _build_audit_activity_items(
+        db,
+        [("subscriber", str(customer_id))],
+        limit=limit,
+    )
+
+
 def _build_activity_items(
     db: Session,
     entity_type: str,
@@ -710,6 +723,8 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
             "access_credentials": [],
             "cpe_devices": [],
             "ip_assignments": [],
+            "active_additional_routes": [],
+            "active_additional_route_rows": [],
             "ont_assignments": [],
             "linked_resellers": [],
             "relationship_summary": empty_summary,
@@ -776,6 +791,50 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         .limit(10)
         .all()
     )
+    active_additional_routes = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id.in_(account_ids))
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .order_by(SubscriberAdditionalRoute.cidr.asc())
+        .all()
+    )
+    active_public_ip_addons = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .filter(Subscription.subscriber_id.in_(account_ids))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .filter(AddOn.ip_is_public.is_(True))
+        .all()
+    )
+    addon_qty_by_prefix: dict[int, int] = {}
+    for sub_addon, add_on in active_public_ip_addons:
+        if add_on.ip_prefix_length is None:
+            continue
+        prefix = int(add_on.ip_prefix_length)
+        addon_qty_by_prefix[prefix] = addon_qty_by_prefix.get(prefix, 0) + int(
+            sub_addon.quantity or 0
+        )
+    route_counts_by_prefix: dict[int, int] = {}
+    for route in active_additional_routes:
+        prefix = int(route.prefix_length)
+        route_counts_by_prefix[prefix] = route_counts_by_prefix.get(prefix, 0) + 1
+    active_additional_route_rows = []
+    for route in active_additional_routes:
+        prefix = int(route.prefix_length)
+        qty = addon_qty_by_prefix.get(prefix, 0)
+        billing_ok = qty >= route_counts_by_prefix.get(prefix, 0)
+        active_additional_route_rows.append(
+            {
+                "cidr": route.cidr,
+                "prefix_length": prefix,
+                "type_label": "Additional IP" if prefix == 32 else "Routed IP Block",
+                "billing_ok": billing_ok,
+                "billing_label": f"Billed /{prefix} IP x{qty}"
+                if billing_ok
+                else "Billing add-on missing",
+            }
+        )
     ont_assignments = (
         db.query(OntAssignment)
         .options(
@@ -846,6 +905,8 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         "access_credentials": access_credentials,
         "cpe_devices": cpe_devices,
         "ip_assignments": ip_assignments,
+        "active_additional_routes": active_additional_routes,
+        "active_additional_route_rows": active_additional_route_rows,
         "ont_assignments": ont_assignments,
         "linked_resellers": linked_resellers,
         "relationship_summary": relationship_summary,

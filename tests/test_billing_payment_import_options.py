@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from app.models.audit import AuditActorType
-from app.models.billing import Payment
+from app.models.billing import Payment, PaymentMethodType
 from app.schemas.audit import AuditEventCreate
+from app.schemas.billing import PaymentMethodCreate
 from app.services import audit as audit_service
+from app.services import billing as billing_service
 from app.services.web_billing_payments import (
     import_payments,
     list_payment_import_history,
     list_payment_import_history_filtered,
     normalize_import_rows,
+    process_payment_create,
     render_payment_import_history_csv,
 )
 
@@ -107,6 +110,51 @@ def test_import_payments_assigns_selected_payment_method_type(db_session, subscr
     assert payment is not None
     assert payment.payment_method is not None
     assert payment.payment_method.method_type.value == "transfer"
+
+
+def test_create_payment_assigns_selected_payment_method_type(db_session, subscriber):
+    result = process_payment_create(
+        db_session,
+        account_id=str(subscriber.id),
+        amount="700",
+        currency="NGN",
+        status="succeeded",
+        invoice_id=None,
+        collection_account_id=None,
+        payment_method_id="type:transfer",
+        memo="TRF-700",
+    )
+
+    payment = result["payment"]
+    assert payment.payment_method is not None
+    assert payment.payment_method.method_type == PaymentMethodType.transfer
+
+
+def test_create_payment_assigns_saved_payment_method(db_session, subscriber):
+    method = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            method_type=PaymentMethodType.cash,
+            label="Cash office",
+        ),
+    )
+
+    result = process_payment_create(
+        db_session,
+        account_id=str(subscriber.id),
+        amount="500",
+        currency="NGN",
+        status="succeeded",
+        invoice_id=None,
+        collection_account_id=None,
+        payment_method_id=f"id:{method.id}",
+        memo="Cash receipt",
+    )
+
+    payment = result["payment"]
+    assert payment.payment_method_id == method.id
+    assert payment.payment_method.label == "Cash office"
 
 
 def test_list_payment_import_history_reads_audit_metadata(db_session):

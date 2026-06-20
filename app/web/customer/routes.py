@@ -32,6 +32,7 @@ from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services.audit_helpers import log_audit_event
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -61,6 +62,45 @@ def _format_bps(value: float | int | None) -> str:
         unit_index += 1
     precision = 0 if unit_index == 0 else (2 if amount < 10 else 1)
     return f"{amount:.{precision}f} {units[unit_index]}"
+
+
+def _profile_value(value):
+    if hasattr(value, "value"):
+        return value.value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _profile_audit_snapshot(subscriber) -> dict[str, object]:
+    metadata = dict(getattr(subscriber, "metadata_", None) or {})
+    return {
+        "first_name": subscriber.first_name,
+        "last_name": subscriber.last_name,
+        "display_name": subscriber.display_name,
+        "email": subscriber.email,
+        "phone": subscriber.phone,
+        "date_of_birth": _profile_value(subscriber.date_of_birth),
+        "gender": _profile_value(subscriber.gender),
+        "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
+        "address_line1": subscriber.address_line1,
+        "address_line2": subscriber.address_line2,
+        "city": subscriber.city,
+        "region": subscriber.region,
+        "postal_code": subscriber.postal_code,
+        "country_code": subscriber.country_code,
+        "billing_notifications": bool(metadata.get("billing_notifications")),
+        "sms_updates": bool(metadata.get("sms_updates")),
+        "email_verified": subscriber.email_verified,
+    }
+
+
+def _profile_audit_changes(before: dict, after: dict) -> dict[str, dict[str, object]]:
+    changes: dict[str, dict[str, object]] = {}
+    for key in sorted(set(before) | set(after)):
+        if before.get(key) != after.get(key):
+            changes[key] = {"from": before.get(key), "to": after.get(key)}
+    return changes
 
 
 def _load_initial_bandwidth_stats(
@@ -1151,9 +1191,14 @@ def customer_update_profile(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id:
+        from app.models.subscriber import Subscriber
         from app.services.web_customer_actions import update_customer_profile
 
-        update_customer_profile(
+        subscriber_before = db.get(Subscriber, subscriber_id)
+        before_snapshot = (
+            _profile_audit_snapshot(subscriber_before) if subscriber_before else {}
+        )
+        updated = update_customer_profile(
             db,
             subscriber_id=subscriber_id,
             first_name=first_name,
@@ -1173,6 +1218,26 @@ def customer_update_profile(
             billing_notifications=billing_notifications,
             sms_updates=sms_updates,
         )
+        if updated is not None:
+            after_snapshot = _profile_audit_snapshot(updated)
+            changes = _profile_audit_changes(before_snapshot, after_snapshot)
+            if changes:
+                try:
+                    log_audit_event(
+                        db=db,
+                        request=request,
+                        action="portal_profile_update",
+                        entity_type="subscriber",
+                        entity_id=str(subscriber_id),
+                        actor_id=str(subscriber_id),
+                        metadata={"changes": changes, "source": "customer_portal"},
+                    )
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "Unable to log customer portal profile audit for %s",
+                        subscriber_id,
+                    )
 
     # POST-Redirect-GET: bounce to the profile page with a success flag so a
     # browser refresh after save can't accidentally resubmit the form.
@@ -1588,7 +1653,6 @@ def customer_billing_topup(
     if not page_data.get("payment_options"):
         page_data["payment_options"] = [
             {"provider_type": "paystack", "label": "Pay with Paystack"},
-            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
         ]
     return templates.TemplateResponse(
         "customer/billing/topup.html",

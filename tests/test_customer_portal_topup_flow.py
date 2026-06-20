@@ -105,7 +105,6 @@ def test_get_topup_page_includes_limits_and_public_key(
     assert page["max_amount"] == 750000
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
-        {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
     ]
 
 
@@ -186,7 +185,6 @@ def test_get_topup_page_includes_active_online_provider_options(
 
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
-        {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
     ]
 
 
