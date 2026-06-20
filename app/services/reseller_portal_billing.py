@@ -31,6 +31,7 @@ from app.services.customer_portal_flow_payments import (
     _resolve_payment_provider,
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ def verify_and_record_consolidated_payment(
     if existing is not None:
         intent.completed_payment_id = existing.id
         intent.completed_at = datetime.now(UTC)
-        intent.status = "completed"
+        set_topup_intent_status(intent, "completed", source="reseller_existing_payment")
         intent.actual_amount = amount
         intent.external_id = external_id
         db.commit()
@@ -235,7 +236,7 @@ def verify_and_record_consolidated_payment(
 
     intent.completed_payment_id = payment.id
     intent.completed_at = datetime.now(UTC)
-    intent.status = "completed"
+    set_topup_intent_status(intent, "completed", source="reseller_new_payment")
     intent.actual_amount = amount
     intent.external_id = external_id
     db.commit()

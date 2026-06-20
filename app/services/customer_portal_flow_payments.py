@@ -37,6 +37,7 @@ from app.services.customer_portal_context import (
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.settings_spec import resolve_value
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 _TOPUP_INTENT_TTL = timedelta(minutes=30)
@@ -314,7 +315,7 @@ def _finalize_topup_intent(
     intent.completed_payment_id = payment.id
     intent.external_id = external_id
     intent.actual_amount = actual_amount
-    intent.status = "completed"
+    set_topup_intent_status(intent, "completed", source="portal_verify")
     intent.completed_at = datetime.now(UTC)
     intent.metadata_ = metadata
     db.add(intent)
@@ -960,7 +961,7 @@ def _cancel_pending_direct_transfer_intents(db: Session, account_id: uuid.UUID) 
     ).all()
     changed = False
     for intent in pending:
-        intent.status = "canceled"
+        set_topup_intent_status(intent, "canceled", source="portal_replace")
         metadata = dict(intent.metadata_ or {})
         metadata["canceled_reason"] = "replaced_by_new_topup"
         intent.metadata_ = metadata
@@ -1094,7 +1095,7 @@ async def submit_direct_transfer_topup(
         paid_at=datetime.now(UTC),
         file_path=path,
     )
-    intent.status = "submitted"
+    set_topup_intent_status(intent, "submitted", source="portal_proof_submit")
     metadata = dict(intent.metadata_ or {})
     metadata["payment_proof_id"] = proof.get("id")
     metadata["selected_bank_account"] = {
