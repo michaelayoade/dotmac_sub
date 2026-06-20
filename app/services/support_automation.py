@@ -246,7 +246,14 @@ def _apply_action(rule: TicketAutomationRule, ticket: Ticket) -> None:
     elif action == AutomationActionType.set_status:
         value = payload.get("status")
         if value:
-            ticket.status = str(value).strip()
+            from app.services.support import transition_ticket_status
+
+            try:
+                # Automation cannot reopen a terminal ticket or set a garbage
+                # status; both are dropped (audited) rather than persisted.
+                transition_ticket_status(ticket, value, source="automation")
+            except ValueError:
+                logger.warning("automation set_status ignored invalid status %r", value)
     elif action == AutomationActionType.set_due_in_hours:
         hours_raw = payload.get("hours")
         if hours_raw is not None:
