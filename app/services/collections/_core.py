@@ -1825,6 +1825,23 @@ class PrepaidEnforcement(ListResponseMixin):
         return len(cases)
 
 
+def _clear_prepaid_dunning_flags(db: Session, account_id: str) -> None:
+    """Clear the prepaid low-balance / scheduled-deactivation timestamps.
+
+    A payment or top-up that restores the account makes these stale; clearing
+    them here — instead of waiting for the next collections sweep — stops a
+    just-paid customer from being deactivated on a pending timer. The sweep
+    re-sets them if the account is still below its minimum balance.
+    """
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if account is not None and (
+        account.prepaid_low_balance_at is not None
+        or account.prepaid_deactivation_at is not None
+    ):
+        account.prepaid_low_balance_at = None
+        account.prepaid_deactivation_at = None
+
+
 def restore_account_services(
     db: Session,
     account_id: str,
@@ -1838,6 +1855,7 @@ def restore_account_services(
         invoice_id=invoice_id,
         commit=False,
     )
+    _clear_prepaid_dunning_flags(db, account_id)
     return restored
 
 
