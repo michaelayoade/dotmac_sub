@@ -346,6 +346,17 @@ def _reset_singletons():
         reset_dispatcher()
     except ImportError:
         pass
+    # Clear the OpenBao secret cache. _fetch_secret_data is lru_cache'd with
+    # id(httpx.get) as a cache-buster key; CPython recycles id() values across
+    # GC'd monkeypatched functions, so a cached 200 payload from an earlier test
+    # can leak into a later one and skip the live httpx call (e.g. a missing
+    # secret then trips the field-not-found 500 branch instead of returning 404).
+    try:
+        from app.services import secrets
+
+        secrets.clear_cache()
+    except ImportError:
+        pass
 
 
 @pytest.fixture(autouse=True)
