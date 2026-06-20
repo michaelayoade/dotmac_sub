@@ -1659,8 +1659,9 @@ def build_beat_schedule() -> dict:
         # subsystem was removed (it was never wired — the queue had no
         # producers and the real write paths bypassed the breaker, so it gave
         # false confidence). OLT writes happen directly; reconciliation/cleanup
-        # is handled by the ONT reconcile sweeper. See the model note on
-        # QueuedOltOperation for the inert schema pending a drop migration.
+        # is handled by the ONT reconcile sweeper. The inert schema
+        # (queued_olt_operations table + OLTDevice circuit_* columns) was
+        # dropped in migration 162.
 
         # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
         zabbix_sync_enabled_by_default = _zabbix_configured_default()
