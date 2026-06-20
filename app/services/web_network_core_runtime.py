@@ -24,6 +24,28 @@ from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
+# DeviceStatus mixes poller-observed states (online/offline/degraded) with the
+# operator-set admin state (maintenance) in one column. Pollers must go through
+# this gate so a device an operator put into maintenance is never silently
+# flipped back online/offline/degraded by a health check.
+_OBSERVED_DEVICE_STATUSES = frozenset(
+    {DeviceStatus.online, DeviceStatus.offline, DeviceStatus.degraded}
+)
+
+
+def set_device_observed_status(device: NetworkDevice, observed: DeviceStatus) -> bool:
+    """Apply a poller-observed device status. Returns True if it changed.
+
+    Refuses to overwrite the admin ``maintenance`` state — that's an operator
+    override the pollers do not own. Same-status writes are a no-op.
+    """
+    if device.status == DeviceStatus.maintenance:
+        return False
+    if device.status == observed:
+        return False
+    device.status = observed
+    return True
+
 
 def _maybe_trigger_olt_retry(
     db: Session, device: NetworkDevice, check_type: str
@@ -264,14 +286,14 @@ def ping_device(
         device.ping_down_since = None
         # Keep degraded when SNMP is still down, otherwise mark online.
         if device.snmp_enabled and device.last_snmp_ok is False:
-            device.status = DeviceStatus.degraded
+            set_device_observed_status(device, DeviceStatus.degraded)
         else:
-            device.status = DeviceStatus.online
+            set_device_observed_status(device, DeviceStatus.online)
     else:
         if device.ping_down_since is None:
             device.ping_down_since = now
         if _delay_elapsed(device.ping_down_since, now, delay_minutes):
-            device.status = DeviceStatus.offline
+            set_device_observed_status(device, DeviceStatus.offline)
         # Trigger immediate retry if this is a new failure
         if was_healthy:
             _maybe_trigger_olt_retry(db, device, "ping")
@@ -327,9 +349,9 @@ def mark_discovery_failure(db: Session, device: NetworkDevice) -> None:
         device.snmp_down_since = now
     if _delay_elapsed(device.snmp_down_since, now, delay_minutes):
         if device.ping_enabled and device.last_ping_ok is False:
-            device.status = DeviceStatus.offline
+            set_device_observed_status(device, DeviceStatus.offline)
         elif device.status != DeviceStatus.offline:
-            device.status = DeviceStatus.degraded
+            set_device_observed_status(device, DeviceStatus.degraded)
     db.flush()
     _recompute_parent_rollup(db, device)
     db.flush()
@@ -375,13 +397,13 @@ def _recompute_parent_rollup(db: Session, device: NetworkDevice) -> None:
         )
         if parent.status != DeviceStatus.offline:
             if has_child_impact:
-                parent.status = DeviceStatus.degraded
+                set_device_observed_status(parent, DeviceStatus.degraded)
             elif (
                 parent.status == DeviceStatus.degraded
                 and parent.ping_down_since is None
                 and (not parent.snmp_enabled or parent.snmp_down_since is None)
             ):
-                parent.status = DeviceStatus.online
+                set_device_observed_status(parent, DeviceStatus.online)
         parent_id = parent.parent_device_id
 
 
