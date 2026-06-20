@@ -587,7 +587,13 @@ def _resolve_login_credential(
     provider: AuthProvider,
     identifier: str,
 ) -> UserCredential | None:
-    """Resolve active credential using either username or subscriber email."""
+    """Resolve active credential by login identity.
+
+    Login identity is the credential ``username`` (customers and resellers) or,
+    for admins, the ``system_users.email``. Subscriber email is deliberately NOT
+    a login key: it is non-unique contact information (many customers share an
+    address), so matching on it would be ambiguous.
+    """
     normalized_identifier = identifier.strip()
     if not normalized_identifier:
         return None
@@ -595,13 +601,11 @@ def _resolve_login_credential(
     return cast(
         UserCredential | None,
         db.query(UserCredential)
-        .outerjoin(Subscriber, Subscriber.id == UserCredential.subscriber_id)
         .outerjoin(SystemUser, SystemUser.id == UserCredential.system_user_id)
         .filter(UserCredential.provider == provider)
         .filter(UserCredential.is_active.is_(True))
         .filter(
             (UserCredential.username == normalized_identifier)
-            | (func.lower(Subscriber.email) == normalized_identifier.lower())
             | (func.lower(SystemUser.email) == normalized_identifier.lower())
         )
         .order_by(UserCredential.created_at.desc())
@@ -1410,19 +1414,27 @@ def request_password_reset(
     Does not raise an error if email doesn't exist (security best practice).
     """
     normalized_email = email.strip().lower()
-    subscriber = (
-        db.query(Subscriber)
+    # Email is non-unique contact info, so a reset-by-email request can match
+    # several customers. Only accounts that actually have a local login
+    # credential can be reset; join to it directly and, if the address is shared
+    # by more than one credentialed account, pick the most recent deterministically.
+    subscriber_rows = (
+        db.query(Subscriber, UserCredential)
+        .join(UserCredential, UserCredential.subscriber_id == Subscriber.id)
         .filter(func.lower(Subscriber.email) == normalized_email)
-        .first()
+        .filter(UserCredential.provider == AuthProvider.local)
+        .filter(UserCredential.is_active.is_(True))
+        .order_by(UserCredential.created_at.desc())
+        .all()
     )
-    if subscriber:
-        credential = (
-            db.query(UserCredential)
-            .filter(UserCredential.subscriber_id == subscriber.id)
-            .filter(UserCredential.provider == AuthProvider.local)
-            .filter(UserCredential.is_active.is_(True))
-            .first()
-        )
+    if subscriber_rows:
+        if len(subscriber_rows) > 1:
+            logger.warning(
+                "Password reset for shared email matched %d credentialed accounts; "
+                "using most recent credential",
+                len(subscriber_rows),
+            )
+        subscriber, credential = subscriber_rows[0]
         if credential:
             effective_ttl = (
                 ttl_minutes
@@ -1678,9 +1690,9 @@ def set_subscriber_email(
     Single source of truth shared by the web profile form and the mobile ``/me``
     update so the rule "a changed/added email must be re-verified, with a fresh
     link dispatched" lives in exactly one place. No-op (returns ``False``) when
-    the email is blank or unchanged. Raises ``HTTPException(409)`` when another
-    subscriber already uses the address (the column is unique). Returns ``True``
-    when the email changed (and a verification email was dispatched).
+    the email is blank or unchanged. Returns ``True`` when the email changed (and
+    a verification email was dispatched). Email is non-unique contact info, so
+    sharing an address with another subscriber is allowed and not blocked.
     """
     new_email = (new_email or "").strip()
     if not new_email:
@@ -1690,16 +1702,6 @@ def set_subscriber_email(
         return False
     if new_email.lower() == (subscriber.email or "").strip().lower():
         return False
-    clash = db.scalar(
-        sa_select(Subscriber.id).where(
-            func.lower(Subscriber.email) == new_email.lower(),
-            Subscriber.id != subscriber.id,
-        )
-    )
-    if clash is not None:
-        raise HTTPException(
-            status_code=409, detail="That email address is already in use."
-        )
 
     from app.schemas.subscriber import SubscriberUpdate
     from app.services import subscriber as subscriber_service

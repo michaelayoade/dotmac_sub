@@ -1033,13 +1033,8 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
         email = (data.get("email") or "").strip()
         if not email:
             raise ValueError("email is required")
-        existing = (
-            db.query(Subscriber)
-            .filter(func.lower(Subscriber.email) == email.lower())
-            .first()
-        )
-        if existing:
-            raise ValueError(f"A customer with email {email} already exists.")
+        # Email is contact info, not an identity — duplicates are valid
+        # (customers under one reseller often share a contact address).
         person = _create_subscriber(
             db=db,
             payload={
@@ -1132,15 +1127,7 @@ def create_customer_from_form(
         last_name = _require_text(
             form_data.get("last_name"), "Last name", max_length=80
         )
-        existing = (
-            db.query(Subscriber)
-            .filter(func.lower(Subscriber.email) == normalized_email.lower())
-            .first()
-        )
-        if existing:
-            raise ValueError(
-                f"A customer with email {normalized_email} already exists."
-            )
+        # Email is contact info, not an identity — duplicates are valid.
         customer = _create_subscriber(
             db=db,
             payload={
@@ -1343,20 +1330,9 @@ def update_person_customer(
     raw_status = str(status or "").strip().lower()
     should_block_subscriptions = raw_status == "blocked"
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    # Email is contact info, not an identity — duplicates across customers are
+    # valid, so editing one to match another's address is allowed.
     normalized_email = _normalize_optional(email)
-    if normalized_email:
-        clash = (
-            db.query(Subscriber)
-            .filter(
-                func.lower(Subscriber.email) == normalized_email.lower(),
-                Subscriber.id != before.id,
-            )
-            .first()
-        )
-        if clash:
-            raise ValueError(
-                f"A customer with email {normalized_email} already exists."
-            )
     active = before.is_active if is_active is None else (is_active == "true")
     normalized_status, active = _normalize_status_for_customer_edit(
         status, is_active=active

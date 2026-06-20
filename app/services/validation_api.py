@@ -71,13 +71,12 @@ def validate_email_unique(
     email: str,
     exclude_id: str | None = None,
 ) -> tuple[bool, str | None]:
-    if not email:
-        return True, None
-    query = db.query(Subscriber).filter(func.lower(Subscriber.email) == email.lower())
-    if exclude_id:
-        query = query.filter(Subscriber.id != exclude_id)
-    if query.first() is not None:
-        return False, "This email is already in use"
+    """Email is contact information, not an identity, and is intentionally
+    non-unique (many customers under one reseller share a contact address).
+    This therefore never blocks. Kept as a no-op so existing callers and the
+    field-validation dispatcher don't need restructuring; login identity
+    uniqueness is enforced on ``user_credentials.username`` instead.
+    """
     return True, None
 
 
