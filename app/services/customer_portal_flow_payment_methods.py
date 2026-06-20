@@ -22,6 +22,7 @@ from app.models.billing import PaymentMethod, PaymentMethodType
 from app.schemas.billing import PaymentMethodCreate, PaymentMethodUpdate
 from app.services import billing as billing_service
 from app.services.common import coerce_uuid
+from app.services.credential_crypto import encrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -153,3 +154,117 @@ def remove(db: Session, account_id: str, method_id: str) -> bool:
         mandate.is_active = False
     db.commit()
     return True
+
+
+# --- Reseller-org-owned cards (Layer 3 #329) -------------------------------
+# A first-class reseller_user login has no backing subscriber, so its saved
+# cards are owned by the reseller org (PaymentMethod.reseller_id) rather than an
+# account. These mirror the account-scoped helpers above, querying/inserting
+# PaymentMethod directly (the generic account-keyed CRUD can't own by reseller).
+
+
+def list_for_reseller(db: Session, reseller_id: str) -> builtins.list[PaymentMethod]:
+    return list(
+        db.scalars(
+            select(PaymentMethod)
+            .where(PaymentMethod.reseller_id == coerce_uuid(reseller_id))
+            .where(PaymentMethod.is_active.is_(True))
+            .where(PaymentMethod.method_type == PaymentMethodType.card)
+            .order_by(PaymentMethod.created_at.desc())
+        ).all()
+    )
+
+
+def _owned_by_reseller(
+    db: Session, reseller_id: str, method_id: str
+) -> PaymentMethod | None:
+    method = db.get(PaymentMethod, coerce_uuid(method_id))
+    if not method or str(method.reseller_id) != str(reseller_id):
+        return None
+    return method
+
+
+def set_default_for_reseller(
+    db: Session, reseller_id: str, method_id: str
+) -> PaymentMethod | None:
+    method = _owned_by_reseller(db, reseller_id, method_id)
+    if method is None:
+        return None
+    db.query(PaymentMethod).filter(
+        PaymentMethod.reseller_id == coerce_uuid(reseller_id),
+        PaymentMethod.id != method.id,
+        PaymentMethod.is_default.is_(True),
+    ).update({"is_default": False})
+    method.is_default = True
+    db.commit()
+    db.refresh(method)
+    return method
+
+
+def remove_for_reseller(db: Session, reseller_id: str, method_id: str) -> bool:
+    method = _owned_by_reseller(db, reseller_id, method_id)
+    if method is None:
+        return False
+    db.delete(method)
+    for mandate in db.scalars(
+        select(AutopayMandate).where(AutopayMandate.payment_method_id == method.id)
+    ).all():
+        mandate.is_active = False
+    db.commit()
+    return True
+
+
+def save_card_for_reseller(
+    db: Session, reseller_id: str, authorization: dict | None
+) -> PaymentMethod | None:
+    """Persist a reseller-org-owned saved card from a Paystack authorization,
+    de-duplicating on the card fingerprint. Mirrors save_card_from_authorization
+    but owns by reseller_id."""
+    if not authorization:
+        return None
+    code = authorization.get("authorization_code")
+    if not code or authorization.get("reusable") is False:
+        return None
+    last4 = authorization.get("last4")
+    brand = authorization.get("brand") or authorization.get("card_type")
+    exp_month = _int(authorization.get("exp_month"))
+    exp_year = _int(authorization.get("exp_year"))
+    fingerprint = (last4, brand, exp_month, exp_year)
+    for existing in list_for_reseller(db, reseller_id):
+        if (
+            existing.last4,
+            existing.brand,
+            existing.expires_month,
+            existing.expires_year,
+        ) == fingerprint:
+            return existing
+    method = PaymentMethod(
+        reseller_id=coerce_uuid(reseller_id),
+        method_type=PaymentMethodType.card,
+        label=card_label(authorization),
+        token=encrypt_credential(code),
+        last4=last4,
+        brand=brand,
+        expires_month=exp_month,
+        expires_year=exp_year,
+    )
+    db.add(method)
+    db.commit()
+    db.refresh(method)
+    return method
+
+
+def capture_card_after_payment_for_reseller(
+    db: Session, reseller_id: str, reference: str, provider_type: str | None
+) -> PaymentMethod | None:
+    """Best-effort reseller-org card capture after a verified Paystack payment."""
+    if provider_type not in (None, "", "paystack"):
+        return None
+    try:
+        from app.services import paystack
+
+        data = paystack.verify_transaction(db, reference)
+        return save_card_for_reseller(db, reseller_id, data.get("authorization"))
+    except Exception:  # noqa: BLE001 - capture is non-critical
+        logger.warning("reseller card capture skipped for %s", reference, exc_info=True)
+        return None
