@@ -201,7 +201,11 @@ class Subscriber(Base):
     domain: Mapped[str | None] = mapped_column(String(120))
     website: Mapped[str | None] = mapped_column(String(255))
 
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # Email is *contact information*, not an identity. It is intentionally
+    # non-unique: many customers under one reseller legitimately share a
+    # contact address (e.g. the reseller owner's email). Login identity lives
+    # in UserCredential.username (and RADIUS); ownership in reseller_id.
+    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     phone: Mapped[str | None] = mapped_column(String(40))
 
