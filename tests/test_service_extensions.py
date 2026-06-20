@@ -221,3 +221,85 @@ def test_subscribers_scope_requires_ids(db_session, subscriber, catalog_offer):
             subscriber_ids=[],
         )
     assert exc.value.status_code == 400
+
+
+def test_subscribers_scope_resolves_customer_identifiers(
+    db_session, subscriber, catalog_offer
+):
+    subscriber.account_number = "ACC-EXT-1"
+    subscriber.splynx_customer_id = 11192
+    subscriber.phone = "08012345678"
+    _sub(db_session, subscriber, catalog_offer)
+
+    by_email = _another_subscriber(db_session)
+    by_email.email = "billing-ext@example.com"
+    _sub(db_session, by_email, catalog_offer)
+    db_session.commit()
+
+    ext = svc.create_extension(
+        db_session,
+        reason="outage",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=1,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[
+            "ACC-EXT-1",
+            "11192",
+            "08012345678",
+            "billing-ext@example.com",
+            str(by_email.id),
+        ],
+    )
+
+    assert set(ext.scope_subscriber_ids or []) == {
+        str(subscriber.id),
+        str(by_email.id),
+    }
+    preview = svc.preview_extension(db_session, ext)
+    assert preview["extendable_count"] == 2
+
+
+def test_subscribers_scope_reports_unknown_customer(
+    db_session, subscriber, catalog_offer
+):
+    _sub(db_session, subscriber, catalog_offer)
+
+    with pytest.raises(HTTPException) as exc:
+        svc.create_extension(
+            db_session,
+            reason="outage",
+            window_start=_WIN_START,
+            window_end=_WIN_END,
+            days=1,
+            scope_type=ServiceExtensionScope.subscribers,
+            subscriber_ids=["not-a-customer"],
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Could not find customer: not-a-customer"
+
+
+def test_shared_contact_email_is_ambiguous(db_session):
+    # Post-decoupling, subscribers.email is non-unique: many customers can share
+    # a contact email. Resolving by such an email must refuse as ambiguous
+    # (steering to the internal UUID), not silently pick one.
+    a = Subscriber(first_name="A", last_name="One", email="shared@ext.example")
+    b = Subscriber(first_name="B", last_name="Two", email="shared@ext.example")
+    db_session.add_all([a, b])
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        svc._find_subscriber_by_identifier(db_session, "shared@ext.example")
+    assert exc.value.status_code == 400
+    assert "ambiguous" in exc.value.detail.lower()
+
+
+def test_long_digit_identifier_not_treated_as_splynx_id(db_session):
+    # An 11-digit string exceeds int4; it must NOT hit the splynx_customer_id
+    # branch (which would overflow the int4 column on Postgres → 500). With no
+    # phone match it is simply "not found".
+    with pytest.raises(HTTPException) as exc:
+        svc._find_subscriber_by_identifier(db_session, "99999999999")
+    assert exc.value.status_code == 400
+    assert "could not find" in exc.value.detail.lower()
