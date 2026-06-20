@@ -30,22 +30,44 @@ def _require_reseller_context(request: Request, db: Session):
     return context
 
 
-def _scoped_customer(context) -> dict:
+def _scoped_customer(context) -> dict | None:
     """A customer-shaped dict scoped to the reseller's login subscriber.
 
     Passing only ``subscriber_id`` makes ``customer_portal_contacts`` resolve the
     allowed-subscriber set to exactly that login subscriber, so contacts never
-    leak across resellers or into the reseller's managed customer accounts."""
-    return {"subscriber_id": str(context["subscriber"].id)}
+    leak across resellers or into the reseller's managed customer accounts.
+
+    Returns None for a first-class reseller_user principal (Layer 3): contacts
+    are login-subscriber-keyed, and such a login has no backing subscriber, so
+    the feature degrades to empty/unavailable rather than erroring."""
+    subscriber = context.get("subscriber")
+    if subscriber is None:
+        return None
+    return {"subscriber_id": str(subscriber.id)}
+
+
+_NO_CONTACTS_NOTICE = (
+    "Contact management isn't available for this reseller login yet."
+)
 
 
 def _page_context(request: Request, context, db: Session, **extra) -> dict:
+    customer = _scoped_customer(context)
+    if customer is None:
+        contacts_page = {
+            "subscriber": None,
+            "contacts": [],
+            "contact_types": contacts_service.CONTACT_TYPES,
+        }
+        extra.setdefault("notice", _NO_CONTACTS_NOTICE)
+    else:
+        contacts_page = contacts_service.get_contacts_page(db, customer)
     return {
         "request": request,
         "active_page": "contacts",
         "current_user": context["current_user"],
         "reseller": context["reseller"],
-        **contacts_service.get_contacts_page(db, _scoped_customer(context)),
+        **contacts_page,
         **extra,
     }
 
@@ -64,6 +86,12 @@ def reseller_contacts_create(request: Request, db: Session, **form_fields):
     if not context:
         return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
     customer = _scoped_customer(context)
+    if customer is None:
+        return templates.TemplateResponse(
+            "reseller/contacts/index.html",
+            _page_context(request, context, db, error=_NO_CONTACTS_NOTICE),
+            status_code=400,
+        )
     form = contacts_service.normalize_contact_form(**form_fields)
     try:
         warnings = contacts_service.create_contact(db, customer, form)
@@ -88,6 +116,12 @@ def reseller_contacts_update(
     if not context:
         return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
     customer = _scoped_customer(context)
+    if customer is None:
+        return templates.TemplateResponse(
+            "reseller/contacts/index.html",
+            _page_context(request, context, db, error=_NO_CONTACTS_NOTICE),
+            status_code=400,
+        )
 
     if intent == "delete":
         try:

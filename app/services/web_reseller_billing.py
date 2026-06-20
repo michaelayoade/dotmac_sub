@@ -31,6 +31,16 @@ def _require_reseller_context(request: Request, db: Session):
     return context
 
 
+def _login_subscriber_id(context) -> str | None:
+    """The login subscriber's id for subscriber-keyed features (saved cards).
+
+    None for a first-class reseller_user principal (Layer 3) — those have no
+    backing subscriber, so saved-card flows degrade to empty rather than error.
+    """
+    subscriber = context.get("subscriber")
+    return str(subscriber.id) if subscriber is not None else None
+
+
 def billing_overview(
     request: Request,
     db: Session,
@@ -53,7 +63,7 @@ def billing_overview(
             "reseller": context["reseller"],
             "current_user": context["current_user"],
             "saved_cards": reseller_portal_billing.list_payment_methods(
-                db, str(context["subscriber"].id)
+                db, _login_subscriber_id(context)
             ),
             "billing_activity": reseller_portal_billing.account_activity(
                 db, reseller_id, summary
@@ -71,7 +81,7 @@ def payment_methods(request: Request, db: Session, saved=None, error=None):
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     reseller_id = str(context["reseller"].id)
     page_data = reseller_portal_billing.get_payment_methods_page(
-        db, reseller_id, str(context["subscriber"].id)
+        db, reseller_id, _login_subscriber_id(context)
     )
     return templates.TemplateResponse(
         "reseller/billing/payment_methods.html",
@@ -92,7 +102,7 @@ def payment_method_set_default(request: Request, db: Session, method_id: str):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     ok = reseller_portal_billing.set_default_payment_method(
-        db, str(context["subscriber"].id), method_id
+        db, _login_subscriber_id(context), method_id
     )
     if not ok:
         return RedirectResponse(
@@ -112,7 +122,7 @@ def payment_method_remove(request: Request, db: Session, method_id: str):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     removed = reseller_portal_billing.remove_payment_method(
-        db, str(context["subscriber"].id), method_id
+        db, _login_subscriber_id(context), method_id
     )
     if not removed:
         return RedirectResponse(
@@ -169,7 +179,7 @@ def billing_pay_intent(
             Decimal(amount),
             payment_method_id=payment_method_id or None,
             save_card=save_card,
-            login_subscriber_id=str(context["subscriber"].id),
+            login_subscriber_id=_login_subscriber_id(context),
         )
     except ValueError as exc:
         return templates.TemplateResponse(

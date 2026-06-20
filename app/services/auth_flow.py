@@ -987,6 +987,95 @@ class AuthFlow(ListResponseMixin):
         return method
 
     @staticmethod
+    def reseller_mfa_setup(db: Session, reseller_user_id: str, label: str | None):
+        """TOTP enrolment for a first-class reseller_user principal (Layer 3)."""
+        reseller_user = db.get(ResellerUser, coerce_uuid(reseller_user_id))
+        if not reseller_user:
+            raise HTTPException(status_code=404, detail="Reseller user not found")
+
+        username = reseller_user.email or str(reseller_user.id)
+        credential = (
+            db.query(UserCredential)
+            .filter(UserCredential.reseller_user_id == reseller_user.id)
+            .filter(UserCredential.provider == AuthProvider.local)
+            .first()
+        )
+        if credential and credential.username:
+            username = credential.username
+
+        secret = pyotp.random_base32()
+        encrypted = _encrypt_secret(db, secret)
+        method = (
+            db.query(MFAMethod)
+            .filter(MFAMethod.reseller_user_id == reseller_user.id)
+            .filter(MFAMethod.method_type == MFAMethodType.totp)
+            .filter(MFAMethod.enabled.is_(False))
+            .filter(MFAMethod.verified_at.is_(None))
+            .order_by(MFAMethod.created_at.desc())
+            .first()
+        )
+        if method:
+            method.label = label
+            method.secret = encrypted
+        else:
+            method = MFAMethod(
+                reseller_user_id=reseller_user.id,
+                method_type=MFAMethodType.totp,
+                label=label,
+                secret=encrypted,
+                enabled=False,
+                is_primary=False,
+            )
+            db.add(method)
+        db.commit()
+        db.refresh(method)
+
+        totp = pyotp.TOTP(secret)
+        otpauth_uri = totp.provisioning_uri(name=username, issuer_name=_totp_issuer(db))
+        return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
+
+    @staticmethod
+    def reseller_mfa_confirm(
+        db: Session, method_id: str, code: str, reseller_user_id: str
+    ):
+        method = db.get(MFAMethod, coerce_uuid(method_id))
+        if not method:
+            raise HTTPException(status_code=404, detail="MFA method not found")
+        if str(method.reseller_user_id) != str(reseller_user_id):
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if method.method_type != MFAMethodType.totp:
+            raise HTTPException(status_code=400, detail="Unsupported MFA method")
+
+        ensure_mfa_not_locked(method)
+        secret = _decrypt_secret(db, method.secret or "")
+        totp = pyotp.TOTP(secret)
+        if not totp.verify(code, valid_window=0):
+            record_mfa_failure(db, method)
+            raise HTTPException(status_code=401, detail="Invalid MFA code")
+        record_mfa_success(method)
+
+        db.query(MFAMethod).filter(
+            MFAMethod.reseller_user_id == method.reseller_user_id,
+            MFAMethod.id != method.id,
+            MFAMethod.is_primary.is_(True),
+        ).update({"is_primary": False})
+
+        method.enabled = True
+        method.is_primary = True
+        method.is_active = True
+        method.verified_at = _now()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Primary MFA method already exists for this user",
+            ) from exc
+        db.refresh(method)
+        return method
+
+    @staticmethod
     def mfa_setup(db: Session, subscriber_id: str, label: str | None):
         subscriber = _subscriber_or_404(db, subscriber_id)
         username = subscriber.email
