@@ -36,8 +36,10 @@ def test_real_email_ignores_non_generated_addresses(value):
     assert _real_email(value) is None
 
 
-def test_guard_detects_unique_constraint_on_base_schema(db_session):
-    # On main (pre-decoupling) the test schema is built from the model whose
-    # email column is still unique, so the apply-guard must report it as
-    # constrained and the script will refuse to write.
-    assert _email_is_unique_constrained(db_session) is True
+def test_guard_reports_no_unique_constraint_after_decoupling(db_session):
+    # Post-decoupling (#316) the model's email column is non-unique, so the test
+    # schema built from it has no UNIQUE on subscribers.email. The apply-guard
+    # therefore reports False — i.e. --apply is permitted (un-mangling, which
+    # creates intentional duplicates, is now safe). The guard exists to refuse
+    # only against an OLD prod DB where the constraint hasn't been dropped yet.
+    assert _email_is_unique_constrained(db_session) is False
