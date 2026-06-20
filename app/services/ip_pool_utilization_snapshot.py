@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 # cap ``total`` to keep it in range. IPv6 percent is not meaningful by
 # capacity anyway; the chart is primarily useful for IPv4 pools.
 _TOTAL_CAP = 2_000_000_000
+
+# Default chart window: how many of the most recent snapshots to plot.
+# At the daily snapshot cadence this is ~1 year of trend.
+_DEFAULT_HISTORY_LIMIT = 365
+
+# Default retention: snapshots older than this are pruned. Kept a little
+# beyond the chart window so the full window always has data.
+_DEFAULT_RETENTION_DAYS = 400
 
 
 def _ip_version(pool) -> str:
@@ -103,7 +111,7 @@ class IpPoolUtilizationSnapshotManager:
 
     @staticmethod
     def history(
-        db: Session, pool_id: str, *, limit: int = 90
+        db: Session, pool_id: str, *, limit: int = _DEFAULT_HISTORY_LIMIT
     ) -> list[IpPoolUtilizationSnapshot]:
         """Most recent snapshots for a pool, oldest-first for charting."""
         rows = list(
@@ -115,6 +123,29 @@ class IpPoolUtilizationSnapshotManager:
             ).all()
         )
         return list(reversed(rows))
+
+    @staticmethod
+    def prune(
+        db: Session, *, keep_days: int = _DEFAULT_RETENTION_DAYS
+    ) -> dict[str, int]:
+        """Delete snapshots older than ``keep_days``.
+
+        The table is otherwise append-only and unbounded; a periodic prune
+        keeps it from growing forever. Returns ``{"deleted": n}``.
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=keep_days)
+        deleted = (
+            db.query(IpPoolUtilizationSnapshot)
+            .filter(IpPoolUtilizationSnapshot.captured_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        logger.info(
+            "Pruned %d IP pool utilization snapshot(s) older than %d days",
+            deleted,
+            keep_days,
+        )
+        return {"deleted": deleted}
 
 
 ip_pool_utilization_snapshots = IpPoolUtilizationSnapshotManager()

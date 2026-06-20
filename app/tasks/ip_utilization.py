@@ -26,3 +26,24 @@ def snapshot_ip_pool_utilization() -> dict[str, int]:
             "IP pool utilization snapshot complete: pools=%d", result["created"]
         )
         return result
+
+
+@celery_app.task(name="app.tasks.ip_utilization.prune_ip_pool_utilization_snapshots")
+def prune_ip_pool_utilization_snapshots() -> dict[str, int]:
+    """Delete IP pool utilization snapshots beyond the retention window.
+
+    The snapshot table is append-only; this keeps it bounded. Designed to run
+    daily via Celery beat.
+    """
+    logger.info("Starting IP pool utilization snapshot prune")
+    with db_session_adapter.session() as db:
+        from app.services.ip_pool_utilization_snapshot import (
+            ip_pool_utilization_snapshots,
+        )
+
+        result = ip_pool_utilization_snapshots.prune(db)
+        logger.info(
+            "IP pool utilization snapshot prune complete: deleted=%d",
+            result["deleted"],
+        )
+        return result

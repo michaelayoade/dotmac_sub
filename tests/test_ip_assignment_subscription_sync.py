@@ -298,3 +298,47 @@ def test_ip_pool_utilization_snapshot_counts(db_session):
 
     history = ip_pool_utilization_snapshots.history(db_session, str(pool.id))
     assert len(history) == 1
+
+
+def test_prune_ip_pool_utilization_snapshots(db_session):
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.network import IpPoolUtilizationSnapshot
+    from app.services.ip_pool_utilization_snapshot import (
+        ip_pool_utilization_snapshots,
+    )
+
+    pool = _make_pool(db_session, "100.64.50.0/24")
+    now = datetime.now(UTC)
+    old = IpPoolUtilizationSnapshot(
+        pool_id=pool.id,
+        captured_at=now - timedelta(days=500),
+        total=254,
+        used=10,
+        reserved=0,
+        available=244,
+        percent=4,
+    )
+    recent = IpPoolUtilizationSnapshot(
+        pool_id=pool.id,
+        captured_at=now - timedelta(days=10),
+        total=254,
+        used=12,
+        reserved=0,
+        available=242,
+        percent=5,
+    )
+    db_session.add_all([old, recent])
+    db_session.flush()
+    recent_id = recent.id
+
+    result = ip_pool_utilization_snapshots.prune(db_session, keep_days=400)
+    assert result["deleted"] == 1
+
+    remaining = (
+        db_session.query(IpPoolUtilizationSnapshot)
+        .filter(IpPoolUtilizationSnapshot.pool_id == pool.id)
+        .all()
+    )
+    assert len(remaining) == 1
+    assert remaining[0].id == recent_id
