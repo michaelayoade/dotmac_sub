@@ -641,6 +641,13 @@ class ResellerUser(Base):
         UUID(as_uuid=True), ForeignKey("resellers.id", ondelete="CASCADE")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Layer 3: a reseller portal login as a first-class identity rather than a
+    # fake Subscriber. These carry the login's own contact/display info so no
+    # subscriber row is needed; subscriber_id (person_id) above is kept only for
+    # historical linkage during the transition and is now optional.
+    email: Mapped[str | None] = mapped_column(String(255))
+    full_name: Mapped[str | None] = mapped_column(String(160))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

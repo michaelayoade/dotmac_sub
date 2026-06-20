@@ -18,6 +18,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
@@ -37,7 +38,7 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import auth_cache
@@ -522,6 +523,12 @@ def _load_rbac_claims(
     cached = auth_cache.get_claims(principal_type, str(resolved_principal_id))
     if cached is not None:
         return cached
+    if principal_type == "reseller_user":
+        # Reseller portal authorization is enforced via reseller_users
+        # membership (reseller_portal._get_reseller_user), not RBAC roles. A
+        # reseller_user principal carries no system/subscriber roles.
+        auth_cache.set_claims(principal_type, str(resolved_principal_id), [], [])
+        return [], []
     principal_uuid = coerce_uuid(resolved_principal_id)
     if principal_type == "system_user":
         roles = (
@@ -622,6 +629,15 @@ def _principal_for_credential(
             str(credential.system_user_id),
             db.get(SystemUser, credential.system_user_id),
         )
+    if (
+        getattr(credential, "reseller_user_id", None)
+        and settings.reseller_user_principal_enabled
+    ):
+        return (
+            "reseller_user",
+            str(credential.reseller_user_id),
+            db.get(ResellerUser, credential.reseller_user_id),
+        )
     if credential.subscriber_id:
         return (
             "subscriber",
@@ -637,6 +653,8 @@ def _primary_totp_method(
     query = db.query(MFAMethod).filter(MFAMethod.method_type == MFAMethodType.totp)
     if principal_type == "system_user":
         query = query.filter(MFAMethod.system_user_id == coerce_uuid(principal_id))
+    elif principal_type == "reseller_user":
+        query = query.filter(MFAMethod.reseller_user_id == coerce_uuid(principal_id))
     else:
         query = query.filter(MFAMethod.subscriber_id == coerce_uuid(principal_id))
     return cast(
@@ -1222,36 +1240,21 @@ class AuthFlow(ListResponseMixin):
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
+        session_kwargs = dict(
+            status=SessionStatus.active,
+            token_hash=_hash_token(refresh_token),
+            ip_address=active_request.client.host if active_request.client else None,
+            user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+            created_at=now,
+            last_seen_at=now,
+            expires_at=expires_at,
+        )
         if principal_type == "system_user":
-            session = AuthSession(
-                system_user_id=principal_uuid,
-                status=SessionStatus.active,
-                token_hash=_hash_token(refresh_token),
-                ip_address=active_request.client.host
-                if active_request.client
-                else None,
-                user_agent=_truncate_user_agent(
-                    active_request.headers.get("user-agent")
-                ),
-                created_at=now,
-                last_seen_at=now,
-                expires_at=expires_at,
-            )
+            session = AuthSession(system_user_id=principal_uuid, **session_kwargs)
+        elif principal_type == "reseller_user":
+            session = AuthSession(reseller_user_id=principal_uuid, **session_kwargs)
         else:
-            session = AuthSession(
-                subscriber_id=principal_uuid,
-                status=SessionStatus.active,
-                token_hash=_hash_token(refresh_token),
-                ip_address=active_request.client.host
-                if active_request.client
-                else None,
-                user_agent=_truncate_user_agent(
-                    active_request.headers.get("user-agent")
-                ),
-                created_at=now,
-                last_seen_at=now,
-                expires_at=expires_at,
-            )
+            session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
         db.add(session)
         db.commit()
         db.refresh(session)
