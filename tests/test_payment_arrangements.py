@@ -885,3 +885,43 @@ class TestCustomerCancelArrangement:
                 db_session, {"account_id": str(uuid.uuid4())}, str(arrangement.id)
             )
         assert exc_info.value.status_code == 404
+
+
+def test_payment_on_defaulted_arrangement_does_not_complete_it(db_session, subscriber):
+    """A late installment payment must not silently resurrect a defaulted
+    arrangement into completed (SM-gap #46)."""
+    arrangement = _create_arrangement_directly(
+        db_session, subscriber, num_installments=2
+    )
+    payment_arrangements.approve(db_session, str(arrangement.id))
+    arrangement.status = ArrangementStatus.defaulted
+    db_session.flush()
+
+    for inst in _installments_for(db_session, arrangement):
+        payment_arrangements.record_installment_payment(db_session, str(inst.id))
+
+    db_session.refresh(arrangement)
+    assert arrangement.status == ArrangementStatus.defaulted
+
+
+def test_waived_installment_is_not_double_counted(db_session, subscriber):
+    """Recording payment on a waived installment must not count it again
+    (SM-gap #46)."""
+    arrangement = _create_arrangement_directly(
+        db_session, subscriber, num_installments=2
+    )
+    payment_arrangements.approve(db_session, str(arrangement.id))
+    installments = _installments_for(db_session, arrangement)
+    installments[0].status = InstallmentStatus.waived
+    db_session.flush()
+    db_session.refresh(arrangement)
+    before = arrangement.installments_paid
+
+    payment_arrangements.record_installment_payment(
+        db_session, str(installments[0].id)
+    )
+
+    db_session.refresh(arrangement)
+    db_session.refresh(installments[0])
+    assert arrangement.installments_paid == before
+    assert installments[0].status == InstallmentStatus.waived

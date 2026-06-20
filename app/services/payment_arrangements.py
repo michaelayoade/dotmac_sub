@@ -376,6 +376,17 @@ class PaymentArrangements(ListResponseMixin):
         Mutates state without committing; callers commit.
         """
         today = date.today()
+        # Idempotency: a paid/waived installment is terminal — re-marking it
+        # would double-count installments_paid and could wrongly complete the
+        # arrangement.
+        if installment.status in (InstallmentStatus.paid, InstallmentStatus.waived):
+            logger.info(
+                "installment %s already %s; skipping re-mark",
+                installment.id,
+                installment.status.value,
+            )
+            return
+
         installment.status = InstallmentStatus.paid
         installment.paid_at = datetime.now(UTC)
         if payment_id:
@@ -386,6 +397,19 @@ class PaymentArrangements(ListResponseMixin):
             )
 
         arrangement = installment.arrangement
+        # A late installment payment must not silently resurrect a terminal
+        # (defaulted/canceled/completed) arrangement — record the installment
+        # but do not advance/complete it.
+        if arrangement.status != ArrangementStatus.active:
+            logger.warning(
+                "installment %s paid on non-active arrangement %s (%s); not advancing",
+                installment.id,
+                arrangement.id,
+                arrangement.status.value,
+            )
+            db.flush()
+            return
+
         arrangement.installments_paid += 1
 
         # Advance the next installment; it only becomes "due" once its

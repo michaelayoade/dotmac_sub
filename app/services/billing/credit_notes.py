@@ -196,6 +196,8 @@ class CreditNotes(ListResponseMixin):
         credit_note = get_by_id(db, CreditNote, credit_note_id)
         if not credit_note:
             raise HTTPException(status_code=404, detail="Credit note not found")
+        if credit_note.status == CreditNoteStatus.void:
+            raise HTTPException(status_code=400, detail="Credit note already void")
         if credit_note.applied_total > 0:
             raise HTTPException(
                 status_code=400, detail="Credit note has applied balance"

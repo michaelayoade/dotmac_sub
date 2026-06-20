@@ -611,7 +611,21 @@ def _purchase_from_wallet(
     return txn
 
 
+_VAS_TERMINAL_STATUSES = frozenset(
+    {VasTransactionStatus.delivered, VasTransactionStatus.refunded}
+)
+
+
 def _mark_delivered(db: Session, txn: VasTransaction, body: dict) -> None:
+    # Lock + re-read so an already delivered/refunded txn is never flipped
+    # (e.g. the review-requery racing the periodic sweep) — that would settle
+    # commission on a refunded purchase.
+    db.refresh(txn, with_for_update=True)
+    if txn.status in _VAS_TERMINAL_STATUSES:
+        logger.info(
+            "vas _mark_delivered skipped: txn %s already %s", txn.id, txn.status.value
+        )
+        return
     token = _extract_token(body)
     if token:
         # Write-ahead: token persists before the delivered flag.
@@ -629,6 +643,17 @@ def _mark_delivered(db: Session, txn: VasTransaction, body: dict) -> None:
 
 
 def _mark_failed_and_refund(db: Session, txn: VasTransaction, detail: str) -> None:
+    # Lock + re-read so a txn that was already refunded (or delivered) by a
+    # concurrent path is not refunded again — the row lock serialises the
+    # review-requery vs sweep race and the recheck closes the double-credit.
+    db.refresh(txn, with_for_update=True)
+    if txn.status in _VAS_TERMINAL_STATUSES:
+        logger.info(
+            "vas _mark_failed_and_refund skipped: txn %s already %s",
+            txn.id,
+            txn.status.value,
+        )
+        return
     txn.status = VasTransactionStatus.failed
     txn.error = detail
     db.commit()
