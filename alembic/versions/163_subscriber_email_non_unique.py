@@ -1,15 +1,12 @@
 """Make subscribers.email non-unique (contact info, not identity).
 
-Revision ID: 162_subscriber_email_non_unique
-Revises: 159_ledger_effective_date
+Revision ID: 163_subscriber_email_non_unique
+Revises: 162_drop_olt_circuit_breaker_schema
 Create Date: 2026-06-20
 
-DEPLOY NOTE — re-parent before applying to prod: this branch's alembic tree head
-is 159, but prod/main has advanced (160 written_off, 161 IPAM-trend) which are
-not in this working tree. Run ``alembic current`` / ``alembic heads`` INSIDE the
-app container, then repoint ``down_revision`` below to the true prod head so this
-revision applies after it (avoids a multi-head branch). Idempotent, so safe to
-re-run after re-parenting.
+Chained onto the live main head (162_drop_olt_circuit_breaker_schema). Idempotent,
+so safe to re-run. The Layer 3 migration (164_reseller_user_principal) chains
+after this one.
 
 Email overloaded three concepts: customer contact info, login identity, and
 (historically) ownership. Ownership is already modelled via
@@ -32,8 +29,8 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision = "162_subscriber_email_non_unique"
-down_revision = "159_ledger_effective_date"
+revision = "163_subscriber_email_non_unique"
+down_revision = "162_drop_olt_circuit_breaker_schema"
 branch_labels = None
 depends_on = None
 
