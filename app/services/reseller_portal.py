@@ -535,6 +535,11 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
             "subscriber": None,
             "reseller": reseller,
             "reseller_user": reseller_user,
+            # Principal-agnostic acting identity (Layer 3): handlers should key
+            # MFA/audit/personal-feature scoping off these, not context["subscriber"]
+            # which is None for a first-class reseller_user principal.
+            "principal_type": "reseller_user",
+            "principal_id": str(reseller_user.id),
         }
 
     subscriber = db.get(Subscriber, coerce_uuid(session["subscriber_id"]))
@@ -559,6 +564,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         "subscriber": subscriber,
         "reseller": reseller,
         "reseller_user": reseller_user,
+        "principal_type": "subscriber",
+        "principal_id": str(subscriber.id),
     }
 
 

@@ -301,9 +301,15 @@ def _coerce_uuid_str(value) -> str | None:
 # share one self-scoped implementation.
 
 
-def list_payment_methods(db: Session, login_subscriber_id: str) -> list:
+def list_payment_methods(db: Session, login_subscriber_id: str | None) -> list:
     from app.models.billing import PaymentMethodType
 
+    # Saved cards are keyed on the login Subscriber. A first-class reseller_user
+    # principal (Layer 3) has no backing subscriber, so it has no saved-card
+    # store yet — return empty rather than error. (Re-keying the card store to
+    # reseller_user/reseller is a tracked follow-up.)
+    if not login_subscriber_id:
+        return []
     cards = customer_cards.list_for_account(db, str(login_subscriber_id))
     return [c for c in cards if c.method_type == PaymentMethodType.card]
 
@@ -325,21 +331,25 @@ def payment_method_api_dict(method) -> dict:
 
 
 def set_default_payment_method(
-    db: Session, login_subscriber_id: str, method_id: str
+    db: Session, login_subscriber_id: str | None, method_id: str
 ) -> bool:
+    if not login_subscriber_id:
+        return False
     return (
         customer_cards.set_default(db, str(login_subscriber_id), method_id) is not None
     )
 
 
 def remove_payment_method(
-    db: Session, login_subscriber_id: str, method_id: str
+    db: Session, login_subscriber_id: str | None, method_id: str
 ) -> bool:
+    if not login_subscriber_id:
+        return False
     return customer_cards.remove(db, str(login_subscriber_id), method_id)
 
 
 def get_payment_methods_page(
-    db: Session, reseller_id: str, login_subscriber_id: str
+    db: Session, reseller_id: str, login_subscriber_id: str | None
 ) -> dict:
     """Context for the reseller payment-methods management page."""
     summary = get_billing_account_summary(db, reseller_id)
