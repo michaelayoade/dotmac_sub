@@ -20,10 +20,18 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import ValidationError
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.db import get_db
+from app.models.subscriber import Subscriber
+from app.schemas.subscriber import SubscriberCreate
+from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +107,154 @@ async def receive_crm_event(request: Request) -> dict:
         ) from exc
 
     return {"status": "queued", "event": event_type, "ticket_id": ticket_id}
+
+
+def _clean_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _fallback_email(payload: dict, crm_person_id: str) -> str:
+    email = _clean_text(payload.get("email"))
+    if email:
+        return email.lower()
+    return f"crm-{crm_person_id}@selfcare.dotmac.io"
+
+
+def _name_parts(payload: dict) -> tuple[str, str]:
+    first_name = _clean_text(payload.get("first_name"))
+    last_name = _clean_text(payload.get("last_name"))
+    if first_name and last_name:
+        return first_name, last_name
+
+    display_name = _clean_text(payload.get("display_name"))
+    if display_name:
+        parts = display_name.split(maxsplit=1)
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        return parts[0], "Customer"
+    return first_name or "Customer", last_name or "Customer"
+
+
+def _find_existing_customer(
+    db: Session, *, crm_person_id: str, email: str
+) -> Subscriber | None:
+    existing = (
+        db.query(Subscriber)
+        .filter(
+            func.lower(
+                func.coalesce(Subscriber.metadata_["crm_person_id"].as_string(), "")
+            )
+            == crm_person_id.lower()
+        )
+        .first()
+    )
+    if existing:
+        return existing
+    return (
+        db.query(Subscriber)
+        .filter(func.lower(Subscriber.email) == email.lower())
+        .first()
+    )
+
+
+def _subscriber_payload(payload: dict, *, crm_person_id: str) -> SubscriberCreate:
+    first_name, last_name = _name_parts(payload)
+    email = _fallback_email(payload, crm_person_id)
+    metadata = (
+        payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    )
+    metadata = {
+        **metadata,
+        "source": "dotmac_omni",
+        "crm_person_id": crm_person_id,
+        "crm_project_id": _clean_text(payload.get("crm_project_id")),
+        "crm_quote_id": _clean_text(payload.get("crm_quote_id")),
+        "crm_sales_order_id": _clean_text(payload.get("crm_sales_order_id")),
+    }
+    return SubscriberCreate(
+        first_name=first_name,
+        last_name=last_name,
+        display_name=_clean_text(payload.get("display_name")),
+        email=email,
+        phone=_clean_text(payload.get("phone")),
+        address_line1=_clean_text(payload.get("address_line1")),
+        address_line2=_clean_text(payload.get("address_line2")),
+        city=_clean_text(payload.get("city")),
+        region=_clean_text(payload.get("region")),
+        postal_code=_clean_text(payload.get("postal_code")),
+        country_code=_clean_text(payload.get("country_code")),
+        status="new",
+        billing_enabled=True,
+        metadata_=metadata,
+    )
+
+
+@router.post("/customers")
+async def receive_crm_customer(request: Request, db: Session = Depends(get_db)) -> dict:
+    raw_body = await request.body()
+    original_secret = settings.crm_webhook_secret
+    customer_secret = settings.crm_customer_webhook_secret or original_secret
+    object.__setattr__(settings, "crm_webhook_secret", customer_secret)
+    try:
+        _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
+    finally:
+        object.__setattr__(settings, "crm_webhook_secret", original_secret)
+
+    event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
+    if event_type != "customer.accepted":
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        ) from None
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid customer payload."
+        )
+
+    crm_person_id = _clean_text(payload.get("crm_person_id"))
+    if not crm_person_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="crm_person_id is required."
+        )
+    try:
+        uuid.UUID(crm_person_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="crm_person_id must be a UUID.",
+        ) from exc
+
+    email = _fallback_email(payload, crm_person_id)
+    existing = _find_existing_customer(db, crm_person_id=crm_person_id, email=email)
+    if existing:
+        metadata = dict(existing.metadata_ or {})
+        metadata.update(
+            _subscriber_payload(payload, crm_person_id=crm_person_id).metadata_ or {}
+        )
+        existing.metadata_ = metadata
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return {
+            "status": "existing",
+            "subscriber_id": str(existing.id),
+            "subscriber_number": existing.subscriber_number,
+        }
+
+    try:
+        subscriber_payload = _subscriber_payload(payload, crm_person_id=crm_person_id)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.errors()
+        ) from exc
+    subscriber = subscriber_service.subscribers.create(db, subscriber_payload)
+    return {
+        "status": "created",
+        "subscriber_id": str(subscriber.id),
+        "subscriber_number": subscriber.subscriber_number,
+    }

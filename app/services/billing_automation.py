@@ -34,6 +34,7 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import settings_spec
+from app.services.billing._common import _calculate_tax_amount
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
@@ -318,6 +319,31 @@ def _default_tax_application(db: Session) -> TaxApplication:
     if value == "exempt":
         return TaxApplication.exempt
     return TaxApplication.exclusive
+
+
+def _gross_amount_with_tax(
+    db: Session, subscription: Subscription, amount: Decimal
+) -> Decimal:
+    """Return the customer-facing charge after the subscription's tax rules.
+
+    Invoice lines store the net amount and let ``_recalculate_invoice_totals``
+    add/extract tax. Prepaid drawdown writes a single ledger debit, so it must
+    store the gross amount directly to match what customers actually pay.
+    """
+    net_amount = round_money(amount)
+    tax_rate_id = _resolve_tax_rate_id(db, subscription)
+    if not tax_rate_id:
+        return net_amount
+    rate = db.get(TaxRate, tax_rate_id)
+    if rate is None:
+        return net_amount
+    tax_application = _default_tax_application(db)
+    if tax_application in (TaxApplication.inclusive, TaxApplication.exempt):
+        return net_amount
+    tax_amount = _calculate_tax_amount(
+        net_amount, Decimal(str(rate.rate)), tax_application
+    )
+    return round_money(net_amount + tax_amount)
 
 
 def _prorated_amount(

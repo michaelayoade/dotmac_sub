@@ -15,7 +15,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
 from app.models.catalog import NasDevice, Subscription
-from app.models.network import IPAssignment, IPv4Address, IPv6Address, IPVersion
+from app.models.network import (
+    IPAssignment,
+    IPv4Address,
+    IPv6Address,
+    IPVersion,
+    SubscriberAdditionalRoute,
+)
 from app.schemas.network import (
     IPAssignmentCreate,
     IPAssignmentUpdate,
@@ -289,6 +295,7 @@ def _subscription_display_name(subscription) -> str | None:
         return None
     return (
         str(getattr(subscription, "service_id", "") or "").strip()
+        or str(getattr(subscription, "login", "") or "").strip()
         or str(getattr(subscription, "id", "") or "").strip()
         or None
     )
@@ -319,6 +326,105 @@ def _subscriptions_by_ipv4(
         if ip_address:
             by_ip[ip_address].append(subscription)
     return by_ip
+
+
+def _subscriptions_by_subscriber_id(
+    db,
+    *,
+    subscriber_ids: set[str],
+) -> dict[str, Subscription]:
+    normalized = []
+    for subscriber_id in subscriber_ids:
+        text = str(subscriber_id or "").strip()
+        if not text:
+            continue
+        try:
+            normalized.append(coerce_uuid(text))
+        except ValueError:
+            continue
+    if not normalized:
+        return {}
+    rows = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id.in_(normalized))
+        .order_by(Subscription.updated_at.desc().nullslast())
+        .all()
+    )
+    result: dict[str, Subscription] = {}
+    for subscription in rows:
+        subscriber_id = str(getattr(subscription, "subscriber_id", "") or "")
+        if not subscriber_id:
+            continue
+        current = result.get(subscriber_id)
+        if current is None:
+            result[subscriber_id] = subscription
+            continue
+        status = str(getattr(getattr(subscription, "status", None), "value", "") or "")
+        current_status = str(getattr(getattr(current, "status", None), "value", "") or "")
+        if status == "active" and current_status != "active":
+            result[subscriber_id] = subscription
+    return result
+
+
+def _active_routed_rows_by_ip(
+    db,
+    *,
+    ip_addresses: list[str],
+) -> dict[str, dict[str, object]]:
+    """Map displayed IPv4 hosts to active routed blocks covering them."""
+    parsed_hosts: list[tuple[str, ipaddress.IPv4Address]] = []
+    for value in ip_addresses:
+        try:
+            parsed = ipaddress.ip_address(str(value))
+        except ValueError:
+            continue
+        if parsed.version == 4:
+            parsed_hosts.append((str(value), parsed))
+    if not parsed_hosts:
+        return {}
+
+    routes = (
+        db.query(SubscriberAdditionalRoute)
+        .options(joinedload(SubscriberAdditionalRoute.subscriber))
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .all()
+    )
+    parsed_routes: list[tuple[ipaddress.IPv4Network, SubscriberAdditionalRoute]] = []
+    for route in routes:
+        try:
+            network = ipaddress.ip_network(str(route.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            parsed_routes.append((network, route))
+
+    matches: dict[str, dict[str, object]] = {}
+    subscriber_ids: set[str] = set()
+    for ip_text, ip_obj in parsed_hosts:
+        best_route: SubscriberAdditionalRoute | None = None
+        best_prefix = -1
+        for network, route in parsed_routes:
+            if ip_obj in network and network.prefixlen > best_prefix:
+                best_route = route
+                best_prefix = network.prefixlen
+        if best_route is None:
+            continue
+        subscriber_id = str(getattr(best_route, "subscriber_id", "") or "")
+        if subscriber_id:
+            subscriber_ids.add(subscriber_id)
+        matches[ip_text] = {
+            "route": best_route,
+            "subscriber": getattr(best_route, "subscriber", None),
+            "subscriber_id": subscriber_id,
+            "cidr": str(best_route.cidr),
+            "metric": int(getattr(best_route, "metric", 1) or 1),
+        }
+
+    subscriptions = _subscriptions_by_subscriber_id(db, subscriber_ids=subscriber_ids)
+    for item in matches.values():
+        subscriber_id = str(item.get("subscriber_id") or "")
+        item["subscription"] = subscriptions.get(subscriber_id)
+    return matches
 
 
 def _matching_subscription_for_assignment(
@@ -860,6 +966,7 @@ def _build_ipv4_range_rows(
         db,
         ip_addresses=set(limited_hosts),
     )
+    routed_rows_by_ip = _active_routed_rows_by_ip(db, ip_addresses=limited_hosts)
 
     rows: list[dict[str, object]] = []
     assigned_count = 0
@@ -875,10 +982,15 @@ def _build_ipv4_range_rows(
             ip_address=ip,
             assignment=assignment,
         )
+        routed = routed_rows_by_ip.get(ip)
         status = _ipam_row_status(record)
         if status in {"available", "reserved"} and device_refs:
             status = "device"
-        if status in {"assigned", "ont_management", "device"}:
+        elif status in {"available", "reserved"} and routed:
+            status = "routed"
+            subscriber = routed.get("subscriber")
+            subscription = routed.get("subscription")
+        if status in {"assigned", "ont_management", "device", "routed"}:
             assigned_count += 1
         elif status == "reserved":
             reserved_count += 1
@@ -892,6 +1004,15 @@ def _build_ipv4_range_rows(
         device_search = " ".join(
             f"{ref['label']} {ref['source']}" for ref in device_refs
         )
+        subscriber_name = _subscriber_display_name(subscriber)
+        routed_cidr = str((routed or {}).get("cidr") or "")
+        routed_metric = (routed or {}).get("metric")
+        routed_note = (
+            f"Routed block {routed_cidr}"
+            + (f" metric {routed_metric}" if routed_metric else "")
+            if routed_cidr
+            else ""
+        )
 
         rows.append(
             {
@@ -899,24 +1020,18 @@ def _build_ipv4_range_rows(
                 "status": status,
                 "search_text": (
                     f"{ip} "
-                    f"{str(getattr(subscriber, 'full_name', '') or '').strip()} "
+                    f"{str(subscriber_name or '').strip()} "
                     f"{str(getattr(subscriber, 'first_name', '') or '').strip()} "
                     f"{str(getattr(subscriber, 'last_name', '') or '').strip()} "
                     f"{str(getattr(subscriber, 'email', '') or '').strip()} "
                     f"{str(getattr(subscription, 'service_id', '') or '').strip()} "
-                    f"{device_search}"
+                    f"{str(getattr(subscription, 'login', '') or '').strip()} "
+                    f"{device_search} "
+                    f"{routed_cidr}"
                 )
                 .strip()
                 .lower(),
-                "subscriber_name": (
-                    str(getattr(subscriber, "full_name", "") or "").strip()
-                    or (
-                        f"{str(getattr(subscriber, 'first_name', '') or '').strip()} "
-                        f"{str(getattr(subscriber, 'last_name', '') or '').strip()}"
-                    ).strip()
-                    or str(getattr(subscriber, "email", "") or "").strip()
-                    or None
-                ),
+                "subscriber_name": subscriber_name,
                 "subscriber_id": str(getattr(subscriber, "id", "") or "") or None,
                 "subscription_id": str(getattr(subscription, "id", "") or "") or None,
                 "service_ref": str(
@@ -927,8 +1042,10 @@ def _build_ipv4_range_rows(
                 or str(metadata.get("router") or "").strip()
                 or None,
                 "notes": str(getattr(record, "notes", "") or "").strip()
+                or routed_note
                 or device_sources
                 or None,
+                "routed_cidr": routed_cidr or None,
             }
         )
 

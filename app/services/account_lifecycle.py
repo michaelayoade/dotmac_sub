@@ -94,6 +94,23 @@ _TERMINAL = {
 }
 
 
+def _active_login_conflict(
+    db: Session,
+    subscription: Subscription,
+) -> Subscription | None:
+    """Return an active sibling that already owns this access login, if any."""
+    if subscription.login is None:
+        return None
+    return db.scalars(
+        select(Subscription)
+        .where(Subscription.subscriber_id == subscription.subscriber_id)
+        .where(Subscription.login == subscription.login)
+        .where(Subscription.id != subscription.id)
+        .where(Subscription.status == SubscriptionStatus.active)
+        .limit(1)
+    ).first()
+
+
 # ---------------------------------------------------------------------------
 # Domain operations
 # ---------------------------------------------------------------------------
@@ -287,6 +304,19 @@ def restore_subscription(
 
     restored = False
     if remaining is None:
+        conflict = _active_login_conflict(db, subscription)
+        if conflict is not None:
+            logger.warning(
+                "Subscription %s not restored: active sibling %s already owns "
+                "login %r for subscriber %s",
+                subscription.id,
+                conflict.id,
+                subscription.login,
+                subscription.subscriber_id,
+            )
+            compute_account_status(db, str(subscription.subscriber_id))
+            return False
+
         subscription.status = SubscriptionStatus.active
         db.flush()
         restored = True

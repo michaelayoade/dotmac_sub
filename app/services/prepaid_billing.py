@@ -116,12 +116,18 @@ def _period_charge(
     """Return (charge, currency, period_days) for one prepaid period.
 
     Charge = the recurring catalog/subscription price (discounts and
-    Splynx-imported ``unit_price`` overrides applied) normalised to monthly and
-    pro-rated to the period: full price for a 30-day period, 1/30 for a day.
+    Splynx-imported ``unit_price`` overrides applied) normalised to monthly,
+    pro-rated to the period, then grossed up by the subscription's configured
+    tax rules because prepaid drawdown writes one ledger debit rather than an
+    invoice line with separate tax fields.
     """
     # Imported lazily to avoid a heavy import at module load and a potential
     # cycle through billing_automation.
-    from app.services.billing_automation import _effective_unit_price, _resolve_price
+    from app.services.billing_automation import (
+        _effective_unit_price,
+        _gross_amount_with_tax,
+        _resolve_price,
+    )
 
     period_days = _parse_period_days(
         subscription.offer.prepaid_period if subscription.offer is not None else None
@@ -137,7 +143,8 @@ def _period_charge(
         return Decimal("0.00"), (currency or "NGN"), period_days
     effective = _effective_unit_price(subscription, Decimal(str(amount or 0)), now)
     monthly = _monthly_equivalent(effective, cycle)
-    charge = round_money(monthly * Decimal(period_days) / Decimal("30"))
+    net_charge = round_money(monthly * Decimal(period_days) / Decimal("30"))
+    charge = _gross_amount_with_tax(db, subscription, net_charge)
     return charge, (currency or "NGN"), period_days
 
 

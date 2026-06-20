@@ -1331,6 +1331,60 @@ def test_subscription_form_context_hides_child_routes_assigned_to_other_subscrib
     assert "160.119.127.12/30" in child_cidrs
 
 
+def test_route_child_options_include_current_subscriber_reserved_route(
+    db_session,
+    subscriber,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Range 161",
+            "ip_version": "ipv4",
+            "cidr": "160.119.128.0/24",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+    for address in (
+        "160.119.128.8",
+        "160.119.128.9",
+        "160.119.128.10",
+        "160.119.128.11",
+    ):
+        db_session.add(
+            IPv4Address(
+                address=address,
+                pool_id=pool.id,
+                is_reserved=True,
+            )
+        )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="160.119.128.8/30",
+            prefix_length=30,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.commit()
+
+    children = web_catalog_subscriptions_service.route_child_options_for_parent(
+        db_session,
+        parent_cidr="160.119.128.0/24",
+        prefix=30,
+        current_subscriber_id=subscriber.id,
+    )
+
+    current = next(
+        child for child in children if child["cidr"] == "160.119.128.8/30"
+    )
+    assert current["is_current"] is True
+    assert current["display"] == "160.119.128.8/30 (current)"
+
+
 def test_update_subscription_with_audit_syncs_additional_routes(
     db_session,
     subscriber,

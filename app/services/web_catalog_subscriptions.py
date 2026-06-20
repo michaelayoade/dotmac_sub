@@ -2449,14 +2449,33 @@ def route_child_options_for_parent(
     assigned_networks = _active_route_networks(
         db, current_subscriber_id=current_subscriber_id
     )
+    current_route_networks: set[str] = set()
+    if current_subscriber_id:
+        current_routes = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(SubscriberAdditionalRoute.subscriber_id == current_subscriber_id)
+            .filter(SubscriberAdditionalRoute.is_active.is_(True))
+            .all()
+        )
+        for route in current_routes:
+            try:
+                route_network = ipaddress.ip_network(str(route.cidr), strict=False)
+            except ValueError:
+                continue
+            if route_network.version == 4:
+                current_route_networks.add(str(route_network))
     used_ip_ints = _used_ipam_address_ints(db)
     children: list[dict[str, object]] = []
     for subnet in network.subnets(new_prefix=prefix):
+        subnet_is_current = str(subnet) in current_route_networks
         if _subnet_starts_at_zero_address(subnet):
             continue
         if any(subnet.overlaps(assigned) for assigned in assigned_networks):
             continue
-        if _subnet_contains_used_ipam_address(subnet, used_ip_ints):
+        if (
+            not subnet_is_current
+            and _subnet_contains_used_ipam_address(subnet, used_ip_ints)
+        ):
             continue
         children.append(
             {
@@ -2465,7 +2484,8 @@ def route_child_options_for_parent(
                 "prefix": prefix,
                 "parent_cidr": str(network),
                 "pool_name": pool_name,
-                "display": str(subnet),
+                "display": f"{subnet} (current)" if subnet_is_current else str(subnet),
+                "is_current": subnet_is_current,
             }
         )
     return children

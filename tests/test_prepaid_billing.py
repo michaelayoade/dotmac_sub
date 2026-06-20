@@ -4,8 +4,9 @@ and the ledger/deposit balance switch at cutover."""
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
+from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource, TaxRate
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services.billing._common import get_account_credit_balance
 from app.services.collections._core import _resolve_prepaid_available_balance
 from app.services.prepaid_billing import (
@@ -88,6 +89,39 @@ def test_due_subscription_is_charged_and_advances(
     assert debit.memo.startswith(PREPAID_CHARGE_MEMO_PREFIX)
     db_session.refresh(subscription)
     assert _naive(subscription.next_billing_at) == _naive(NOW + timedelta(days=30))
+
+
+def test_due_subscription_charge_applies_default_vat(
+    db_session, subscriber_account, subscription
+):
+    tax = TaxRate(name="VAT 7.5%", code="VAT75", rate=Decimal("7.5000"))
+    db_session.add(tax)
+    db_session.flush()
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="default_tax_rate_id",
+            value_text=str(tax.id),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    _make_prepaid(db_session, subscriber_account, subscription, unit_price="35000")
+    subscription.next_billing_at = NOW - timedelta(days=1)
+    db_session.commit()
+
+    summary = run_prepaid_charges(db_session, dry_run=False, now=NOW)
+    assert summary["charged"] == 1
+    assert summary["total_charged"] == "37625.00"
+
+    debit = (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.account_id == subscriber_account.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .one()
+    )
+    assert debit.amount == Decimal("37625.00")
 
 
 def test_idempotent_within_period(db_session, subscriber_account, subscription):

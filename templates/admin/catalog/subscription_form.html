@@ -926,6 +926,14 @@ function subscriptionProvisioning() {
                 this.populateRouteFromChild(route);
                 return;
             }
+            const currentChild = route.cidr
+                ? children.find((child) => child.cidr === route.cidr || child.id === route.cidr)
+                : null;
+            if (currentChild) {
+                route.childId = currentChild.id;
+                route.cidr = currentChild.cidr;
+                return;
+            }
             route.childId = children[0].id;
             route.cidr = children[0].cidr;
         },

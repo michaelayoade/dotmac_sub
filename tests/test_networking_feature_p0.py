@@ -32,6 +32,7 @@ from app.models.network import (
     OntUnit,
     OnuOnlineStatus,
     PonPort,
+    SubscriberAdditionalRoute,
 )
 from app.models.network_monitoring import (
     DeviceInterface,
@@ -4244,6 +4245,68 @@ def test_build_ipv4_network_detail_data_exposes_assignment_rows(db_session, subs
     assert data["usage_type"] == "Static"
     assert data["allow_network_broadcast"] is False
     assert reserved is not None
+
+
+def test_build_ipv4_network_detail_data_marks_routed_additional_route_rows(
+    db_session,
+    subscriber,
+):
+    pool, err = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "IPv4 Routed Detail",
+            "ip_version": "ipv4",
+            "cidr": "10.73.0.0/28",
+            "gateway": "10.73.0.1",
+            "dns_primary": None,
+            "dns_secondary": None,
+            "notes": None,
+            "location": "Abuja",
+            "category": "Production",
+            "network_type": "EndNet",
+            "router": "RTR-R",
+            "usage_type": "Static",
+            "allow_network_broadcast": False,
+            "is_fallback": False,
+            "is_active": True,
+        },
+    )
+    assert err is None
+    assert pool is not None
+    for address in ("10.73.0.8", "10.73.0.9", "10.73.0.10", "10.73.0.11"):
+        network_service.ipv4_addresses.create(
+            db_session,
+            IPv4AddressCreate(address=address, pool_id=pool.id, is_reserved=True),
+        )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="10.73.0.8/30",
+            prefix_length=30,
+            metric=2,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.commit()
+
+    data = web_network_ip_service.build_ipv4_network_detail_data(
+        db_session,
+        pool_id=str(pool.id),
+        limit=32,
+    )
+
+    assert data is not None
+    rows = {row["ip_address"]: row for row in data["ip_rows"]}
+    routed_row = rows["10.73.0.9"]
+    assert routed_row["status"] == "routed"
+    assert routed_row["subscriber_id"] == str(subscriber.id)
+    assert routed_row["subscriber_name"] == subscriber.full_name
+    assert routed_row["routed_cidr"] == "10.73.0.8/30"
+    assert routed_row["notes"] == "Routed block 10.73.0.8/30 metric 2"
+    assert "10.73.0.8/30" in routed_row["search_text"]
+    assert data["stats"]["assigned"] == 4
+    assert data["stats"]["reserved"] == 0
 
 
 def test_parse_ipv6_network_form_maps_to_pool_payload():

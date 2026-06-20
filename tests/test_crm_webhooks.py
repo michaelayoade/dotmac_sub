@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -13,24 +14,31 @@ from fastapi.testclient import TestClient
 
 from app.api.crm_webhooks import router
 from app.config import settings
+from app.db import get_db
+from app.models.subscriber import Subscriber
 
 SECRET = "test-webhook-secret"
 
 
 @contextmanager
 def _with_secret(value: str):
-    """Temporarily set the frozen settings' webhook secret."""
+    """Temporarily set the frozen settings' webhook secrets."""
     original = settings.crm_webhook_secret
+    original_customer = settings.crm_customer_webhook_secret
     object.__setattr__(settings, "crm_webhook_secret", value)
+    object.__setattr__(settings, "crm_customer_webhook_secret", value)
     try:
         yield
     finally:
         object.__setattr__(settings, "crm_webhook_secret", original)
+        object.__setattr__(settings, "crm_customer_webhook_secret", original_customer)
 
 
-def _client() -> TestClient:
+def _client(db_session=None) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
+    if db_session is not None:
+        app.dependency_overrides[get_db] = lambda: db_session
     return TestClient(app)
 
 
@@ -109,3 +117,74 @@ def test_missing_ticket_id_ignored():
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     enqueue.assert_not_called()
+
+
+def _post_customer(client, body: dict, event: str = "customer.accepted"):
+    raw = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
+    headers = {
+        "X-Webhook-Event": event,
+        "Content-Type": "application/json",
+        "X-Webhook-Signature-256": _sign(raw),
+    }
+    return client.post("/api/v1/webhooks/crm/customers", content=raw, headers=headers)
+
+
+def test_customer_accepted_creates_subscriber(db_session):
+    crm_person_id = str(uuid.uuid4())
+    body = {
+        "crm_person_id": crm_person_id,
+        "crm_project_id": str(uuid.uuid4()),
+        "crm_quote_id": str(uuid.uuid4()),
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "display_name": "Ada Lovelace",
+        "email": f"ada-{uuid.uuid4().hex[:8]}@example.com",
+        "phone": "+2348000000000",
+        "city": "Lagos",
+    }
+
+    with _with_secret(SECRET):
+        resp = _post_customer(_client(db_session), body)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "created"
+    subscriber = db_session.get(Subscriber, payload["subscriber_id"])
+    assert subscriber is not None
+    assert subscriber.first_name == "Ada"
+    assert subscriber.status.value == "new"
+    assert subscriber.metadata_["crm_person_id"] == crm_person_id
+    assert subscriber.metadata_["source"] == "dotmac_omni"
+
+
+def test_customer_accepted_is_idempotent_by_crm_person_id(db_session):
+    crm_person_id = str(uuid.uuid4())
+    body = {
+        "crm_person_id": crm_person_id,
+        "first_name": "Grace",
+        "last_name": "Hopper",
+        "email": f"grace-{uuid.uuid4().hex[:8]}@example.com",
+    }
+    client = _client(db_session)
+
+    with _with_secret(SECRET):
+        first = _post_customer(client, body)
+        second = _post_customer(client, body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["status"] == "existing"
+    assert first.json()["subscriber_id"] == second.json()["subscriber_id"]
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.metadata_["crm_person_id"].as_string() == crm_person_id)
+        .count()
+        == 1
+    )
+
+
+def test_customer_accepted_requires_crm_person_id(db_session):
+    with _with_secret(SECRET):
+        resp = _post_customer(_client(db_session), {"email": "missing@example.com"})
+
+    assert resp.status_code == 400
