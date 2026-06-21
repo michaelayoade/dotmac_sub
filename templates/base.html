@@ -45,6 +45,9 @@
     <link rel="stylesheet" href="/static/css/main.css?v=20260530a" />
     <link rel="stylesheet" href="/static/css/design-system.css?v=20260530a" />
 
+    <!-- Runtime admin-configurable brand theme (overrides above) -->
+    <link rel="stylesheet" href="/branding/theme.css" />
+
     <!-- CSRF Token Meta Tag -->
     <meta name="csrf-token" content="{{ csrf_token|default(request.state.csrf_token if request is defined and request and request.state and request.state.csrf_token is defined else '') }}">
 

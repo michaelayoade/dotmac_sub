@@ -2262,6 +2262,38 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="",
         label="Favicon URL",
     ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_primary_color",
+        env_var="BRAND_PRIMARY_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default="#206a07",
+        label="Brand Primary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_customer_url",
+        env_var="LOGIN_HERO_CUSTOMER_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Customer Login Image URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_reseller_url",
+        env_var="LOGIN_HERO_RESELLER_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Reseller Login Image URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_admin_url",
+        env_var="LOGIN_HERO_ADMIN_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Admin Login Image URL",
+    ),
     # Meta (Facebook/Instagram) Integration Settings
     SettingSpec(
         domain=SettingDomain.comms,

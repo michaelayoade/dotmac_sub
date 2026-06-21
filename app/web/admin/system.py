@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from base64 import b64encode
 from datetime import UTC, datetime
 from io import BytesIO
@@ -2796,6 +2797,16 @@ def settings_branding_update(
     main_logo_file: UploadFile | None = File(None),
     dark_logo_file: UploadFile | None = File(None),
     favicon_file: UploadFile | None = File(None),
+    brand_primary_color: str | None = Form(None),
+    login_hero_customer_url: str | None = Form(None),
+    login_hero_reseller_url: str | None = Form(None),
+    login_hero_admin_url: str | None = Form(None),
+    remove_login_hero_customer: str | None = Form(None),
+    remove_login_hero_reseller: str | None = Form(None),
+    remove_login_hero_admin: str | None = Form(None),
+    login_hero_customer_file: UploadFile | None = File(None),
+    login_hero_reseller_file: UploadFile | None = File(None),
+    login_hero_admin_file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
     """Update sidebar branding assets via URL or file upload."""
@@ -2913,6 +2924,30 @@ def settings_branding_update(
                 "favicon",
                 "favicon",
             ),
+            (
+                "login_hero_customer_url",
+                login_hero_customer_url,
+                web_system_common_service.form_bool(remove_login_hero_customer),
+                login_hero_customer_file,
+                "login",
+                "login_hero_customer",
+            ),
+            (
+                "login_hero_reseller_url",
+                login_hero_reseller_url,
+                web_system_common_service.form_bool(remove_login_hero_reseller),
+                login_hero_reseller_file,
+                "login",
+                "login_hero_reseller",
+            ),
+            (
+                "login_hero_admin_url",
+                login_hero_admin_url,
+                web_system_common_service.form_bool(remove_login_hero_admin),
+                login_hero_admin_file,
+                "login",
+                "login_hero_admin",
+            ),
         ]
 
         updates: list[tuple[str, str, str]] = []
@@ -2939,6 +2974,15 @@ def settings_branding_update(
             if _is_local_branding_path(current_value):
                 upload = file_upload_service.get_branding_upload()
                 upload.delete_by_url(current_value, "/static/branding/")
+
+        color_candidate = (brand_primary_color or "").strip()
+        if color_candidate:
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", color_candidate):
+                raise ValueError(
+                    "Brand colour must be a 6-digit hex value, e.g. #206a07."
+                )
+            normalised = color_candidate.lstrip("#").lower()
+            _persist_setting("brand_primary_color", f"#{normalised}")
 
         return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:

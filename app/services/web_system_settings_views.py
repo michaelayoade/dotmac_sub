@@ -189,6 +189,22 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
         main_logo_url = str(main_logo_raw).strip() if main_logo_raw else ""
         dark_logo_url = str(dark_logo_raw).strip() if dark_logo_raw else ""
         favicon_url = str(favicon_raw).strip() if favicon_raw else ""
+        brand_color_raw = settings_spec.resolve_value(
+            db,
+            SettingDomain.comms,
+            "brand_primary_color",
+        )
+        brand_primary_color = (
+            str(brand_color_raw).strip() if brand_color_raw else "#206a07"
+        )
+        hero_urls: dict[str, str] = {}
+        for portal in ("customer", "reseller", "admin"):
+            hero_raw = settings_spec.resolve_value(
+                db,
+                SettingDomain.comms,
+                f"login_hero_{portal}_url",
+            )
+            hero_urls[portal] = str(hero_raw).strip() if hero_raw else ""
         return {
             "domain": BRANDING_DOMAIN,
             "domains": settings_domains(),
@@ -199,6 +215,10 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
             "branding_main_logo_url": main_logo_url,
             "branding_dark_logo_url": dark_logo_url,
             "branding_favicon_url": favicon_url,
+            "current_brand_primary_color": brand_primary_color,
+            "current_login_hero_customer_url": hero_urls["customer"],
+            "current_login_hero_reseller_url": hero_urls["reseller"],
+            "current_login_hero_admin_url": hero_urls["admin"],
         }
 
     selected_domain = resolve_settings_domain(domain_value)
