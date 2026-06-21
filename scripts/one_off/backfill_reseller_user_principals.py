@@ -111,7 +111,9 @@ def _rollback(db) -> None:
     methods = db.scalars(
         select(MFAMethod).where(MFAMethod.reseller_user_id.is_not(None))
     ).all()
-    print(f"Reverting {len(creds)} credential(s), {len(methods)} mfa method(s) (ROLLBACK)")
+    print(
+        f"Reverting {len(creds)} credential(s), {len(methods)} mfa method(s) (ROLLBACK)"
+    )
     moved = 0
     for cred in creds:
         ru = db.get(ResellerUser, cred.reseller_user_id)

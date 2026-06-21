@@ -27,7 +27,9 @@ def _pending_count(db, subscriber_id):
 
 
 def test_locks_once_verified(db_session, subscriber):
-    success = _add(db_session, subscriber.id, "11111111111", NINVerificationStatus.success)
+    success = _add(
+        db_session, subscriber.id, "11111111111", NINVerificationStatus.success
+    )
     db_session.commit()
 
     # A re-verify attempt (even with a different NIN) returns the existing
