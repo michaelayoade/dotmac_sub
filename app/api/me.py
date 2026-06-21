@@ -54,7 +54,6 @@ from app.schemas.catalog import (
     SubscriptionRead,
 )
 from app.schemas.common import ListResponse
-from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.gis import (
     MyLocationRead,
     MyLocationRequestCreate,
@@ -65,6 +64,7 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
+from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
     SubscriberContactCreate,
     SubscriberContactRead,

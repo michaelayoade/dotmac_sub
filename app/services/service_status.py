@@ -101,9 +101,7 @@ def _overdue_summary(
     )
     if not rows:
         return Decimal("0.00"), None
-    outstanding = sum(
-        (Decimal(str(b or 0)) for b, _ in rows), Decimal("0.00")
-    )
+    outstanding = sum((Decimal(str(b or 0)) for b, _ in rows), Decimal("0.00"))
     dues = [d for _, d in rows if d is not None]
     return outstanding, (min(dues) if dues else None)
 
@@ -114,9 +112,7 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
     account = db.get(Subscriber, coerce_uuid(subscriber_id))
     if account is None:
         # Caller authenticated but no subscriber row — empty, not an error.
-        return ServiceStatusResponse(
-            as_of=now, billing_mode=BillingMode.prepaid.value
-        )
+        return ServiceStatusResponse(as_of=now, billing_mode=BillingMode.prepaid.value)
 
     account_mode = account.billing_mode or BillingMode.prepaid
     resp = ServiceStatusResponse(as_of=now, billing_mode=account_mode.value)
@@ -137,9 +133,7 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
             grace_days = _grace_days(db, account)
             low_at = account.prepaid_low_balance_at or now
             grace_until = (
-                low_at + timedelta(days=grace_days)
-                if grace_days > 0
-                else low_at
+                low_at + timedelta(days=grace_days) if grace_days > 0 else low_at
             )
             resp.grace_until = grace_until
     else:
