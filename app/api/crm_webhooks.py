@@ -21,9 +21,12 @@ import hmac
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.db import get_db
+from app.services.crm_customers import upsert_customer_from_payload
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,7 @@ EVENT_HEADER = "X-Webhook-Event"
 
 # CRM ticket events that should refresh the local copy.
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
+CUSTOMER_EVENTS = {"customer.accepted"}
 
 
 def _verify_signature(raw_body: bytes, presented: str | None) -> None:
@@ -53,6 +57,31 @@ def _verify_signature(raw_body: bytes, presented: str | None) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing CRM webhook signature.",
         )
+
+
+@router.post("/customers")
+async def receive_crm_customer(request: Request, db: Session = Depends(get_db)) -> dict:
+    raw_body = await request.body()
+    _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
+
+    event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
+    if event_type and event_type not in CUSTOMER_EVENTS:
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        ) from None
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        )
+
+    response = upsert_customer_from_payload(db, payload)
+    response["status"] = "ok"
+    return response
 
 
 @router.post("")
