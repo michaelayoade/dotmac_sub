@@ -75,35 +75,45 @@ def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
 
 
 def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str, str]]:
-    """Return active online provider options for customer top-ups."""
-    allowed_provider_types = {"paystack"}
-    provider_types: list[str] = (
-        [default_provider] if default_provider in allowed_provider_types else []
-    )
+    """Return online provider options for customer payments.
+
+    Paystack is always offered as the baseline gateway (it works even with no
+    ``PaymentProvider`` row). Flutterwave only appears when an active
+    Flutterwave provider row exists, because it needs configured API keys —
+    listing it without keys would hand the customer a checkout that can't
+    complete. The configured default provider is surfaced first.
+    """
+    active: list[str] = []
     try:
         rows = db.scalars(
             select(PaymentProvider.provider_type)
             .where(PaymentProvider.is_active.is_(True))
-            .where(PaymentProvider.provider_type.in_([PaymentProviderType.paystack]))
+            .where(
+                PaymentProvider.provider_type.in_(
+                    [PaymentProviderType.paystack, PaymentProviderType.flutterwave]
+                )
+            )
             .order_by(PaymentProvider.name)
         ).all()
         for provider_type in rows:
             value = getattr(provider_type, "value", str(provider_type))
-            if value in allowed_provider_types and value not in provider_types:
-                provider_types.append(value)
+            if value in _ONLINE_PROVIDER_LABELS and value not in active:
+                active.append(value)
     except Exception:
         logger.debug("Failed to resolve active payment providers", exc_info=True)
 
-    for provider_type in ("paystack",):
-        if provider_type not in provider_types:
-            provider_types.append(provider_type)
+    if "paystack" not in active:
+        active.append("paystack")
+    if default_provider in active:
+        active.remove(default_provider)
+        active.insert(0, default_provider)
 
     options = [
         {
             "provider_type": provider_type,
             "label": _ONLINE_PROVIDER_LABELS[provider_type],
         }
-        for provider_type in provider_types
+        for provider_type in active
         if provider_type in _ONLINE_PROVIDER_LABELS
     ]
     if direct_bank_transfer_enabled(db):
@@ -429,26 +439,333 @@ def get_payment_page(
         return None
 
     provider_type = _resolve_payment_provider(db)
-    invoice_number = getattr(invoice, "invoice_number", None)
 
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
     email = billing_contact["billing_email"] or _resolve_customer_email(db, customer)
 
+    account_id = getattr(invoice, "account_id", None)
+    payment_methods = []
+    if account_id:
+        try:
+            payment_methods = customer_cards.list_for_account(db, str(account_id))
+        except Exception:
+            logger.warning(
+                "Failed to resolve payment methods for account %s",
+                account_id,
+                exc_info=True,
+            )
+
+    amount_due = round_money(
+        to_decimal(
+            getattr(invoice, "balance_due", None)
+            or getattr(invoice, "total_amount", 0)
+            or 0
+        )
+    )
+
+    # The web chooser mints a per-provider reference/checkout via the intent
+    # endpoint (mirroring the top-up flow). The bearer API
+    # (``initiate_payment``) instead consumes a single pre-minted gateway
+    # context, so keep ``provider_public_key``/``payment_reference`` for it.
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
-        invoice_number=invoice_number,
+        invoice_number=getattr(invoice, "invoice_number", None),
     )
     return {
         "invoice": invoice,
+        "amount": amount_due,
         "provider_type": gateway_context.provider_type,
         "provider_public_key": gateway_context.public_key,
         "paystack_public_key": gateway_context.public_key
         if gateway_context.provider_type == "paystack"
         else None,
         "payment_reference": gateway_context.reference,
+        "payment_options": _topup_payment_options(db, provider_type),
+        "payment_methods": payment_methods,
+        "direct_bank_transfer_enabled": direct_bank_transfer_enabled(db),
         "customer_email": email,
     }
+
+
+_INVOICE_CHARGE_IDEMPOTENCY_SCOPE = "invoice_saved_card_charge"
+
+
+def _invoice_charge_replay(reference: str) -> dict:
+    """Return checkout context for a replayed saved-card invoice charge.
+
+    The card was already charged on the original request, so the replay points
+    the client straight at verification rather than charging again."""
+    return {
+        "provider_type": "paystack",
+        "provider_public_key": None,
+        "reference": reference,
+        "charged": True,
+        "checkout_url": None,
+        "replayed": True,
+    }
+
+
+def _init_flutterwave_invoice_checkout(
+    db: Session,
+    customer: dict,
+    *,
+    amount: Decimal,
+    reference: str,
+    redirect_url: str | None,
+    metadata: dict,
+) -> str:
+    """Start a Flutterwave hosted checkout for an invoice and return its link."""
+    from app.services import flutterwave
+
+    callback_url = redirect_url or "/portal/billing/pay/verify"
+    if callback_url.startswith("/"):
+        # Flutterwave requires an absolute redirect_url; a relative path breaks
+        # the hosted-checkout return leg (mobile hits this branch).
+        from app.services.email import _get_app_url
+
+        base_url = _get_app_url(db) or ""
+        if base_url:
+            callback_url = f"{base_url}{callback_url}"
+    separator = "&" if "?" in callback_url else "?"
+    try:
+        checkout = flutterwave.initialize_transaction(
+            db,
+            email=_resolve_customer_email(db, customer),
+            amount=amount,
+            reference=reference,
+            redirect_url=(
+                f"{callback_url}{separator}reference={reference}&provider=flutterwave"
+            ),
+            metadata=metadata,
+        )
+    except ValueError:
+        raise
+    except Exception as exc:
+        logger.warning("Flutterwave checkout initialization failed", exc_info=True)
+        raise ValueError(
+            "Unable to start Flutterwave checkout. Check Flutterwave configuration and try again."
+        ) from exc
+    link = checkout.get("link")
+    if not link:
+        logger.warning(
+            "Flutterwave checkout initialization returned no link: %s", checkout
+        )
+        raise ValueError("Flutterwave did not return a checkout link")
+    return link
+
+
+def _charge_saved_card_for_invoice(
+    db: Session,
+    customer: dict,
+    *,
+    invoice: Invoice,
+    amount: Decimal,
+    payment_method_id: str,
+    checkout_metadata: dict,
+    idempotency_key: str | None,
+) -> dict:
+    """Charge a saved card server-side for an invoice (Paystack only).
+
+    Recording/allocation happens in :func:`verify_and_record_payment` when the
+    client returns to the verify route — the gateway metadata carries the
+    ``invoice_id``. An ``idempotency_key`` makes the charge safe against
+    double-submit: a replay returns the original reference rather than charging
+    the card a second time."""
+    account_id = uuid.UUID(str(invoice.account_id))
+    method = customer_cards._owned(db, str(account_id), payment_method_id)
+    if method is None:
+        raise ValueError("Payment method not found")
+    token = billing_service.payment_methods.get_decrypted_token(db, str(method.id))
+    if not token:
+        raise ValueError("Payment method is not chargeable")
+
+    gateway_context = payment_gateway_adapter.build_context(
+        db,
+        provider_type="paystack",
+        invoice_number=getattr(invoice, "invoice_number", None),
+    )
+    reference = gateway_context.reference
+
+    # Reserve the idempotency key BEFORE charging so a concurrent same-key
+    # request fails the unique constraint here rather than charging twice.
+    idem_key = (idempotency_key or "").strip() or None
+    reservation: IdempotencyKey | None = None
+    if idem_key:
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _INVOICE_CHARGE_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == idem_key,
+            )
+        ).first()
+        if prior is not None:
+            if str(prior.account_id) != str(account_id):
+                raise ValueError("Idempotency key already used")
+            if prior.ref_id:
+                return _invoice_charge_replay(prior.ref_id)
+            db.delete(prior)
+            db.commit()
+        reservation = IdempotencyKey(
+            scope=_INVOICE_CHARGE_IDEMPOTENCY_SCOPE,
+            key=idem_key,
+            account_id=account_id,
+            ref_id=None,
+        )
+        db.add(reservation)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            prior = db.scalars(
+                select(IdempotencyKey).where(
+                    IdempotencyKey.scope == _INVOICE_CHARGE_IDEMPOTENCY_SCOPE,
+                    IdempotencyKey.key == idem_key,
+                )
+            ).first()
+            if prior and prior.ref_id:
+                return _invoice_charge_replay(prior.ref_id)
+            raise ValueError("A payment with this key is already in progress.")
+
+    from app.services import paystack
+
+    try:
+        paystack.charge_authorization(
+            db,
+            authorization_code=token,
+            email=_resolve_customer_email(db, customer),
+            amount_kobo=paystack.amount_to_kobo(amount),
+            reference=reference,
+            metadata=checkout_metadata,
+        )
+    except Exception:
+        # Release the key so the customer can retry with a different card.
+        if reservation is not None:
+            db.delete(reservation)
+            db.commit()
+        raise
+    if reservation is not None:
+        reservation.ref_id = reference
+        db.add(reservation)
+        db.commit()
+
+    return {
+        "provider_type": "paystack",
+        "provider_public_key": gateway_context.public_key,
+        "reference": reference,
+        "amount": amount,
+        "currency": "NGN",
+        "checkout_metadata": checkout_metadata,
+        "charged": True,
+        "checkout_url": None,
+    }
+
+
+def create_invoice_payment_intent(
+    db: Session,
+    customer: dict,
+    invoice_id: str,
+    *,
+    provider: str | None = None,
+    payment_method_id: str | None = None,
+    redirect_url: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    """Start an invoice payment via the customer's chosen method.
+
+    Mirrors :func:`create_topup_intent` but settles a specific invoice:
+
+    * a **saved card** is charged server-side (Paystack only);
+    * a **gateway** choice (Paystack inline / Flutterwave hosted) returns
+      checkout context for the client to open;
+    * a **bank transfer** hands off to the direct-transfer proof flow.
+
+    The amount is the invoice balance (server-authoritative — the client cannot
+    set it). The verified payment is allocated to ``invoice_id`` by
+    :func:`verify_and_record_payment`, which reads ``invoice_id`` back from the
+    gateway metadata.
+    """
+    allowed_account_ids = get_allowed_account_ids(customer, db)
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if not invoice or (
+        allowed_account_ids
+        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    ):
+        raise ValueError("Invoice not found or access denied")
+    if invoice.status in (
+        InvoiceStatus.paid,
+        InvoiceStatus.void,
+        InvoiceStatus.written_off,
+    ):
+        raise ValueError("Invoice is no longer payable")
+
+    amount = round_money(
+        to_decimal(
+            getattr(invoice, "balance_due", None)
+            or getattr(invoice, "total_amount", 0)
+            or 0
+        )
+    )
+    if amount <= Decimal("0.00"):
+        raise ValueError("Invoice no longer has an outstanding balance")
+
+    provider_type = provider or _resolve_payment_provider(db)
+
+    # Bank transfer: reuse the direct-transfer proof flow, prefilled with the
+    # invoice balance. The reviewed transfer credits the account and
+    # auto-allocation settles this (and any older outstanding) invoice.
+    if provider_type == _DIRECT_TRANSFER_PROVIDER:
+        return create_direct_transfer_topup_intent(db, customer, amount)
+
+    invoice_number = getattr(invoice, "invoice_number", None)
+    checkout_metadata = {
+        "payment_flow": "invoice_payment",
+        "invoice_id": str(invoice.id),
+        "invoice_number": invoice_number or "",
+        "account_id": str(invoice.account_id),
+    }
+
+    # Saved card -> server-to-server Paystack charge.
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    if selected_payment_method_id:
+        if provider_type != "paystack":
+            raise ValueError("Saved cards can only be used with Paystack")
+        return _charge_saved_card_for_invoice(
+            db,
+            customer,
+            invoice=invoice,
+            amount=amount,
+            payment_method_id=selected_payment_method_id,
+            checkout_metadata=checkout_metadata,
+            idempotency_key=idempotency_key,
+        )
+
+    # Gateway checkout (Paystack inline opened client-side, or Flutterwave
+    # hosted checkout we initialize here).
+    gateway_context = payment_gateway_adapter.build_context(
+        db,
+        provider_type=provider_type,
+        invoice_number=invoice_number,
+    )
+    result = {
+        "provider_type": gateway_context.provider_type,
+        "provider_public_key": gateway_context.public_key,
+        "reference": gateway_context.reference,
+        "amount": amount,
+        "currency": "NGN",
+        "checkout_metadata": checkout_metadata,
+        "charged": False,
+        "checkout_url": None,
+    }
+    if gateway_context.provider_type == "flutterwave":
+        result["checkout_url"] = _init_flutterwave_invoice_checkout(
+            db,
+            customer,
+            amount=amount,
+            reference=gateway_context.reference,
+            redirect_url=redirect_url,
+            metadata=checkout_metadata,
+        )
+    return result
 
 
 def verify_and_record_payment(
@@ -1308,6 +1625,7 @@ def verify_and_record_topup(
 
 __all__ = [
     "_resolve_payment_provider",
+    "create_invoice_payment_intent",
     "create_topup_intent",
     "create_direct_transfer_topup_intent",
     "direct_bank_transfer_enabled",

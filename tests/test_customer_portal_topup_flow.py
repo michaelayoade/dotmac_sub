@@ -22,6 +22,7 @@ from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
 from app.services import billing as billing_service
 from app.services.customer_portal_flow_billing import get_billing_page
 from app.services.customer_portal_flow_payments import (
+    create_invoice_payment_intent,
     create_topup_intent,
     get_topup_page,
     verify_and_record_payment,
@@ -140,7 +141,7 @@ def test_get_topup_page_includes_saved_payment_methods(
     assert [str(method.id) for method in page["payment_methods"]] == [str(card.id)]
 
 
-def test_get_topup_page_includes_active_online_provider_options(
+def test_get_topup_page_surfaces_active_flutterwave_provider(
     monkeypatch, db_session, subscriber
 ):
     db_session.add_all(
@@ -183,8 +184,11 @@ def test_get_topup_page_includes_active_online_provider_options(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
     )
 
+    # Paystack (the default) is listed first; an active Flutterwave provider is
+    # now surfaced too. Manual and the inactive Flutterwave row are excluded.
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
+        {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
     ]
 
 
@@ -409,6 +413,261 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
     )
     assert captured_checkout["metadata"]["payment_flow"] == "account_topup"
     assert captured_checkout["metadata"]["account_id"] == str(subscriber.id)
+
+
+# ---------------------------------------------------------------------------
+# Invoice payment chooser (create_invoice_payment_intent)
+# ---------------------------------------------------------------------------
+
+
+def _invoice_customer(subscriber) -> dict:
+    return {"account_id": str(subscriber.id), "username": "customer@example.com"}
+
+
+def test_create_invoice_payment_intent_gateway_paystack(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-1"
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack", public_key="pk_test_pay", reference="pay-ref-1"
+        ),
+    )
+
+    payload = create_invoice_payment_intent(
+        db_session, _invoice_customer(subscriber), str(invoice.id), provider="paystack"
+    )
+
+    assert payload["charged"] is False
+    assert payload["checkout_url"] is None
+    assert payload["reference"] == "pay-ref-1"
+    assert payload["provider_public_key"] == "pk_test_pay"
+    assert payload["amount"] == Decimal("2500.00")
+    assert payload["checkout_metadata"]["invoice_id"] == str(invoice.id)
+    assert payload["checkout_metadata"]["payment_flow"] == "invoice_payment"
+
+
+def test_create_invoice_payment_intent_charges_saved_card(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="3000.00", invoice_number="INV-PAY-2"
+    )
+    card = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            label="Visa •••• 4081",
+            token="AUTH_4081",
+            last4="4081",
+            brand="visa",
+            is_default=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack", public_key="pk_test_pay", reference="pay-ref-card"
+        ),
+    )
+    captured = {}
+
+    def fake_charge(_db, **kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "reference": kwargs["reference"]}
+
+    monkeypatch.setattr("app.services.paystack.charge_authorization", fake_charge)
+
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="paystack",
+        payment_method_id=str(card.id),
+        idempotency_key="idem-pay-1",
+    )
+
+    assert payload["charged"] is True
+    assert payload["reference"] == "pay-ref-card"
+    assert captured["authorization_code"] == "AUTH_4081"
+    assert captured["amount_kobo"] == 300000
+    assert captured["metadata"]["invoice_id"] == str(invoice.id)
+
+
+def test_create_invoice_payment_intent_saved_card_idempotent_replay(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="3000.00", invoice_number="INV-PAY-3"
+    )
+    card = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            label="Visa •••• 1111",
+            token="AUTH_1111",
+            last4="1111",
+            brand="visa",
+            is_default=True,
+        ),
+    )
+    refs = iter(["ref-A", "ref-B"])
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack", public_key="pk", reference=next(refs)
+        ),
+    )
+    charges: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.paystack.charge_authorization",
+        lambda _db, **kw: charges.append(kw) or {"status": "success"},
+    )
+    cust = _invoice_customer(subscriber)
+
+    first = create_invoice_payment_intent(
+        db_session,
+        cust,
+        str(invoice.id),
+        provider="paystack",
+        payment_method_id=str(card.id),
+        idempotency_key="dup-key",
+    )
+    second = create_invoice_payment_intent(
+        db_session,
+        cust,
+        str(invoice.id),
+        provider="paystack",
+        payment_method_id=str(card.id),
+        idempotency_key="dup-key",
+    )
+
+    # The card is charged exactly once; the replay reuses the first reference.
+    assert len(charges) == 1
+    assert first["reference"] == "ref-A"
+    assert second["reference"] == "ref-A"
+    assert second["replayed"] is True
+
+
+def test_create_invoice_payment_intent_bank_transfer_hands_off(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-4"
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="direct_bank_transfer",
+    )
+
+    assert payload["provider_type"] == "direct_bank_transfer"
+    assert payload["redirect_url"] == "/portal/billing/topup/transfer"
+    assert payload["requested_amount"] == Decimal("2500.00")
+
+
+def test_create_invoice_payment_intent_initializes_flutterwave(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-5"
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="flutterwave",
+            public_key="flw_pk_test",
+            reference="pay-ref-flw",
+        ),
+    )
+    captured = {}
+
+    def fake_initialize_transaction(_db, **kwargs):
+        captured.update(kwargs)
+        return {"link": "https://checkout.flutterwave.test/pay/pay-ref-flw"}
+
+    monkeypatch.setattr(
+        "app.services.flutterwave.initialize_transaction", fake_initialize_transaction
+    )
+
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="flutterwave",
+        redirect_url="https://selfcare.test/portal/billing/pay/verify",
+    )
+
+    assert payload["provider_type"] == "flutterwave"
+    assert (
+        payload["checkout_url"] == "https://checkout.flutterwave.test/pay/pay-ref-flw"
+    )
+    assert captured["redirect_url"] == (
+        "https://selfcare.test/portal/billing/pay/verify"
+        "?reference=pay-ref-flw&provider=flutterwave"
+    )
+    assert captured["metadata"]["invoice_id"] == str(invoice.id)
+
+
+def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-6"
+    )
+    card = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            label="Visa •••• 2222",
+            token="AUTH_2222",
+            last4="2222",
+            brand="visa",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Saved cards can only be used with Paystack"):
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="flutterwave",
+            payment_method_id=str(card.id),
+        )
+
+
+def test_create_invoice_payment_intent_rejects_paid_invoice(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-7"
+    )
+    invoice.status = InvoiceStatus.paid
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="no longer payable"):
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="paystack",
+        )
 
 
 def test_create_topup_intent_rejects_payment_method_for_other_account(
