@@ -239,6 +239,15 @@ def evaluate_fup_rules() -> dict[str, int]:
 
             current_usage = float(bucket.used_gb or 0)
 
+            # Per-period usage so daily/weekly rules measure their own window.
+            # A monthly-only offer yields {"monthly": current_usage} — identical
+            # to the legacy path (no extra queries, no async bridge).
+            from app.services.fup_usage import build_usage_by_period
+
+            usage_by_period = build_usage_by_period(
+                session, sub, str(sub.offer_id), now, current_usage
+            )
+
             # Status persisted from a prior run — used to notify the customer
             # only on a *transition* into throttled/blocked (not every tick).
             prior_status = state.action_status.value if state else "none"
@@ -249,6 +258,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                 str(sub.offer_id),
                 current_usage_gb=current_usage,
                 current_time=now,
+                usage_by_period=usage_by_period,
             )
 
             triggered = [r for r in results if r.get("triggered")]
@@ -256,6 +266,13 @@ def evaluate_fup_rules() -> dict[str, int]:
             if triggered:
                 # Find the highest-severity triggered rule
                 for rule_result in reversed(triggered):
+                    # Cap auto-lifts at the end of THIS rule's consumption window
+                    # (daily -> next local midnight, weekly -> next Monday,
+                    # monthly -> the billing-period end). Falls back to the quota
+                    # period boundary when no window is attached.
+                    cap_resets_at = rule_result.get("window_end") or (
+                        bucket.period_end.isoformat() if bucket.period_end else None
+                    )
                     if rule_result.get("action") == "block":
                         if _fup_should_enforce(
                             prior_status=prior_status,
@@ -273,13 +290,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                                     "rule_id": rule_result.get("rule_id"),
                                     "current_usage_gb": current_usage,
                                     "threshold_gb": rule_result.get("threshold_gb"),
-                                    # cap resets at the quota period boundary —
-                                    # lets enforcement auto-lift the block then.
-                                    "cap_resets_at": (
-                                        bucket.period_end.isoformat()
-                                        if bucket.period_end
-                                        else None
-                                    ),
+                                    "cap_resets_at": cap_resets_at,
                                 },
                                 subscription_id=sub.id,
                                 account_id=sub.subscriber_id,
@@ -316,13 +327,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                                     "rule_id": rule_result.get("rule_id"),
                                     "current_usage_gb": current_usage,
                                     "threshold_gb": rule_result.get("threshold_gb"),
-                                    # cap resets at the quota period boundary —
-                                    # lets enforcement auto-lift the throttle then.
-                                    "cap_resets_at": (
-                                        bucket.period_end.isoformat()
-                                        if bucket.period_end
-                                        else None
-                                    ),
+                                    "cap_resets_at": cap_resets_at,
                                 },
                                 subscription_id=sub.id,
                                 account_id=sub.subscriber_id,

@@ -11,9 +11,12 @@ B layers durable period buckets behind the same reader.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
+
+from sqlalchemy.orm import Session
 
 from app.models.fup import FupConsumptionPeriod
 
@@ -89,3 +92,121 @@ def fup_window_bounds(
 
 def _tz_name(tz) -> str:
     return getattr(tz, "key", None) or str(tz)
+
+
+@dataclass(frozen=True)
+class FupUsageWindow:
+    """Windowed FUP usage: the single value enforcement, UI, and notifications
+    all read. ``source`` records which backing store answered (so A/B drift can
+    be observed); ``is_authoritative`` is False when derived from possibly-sparse
+    samples — callers should avoid a hard throttle on non-authoritative zero."""
+
+    used_gb: float
+    window: FupWindow
+    source: str  # "quota_bucket" | "samples" | "fallback"
+    is_authoritative: bool
+
+
+async def _resolve_fup_usage(
+    db: Session,
+    subscription,
+    period: FupConsumptionPeriod | str | None,
+    now: datetime,
+    tz: ZoneInfo | None,
+) -> FupUsageWindow:
+    # Lazy import keeps fup_usage importable without pulling the bandwidth/VM
+    # stack at module load, and avoids any import cycle with usage_summary.
+    from app.services.usage_summary import (
+        _GB_BYTES,
+        _current_bucket_used_gb,
+        _subscriber_tz,
+        windowed_used_bytes,
+    )
+
+    p = period_value(period)
+    if tz is None:
+        tz = _subscriber_tz(db, str(subscription.subscriber_id))
+    window = fup_window_bounds(p, now, tz)
+
+    if p == "monthly":
+        # Authoritative billing-cycle usage from the rated quota bucket.
+        used = _current_bucket_used_gb(db, subscription.id)
+        return FupUsageWindow(
+            used_gb=float(used or 0.0),
+            window=window,
+            source="quota_bucket",
+            is_authoritative=used is not None,
+        )
+
+    total_bytes, authoritative = await windowed_used_bytes(
+        db, [subscription.id], window.start, window.end, tz
+    )
+    return FupUsageWindow(
+        used_gb=total_bytes / _GB_BYTES,
+        window=window,
+        source="samples",
+        is_authoritative=authoritative,
+    )
+
+
+async def get_fup_usage_gb_async(
+    db: Session,
+    subscription,
+    period: FupConsumptionPeriod | str | None,
+    now: datetime | None = None,
+    tz: ZoneInfo | None = None,
+) -> FupUsageWindow:
+    """Windowed FUP usage for one subscription. Await this from async callers
+    (e.g. the customer usage-summary endpoint)."""
+    return await _resolve_fup_usage(db, subscription, period, now or datetime.now(UTC), tz)
+
+
+def get_fup_usage_gb(
+    db: Session,
+    subscription,
+    period: FupConsumptionPeriod | str | None,
+    now: datetime | None = None,
+    tz: ZoneInfo | None = None,
+) -> FupUsageWindow:
+    """Sync entry for the Celery FUP-evaluation task. Bridges the async reader
+    via asyncio.run — do NOT call from within a running event loop (use
+    ``get_fup_usage_gb_async`` there)."""
+    return asyncio.run(
+        _resolve_fup_usage(db, subscription, period, now or datetime.now(UTC), tz)
+    )
+
+
+def build_usage_by_period(
+    db: Session,
+    subscription,
+    offer_id: str,
+    now: datetime,
+    monthly_used_gb: float,
+) -> dict[str, FupUsageWindow]:
+    """Usage per consumption period needed by an offer's active FUP rules.
+
+    monthly reuses the already-resolved billing-bucket figure (authoritative, no
+    extra query); daily/weekly come from the windowed reader. Keyed by the
+    period string so ``evaluate_rules`` can look each rule up by its
+    ``consumption_period``. Sync — call only from the Celery evaluation task.
+    """
+    from app.services.fup import FupPolicies
+
+    policy = FupPolicies.get_by_offer(db, offer_id)
+    periods = (
+        {period_value(r.consumption_period) for r in policy.rules if r.is_active}
+        if policy
+        else set()
+    )
+    out: dict[str, FupUsageWindow] = {}
+    for p in periods:
+        if p == "monthly":
+            out["monthly"] = FupUsageWindow(
+                used_gb=float(monthly_used_gb),
+                window=fup_window_bounds("monthly", now),  # monthly ignores tz
+                source="quota_bucket",
+                is_authoritative=True,
+            )
+        else:
+            out[p] = get_fup_usage_gb(db, subscription, p, now=now)
+    return out
