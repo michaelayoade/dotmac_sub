@@ -74,28 +74,47 @@
     <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                {{ table_head([
-                    {"label": "Subscriber"},
-                    {"label": "Claimed Amount"},
-                    {"label": "Bank"},
-                    {"label": "Reference"},
-                    {"label": "Transfer Date"},
-                    {"label": "Status"},
-                    {"label": "Submitted"},
-                    {"label": "Actions", "align": "right"}
-                ]) }}
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
+                        <th scope="col" class="sticky left-0 z-30 min-w-56 bg-slate-50 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 shadow-[1px_0_0_rgba(148,163,184,0.25)] dark:bg-slate-900 dark:text-slate-500 dark:shadow-[1px_0_0_rgba(51,65,85,0.85)]">
+                            Subscriber
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Claimed Amount
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Bank
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Reference
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Transfer Date
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Status
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Submitted
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                            Actions
+                        </th>
+                    </tr>
+                </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
                     {% if proofs %}
                     {% for proof in proofs %}
                     {% call table_row(color="emerald") %}
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td class="sticky left-0 z-20 min-w-56 whitespace-nowrap bg-white px-6 py-4 shadow-[1px_0_0_rgba(148,163,184,0.18)] transition-colors group-hover:bg-emerald-50 dark:bg-slate-800 dark:shadow-[1px_0_0_rgba(51,65,85,0.75)] dark:group-hover:bg-slate-800">
                             <div>
+                                {% set proof_detail_href = "/admin/billing/payment-proofs/" ~ proof.id %}
                                 {% if proof.account %}
-                                <p class="font-semibold text-slate-900 dark:text-white">
+                                <a href="{{ proof_detail_href }}" class="font-semibold text-slate-900 transition-colors hover:text-emerald-700 hover:underline dark:text-white dark:hover:text-emerald-300">
                                     {{ proof.account.first_name }} {{ proof.account.last_name }}
-                                </p>
+                                </a>
                                 {% else %}
-                                <p class="font-semibold text-slate-900 dark:text-white">Subscriber</p>
+                                <a href="{{ proof_detail_href }}" class="font-semibold text-slate-900 transition-colors hover:text-emerald-700 hover:underline dark:text-white dark:hover:text-emerald-300">Subscriber</a>
                                 {% endif %}
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ proof.id | string | truncate(8, True, '') }}</p>
                             </div>

@@ -47,6 +47,7 @@ from app.services.flutterwave import (
 )
 from app.services.paystack import verify_webhook_signature as verify_paystack_signature
 from app.services.response import list_response
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,7 @@ def _finalize_webhook_topup_intent(
         return
     intent.completed_payment_id = payment_id
     intent.completed_at = _now()
-    intent.status = "completed"
+    set_topup_intent_status(intent, "completed", source="webhook")
     if amount is not None:
         intent.actual_amount = amount
     db.commit()

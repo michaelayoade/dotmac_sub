@@ -33,6 +33,16 @@ class TestCustomerBillingRouteRegistration:
         }
         assert ("/portal/billing/topup/intent", "POST") in routes
 
+    def test_pay_intent_post_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/billing/pay/intent", "POST") in routes
+
 
 class TestPaymentSuccessBanner:
     def test_payment_success_only_marks_service_restored_after_post_payment_check(
@@ -172,7 +182,6 @@ class TestCustomerTopupRoutes:
         assert context["active_page"] == "billing"
         assert context["payment_options"] == [
             {"provider_type": "paystack", "label": "Pay with Paystack"},
-            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
         ]
 
     def test_topup_intent_route_returns_json_payload(self) -> None:
@@ -215,6 +224,89 @@ class TestCustomerTopupRoutes:
         payload = json.loads(response.body)
         assert payload["reference"] == "ref-topup"
         assert payload["checkout_metadata"]["topup_intent_id"] == "intent-1"
+
+    def test_pay_intent_route_returns_json_payload(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_invoice_payment_intent
+
+        request = MagicMock()
+        request.url_for.return_value = "https://selfcare.test/portal/billing/pay/verify"
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.create_invoice_payment_intent",
+                return_value={
+                    "provider_type": "paystack",
+                    "provider_public_key": "pk_test",
+                    "reference": "pay-ref",
+                    "amount": 2500,
+                    "currency": "NGN",
+                    "checkout_metadata": {
+                        "payment_flow": "invoice_payment",
+                        "invoice_id": "inv-1",
+                    },
+                    "charged": False,
+                    "checkout_url": None,
+                },
+            ) as create_intent,
+        ):
+            response = customer_create_invoice_payment_intent(
+                request=request,
+                payload={"invoice": "inv-1", "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 200
+        payload = json.loads(response.body)
+        assert payload["reference"] == "pay-ref"
+        assert payload["checkout_metadata"]["invoice_id"] == "inv-1"
+        assert create_intent.call_args.args[2] == "inv-1"
+
+    def test_pay_intent_route_requires_invoice(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_invoice_payment_intent
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with patch(
+            "app.web.customer.routes.get_current_customer_from_request",
+            return_value=customer,
+        ):
+            response = customer_create_invoice_payment_intent(
+                request=request, payload={"provider": "paystack"}, db=MagicMock()
+            )
+
+        assert response.status_code == 400
+        assert "invoice is required" in json.loads(response.body)["detail"]
+
+    def test_pay_intent_route_blocks_read_only_session(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_invoice_payment_intent
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1", "read_only": True}
+
+        with patch(
+            "app.web.customer.routes.get_current_customer_from_request",
+            return_value=customer,
+        ):
+            response = customer_create_invoice_payment_intent(
+                request=request,
+                payload={"invoice": "inv-1", "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 403
+        assert "View-only" in json.loads(response.body)["detail"]
 
     def test_topup_success_marks_service_restored_after_post_payment_check(
         self,

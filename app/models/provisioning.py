@@ -45,6 +45,59 @@ class ServiceState(enum.Enum):
     disconnected = "disconnected"
 
 
+# Allowed ServiceState transitions for the service-order state machine.
+# ``canceled`` is terminal (a sink). A freshly-created order with no recorded
+# transition is treated as implicitly in ``pending``. This table is enforced by
+# ``ServiceStateTransitions.create`` so the transition log cannot record
+# histories that never happened (e.g. canceled → active).
+ALLOWED_SERVICE_STATE_TRANSITIONS: dict[ServiceState, set[ServiceState]] = {
+    ServiceState.pending: {
+        ServiceState.installing,
+        ServiceState.provisioning,
+        ServiceState.active,
+        ServiceState.canceled,
+    },
+    ServiceState.installing: {
+        ServiceState.provisioning,
+        ServiceState.active,
+        ServiceState.canceled,
+        ServiceState.disconnected,
+    },
+    ServiceState.provisioning: {
+        ServiceState.active,
+        ServiceState.canceled,
+        ServiceState.disconnected,
+    },
+    ServiceState.active: {
+        ServiceState.suspended,
+        ServiceState.disconnected,
+        ServiceState.canceled,
+    },
+    ServiceState.suspended: {
+        ServiceState.active,
+        ServiceState.disconnected,
+        ServiceState.canceled,
+    },
+    ServiceState.disconnected: {
+        ServiceState.active,
+        ServiceState.canceled,
+    },
+    ServiceState.canceled: set(),
+}
+
+
+def assert_legal_service_state_transition(
+    from_state: "ServiceState", to_state: "ServiceState"
+) -> None:
+    """Raise ``ValueError`` if ``from_state → to_state`` is not allowed."""
+    if to_state == from_state:
+        return
+    if to_state not in ALLOWED_SERVICE_STATE_TRANSITIONS.get(from_state, set()):
+        raise ValueError(
+            f"Illegal service-state transition {from_state.value} → {to_state.value}"
+        )
+
+
 class ProvisioningVendor(enum.Enum):
     mikrotik = "mikrotik"
     huawei = "huawei"

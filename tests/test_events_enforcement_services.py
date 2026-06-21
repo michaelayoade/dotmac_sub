@@ -117,6 +117,7 @@ class TestEventType:
             EventType.subscription_canceled,
             EventType.subscription_upgraded,
             EventType.subscription_downgraded,
+            EventType.subscription_expired,
         }
         assert set(SUBSCRIPTION_LIFECYCLE_MAP.keys()) == expected_keys
 
@@ -1079,9 +1080,7 @@ class TestNotificationHandler:
 
         assert db_session.query(Notification).count() == 0
 
-    def test_balance_notification_switch_keeps_receipts(
-        self, db_session, subscriber
-    ):
+    def test_balance_notification_switch_keeps_receipts(self, db_session, subscriber):
         self._set_customer_balance_notifications(db_session, False)
 
         handler = NotificationHandler()

@@ -362,6 +362,13 @@ class BandwidthSamples(ListResponseMixin):
             # If recent raw samples are missing in PostgreSQL, fallback to VictoriaMetrics
             # so charts still render when live/stats are sourced from metrics storage.
             if not data:
+                # Release the read transaction before the slow VictoriaMetrics
+                # HTTP call. This is an async function holding a *sync* Session;
+                # awaiting with the transaction open leaves the connection
+                # "idle in transaction", which Postgres kills at the per-conn
+                # idle_in_transaction_session_timeout (120s) -> QueuePool reset
+                # churn. The PG rows are already materialised above.
+                db.rollback()
                 try:
                     from app.services.metrics_store import get_metrics_store
 
@@ -387,6 +394,10 @@ class BandwidthSamples(ListResponseMixin):
                 except Exception as e:
                     logger.error(f"VictoriaMetrics fallback query failed: {e}")
         else:
+            # Release any open read transaction before the VictoriaMetrics HTTP
+            # call so the connection isn't held idle-in-transaction across the
+            # await (see the postgres branch above).
+            db.rollback()
             # Query from VictoriaMetrics
             try:
                 from app.services.metrics_store import (

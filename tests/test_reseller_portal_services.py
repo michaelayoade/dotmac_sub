@@ -1267,10 +1267,17 @@ def test_reseller_can_deactivate_own_customer_account(db_session, reseller):
 
     db_session.refresh(account)
     db_session.refresh(subscription)
-    assert result["status"] == "blocked"
-    assert account.status == SubscriberStatus.blocked
+    # Deactivation now routes through the suspend domain op: the active service
+    # becomes suspended AND gains an enforcement lock (so it is restorable
+    # through the canonical path, not a lock-less ``stopped`` dead-end).
+    assert result["status"] == "suspended"
+    assert account.status == SubscriberStatus.suspended
     assert account.is_active is True
-    assert subscription.status == SubscriptionStatus.stopped
+    assert subscription.status == SubscriptionStatus.suspended
+
+    from app.services.account_lifecycle import get_active_locks
+
+    assert get_active_locks(db_session, subscription_id=str(subscription.id))
 
 
 def test_reseller_can_restore_own_deactivated_customer_account(db_session, reseller):

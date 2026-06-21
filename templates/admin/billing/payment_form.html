@@ -85,10 +85,9 @@
                     </div>
                 </div>
             </div>
-            {% if payment %}
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Payment Method</label>
-                {% set selected_method = "id:" ~ payment.payment_method_id if payment and payment.payment_method_id else "" %}
+                {% set selected_method = "id:" ~ payment.payment_method_id if payment and payment.payment_method_id else selected_payment_method_id|default('') %}
                 <select name="payment_method_id"
                         class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">Select payment method...</option>
@@ -96,7 +95,7 @@
                     <optgroup label="Method Types">
                         {% for method_type in payment_method_types %}
                             {% set method_value = "type:" ~ method_type %}
-                            <option value="{{ method_value }}">{{ method_type | replace('_', ' ') | title }}</option>
+                            <option value="{{ method_value }}" {% if selected_method == method_value %}selected{% endif %}>{{ method_type | replace('_', ' ') | title }}</option>
                         {% endfor %}
                     </optgroup>
                     {% endif %}
@@ -116,7 +115,7 @@
                     {% endif %}
                 </select>
             </div>
-            {% else %}
+            {% if not payment %}
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Collection Account</label>
                 <select name="collection_account_id"

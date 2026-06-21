@@ -849,6 +849,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="enforce_stopped_disabled",
+        env_var="RADIUS_ENFORCE_STOPPED_DISABLED",
+        value_type=SettingValueType.boolean,
+        # Default OFF: enabling it makes a transition to stopped/disabled
+        # actively disconnect the subscriber (walled-garden / removed) instead
+        # of waiting for the orphan sweep. Roll out deliberately after checking
+        # the would-disconnect audit log + suspension audit.
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="auth_shared_secret",
         env_var="RADIUS_AUTH_SHARED_SECRET",
         value_type=SettingValueType.string,
@@ -2251,6 +2262,46 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="",
         label="Favicon URL",
     ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_primary_color",
+        env_var="BRAND_PRIMARY_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default="#206a07",
+        label="Brand Primary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_secondary_color",
+        env_var="BRAND_SECONDARY_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default="#06b6d4",
+        label="Brand Secondary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_customer_url",
+        env_var="LOGIN_HERO_CUSTOMER_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Customer Login Image URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_reseller_url",
+        env_var="LOGIN_HERO_RESELLER_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Reseller Login Image URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_admin_url",
+        env_var="LOGIN_HERO_ADMIN_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Admin Login Image URL",
+    ),
     # Meta (Facebook/Instagram) Integration Settings
     SettingSpec(
         domain=SettingDomain.comms,
@@ -2327,6 +2378,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.comms,
         key="whatsapp_phone_number",
         env_var="WHATSAPP_PHONE_NUMBER",
+        value_type=SettingValueType.string,
+        default="",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="whatsapp_waba_id",
+        env_var="WHATSAPP_WABA_ID",
         value_type=SettingValueType.string,
         default="",
     ),

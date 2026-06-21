@@ -95,7 +95,7 @@
                     const chartData = {
                         labels: ['Used IPs', 'Available IPs'],
                         values: [{{ used_ips | default(0) }}, {{ (total_ips | default(0)) - (used_ips | default(0)) }}],
-                        colors: ['#06b6d4', '#e2e8f0']
+                        colors: ['#206a07', '#e2e8f0']
                     };
                     const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
                     DotmacCharts.registerChart('ip-pool-chart', chart);

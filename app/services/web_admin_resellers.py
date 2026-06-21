@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.config import settings
 from app.models.auth import AuthProvider, UserCredential
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
@@ -26,6 +27,7 @@ from app.schemas.rbac import SubscriberRoleCreate
 from app.schemas.subscriber import ResellerCreate, ResellerUpdate, SubscriberCreate
 from app.services import auth as auth_service
 from app.services import rbac as rbac_service
+from app.services import reseller_portal
 from app.services import subscriber as subscriber_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.auth_flow import hash_password
@@ -357,10 +359,32 @@ def create_reseller_with_user(
     reseller: Reseller,
     user_payload: dict[str, str | None],
 ) -> None:
-    """Create a subscriber credential, assign optional role, and link to reseller.
+    """Create a reseller portal login and link it to the reseller.
 
-    Commits the transaction on success.
+    Commits the transaction on success. When RESELLER_USER_PRINCIPAL_ENABLED is
+    on (Layer 3 cutover done), the login is a first-class ResellerUser principal
+    with no backing Subscriber; otherwise it falls back to the legacy
+    subscriber-with-user_type=reseller path (kept for rollback safety).
     """
+    if settings.reseller_user_principal_enabled:
+        email = user_payload["email"] or ""
+        full_name = (
+            f"{user_payload['first_name'] or ''} {user_payload['last_name'] or ''}"
+        ).strip() or None
+        reseller_portal.create_reseller_user_principal(
+            db,
+            reseller_id=str(reseller.id),
+            username=(user_payload.get("username") or email).strip(),
+            password=user_payload.get("password") or secrets.token_urlsafe(24),
+            email=email,
+            full_name=full_name,
+            must_change_password=True,
+        )
+        invite_note = send_reseller_portal_invite(db, email=email)
+        if "could not" in invite_note.lower():
+            logger.warning("Reseller invite issue for %s: %s", email, invite_note)
+        return
+
     subscriber = create_subscriber_credential(
         db,
         first_name=user_payload["first_name"] or "",

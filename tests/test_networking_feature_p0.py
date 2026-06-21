@@ -2200,10 +2200,7 @@ def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucke
     ).first()
     assert created_olt is not None
     assert created_olt.is_active is False
-    assert (
-        "Auto-created from monitoring inventory"
-        in str(created_olt.notes or "")
-    )
+    assert "Auto-created from monitoring inventory" in str(created_olt.notes or "")
 
 
 def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session):

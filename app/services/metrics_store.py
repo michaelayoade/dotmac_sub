@@ -6,6 +6,7 @@ using VictoriaMetrics' Prometheus-compatible API.
 """
 
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,41 @@ logger = logging.getLogger(__name__)
 
 VICTORIAMETRICS_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
 _DEFAULT_TIMEOUT = 30.0  # fallback when settings unavailable
+
+
+# VictoriaMetrics rejects a query_range whose point count (range / step) exceeds
+# -search.maxPointsPerTimeseries (default 30000) with HTTP 422. Target well under
+# that so wide windows (e.g. 24h at a 1s step = 86,400 points) are auto-coarsened.
+_VM_MAX_POINTS = 10_000
+
+
+def _parse_step_seconds(step: str) -> int:
+    """Parse a PromQL step ('1s'/'30s'/'1m'/'5m'/'1h'/'1d' or bare seconds)."""
+    text = str(step).strip().lower()
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        if text and text[-1] in units:
+            return max(1, int(float(text[:-1]) * units[text[-1]]))
+        return max(1, int(float(text)))
+    except ValueError:
+        return 60
+
+
+def _clamp_step_to_points(
+    start: datetime, end: datetime, step: str, max_points: int = _VM_MAX_POINTS
+) -> str:
+    """Coarsen ``step`` so (range / step) stays under VictoriaMetrics' point cap.
+
+    Callers may pass a fine step suited to raw storage (e.g. '1s'); over a wide
+    range that would exceed maxPointsPerTimeseries and 422. Bump the step up to
+    the coarser of (requested, range/max_points); never finer than requested.
+    """
+    range_seconds = max(1, int((end - start).total_seconds()))
+    step_seconds = _parse_step_seconds(step)
+    if range_seconds // step_seconds <= max_points:
+        return step
+    safe = max(step_seconds, math.ceil(range_seconds / max_points))
+    return f"{safe}s"
 
 
 @dataclass
@@ -205,6 +241,10 @@ class MetricsStore:
             List of time series results
         """
         client = await self._get_client()
+
+        # Coarsen the step if it would blow past VictoriaMetrics' point cap (e.g.
+        # a 1s step over 24h), which otherwise 422s and silently breaks the chart.
+        step = _clamp_step_to_points(start, end, step)
 
         params = {
             "query": query,

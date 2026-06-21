@@ -446,8 +446,9 @@
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for addr in ipv4_addresses %}
+                        {% set route_owner = addr.additional_route_owner if addr.additional_route_owner is defined else none %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
-                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment and addr.assignment.is_active else 'available' }}"
+                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ route_owner.subscriber_name if route_owner else '' }} {{ route_owner.cidr if route_owner else '' }} {{ 'assigned' if addr.assignment and addr.assignment.is_active else ('routed' if route_owner else 'available') }}"
                             data-row-copy="{{ addr.address }}"
                             data-pool-id="{{ addr.pool.id if addr.pool else '' }}">
                             <td class="px-6 py-4">
@@ -456,7 +457,9 @@
                             <td class="px-6 py-4"><span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ addr.address }}</span></td>
                             <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ addr.pool.name if addr.pool else '-' }}</td>
                             <td class="px-6 py-4">
-                                {% if addr.is_reserved %}
+                                {% if route_owner and not (addr.assignment and addr.assignment.is_active) %}
+                                <span class="inline-flex rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Routed</span>
+                                {% elif addr.is_reserved %}
                                 <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
                                 {% elif addr.assignment and addr.assignment.is_active %}
                                 <span class="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Assigned</span>
@@ -467,6 +470,9 @@
                             <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                                 {% if addr.assignment and addr.assignment.is_active and addr.assignment.subscriber %}
                                 {{ addr.assignment.subscriber.display_name or addr.assignment.subscriber.email or addr.assignment.subscriber.id }}
+                                {% elif route_owner %}
+                                <div class="font-medium text-slate-700 dark:text-slate-200">{{ route_owner.subscriber_name }}</div>
+                                <div class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ route_owner.cidr }}</div>
                                 {% else %}-{% endif %}
                             </td>
                         </tr>

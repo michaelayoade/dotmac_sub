@@ -768,6 +768,46 @@ class IPv6Address(Base):
     pool = relationship("IpPool", back_populates="ipv6_addresses")
 
 
+class IpPoolUtilizationSnapshot(Base):
+    """Point-in-time utilization of an IP pool, captured periodically.
+
+    Utilization is otherwise computed live (current counts only). A periodic
+    Celery task writes one row per pool so the admin pool detail can chart
+    usage over time rather than just the instantaneous bar.
+    """
+
+    __tablename__ = "ip_pool_utilization_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_ip_pool_util_snap_pool_time",
+            "pool_id",
+            "captured_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ip_pools.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    pool = relationship("IpPool")
+
+
 class OLTDevice(Base):
     __tablename__ = "olt_devices"
     __table_args__ = (
@@ -835,17 +875,14 @@ class OLTDevice(Base):
     last_ping_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_ping_ok: Mapped[bool | None] = mapped_column(Boolean)
 
-    # Circuit breaker state (Phase 4)
-    circuit_state: Mapped[str | None] = mapped_column(
-        String(20),
-        doc="closed (normal), open (failing), half_open (testing)",
-    )
-    circuit_failure_count: Mapped[int] = mapped_column(Integer, default=0)
-    backoff_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last successful SSH connection (telemetry). The Phase-4 OLT SSH
+    # circuit-breaker columns (circuit_state / circuit_failure_count /
+    # circuit_failure_threshold / backoff_until) were removed — the subsystem
+    # was inert (no producers; writes bypassed it). OLT writes go direct and
+    # cleanup is the ONT reconcile sweeper's job.
     last_successful_ssh_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
-    circuit_failure_threshold: Mapped[int] = mapped_column(Integer, default=3)
 
     # Zabbix monitoring integration
     zabbix_host_id: Mapped[str | None] = mapped_column(String(20))
@@ -3677,64 +3714,6 @@ class VerificationStatus(enum.Enum):
     verified = "verified"
     drift_detected = "drift_detected"
     failed = "failed"
-
-
-# =============================================================================
-# Phase 4: Circuit Breaker Models
-# =============================================================================
-
-
-class CircuitState(enum.Enum):
-    """Circuit breaker state for OLT SSH connections."""
-
-    closed = "closed"  # Normal operation
-    open = "open"  # Failing, reject requests
-    half_open = "half_open"  # Testing recovery
-
-
-class QueuedOltOperation(Base):
-    """Operations queued while OLT circuit is open.
-
-    When an OLT's circuit breaker is open, provisioning operations are
-    queued here for later execution when the circuit recovers.
-    """
-
-    __tablename__ = "queued_olt_operations"
-    __table_args__ = (
-        Index("ix_queued_olt_operations_olt_status", "olt_device_id", "status"),
-        Index("ix_queued_olt_operations_scheduled", "scheduled_for"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    olt_device_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("olt_devices.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    operation_type: Mapped[str] = mapped_column(
-        String(64), nullable=False, doc="authorize, deprovision, service_port"
-    )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="pending", server_default="pending"
-    )
-    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_error: Mapped[str | None] = mapped_column(Text)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-    olt_device = relationship("OLTDevice")
 
 
 # =============================================================================
