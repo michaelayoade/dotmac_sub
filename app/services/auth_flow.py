@@ -242,6 +242,35 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def principal_from_session(session: AuthSession) -> tuple[str, str]:
+    """(principal_type, principal_id) for an AuthSession — subscriber, system_user,
+    or reseller_user (Layer 3). Used by token issuance/refresh."""
+    if session.system_user_id:
+        return "system_user", str(session.system_user_id)
+    if getattr(session, "reseller_user_id", None):
+        return "reseller_user", str(session.reseller_user_id)
+    return "subscriber", str(session.subscriber_id)
+
+
+def auth_session_principal_filter(principal_type: str, principal_id):
+    """AuthSession column filter for a principal — keeps session lookup/revocation
+    correct for reseller_user principals (not just subscriber/system_user)."""
+    if principal_type == "system_user":
+        return AuthSession.system_user_id == principal_id
+    if principal_type == "reseller_user":
+        return AuthSession.reseller_user_id == principal_id
+    return AuthSession.subscriber_id == principal_id
+
+
+def credential_principal_filter(principal_type: str, principal_id):
+    """UserCredential column filter for a principal (reseller_user-aware)."""
+    if principal_type == "system_user":
+        return UserCredential.system_user_id == principal_id
+    if principal_type == "reseller_user":
+        return UserCredential.reseller_user_id == principal_id
+    return UserCredential.subscriber_id == principal_id
+
+
 def _jwt_encode_token(payload: dict[str, Any], secret: str, algorithm: str) -> str:
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -1236,8 +1265,7 @@ class AuthFlow(ListResponseMixin):
         session.user_agent = _truncate_user_agent(request.headers.get("user-agent"))
         db.commit()
 
-        principal_type = "system_user" if session.system_user_id else "subscriber"
-        principal_id = str(session.system_user_id or session.subscriber_id)
+        principal_type, principal_id = principal_from_session(session)
         access_token = _issue_access_token(
             db, principal_id, principal_type, str(session.id)
         )
@@ -1375,6 +1403,7 @@ def change_password(
         .where(
             (UserCredential.subscriber_id == principal_uuid)
             | (UserCredential.system_user_id == principal_uuid)
+            | (UserCredential.reseller_user_id == principal_uuid)
         )
         .where(UserCredential.provider == AuthProvider.local)
         .where(UserCredential.is_active.is_(True))
@@ -1395,12 +1424,19 @@ def change_password(
     credential.password_updated_at = now
     credential.must_change_password = False
 
-    is_system_user = credential.system_user_id is not None
-    session_principal_filter = (
-        AuthSession.system_user_id == credential.system_user_id
-        if is_system_user
-        else AuthSession.subscriber_id == credential.subscriber_id
-    )
+    if credential.system_user_id is not None:
+        principal_type = "system_user"
+        session_principal_filter = (
+            AuthSession.system_user_id == credential.system_user_id
+        )
+    elif getattr(credential, "reseller_user_id", None) is not None:
+        principal_type = "reseller_user"
+        session_principal_filter = (
+            AuthSession.reseller_user_id == credential.reseller_user_id
+        )
+    else:
+        principal_type = "subscriber"
+        session_principal_filter = AuthSession.subscriber_id == credential.subscriber_id
     revoke_query = (
         db.query(AuthSession)
         .filter(session_principal_filter)
@@ -1410,7 +1446,6 @@ def change_password(
     if current_session_id:
         revoke_query = revoke_query.filter(AuthSession.id != current_session_id)
     revoked = revoke_query.all()
-    principal_type = "system_user" if is_system_user else "subscriber"
     for session in revoked:
         session.status = SessionStatus.revoked
         session.revoked_at = now
@@ -1421,7 +1456,7 @@ def change_password(
             principal_type=principal_type,
             principal_id=str(principal_uuid),
         )
-    if not is_system_user:
+    if principal_type == "subscriber":
         _revoke_portal_sessions_for_subscriber(db, str(credential.subscriber_id))
 
     return now
