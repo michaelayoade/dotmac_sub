@@ -57,11 +57,7 @@ def test_apply_repoints_credential_and_mfa_to_reseller_user(db_session):
     assert ru.email == sub.email
     assert ru.full_name  # populated from the subscriber
 
-    mfa = (
-        db_session.query(MFAMethod)
-        .filter(MFAMethod.reseller_user_id == ru.id)
-        .one()
-    )
+    mfa = db_session.query(MFAMethod).filter(MFAMethod.reseller_user_id == ru.id).one()
     assert mfa.subscriber_id is None
 
 
