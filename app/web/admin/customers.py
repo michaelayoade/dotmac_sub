@@ -1925,6 +1925,26 @@ def bulk_send_customer_message(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.get(
+    "/bulk/whatsapp-template",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def bulk_whatsapp_template_details(
+    name: str = Query(..., min_length=1),
+    language: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Fetch Meta WhatsApp template component details for the broadcast modal."""
+    try:
+        return web_customer_actions_service.whatsapp_template_details(
+            db=db,
+            name=name,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.post(
     "/bulk/delete", dependencies=[Depends(require_permission("customer:delete"))]
 )

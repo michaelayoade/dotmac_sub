@@ -6,9 +6,10 @@ import logging
 from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from starlette.datastructures import FormData
 
+from app.models.domain_settings import SettingDomain
 from app.models.fup import (
     FupAction,
     FupConsumptionPeriod,
@@ -17,6 +18,7 @@ from app.models.fup import (
 )
 from app.services import catalog as catalog_service
 from app.services.fup import fup_policies, simulate_fup
+from app.services.settings_spec import resolve_value
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -201,6 +203,32 @@ def handle_policy_update(db: Session, offer_id: str, form: FormData) -> None:
     logger.info("Updated FUP policy settings for offer %s", offer_id)
 
 
+_SUBMONTHLY_PERIODS = {"daily", "weekly"}
+
+
+def _guard_submonthly_period(db: Session, consumption_period: str) -> None:
+    """Gate daily/weekly FUP rules behind an explicit opt-in (#21 safeguard).
+
+    Sub-monthly usage is samples/VM-derived (not billing-grade) and durable
+    period buckets aren't in place yet, so a daily/weekly rule must not silently
+    go live in prod. Off by default; ops flips ``fup_submonthly_rules_enabled``
+    (usage domain) after validating the metrics source.
+    """
+    if consumption_period not in _SUBMONTHLY_PERIODS:
+        return
+    raw = resolve_value(db, SettingDomain.usage, "fup_submonthly_rules_enabled")
+    if raw is None or str(raw).lower() not in {"true", "1", "on", "yes"}:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Daily/weekly FUP rules are gated. Sub-monthly usage is "
+                "samples-derived (not billing-grade); enable the "
+                "'fup_submonthly_rules_enabled' usage setting after validating "
+                "the metrics source."
+            ),
+        )
+
+
 def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
     """Add a new FUP rule from form data.
 
@@ -213,6 +241,7 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
 
     name = str(form.get("name", "")).strip()
     consumption_period = str(form.get("consumption_period", "monthly"))
+    _guard_submonthly_period(db, consumption_period)
     direction = str(form.get("direction", "up_down"))
     threshold_amount_raw = str(form.get("threshold_amount", "0"))
     threshold_unit = str(form.get("threshold_unit", "gb"))
@@ -281,6 +310,7 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
 
     consumption_period = str(form.get("consumption_period", ""))
     if consumption_period:
+        _guard_submonthly_period(db, consumption_period)
         kwargs["consumption_period"] = consumption_period
 
     direction = str(form.get("direction", ""))

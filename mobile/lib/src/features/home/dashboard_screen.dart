@@ -65,16 +65,18 @@ class DashboardScreen extends ConsumerWidget {
     final sessItems = sessions.asData?.value.items;
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
-    final dataToday = todaySummary?.totalBytes;
     final fup = todaySummary?.fup;
-    // Unlimited-with-FUP plans have no quota bucket; their "remaining" is the
-    // distance to the fair-use slowdown, which the API reports even at full
-    // speed.
-    final fupHeadroom = fup?.gbUntilThrottle;
-    // Yesterday's total gives "77.3 GB" a point of reference; 0/unavailable
-    // just keeps the plain label.
-    final dataYesterday =
-        ref.watch(usageSummaryProvider('yesterday')).asData?.value.totalBytes;
+    // Data the current service has consumed this billing cycle — the headline
+    // data figure on Home: meaningful for capped AND unlimited plans, unlike
+    // "data left" which reads as 0/empty on an unlimited plan. Falls back to
+    // today's total when the cycle aggregate isn't populated yet, so the card
+    // is never a misleading empty 0.
+    final dataUsedCycle =
+        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    final dataToday = todaySummary?.totalBytes;
+    final dataUsed = (dataUsedCycle != null && dataUsedCycle > 0)
+        ? dataUsedCycle
+        : dataToday;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -255,22 +257,11 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Plan-type-aware: capped -> what's LEFT; unlimited with
-                    // a fair-use rule -> headroom to the slowdown (proactive,
-                    // not only when approaching); truly unlimited -> today's
-                    // usage with yesterday for scale.
-                    label: currentQuota != null
-                        ? 'Data left'
-                        : fupHeadroom != null
-                            ? 'To slowdown'
-                            : (dataYesterday ?? 0) > 0
-                                ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
-                                : 'Data today',
-                    value: currentQuota != null
-                        ? Fmt.gb(currentQuota.remainingGb ?? 0)
-                        : fupHeadroom != null
-                            ? Fmt.gb(fupHeadroom)
-                            : (dataToday == null ? null : Fmt.bytes(dataToday)),
+                    // Data used on the current service this billing cycle —
+                    // meaningful for capped and unlimited plans alike (replaces
+                    // the old "data left", which read as 0 on unlimited plans).
+                    label: 'Data used',
+                    value: dataUsed == null ? null : Fmt.bytes(dataUsed),
                     highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||

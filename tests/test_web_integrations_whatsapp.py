@@ -5,7 +5,9 @@ import json
 import pytest
 
 from app.models.domain_settings import SettingDomain
+from app.models.notification import NotificationChannel, NotificationTemplate
 from app.services import domain_settings as domain_settings_service
+from app.services import web_notifications
 from app.services.credential_crypto import is_encrypted
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
 from app.services.secrets import is_secret_ref
@@ -85,6 +87,90 @@ def test_run_test_send_uses_current_configuration(db_session):
     assert result["provider"] == "meta_cloud_api"
     assert result["sent"] is False
     assert result["payload"]["template"]["name"] == "invoice_reminder"
+
+
+def test_meta_send_uses_phone_number_id_endpoint(db_session, monkeypatch):
+    save_config(
+        db_session,
+        provider="meta_cloud_api",
+        phone_number="445744508632976",
+        webhook_url="",
+        api_key="meta-token",
+        api_secret="",
+        message_templates_json="[]",
+    )
+
+    captured = {}
+
+    class Response:
+        status_code = 200
+        text = "{}"
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(whatsapp_connector.httpx, "post", fake_post)
+
+    result = whatsapp_connector.send_template_message(
+        db_session,
+        recipient="2348169895859",
+        template_name="good_day",
+        dry_run=False,
+    )
+
+    assert result["ok"] is True
+    assert captured["url"].endswith("/445744508632976/messages")
+    assert captured["headers"]["Authorization"] == "Bearer meta-token"
+    assert captured["json"]["template"]["name"] == "good_day"
+
+
+def test_whatsapp_notification_template_test_uses_template_code(
+    db_session, monkeypatch
+):
+    template = NotificationTemplate(
+        name="Good Day",
+        code="good_day",
+        channel=NotificationChannel.whatsapp,
+        body="good_day",
+        is_active=True,
+    )
+    db_session.add(template)
+    db_session.commit()
+    db_session.refresh(template)
+
+    captured = {}
+
+    def fake_send_template_message(
+        db, *, recipient, template_name, language=None, variables=None, dry_run=True
+    ):
+        captured["recipient"] = recipient
+        captured["template_name"] = template_name
+        captured["language"] = language
+        captured["dry_run"] = dry_run
+        return {"ok": True, "provider": "meta_cloud_api"}
+
+    monkeypatch.setattr(
+        whatsapp_connector, "send_template_message", fake_send_template_message
+    )
+
+    message = web_notifications.send_template_test(
+        db_session,
+        template_id=template.id,
+        test_recipient="2348169895859",
+        test_variables_json="{}",
+    )
+
+    assert message == "Test WhatsApp message sent to 2348169895859"
+    assert captured == {
+        "recipient": "2348169895859",
+        "template_name": "good_day",
+        "language": None,
+        "dry_run": False,
+    }
 
 
 def test_save_config_rejects_invalid_templates_json(db_session):
