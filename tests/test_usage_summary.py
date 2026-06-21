@@ -225,16 +225,16 @@ def test_window_with_no_data_falls_back_without_false_zero(
 
 def test_fup_summary_none_without_subscriptions(db_session, subscriber):
     # A subscriber with no subscriptions has nothing to report.
-    assert svc.fup_summary(db_session, str(subscriber.id)) is None
+    assert _run_async(svc.fup_summary(db_session, str(subscriber.id))) is None
 
 
 def test_fup_summary_none_db_guard():
     # Endpoint passes db=None in some unit paths; must not blow up.
-    assert svc.fup_summary(None, str(uuid.uuid4())) is None
+    assert _run_async(svc.fup_summary(None, str(uuid.uuid4()))) is None
 
 
 def test_fup_summary_full_speed_when_no_state(db_session, subscriber, subscription):
-    out = svc.fup_summary(db_session, str(subscriber.id))
+    out = _run_async(svc.fup_summary(db_session, str(subscriber.id)))
     assert out["status"] == "full_speed"
     assert out["is_reduced"] is False
     # No FUP policy on the offer → no headroom/policy context to show.
@@ -286,7 +286,7 @@ def test_fup_summary_healthy_shows_policy_terms_and_headroom(
     _add_throttle_rule(db_session, subscription, threshold_gb=100)
     _put_bucket(db_session, subscription, used_gb=40)
 
-    out = svc.fup_summary(db_session, str(subscriber.id))
+    out = _run_async(svc.fup_summary(db_session, str(subscriber.id)))
     assert out["status"] == "full_speed"
     assert out["threshold_gb"] == 100.0
     assert out["used_gb"] == 40.0
@@ -300,7 +300,7 @@ def test_fup_summary_approaching_before_enforcement(
     _add_throttle_rule(db_session, subscription, threshold_gb=100)
     _put_bucket(db_session, subscription, used_gb=85)
 
-    out = svc.fup_summary(db_session, str(subscriber.id))
+    out = _run_async(svc.fup_summary(db_session, str(subscriber.id)))
     assert out["status"] == "approaching"
     assert out["is_reduced"] is False
     assert out["gb_until_throttle"] == 15.0
@@ -339,7 +339,7 @@ def test_fup_summary_throttled_with_plain_language(
     )
     db_session.commit()
 
-    out = svc.fup_summary(db_session, str(subscriber.id))
+    out = _run_async(svc.fup_summary(db_session, str(subscriber.id)))
     assert out["status"] == "throttled"
     assert out["is_reduced"] is True
     assert out["speed_reduction_percent"] == 75.0

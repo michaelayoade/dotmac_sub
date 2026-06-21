@@ -56,6 +56,17 @@ def test_settings_branding_update_ignores_non_subscriber_uploaded_by(
         main_logo_file=upload,
         dark_logo_file=None,
         favicon_file=None,
+        brand_primary_color=None,
+        brand_secondary_color=None,
+        login_hero_customer_url=None,
+        login_hero_reseller_url=None,
+        login_hero_admin_url=None,
+        remove_login_hero_customer=None,
+        remove_login_hero_reseller=None,
+        remove_login_hero_admin=None,
+        login_hero_customer_file=None,
+        login_hero_reseller_file=None,
+        login_hero_admin_file=None,
         db=db_session,
     )
 

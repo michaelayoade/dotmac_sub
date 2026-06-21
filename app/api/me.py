@@ -718,7 +718,7 @@ async def my_usage_summary(
     """
     subscriber_id = _subscriber_id(principal)
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
-    summary["fup"] = usage_summary_service.fup_summary(db, subscriber_id)
+    summary["fup"] = await usage_summary_service.fup_summary(db, subscriber_id)
     return summary
 
 

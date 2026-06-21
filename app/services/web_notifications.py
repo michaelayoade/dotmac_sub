@@ -222,10 +222,10 @@ def send_template_test(
         )
         return f"Test email sent to {test_recipient}"
     if template.channel == NotificationChannel.whatsapp:
-        result = whatsapp_service.send_text_message(
+        result = whatsapp_service.send_template_message(
             db=db,
             recipient=recipient,
-            body=rendered_body,
+            template_name=template.code,
             dry_run=False,
         )
         if not result.get("ok"):
@@ -295,6 +295,28 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
         limit=500,
         offset=0,
     )
+    whatsapp_config = whatsapp_connector.load_whatsapp_config(db)
+    whatsapp_registry_templates = [
+        {
+            "id": (
+                f"whatsapp:{str(item.get('name') or '').strip()}:"
+                f"{str(item.get('language') or '').strip() or 'en'}"
+            ),
+            "name": str(item.get("name") or "").strip(),
+            "code": str(item.get("name") or "").strip(),
+            "language": str(item.get("language") or "").strip() or "en",
+            "label": (
+                f"{str(item.get('name') or '').strip()} "
+                f"({str(item.get('language') or '').strip() or 'en'})"
+            ),
+            "channel": NotificationChannel.whatsapp.value,
+            "subject": "",
+            "is_active": True,
+            "is_registry_template": True,
+        }
+        for item in whatsapp_config.get("templates", [])
+        if str(item.get("name") or "").strip()
+    ]
     channel_checks = {
         NotificationChannel.email.value: _email_channel_ready(db),
         NotificationChannel.sms.value: _sms_channel_ready(db),
@@ -303,7 +325,9 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
     channels_state = [
         {
             "id": channel.value,
-            "label": channel.value.capitalize(),
+            "label": "WhatsApp"
+            if channel == NotificationChannel.whatsapp
+            else channel.value.capitalize(),
             "enabled": channel.value
             in {
                 NotificationChannel.email.value,
@@ -314,7 +338,9 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             "message": channel_checks.get(channel.value, (False, "Unsupported"))[1],
             "template_count": sum(
                 1 for template in template_list if template.channel == channel
-            ),
+            )
+            if channel != NotificationChannel.whatsapp
+            else len(whatsapp_registry_templates),
             "settings_url": (
                 "/admin/system/email"
                 if channel == NotificationChannel.email
@@ -334,12 +360,17 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             "id": str(template.id),
             "name": template.name,
             "code": template.code,
+            "language": "",
+            "label": template.name,
             "channel": template.channel.value,
             "subject": template.subject or "",
             "is_active": bool(template.is_active),
+            "is_registry_template": False,
         }
         for template in template_list
+        if template.channel != NotificationChannel.whatsapp
     ]
+    templates_state.extend(whatsapp_registry_templates)
     return {
         "bulk_notification_channels": channels_state,
         "bulk_notification_templates": templates_state,

@@ -1572,6 +1572,45 @@ def customer_pay_invoice(
     )
 
 
+@router.post("/billing/pay/intent")
+def customer_create_invoice_payment_intent(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Start an invoice payment with the customer's chosen method."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if customer.get("read_only"):
+        return JSONResponse(
+            {"detail": "View-only sessions cannot make payments"}, status_code=403
+        )
+
+    invoice_id = str(payload.get("invoice") or payload.get("invoice_id") or "").strip()
+    if not invoice_id:
+        return JSONResponse({"detail": "invoice is required"}, status_code=400)
+    # An Idempotency-Key header (or body token) makes saved-card charges safe
+    # against double-submit; gateway-redirect flows ignore it.
+    idempotency_key = request.headers.get("Idempotency-Key") or payload.get(
+        "idempotency_key"
+    )
+    try:
+        result = customer_portal.create_invoice_payment_intent(
+            db,
+            customer,
+            invoice_id,
+            provider=payload.get("provider"),
+            payment_method_id=payload.get("payment_method_id"),
+            redirect_url=str(request.url_for("customer_verify_payment")),
+            idempotency_key=idempotency_key,
+        )
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    return JSONResponse(content=jsonable_encoder(result))
+
+
 @router.get("/billing/pay/verify", response_class=HTMLResponse)
 def customer_verify_payment(
     request: Request,
@@ -1594,6 +1633,11 @@ def customer_verify_payment(
 
         result = customer_portal.verify_and_record_payment(
             db, customer, reference, provider=provider
+        )
+        # Close out the pending invoice-checkout trace (no-op for references
+        # that never had one, e.g. saved-card charges or the bearer API).
+        customer_portal.complete_invoice_payment_intent(
+            db, reference, result.get("payment")
         )
         if save_card is True:
             # Best-effort, Paystack-only; never breaks the recorded payment.
