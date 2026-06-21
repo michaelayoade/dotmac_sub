@@ -1663,6 +1663,117 @@ class TestSubscriptions:
         assert updated.status == SubscriptionStatus.canceled
         assert updated.canceled_at is not None
 
+    def test_terminal_status_cannot_be_resurrected(
+        self, db_session, subscriber, catalog_offer
+    ):
+        """A canceled/disabled/expired subscription cannot be flipped back to
+        active via the raw update path (terminal-state resurrection guard)."""
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+        now = datetime.now(UTC)
+        catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(status=SubscriptionStatus.canceled, canceled_at=now),
+        )
+
+        for revived in (
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.pending,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                catalog_service.subscriptions.update(
+                    db_session,
+                    str(sub.id),
+                    SubscriptionUpdate(status=revived),
+                )
+            assert exc_info.value.status_code == 409
+            assert "terminal" in str(exc_info.value.detail)
+
+        # Re-fetch: status must still be terminal, untouched.
+        db_session.refresh(sub)
+        assert sub.status == SubscriptionStatus.canceled
+
+    def test_terminal_status_noop_update_allowed(
+        self, db_session, subscriber, catalog_offer
+    ):
+        """Editing a non-status field on a terminal subscription is allowed
+        (no transition occurs)."""
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+        catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(
+                status=SubscriptionStatus.canceled, canceled_at=datetime.now(UTC)
+            ),
+        )
+        updated = catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(service_description="closed account note"),
+        )
+        assert updated.status == SubscriptionStatus.canceled
+        assert updated.service_description == "closed account note"
+
+    def test_disabled_transition_resolves_locks_and_releases_ips(
+        self, db_session, subscriber, catalog_offer, monkeypatch
+    ):
+        """Transition to a terminal status (disabled) via the catalog write
+        path must resolve enforcement locks and release service IPs, same as
+        cancel/expire."""
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services import account_lifecycle as al
+
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+            ),
+        )
+        lock = EnforcementLock(
+            subscription_id=sub.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.overdue,
+            source="test",
+            is_active=True,
+        )
+        db_session.add(lock)
+        db_session.flush()
+
+        released = []
+        monkeypatch.setattr(
+            al,
+            "_release_service_ips",
+            lambda db, subscription: released.append(str(subscription.id)),
+        )
+
+        catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(status=SubscriptionStatus.disabled),
+        )
+
+        db_session.refresh(lock)
+        assert lock.is_active is False
+        assert lock.resolved_at is not None
+        assert str(sub.id) in released
+
     def test_expire_subscriptions(self, db_session, subscriber, catalog_offer):
         """Subscriptions past end_at should be expired."""
         now = datetime.now(UTC)

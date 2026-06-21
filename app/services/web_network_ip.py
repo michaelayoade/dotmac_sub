@@ -15,7 +15,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
 from app.models.catalog import NasDevice, Subscription
-from app.models.network import IPAssignment, IPv4Address, IPv6Address, IPVersion
+from app.models.network import (
+    IPAssignment,
+    IPv4Address,
+    IPv6Address,
+    IPVersion,
+    SubscriberAdditionalRoute,
+)
 from app.schemas.network import (
     IPAssignmentCreate,
     IPAssignmentUpdate,
@@ -120,7 +126,9 @@ def _normalize_ipv4_host(value: object) -> str | None:
     if not text:
         return None
     try:
-        parsed = ipaddress.ip_interface(text) if "/" in text else ipaddress.ip_address(text)
+        parsed = (
+            ipaddress.ip_interface(text) if "/" in text else ipaddress.ip_address(text)
+        )
     except ValueError:
         return None
     address = parsed.ip if hasattr(parsed, "ip") else parsed
@@ -146,7 +154,9 @@ def _device_ip_references_by_ip(
     candidate_values = set(ip_addresses)
     candidate_values.update(f"{ip}/32" for ip in ip_addresses)
 
-    def add_reference(ip_value: object, *, source: str, label: object, entity_id: object) -> None:
+    def add_reference(
+        ip_value: object, *, source: str, label: object, entity_id: object
+    ) -> None:
         ip = _normalize_ipv4_host(ip_value)
         if ip not in ip_addresses:
             return
@@ -241,6 +251,50 @@ def _device_ip_references_by_ip(
     return result
 
 
+def _device_ipv4_hosts(db) -> set[str]:
+    from app.models.network import OLTDevice
+    from app.models.network_monitoring import NetworkDevice
+    from app.models.radius import RadiusClient
+    from app.models.router_management import Router
+
+    hosts: set[str] = set()
+
+    def add_host(value: object) -> None:
+        ip = _normalize_ipv4_host(value)
+        if ip:
+            hosts.add(ip)
+
+    def query_rows(model):
+        try:
+            return db.query(model).all()
+        except Exception:
+            return []
+
+    for device in query_rows(NetworkDevice):
+        if getattr(device, "is_active", True) is not False:
+            add_host(getattr(device, "mgmt_ip", None))
+
+    for device in query_rows(NasDevice):
+        if getattr(device, "is_active", True) is False:
+            continue
+        add_host(getattr(device, "management_ip", None))
+        add_host(getattr(device, "ip_address", None))
+        add_host(getattr(device, "nas_ip", None))
+
+    for device in query_rows(OLTDevice):
+        if getattr(device, "is_active", True) is not False:
+            add_host(getattr(device, "mgmt_ip", None))
+
+    for router in query_rows(Router):
+        add_host(getattr(router, "management_ip", None))
+
+    for client in query_rows(RadiusClient):
+        if getattr(client, "is_active", True) is not False:
+            add_host(getattr(client, "client_ip", None))
+
+    return hosts
+
+
 def _query_count(db, model, where_clause=None) -> int:
     from sqlalchemy import func, select
 
@@ -282,6 +336,76 @@ def _subscriber_display_name(subscriber) -> str | None:
         or str(getattr(subscriber, "id", "") or "").strip()
         or None
     )
+
+
+def _additional_route_owners_by_ipv4(
+    db,
+    *,
+    ip_addresses: set[str],
+) -> dict[str, dict[str, str]]:
+    """Map displayed IPv4 hosts to active subscriber routed blocks."""
+    parsed_hosts: dict[str, ipaddress.IPv4Address] = {}
+    for ip_text in ip_addresses:
+        try:
+            ip = ipaddress.ip_address(str(ip_text))
+        except ValueError:
+            continue
+        if ip.version == 4:
+            parsed_hosts[str(ip)] = ip
+    if not parsed_hosts:
+        return {}
+
+    try:
+        routes = (
+            db.query(SubscriberAdditionalRoute)
+            .options(joinedload(SubscriberAdditionalRoute.subscriber))
+            .filter(SubscriberAdditionalRoute.is_active.is_(True))
+            .all()
+        )
+    except Exception:
+        routes = []
+
+    owners: dict[str, dict[str, str]] = {}
+    owner_prefixes: dict[str, int] = {}
+    for route in routes:
+        try:
+            network = ipaddress.ip_network(str(route.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+
+        subscriber = getattr(route, "subscriber", None)
+        owner = {
+            "subscriber_id": str(getattr(route, "subscriber_id", "") or ""),
+            "subscriber_name": _subscriber_display_name(subscriber)
+            or "Unknown subscriber",
+            "cidr": str(getattr(route, "cidr", "") or ""),
+            "metric": str(getattr(route, "metric", "") or ""),
+            "route_id": str(getattr(route, "id", "") or ""),
+        }
+        for ip_text, ip in parsed_hosts.items():
+            if ip not in network:
+                continue
+            previous_prefix = owner_prefixes.get(ip_text, -1)
+            if network.prefixlen < previous_prefix:
+                continue
+            owners[ip_text] = owner
+            owner_prefixes[ip_text] = network.prefixlen
+
+    return owners
+
+
+def _annotate_ipv4_additional_route_owners(db, addresses) -> None:
+    ip_addresses = {
+        str(getattr(address, "address", "") or "").strip()
+        for address in addresses
+        if getattr(address, "address", None)
+    }
+    owners = _additional_route_owners_by_ipv4(db, ip_addresses=ip_addresses)
+    for address in addresses:
+        ip_text = str(getattr(address, "address", "") or "").strip()
+        address.__dict__["additional_route_owner"] = owners.get(ip_text)
 
 
 def _subscription_display_name(subscription) -> str | None:
@@ -709,21 +833,82 @@ def _build_pool_and_block_utilization(
 
     ipv4_counts = _agg_counts(IPv4Address, ipv4_pool_ids)
     ipv6_counts = _agg_counts(IPv6Address, ipv6_pool_ids)
+    device_ipv4_hosts = _device_ipv4_hosts(db) if ipv4_pool_ids else set()
+    device_ipv4_host_items: list[tuple[str, ipaddress.IPv4Address]] = []
+    for ip_text in device_ipv4_hosts:
+        try:
+            ip = ipaddress.ip_address(ip_text)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            device_ipv4_host_items.append((ip_text, ip))
+    used_ipv4_by_pool: dict[str, set[str]] = defaultdict(set)
+    reserved_ipv4_by_pool: dict[str, set[str]] = defaultdict(set)
+
+    if ipv4_pool_ids:
+        ipv4_records_for_pools = (
+            db.query(IPv4Address)
+            .options(joinedload(IPv4Address.assignment))
+            .filter(IPv4Address.pool_id.in_(ipv4_pool_ids))
+            .all()
+        )
+        for record in ipv4_records_for_pools:
+            pool_id = str(getattr(record, "pool_id", "") or "")
+            address = str(getattr(record, "address", "") or "").strip()
+            if not pool_id or not address:
+                continue
+            if _active_assignment(record) or _is_ont_management_allocation(record):
+                used_ipv4_by_pool[pool_id].add(address)
+            elif getattr(record, "is_reserved", False):
+                reserved_ipv4_by_pool[pool_id].add(address)
+
+    def _device_hosts_in_ipv4_network(
+        network: ipaddress.IPv4Network,
+        *,
+        allow_network_broadcast: bool,
+    ) -> set[str]:
+        hosts: set[str] = set()
+        for ip_text, ip in device_ipv4_host_items:
+            if ip not in network:
+                continue
+            if (
+                not allow_network_broadcast
+                and network.prefixlen < 31
+                and ip in {network.network_address, network.broadcast_address}
+            ):
+                continue
+            hosts.add(ip_text)
+        return hosts
 
     for pool in pools:
         pool_id = str(pool.id)
         version = _ip_version_value(getattr(pool, "ip_version", None))
         if version == "ipv4":
             allow_network_broadcast = _pool_allows_network_broadcast(pool)
+            network = _parse_network(str(pool.cidr))
             total = _ipv4_capacity_count(
                 str(pool.cidr), allow_network_broadcast=allow_network_broadcast
             )
             counts = ipv4_counts.get(pool_id, {"tracked": 0, "used": 0, "reserved": 0})
+            device_hosts = (
+                _device_hosts_in_ipv4_network(
+                    network, allow_network_broadcast=allow_network_broadcast
+                )
+                if (
+                    getattr(pool, "is_active", True) is not False
+                    and network is not None
+                    and network.version == 4
+                )
+                else set()
+            )
         else:
             total = _ipv6_capacity_count(str(pool.cidr))
             counts = ipv6_counts.get(pool_id, {"tracked": 0, "used": 0, "reserved": 0})
-        used = counts["used"]
-        reserved = counts["reserved"]
+            device_hosts = set()
+        already_used = used_ipv4_by_pool.get(pool_id, set())
+        reserved_addresses = reserved_ipv4_by_pool.get(pool_id, set())
+        used = counts["used"] + len(device_hosts - already_used)
+        reserved = max(counts["reserved"] - len(device_hosts & reserved_addresses), 0)
         available = max(total - used - reserved, 0)
         percent = int(round((used / total) * 100)) if total > 0 else 0
         pool_utilization[pool_id] = {
@@ -795,6 +980,8 @@ def _build_pool_and_block_utilization(
         used = 0
         reserved = 0
         tracked = 0
+        used_addresses: set[str] = set()
+        reserved_addresses: set[str] = set()
         for record in ipv4_by_pool.get(pool_id, []):
             try:
                 address = ipaddress.ip_address(str(record.address))
@@ -805,8 +992,20 @@ def _build_pool_and_block_utilization(
             tracked += 1
             if _active_assignment(record) or _is_ont_management_allocation(record):
                 used += 1
+                used_addresses.add(str(record.address))
             elif getattr(record, "is_reserved", False):
                 reserved += 1
+                reserved_addresses.add(str(record.address))
+        device_hosts = (
+            _device_hosts_in_ipv4_network(
+                network, allow_network_broadcast=allow_network_broadcast
+            )
+            if getattr(block, "is_active", True) is not False
+            and getattr(pool, "is_active", True) is not False
+            else set()
+        )
+        used += len(device_hosts - used_addresses)
+        reserved = max(reserved - len(device_hosts & reserved_addresses), 0)
         total = _ipv4_capacity_count(
             str(block.cidr), allow_network_broadcast=allow_network_broadcast
         )
@@ -860,6 +1059,10 @@ def _build_ipv4_range_rows(
         db,
         ip_addresses=set(limited_hosts),
     )
+    route_owners_by_ip = _additional_route_owners_by_ipv4(
+        db,
+        ip_addresses=set(limited_hosts),
+    )
 
     rows: list[dict[str, object]] = []
     assigned_count = 0
@@ -868,6 +1071,7 @@ def _build_ipv4_range_rows(
     for ip in limited_hosts:
         record = address_records.get(ip)
         device_refs = device_refs_by_ip.get(ip, [])
+        route_owner = route_owners_by_ip.get(ip)
         assignment = _active_assignment(record) if record else None
         subscriber = getattr(assignment, "subscriber", None) if assignment else None
         subscription = _matching_subscription_for_assignment(
@@ -878,17 +1082,31 @@ def _build_ipv4_range_rows(
         status = _ipam_row_status(record)
         if status in {"available", "reserved"} and device_refs:
             status = "device"
+        if status in {"available", "reserved"} and route_owner:
+            status = "routed"
         if status in {"assigned", "ont_management", "device"}:
+            assigned_count += 1
+        elif status == "routed":
             assigned_count += 1
         elif status == "reserved":
             reserved_count += 1
         else:
             available_count += 1
 
+        subscriber_name = _subscriber_display_name(subscriber)
+        subscriber_id = str(getattr(subscriber, "id", "") or "") or None
+        subscription_id = str(getattr(subscription, "id", "") or "") or None
+        service_ref = str(getattr(subscription, "service_id", "") or "").strip() or None
+        if route_owner and not subscriber_name:
+            subscriber_name = route_owner.get("subscriber_name") or None
+            subscriber_id = route_owner.get("subscriber_id") or None
+        if route_owner and not service_ref:
+            service_ref = route_owner.get("cidr") or None
+
         device_label = ", ".join(ref["label"] for ref in device_refs) or None
-        device_sources = ", ".join(
-            sorted({ref["source"] for ref in device_refs})
-        ) or None
+        device_sources = (
+            ", ".join(sorted({ref["source"] for ref in device_refs})) or None
+        )
         device_search = " ".join(
             f"{ref['label']} {ref['source']}" for ref in device_refs
         )
@@ -904,31 +1122,24 @@ def _build_ipv4_range_rows(
                     f"{str(getattr(subscriber, 'last_name', '') or '').strip()} "
                     f"{str(getattr(subscriber, 'email', '') or '').strip()} "
                     f"{str(getattr(subscription, 'service_id', '') or '').strip()} "
+                    f"{route_owner.get('subscriber_name', '') if route_owner else ''} "
+                    f"{route_owner.get('cidr', '') if route_owner else ''} "
                     f"{device_search}"
                 )
                 .strip()
                 .lower(),
-                "subscriber_name": (
-                    str(getattr(subscriber, "full_name", "") or "").strip()
-                    or (
-                        f"{str(getattr(subscriber, 'first_name', '') or '').strip()} "
-                        f"{str(getattr(subscriber, 'last_name', '') or '').strip()}"
-                    ).strip()
-                    or str(getattr(subscriber, "email", "") or "").strip()
-                    or None
-                ),
-                "subscriber_id": str(getattr(subscriber, "id", "") or "") or None,
-                "subscription_id": str(getattr(subscription, "id", "") or "") or None,
-                "service_ref": str(
-                    getattr(subscription, "service_id", "") or ""
-                ).strip()
-                or None,
+                "subscriber_name": subscriber_name,
+                "subscriber_id": subscriber_id,
+                "subscription_id": subscription_id,
+                "service_ref": service_ref,
                 "device": device_label
                 or str(metadata.get("router") or "").strip()
                 or None,
                 "notes": str(getattr(record, "notes", "") or "").strip()
                 or device_sources
+                or ("Additional routed block" if route_owner else None)
                 or None,
+                "additional_route_owner": route_owner,
             }
         )
 
@@ -1184,6 +1395,21 @@ def assign_ipv4_address(
                 "reassigned": False,
             }
 
+    # Snapshot the prior owner BEFORE update() mutates the existing row in
+    # place. The ip_assignments row carries only current state; ownership
+    # history lives in the audit log, so the caller needs these values to
+    # record the transition (see release_ipv4_address_from_form / reassign).
+    previous_subscriber_id = (
+        str(previous_assignment.subscriber_id)
+        if previous_assignment and previous_assignment.subscriber_id
+        else None
+    )
+    previous_subscription_id = (
+        str(previous_assignment.subscription_id)
+        if previous_assignment and previous_assignment.subscription_id
+        else None
+    )
+
     assignment_payload = {
         "account_id": UUID(normalized_subscriber_id),
         "subscription_id": UUID(normalized_subscription_id)
@@ -1209,6 +1435,8 @@ def assign_ipv4_address(
         "address": address_record,
         "assignment": assignment,
         "previous_assignment": previous_assignment,
+        "previous_subscriber_id": previous_subscriber_id,
+        "previous_subscription_id": previous_subscription_id,
         "created": previous_assignment is None,
         "reassigned": previous_assignment is not None,
     }
@@ -1300,6 +1528,7 @@ def build_ip_management_data(
     if pool_id:
         ipv4_q = ipv4_q.where(IPv4Address.pool_id == pool_id)
     ipv4_addresses = list(db.scalars(ipv4_q).all())
+    _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
 
     ipv6_q = (
         select(IPv6Address)
@@ -1765,6 +1994,7 @@ def build_ip_pool_detail_data(db, *, pool_id: str) -> dict[str, object] | None:
             .limit(100)
             .all()
         )
+        _annotate_ipv4_additional_route_owners(db, assignments)
     else:
         assignments = (
             db.query(IPv6Address)
@@ -1957,6 +2187,7 @@ def build_ip_addresses_data(db, *, ip_version: str) -> dict[str, object]:
             limit=200,
             offset=0,
         )
+        _annotate_ipv4_additional_route_owners(db, addresses)
     else:
         addresses = network_service.ipv6_addresses.list(
             db=db,

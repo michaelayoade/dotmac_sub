@@ -198,6 +198,10 @@ def require_user_auth(
     )
     if principal_type == "system_user":
         query = query.filter(AuthSession.system_user_id == principal_id)
+    elif principal_type == "reseller_user":
+        # Layer 3: reseller_user bearer principals key the session on
+        # reseller_user_id, not subscriber_id.
+        query = query.filter(AuthSession.reseller_user_id == principal_id)
     else:
         query = query.filter(AuthSession.subscriber_id == principal_id)
     session = query.first()

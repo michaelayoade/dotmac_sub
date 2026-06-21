@@ -10,6 +10,13 @@ import os
 # circuit breaker keeps subsequent lookups cheap.
 os.environ["REDIS_URL"] = "redis://127.0.0.1:9/0"
 os.environ["SESSION_REDIS_URL"] = "redis://127.0.0.1:9/0"
+# Keep import-time globals such as Celery scheduler configuration from touching
+# the deployment database URL loaded from .env. Tests that need a real database
+# use TEST_DATABASE_URL or explicit SQLite engines below.
+os.environ["DATABASE_URL"] = (
+    "postgresql+psycopg://postgres:postgres@127.0.0.1:9/dotmac_sub_test"
+    "?connect_timeout=1"
+)
 # Likewise the radacct importer: .env carries real FreeRADIUS DB credentials
 # and the code has fallbacks; blank both so import_radius_accounting no-ops
 # unless a test explicitly points it at a fixture database.
@@ -337,6 +344,17 @@ def _reset_singletons():
         from app.services.events.dispatcher import reset_dispatcher
 
         reset_dispatcher()
+    except ImportError:
+        pass
+    # Clear the OpenBao secret cache. _fetch_secret_data is lru_cache'd with
+    # id(httpx.get) as a cache-buster key; CPython recycles id() values across
+    # GC'd monkeypatched functions, so a cached 200 payload from an earlier test
+    # can leak into a later one and skip the live httpx call (e.g. a missing
+    # secret then trips the field-not-found 500 branch instead of returning 404).
+    try:
+        from app.services import secrets
+
+        secrets.clear_cache()
     except ImportError:
         pass
 

@@ -26,6 +26,7 @@ from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def _park_if_expired(db: Session, intent: TopupIntent, now: datetime) -> bool:
     if expires_at is not None and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
     if expires_at and now > expires_at + _EXPIRE_GRACE:
-        intent.status = "expired"
+        set_topup_intent_status(intent, "expired", source="reconcile_expiry")
         db.commit()
         return True
     return False
@@ -95,7 +96,7 @@ def _settle_intent(
         )
         created = True
     intent.completed_payment_id = payment.id
-    intent.status = "completed"
+    set_topup_intent_status(intent, "completed", source="reconcile_settle")
     intent.completed_at = now
     intent.actual_amount = amount
     intent.external_id = external_id

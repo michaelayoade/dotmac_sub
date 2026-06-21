@@ -668,7 +668,33 @@ class BillingReporting:
             "check": "Check",
             "other": "Other",
             "bank_transfer": "Bank Transfer",
+            "manual": "Manual",
+            "paystack": "Card",
+            "flutterwave": "Card",
+            "stripe": "Card",
+            "paypal": "Card",
+            "splynx_import": "Splynx Import",
         }
+
+        def _payment_method_label(raw_value: object) -> str:
+            text = str(raw_value or "").strip()
+            if not text:
+                return "Other"
+            key = text.lower()
+            if "." in key:
+                key = key.rsplit(".", 1)[-1]
+            key = key.replace("-", "_").replace(" ", "_")
+            if key in METHOD_LABELS:
+                return METHOD_LABELS[key]
+            if "transfer" in key or "bank" in key:
+                return "Bank Transfer"
+            if "card" in key or key in {"paystack", "flutterwave", "stripe", "paypal"}:
+                return "Card"
+            if "cash" in key:
+                return "Cash"
+            if "check" in key or "cheque" in key:
+                return "Check"
+            return text.replace("_", " ").title()
 
         # Prefer PaymentMethod.method_type, fall back to PaymentChannel.channel_type
         pm_stmt = (
@@ -676,6 +702,10 @@ class BillingReporting:
                 func.coalesce(
                     cast(PaymentMethod.method_type, String),
                     cast(PaymentChannel.channel_type, String),
+                    case(
+                        (Payment.splynx_payment_id.is_not(None), "splynx_import"),
+                        else_=None,
+                    ),
                     "other",
                 ).label("method_key"),
                 func.sum(Payment.amount).label("total"),
@@ -707,7 +737,7 @@ class BillingReporting:
         method_rows = db.execute(pm_stmt).all()
         method_totals: dict[str, float] = {}
         for mrow in method_rows:
-            display_label = METHOD_LABELS.get(mrow.method_key, "Other")
+            display_label = _payment_method_label(mrow.method_key)
             method_totals[display_label] = method_totals.get(
                 display_label, 0.0
             ) + float(mrow.total or 0)

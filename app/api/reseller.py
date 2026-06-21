@@ -58,12 +58,24 @@ class ServiceRequestCreate(BaseModel):
 
 
 def _reseller_id(db: Session, principal: dict) -> str:
-    """Return the caller's reseller_id, or 403 for non-reseller principals."""
-    if principal.get("principal_type") != "subscriber":
-        raise HTTPException(status_code=403, detail="A reseller account is required")
-    reseller_id = reseller_portal.reseller_id_for_subscriber(
-        db, str(principal["subscriber_id"])
-    )
+    """Return the caller's reseller_id, or 403 for non-reseller principals.
+
+    Handles both a legacy subscriber-backed reseller login and a first-class
+    reseller_user principal (Layer 3).
+    """
+    principal_type = principal.get("principal_type")
+    reseller_id: str | None = None
+    if principal_type == "reseller_user":
+        from app.models.subscriber import ResellerUser
+        from app.services.common import coerce_uuid
+
+        ru = db.get(ResellerUser, coerce_uuid(principal.get("principal_id")))
+        if ru is not None and ru.is_active and ru.reseller_id is not None:
+            reseller_id = str(ru.reseller_id)
+    elif principal_type == "subscriber":
+        reseller_id = reseller_portal.reseller_id_for_subscriber(
+            db, str(principal["subscriber_id"])
+        )
     if not reseller_id:
         raise HTTPException(status_code=403, detail="A reseller account is required")
     return reseller_id

@@ -306,6 +306,51 @@ def set_provisioning_status(
     ont.provisioning_status = next_status
 
 
+def clear_authorization_status(ont: OntUnit, *, reason: str) -> None:
+    """Reset ``authorization_status`` to ``None`` (inventory reset / decommission).
+
+    A deliberate CLEAR, not a transition — there is no legal transition-to-None,
+    so this is audited but not validated. Routing the reset/decommission paths
+    through here keeps every authorization_status write observable in one place.
+    """
+    current = ont.authorization_status
+    if current is None:
+        return
+    logger.info(
+        "ont_status_transition",
+        extra={
+            "event": "ont_status_transition",
+            "ont_id": str(ont.id),
+            "field": "authorization_status",
+            "from": current.value if current else None,
+            "to": None,
+            "valid": True,
+            "reason": reason,
+        },
+    )
+    ont.authorization_status = None  # type: ignore[assignment]
+
+
+def clear_provisioning_status(ont: OntUnit, *, reason: str) -> None:
+    """Reset ``provisioning_status`` to ``None`` (decommission). Audited clear."""
+    current = ont.provisioning_status
+    if current is None:
+        return
+    logger.info(
+        "ont_status_transition",
+        extra={
+            "event": "ont_status_transition",
+            "ont_id": str(ont.id),
+            "field": "provisioning_status",
+            "from": current.value if current else None,
+            "to": None,
+            "valid": True,
+            "reason": reason,
+        },
+    )
+    ont.provisioning_status = None  # type: ignore[assignment]
+
+
 def _window_minutes_from_interval_seconds(interval_seconds: int | None) -> int:
     if not interval_seconds or interval_seconds <= 0:
         return DEFAULT_ACS_ONLINE_WINDOW_MINUTES

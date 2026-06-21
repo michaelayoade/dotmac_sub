@@ -23,6 +23,7 @@ from app.models.support import (
     TicketLink,
     TicketMerge,
     TicketSlaEvent,
+    TicketStatus,
 )
 from app.schemas.notification import NotificationCreate
 from app.schemas.provisioning import ServiceOrderCreate
@@ -53,6 +54,68 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 
 logger = logging.getLogger(__name__)
+
+# Ticket.status is a free-form string column; these guard every write at the
+# boundary (no schema migration). closed/canceled/merged are terminal — they
+# cannot be reopened except by an explicit admin action (allow_reopen=True),
+# which keeps CRM pull and automation from silently resurrecting a closed
+# ticket. Garbage values are rejected outright.
+_VALID_TICKET_STATUSES: frozenset[str] = frozenset(s.value for s in TicketStatus)
+_TICKET_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {TicketStatus.closed.value, TicketStatus.canceled.value, TicketStatus.merged.value}
+)
+
+
+def transition_ticket_status(
+    ticket: Ticket,
+    new_status: TicketStatus | str,
+    *,
+    source: str,
+    allow_reopen: bool = False,
+) -> bool:
+    """Guarded write to ``Ticket.status``. Returns True if the status changed.
+
+    - Rejects values that are not a real ``TicketStatus`` (raises ``ValueError``).
+    - Refuses to move OUT of a terminal status (closed/canceled/merged) unless
+      ``allow_reopen`` — this is the CRM-vs-local precedence point: a CRM pull or
+      automation rule cannot reopen a locally-closed ticket.
+    - Audits every change (and every blocked reopen) via the log.
+    """
+    raw = (
+        new_status.value
+        if isinstance(new_status, TicketStatus)
+        else str(new_status).strip()
+    )
+    if raw not in _VALID_TICKET_STATUSES:
+        raise ValueError(f"Invalid ticket status: {new_status!r}")
+    current = ticket.status
+    if current == raw:
+        return False
+    if current in _TICKET_TERMINAL_STATUSES and not allow_reopen:
+        logger.info(
+            "ticket_status_transition_blocked",
+            extra={
+                "event": "ticket_status_transition_blocked",
+                "ticket_id": str(getattr(ticket, "id", None)),
+                "from": current,
+                "to": raw,
+                "source": source,
+            },
+        )
+        return False
+    logger.info(
+        "ticket_status_transition",
+        extra={
+            "event": "ticket_status_transition",
+            "ticket_id": str(getattr(ticket, "id", None)),
+            "from": current,
+            "to": raw,
+            "source": source,
+        },
+    )
+    ticket.status = raw
+    return True
+
 
 MENTION_EMAIL_RE = re.compile(r"@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
@@ -1044,6 +1107,12 @@ class Tickets:
         if "priority" in data and data["priority"] is None:
             data.pop("priority")
 
+        if "status" in data:
+            # Admin edit may legitimately reopen, but it's validated + audited.
+            transition_ticket_status(
+                ticket, data.pop("status"), source="admin_update", allow_reopen=True
+            )
+
         for key, value in data.items():
             setattr(ticket, key, value)
 
@@ -1166,7 +1235,9 @@ class Tickets:
             ticket = Tickets.get(db, str(item.ticket_id))
             _ensure_not_merged_source(ticket)
             if item.status is not None:
-                ticket.status = item.status
+                transition_ticket_status(
+                    ticket, item.status, source="admin_bulk", allow_reopen=True
+                )
             if item.priority is not None:
                 ticket.priority = item.priority
             if item.assigned_to_person_id is not None:
@@ -1387,7 +1458,11 @@ class Tickets:
 
         db.query(TicketAssignee).filter(TicketAssignee.ticket_id == source.id).delete()
 
-        source.status = "merged"
+        # Merge is an explicit admin action; a closed/resolved source can still
+        # be merged (allow_reopen lets it leave a terminal state into merged).
+        transition_ticket_status(
+            source, TicketStatus.merged, source="merge", allow_reopen=True
+        )
         source.merged_into_ticket_id = target.id
 
         merge_row = TicketMerge(

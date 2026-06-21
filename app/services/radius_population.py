@@ -79,7 +79,7 @@ def _radreply_attrs(
     treated as no address.
     """
     ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
-    if ipv4 == "0.0.0.0":  # noqa: S104 — IP-string comparison, not a socket bind
+    if ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare, not a bind
         ipv4 = None
 
     attrs: list[tuple[str, str, str]] = [
@@ -261,7 +261,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
 
             sub_blocked = sub.subscriber_id in blocked_subscriber_ids
             eff_ipv4 = sub.ipv4_address
-            if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # noqa: S104 — IP compare
+            if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
                 eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
             attrs = _radreply_attrs(
                 sub,

@@ -178,6 +178,13 @@ def _write_subscription_ips_from_accounting(
     subscription = db.get(Subscription, subscription_id)
     if not subscription:
         return
+    # Only mirror the framed address for an ACTIVE subscription. For a
+    # suspended/blocked/terminated sub the accounting row can carry a stale or
+    # reject-pool address; copying that into the served-IP column makes it the
+    # new "desired" IP that the RADIUS sweep then re-emits — a self-reinforcing
+    # wrong-IP loop. The column is only authoritative while service is live.
+    if subscription.status != SubscriptionStatus.active:
+        return
     if ipv4 and subscription.ipv4_address != ipv4:
         subscription.ipv4_address = ipv4
     if ipv6 and subscription.ipv6_address != ipv6:

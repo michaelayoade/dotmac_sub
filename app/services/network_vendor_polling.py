@@ -64,8 +64,11 @@ def refresh_device_from_vendor_api(
 
     device.last_snmp_at = now
     device.last_snmp_ok = True
-    if device.status != DeviceStatus.maintenance:
-        device.status = DeviceStatus.online
+    # Route through the single gated writer so a maintenance device is never
+    # flipped back online by a successful poll (see web_network_core_runtime).
+    from app.services.web_network_core_runtime import set_device_observed_status
+
+    set_device_observed_status(device, DeviceStatus.online)
 
     cpu_usage = status.get("cpu_usage")
     try:

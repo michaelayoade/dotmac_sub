@@ -94,6 +94,32 @@ def test_send_email_with_tracking(db_session, monkeypatch):
     assert result is True
 
 
+def test_send_email_tracking_stores_text_body(db_session, monkeypatch):
+    """Tracked notifications should not expose email HTML in customer feeds."""
+    fake_smtp = FakeSMTP()
+
+    def mock_smtp(*args, **kwargs):
+        return fake_smtp
+
+    monkeypatch.setattr("smtplib.SMTP", mock_smtp)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp)
+    monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
+
+    result = email_service.send_email(
+        db=db_session,
+        to_email="tracked@example.com",
+        subject="Tracked Email",
+        body_html="<p>Your <strong>invoice</strong> is ready.</p>",
+        track=True,
+    )
+
+    assert result is True
+    notification = db_session.query(email_service.Notification).one()
+    assert notification.body == "Your invoice is ready."
+
+
 def test_get_smtp_config_from_env(monkeypatch):
     """Test getting SMTP config from environment variables."""
     monkeypatch.setenv("SMTP_HOST", "mail.example.com")
@@ -394,6 +420,9 @@ def test_send_user_invite_email_uses_company_name_and_branding_logo(
         "https://selfcare.dotmac.ng/branding/assets/logo-main.png"
         in captured["body_html"]
     )
+    assert "color: #FF0000" in captured["body_html"]
+    assert "color: #008000" in captured["body_html"]
+    assert "<img" in captured["body_html"]
     assert "Welcome to Dotmac Selfcare." in captured["body_text"]
     assert captured["activity"] == "auth_user_invite"
 
@@ -446,6 +475,21 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
         "https://selfcare.dotmac.ng/branding/assets/logo-main.png"
         in captured["body_html"]
     )
+    assert "background-color: #FF0000" in captured["body_html"]
+    assert "color: #008000" in captured["body_html"]
+    assert "background-color: #F4F4F9" in captured["body_html"]
+    assert "email-highlight-box" in captured["body_html"]
+    assert "background-color: #f8fafc" in captured["body_html"]
+    assert "border: 1px solid #008000" in captured["body_html"]
+    assert "border-left: 5px solid #FF0000" in captured["body_html"]
+    assert 'name="color-scheme" content="light dark"' in captured["body_html"]
+    assert "@media (prefers-color-scheme: dark)" in captured["body_html"]
+    assert "email-muted" in captured["body_html"]
+    assert "#111827" in captured["body_html"]
+    assert "#d1d5db" in captured["body_html"]
+    assert "border: 1px solid #ccc" not in captured["body_html"]
+    assert "box-shadow:" not in captured["body_html"]
+    assert "border: 2px solid #e2e2e2" not in captured["body_html"]
     assert (
         "We received a request to reset your password for Dotmac Selfcare."
         in captured["body_text"]

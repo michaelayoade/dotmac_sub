@@ -503,7 +503,8 @@ def build_ar_aging_data(
     period_filtered_invoices = [
         invoice
         for invoice in invoices
-        if invoice.status not in {InvoiceStatus.paid, InvoiceStatus.void}
+        if invoice.status
+        not in {InvoiceStatus.paid, InvoiceStatus.void, InvoiceStatus.written_off}
         and _in_period(invoice, period=selected_period, today=today)
     ]
     account_ids = {

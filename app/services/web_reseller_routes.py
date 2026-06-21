@@ -69,14 +69,15 @@ def _profile_context(request: Request, context, **extra):
     }
 
 
-def _reseller_mfa_methods(db: Session, subscriber_id) -> list[MFAMethod]:
-    return (
-        db.query(MFAMethod)
-        .filter(MFAMethod.subscriber_id == subscriber_id)
-        .filter(MFAMethod.is_active.is_(True))
-        .order_by(MFAMethod.created_at.desc())
-        .all()
-    )
+def _reseller_mfa_methods(db: Session, context) -> list[MFAMethod]:
+    """MFA methods for the acting principal — subscriber-backed reseller login
+    or a first-class reseller_user (Layer 3)."""
+    query = db.query(MFAMethod).filter(MFAMethod.is_active.is_(True))
+    if context.get("principal_type") == "reseller_user":
+        query = query.filter(MFAMethod.reseller_user_id == context["principal_id"])
+    else:
+        query = query.filter(MFAMethod.subscriber_id == context["principal_id"])
+    return query.order_by(MFAMethod.created_at.desc()).all()
 
 
 def reseller_home(request: Request, db: Session):
@@ -266,7 +267,7 @@ def reseller_account_status_update(
             reseller_id=str(context["reseller"].id),
             account_id=account_id,
             action=action,
-            actor_id=str(context["subscriber"].id),
+            actor_id=context["principal_id"],
         )
     except ValueError:
         return RedirectResponse(
@@ -411,7 +412,7 @@ def reseller_profile(request: Request, db: Session):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    mfa_methods = _reseller_mfa_methods(db, context)
     return templates.TemplateResponse(
         "reseller/profile/index.html",
         _profile_context(
@@ -429,10 +430,13 @@ def reseller_resend_email_verification(request: Request, db: Session):
     if not context:
         return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
     sent = False
-    subscriber_id = context["subscriber"].id
-    if subscriber_id:
+    # Email verification is a subscriber-account concept; a first-class
+    # reseller_user principal has no backing subscriber, so this is a no-op
+    # (the profile template only shows the verify card when a subscriber exists).
+    subscriber = context["subscriber"]
+    if subscriber is not None:
         try:
-            sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
+            sent = auth_flow_service.send_email_verification(db, str(subscriber.id))
         except Exception:
             logger.warning("reseller_resend_email_verification_failed", exc_info=True)
     return RedirectResponse(
@@ -461,7 +465,7 @@ def reseller_profile_update(
         reseller.notes = notes.strip() or None
     db.commit()
     db.refresh(reseller)
-    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    mfa_methods = _reseller_mfa_methods(db, context)
 
     return templates.TemplateResponse(
         "reseller/profile/index.html",
@@ -479,9 +483,14 @@ def reseller_mfa_setup(request: Request, db: Session):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    setup = auth_flow_service.auth_flow.mfa_setup(
-        db, str(context["subscriber"].id), "Authenticator app"
-    )
+    if context["principal_type"] == "reseller_user":
+        setup = auth_flow_service.auth_flow.reseller_mfa_setup(
+            db, context["principal_id"], "Authenticator app"
+        )
+    else:
+        setup = auth_flow_service.auth_flow.mfa_setup(
+            db, context["principal_id"], "Authenticator app"
+        )
     return templates.TemplateResponse(
         "reseller/profile/mfa_setup.html",
         {
@@ -502,9 +511,14 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.mfa_confirm(
-            db, method_id, code.strip(), str(context["subscriber"].id)
-        )
+        if context["principal_type"] == "reseller_user":
+            auth_flow_service.auth_flow.reseller_mfa_confirm(
+                db, method_id, code.strip(), context["principal_id"]
+            )
+        else:
+            auth_flow_service.auth_flow.mfa_confirm(
+                db, method_id, code.strip(), context["principal_id"]
+            )
     except Exception:
         return templates.TemplateResponse(
             "reseller/profile/mfa_setup.html",
@@ -521,7 +535,7 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
             status_code=401,
         )
 
-    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    mfa_methods = _reseller_mfa_methods(db, context)
     return templates.TemplateResponse(
         "reseller/profile/index.html",
         _profile_context(
