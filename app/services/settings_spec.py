@@ -2343,6 +2343,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
+        key="whatsapp_waba_id",
+        env_var="WHATSAPP_WABA_ID",
+        value_type=SettingValueType.string,
+        default="",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
         key="whatsapp_webhook_url",
         env_var="WHATSAPP_WEBHOOK_URL",
         value_type=SettingValueType.string,
