@@ -20,7 +20,7 @@ from sqlalchemy import inspect
 from alembic import op
 
 revision = "151_customer_notification_read_at"
-down_revision = "152_subscriber_additional_routes"
+down_revision = "165_payment_method_reseller_owner"
 branch_labels = None
 depends_on = None
 
