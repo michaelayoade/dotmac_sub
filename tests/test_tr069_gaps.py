@@ -518,7 +518,6 @@ class TestInformWebhook:
 
 class TestAutoLinkOnts:
     def test_sync_auto_links_ont_by_serial(self, db_session) -> None:
-
         from app.models.network import OntUnit
         from app.services.tr069 import CpeDevices, acs_servers
 

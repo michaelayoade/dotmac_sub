@@ -7,10 +7,11 @@ scope. Capped plans keep their calendar-month allowance — validity, not data.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
@@ -20,11 +21,111 @@ from app.models.service_extension import (
     ServiceExtensionScope,
     ServiceExtensionStatus,
 )
+from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
+from app.services.customer_identity_resolution import resolve_customer_identity
 
 logger = logging.getLogger(__name__)
 
 MAX_EXTENSION_DAYS = 30
+# Postgres int4 ceiling: digit strings above this aren't splynx_customer_ids
+# (e.g. phone numbers) and would overflow the column comparison.
+_MAX_INT4 = 2_147_483_647
+
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _unique_subscribers(rows: list[Subscriber]) -> list[Subscriber]:
+    seen: set[uuid.UUID] = set()
+    unique: list[Subscriber] = []
+    for row in rows:
+        if row.id in seen:
+            continue
+        seen.add(row.id)
+        unique.append(row)
+    return unique
+
+
+def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscriber:
+    identifier = str(raw_identifier or "").strip()
+    if not identifier:
+        raise HTTPException(status_code=400, detail="Blank customer identifier")
+
+    ambiguous_detail = (
+        f"Customer identifier is ambiguous: {identifier}. "
+        "Use the internal customer UUID."
+    )
+    matches: list[Subscriber] = []
+
+    # 1. Internal UUID.
+    parsed_uuid = _parse_uuid(identifier)
+    if parsed_uuid is not None:
+        subscriber = db.get(Subscriber, parsed_uuid)
+        if subscriber is not None:
+            matches.append(subscriber)
+
+    # 2. Exact account / subscriber number (case-insensitive).
+    lowered = identifier.lower()
+    for column in (Subscriber.account_number, Subscriber.subscriber_number):
+        matches.extend(
+            db.scalars(select(Subscriber).where(func.lower(column) == lowered)).all()
+        )
+
+    # 3. Splynx customer id — int4-bounded so a longer digit string (e.g. an
+    #    11-digit phone number) doesn't overflow the int4 column on Postgres.
+    if identifier.isdigit() and int(identifier) <= _MAX_INT4:
+        matches.extend(
+            db.scalars(
+                select(Subscriber).where(
+                    Subscriber.splynx_customer_id == int(identifier)
+                )
+            ).all()
+        )
+
+    # 4. Email / phone via the indexed customer-identity resolver (auto-detects
+    #    type, queries customer_identity_index — no full table scan). A shared
+    #    contact email (non-unique post-decoupling) resolves as ambiguous.
+    resolution = resolve_customer_identity(db, identifier)
+    if (
+        resolution.matched
+        and not resolution.ambiguous
+        and resolution.subscriber_id is not None
+    ):
+        subscriber = db.get(Subscriber, resolution.subscriber_id)
+        if subscriber is not None:
+            matches.append(subscriber)
+
+    matches = _unique_subscribers(matches)
+    if len(matches) > 1:
+        raise HTTPException(status_code=400, detail=ambiguous_detail)
+    if len(matches) == 1:
+        return matches[0]
+    # No exact match: an email/phone that resolved to several customers is
+    # ambiguous; anything else is simply unknown.
+    if resolution.ambiguous:
+        raise HTTPException(status_code=400, detail=ambiguous_detail)
+    raise HTTPException(
+        status_code=400, detail=f"Could not find customer: {identifier}"
+    )
+
+
+def resolve_subscriber_identifiers(
+    db: Session, subscriber_ids: list[str] | None
+) -> list[uuid.UUID]:
+    resolved: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw_identifier in subscriber_ids or []:
+        subscriber = _find_subscriber_by_identifier(db, raw_identifier)
+        if subscriber.id in seen:
+            continue
+        seen.add(subscriber.id)
+        resolved.append(subscriber.id)
+    return resolved
 
 
 def resolve_scope_subscriptions(
@@ -54,7 +155,7 @@ def resolve_scope_subscriptions(
             )
         )
     elif scope_type == ServiceExtensionScope.subscribers:
-        ids = [coerce_uuid(s) for s in (subscriber_ids or []) if str(s).strip()]
+        ids = resolve_subscriber_identifiers(db, subscriber_ids)
         if not ids:
             raise HTTPException(
                 status_code=400, detail="At least one subscriber is required"
@@ -92,8 +193,13 @@ def create_extension(
             status_code=400, detail="Outage end must be after its start"
         )
     days = _validated_days(days)
+    resolved_subscriber_ids = (
+        [str(item) for item in resolve_subscriber_identifiers(db, subscriber_ids)]
+        if scope_type == ServiceExtensionScope.subscribers
+        else None
+    )
     # Validates scope inputs (raises on missing scope_id / empty list).
-    resolve_scope_subscriptions(db, scope_type, scope_id, subscriber_ids)
+    resolve_scope_subscriptions(db, scope_type, scope_id, resolved_subscriber_ids)
 
     extension = ServiceExtension(
         reason=reason.strip(),
@@ -102,9 +208,7 @@ def create_extension(
         days=days,
         scope_type=scope_type,
         scope_id=coerce_uuid(scope_id) if scope_id else None,
-        scope_subscriber_ids=(
-            [str(s) for s in subscriber_ids] if subscriber_ids else None
-        ),
+        scope_subscriber_ids=resolved_subscriber_ids,
         status=ServiceExtensionStatus.pending,
         created_by=created_by,
     )

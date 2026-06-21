@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../models/payment_method.dart';
@@ -95,11 +96,145 @@ class PaymentMethodsScreen extends ConsumerWidget {
     }
   }
 
+  /// Launch the top-up flow with "Save this card" pre-enabled so a top-up
+  /// doubles as adding a card. Paystack stays the rail; the toggle is already
+  /// Paystack-gated inside the top-up screen.
+  void _addCard(BuildContext context) {
+    context.push('/topup', extra: true);
+  }
+
+  /// Bank transfer is a first-class payment method (mirrors the web Payment
+  /// Methods page): jump to the existing proof-upload / proofs screen.
+  void _openBankTransfer(BuildContext context) {
+    context.push('/billing/transfer-proofs');
+  }
+
+  /// "Add payment method" affordance: card (via top-up) or bank transfer.
+  Future<void> _addMethod(BuildContext context) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.credit_card),
+              title: const Text('Add card'),
+              subtitle: const Text('Top up and tick "Save this card"'),
+              onTap: () => Navigator.pop(context, 'card'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.account_balance),
+              title: const Text('Bank transfer'),
+              subtitle: const Text('Upload a transfer receipt for review'),
+              onTap: () => Navigator.pop(context, 'bank'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    choice == 'bank' ? _openBankTransfer(context) : _addCard(context);
+  }
+
+  /// A saved-card tile with an "Expired"/"Expires soon" badge and, when the
+  /// card needs replacing, a Renew action that runs the add-card flow (top-up
+  /// with "Save this card" pre-enabled).
+  Widget _cardTile(BuildContext context, WidgetRef ref, SavedCard c) {
+    final scheme = Theme.of(context).colorScheme;
+    final needsRenew = c.isExpired || c.expiresSoon;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          Icons.credit_card,
+          color: c.isExpired ? scheme.error : null,
+        ),
+        title: Row(
+          children: [
+            Flexible(child: Text(c.title)),
+            if (c.isExpired)
+              _badge(context, 'Expired', scheme.error)
+            else if (c.expiresSoon)
+              _badge(context, 'Expires soon', scheme.error),
+          ],
+        ),
+        subtitle: Text([
+          if (c.expiry != null) 'Expires ${c.expiry}',
+          if (c.isDefault) 'Default',
+        ].join(' · ')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (needsRenew)
+              TextButton(
+                onPressed: () => _addCard(context),
+                child: const Text('Renew'),
+              ),
+            PopupMenuButton<String>(
+              tooltip: 'Card options',
+              onSelected: (v) => v == 'default'
+                  ? _setDefault(context, ref, c.id)
+                  : _remove(context, ref, c),
+              itemBuilder: (_) => [
+                if (!c.isDefault)
+                  const PopupMenuItem(
+                      value: 'default', child: Text('Set as default')),
+                const PopupMenuItem(value: 'remove', child: Text('Remove')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _badge(BuildContext context, String text, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+              color: color, fontSize: 11, fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+
+  /// Bank-transfer method entry — always available, alongside saved cards.
+  Widget _bankTransferTile(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: const Icon(Icons.account_balance),
+        title: const Text('Bank transfer'),
+        subtitle: const Text('Pay by transfer and upload your receipt'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _openBankTransfer(context),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cards = ref.watch(paymentMethodsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Payment methods')),
+      appBar: AppBar(
+        title: const Text('Payment methods'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Add payment method',
+            onPressed: () => _addMethod(context),
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(paymentMethodsProvider);
@@ -111,12 +246,22 @@ class PaymentMethodsScreen extends ConsumerWidget {
           data: (list) {
             if (list.isEmpty) {
               return ListView(
-                children: const [
-                  SizedBox(height: 100),
-                  EmptyState(
+                padding: const EdgeInsets.all(12),
+                children: [
+                  _bankTransferTile(context),
+                  const SizedBox(height: 24),
+                  const EmptyState(
                     icon: Icons.credit_card_outlined,
                     message:
-                        'No saved cards yet.\nWhen you pay by card you can choose to save it here.',
+                        'No saved cards yet.\nAdd a card by topping up and ticking "Save this card".',
+                  ),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: FilledButton.icon(
+                      onPressed: () => _addCard(context),
+                      icon: const Icon(Icons.add_card_outlined),
+                      label: const Text('Add card'),
+                    ),
                   ),
                 ],
               );
@@ -126,31 +271,10 @@ class PaymentMethodsScreen extends ConsumerWidget {
               children: [
                 const _AutopayTile(),
                 const SizedBox(height: 8),
+                _bankTransferTile(context),
+                const SizedBox(height: 8),
                 for (final c in list) ...[
-                  Card(
-                    margin: EdgeInsets.zero,
-                    child: ListTile(
-                      leading: const Icon(Icons.credit_card),
-                      title: Text(c.title),
-                      subtitle: Text([
-                        if (c.expiry != null) 'Expires ${c.expiry}',
-                        if (c.isDefault) 'Default',
-                      ].join(' · ')),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (v) => v == 'default'
-                            ? _setDefault(context, ref, c.id)
-                            : _remove(context, ref, c),
-                        itemBuilder: (_) => [
-                          if (!c.isDefault)
-                            const PopupMenuItem(
-                                value: 'default',
-                                child: Text('Set as default')),
-                          const PopupMenuItem(
-                              value: 'remove', child: Text('Remove')),
-                        ],
-                      ),
-                    ),
-                  ),
+                  _cardTile(context, ref, c),
                   const SizedBox(height: 8),
                 ],
               ],

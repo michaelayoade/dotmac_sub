@@ -25,10 +25,12 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
     )
 
 
-from app.models.catalog import AccessCredential, ConnectionType
+from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
 from app.models.subscription_engine import SettingValueType
+from app.models.system_user import SystemUser, SystemUserType
 from app.services.credential_crypto import encrypt_credential
 from app.services.web_customer_details import (
     build_business_detail_snapshot,
@@ -129,6 +131,37 @@ def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber
     )
 
 
+def test_customer_detail_includes_active_additional_routes(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="102.220.189.10/32",
+            prefix_length=32,
+            metric=1,
+            is_active=True,
+            source="test",
+        )
+    )
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=subscriber.id,
+            cidr="160.119.125.24/30",
+            prefix_length=30,
+            metric=1,
+            is_active=False,
+            source="test",
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert [route.cidr for route in context["active_additional_routes"]] == [
+        "102.220.189.10/32"
+    ]
+
+
 def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
     subscriber.user_type = UserType.customer
     credential = AccessCredential(
@@ -151,6 +184,20 @@ def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
     }
 
 
+def test_person_detail_hides_disabled_service_network_access(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.disabled
+    subscription.login = "disabled-login"
+    subscription.ipv4_address = "10.70.0.25"
+    db_session.commit()
+
+    context = build_person_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["network_access_cards"] == []
+
+
 def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscriber):
     subscriber.user_type = UserType.customer
     credential = AccessCredential(
@@ -161,6 +208,15 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
         is_active=True,
     )
     db_session.add(credential)
+    db_session.commit()
+    admin = SystemUser(
+        first_name="Audit",
+        last_name="Admin",
+        email="audit-admin@example.com",
+        user_type=SystemUserType.system_user,
+        is_active=True,
+    )
+    db_session.add(admin)
     db_session.commit()
 
     password, found = reveal_customer_pppoe_password(
@@ -174,6 +230,8 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
         credential_id="00000000-0000-0000-0000-000000000000",
     )
     request = _bare_request()
+    request.state.user = admin
+    request.state.auth = {"principal_type": "system_user"}
     response = customer_routes.person_pppoe_password(
         request=request,
         customer_id=str(subscriber.id),
@@ -197,6 +255,17 @@ def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscribe
     )
     assert audit is not None
     assert audit.is_success is True
+    assert audit.actor_id == str(admin.id)
+    assert audit.metadata_["actor_name"] == "Audit Admin"
+
+    detail = build_customer_detail_snapshot(db_session, str(subscriber.id))
+    reveal_activity = next(
+        item
+        for item in detail["activity_items"]
+        if item["type"] == "audit"
+        and item["title"] == "Subscriber Customer.Pppoe Password Reveal"
+    )
+    assert reveal_activity["actor_name"] == "Audit Admin"
 
 
 def test_customer_detail_rejects_reseller_users(db_session):
@@ -350,3 +419,52 @@ def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
     assert captured["context"]["bandwidth_chart_initial_stats"] == {
         "current_rx_formatted": "1.20 Mbps"
     }
+
+
+def test_customer_detail_snapshot_includes_pending_location_request(
+    db_session, subscriber
+):
+    from app.models.gis import (
+        CustomerLocationChangeRequest,
+        CustomerLocationChangeRequestStatus,
+    )
+
+    subscriber.user_type = UserType.customer
+    db_session.add(
+        Address(
+            subscriber_id=subscriber.id,
+            address_line1="12 Service Lane",
+            city="Abuja",
+            is_primary=True,
+        )
+    )
+    db_session.add(
+        CustomerLocationChangeRequest(
+            subscriber_id=subscriber.id,
+            status=CustomerLocationChangeRequestStatus.pending,
+            current_latitude=9.0501,
+            current_longitude=7.4902,
+            requested_latitude=9.0512,
+            requested_longitude=7.4923,
+            customer_note="Pin is one compound away.",
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    pending = context["pending_location_request"]
+    assert pending is not None
+    assert pending.status == CustomerLocationChangeRequestStatus.pending
+    assert pending.customer_note == "Pin is one compound away."
+
+
+def test_customer_detail_snapshot_pending_location_request_none_when_absent(
+    db_session, subscriber
+):
+    subscriber.user_type = UserType.customer
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["pending_location_request"] is None

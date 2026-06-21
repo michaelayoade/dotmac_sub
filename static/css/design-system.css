@@ -3,17 +3,17 @@
     --font-display: 'Outfit', system-ui, sans-serif;
     --font-body: 'Plus Jakarta Sans', system-ui, sans-serif;
 
-    /* Brand Colors - Teal primary */
-    --color-brand-50: #ecfeff;
-    --color-brand-100: #cffafe;
-    --color-brand-200: #a5f3fc;
-    --color-brand-300: #67e8f9;
-    --color-brand-400: #22d3ee;
-    --color-brand-500: #06b6d4;
-    --color-brand-600: #0891b2;
-    --color-brand-700: #0e7490;
-    --color-brand-800: #155e75;
-    --color-brand-900: #164e63;
+    /* Brand Colors - DotMac green */
+    --color-brand-50: #edf3eb;
+    --color-brand-100: #dbe7d7;
+    --color-brand-200: #b8cfb0;
+    --color-brand-300: #90b483;
+    --color-brand-400: #5a9147;
+    --color-brand-500: #367920;
+    --color-brand-600: #206a07;
+    --color-brand-700: #1a5706;
+    --color-brand-800: #154605;
+    --color-brand-900: #103504;
 
     /* Accent - Warm orange for contrast */
     --color-accent-50: #fff7ed;

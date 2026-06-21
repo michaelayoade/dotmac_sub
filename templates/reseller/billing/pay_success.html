@@ -9,7 +9,7 @@
   {% if result.already_recorded %}
   <p class="text-sm text-emerald-700 dark:text-emerald-200">This payment was previously recorded. No duplicate was created.</p>
   {% else %}
-  <p class="text-sm text-emerald-700 dark:text-emerald-200">Your payment was confirmed and distributed across your subscribers' open invoices.</p>
+  <p class="text-sm text-emerald-700 dark:text-emerald-200">Your payment was confirmed and added to unallocated credit.</p>
   {% endif %}
   <dl class="mt-4 space-y-2 text-sm">
     <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Amount</dt><dd class="tabular-nums font-semibold">{{ result.currency }} {{ "{:,.2f}".format(result.amount|float) }}</dd></div>

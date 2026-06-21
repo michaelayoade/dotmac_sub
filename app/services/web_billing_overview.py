@@ -35,6 +35,12 @@ _overview_cache_lock = Lock()
 _overview_cache: dict[
     tuple[str | None, str | None, str], tuple[float, dict[str, object]]
 ] = {}
+_UNPAID_INVOICE_STATUSES = (
+    InvoiceStatus.draft,
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+)
 
 
 def _add_months(value: date, months: int) -> date:
@@ -176,9 +182,12 @@ def build_invoices_list_data(
             )
 
         if include_status and status:
-            scoped = scoped.filter(
-                Invoice.status == validate_enum(status, InvoiceStatus, "status")
-            )
+            if status == "unpaid":
+                scoped = scoped.filter(Invoice.status.in_(_UNPAID_INVOICE_STATUSES))
+            else:
+                scoped = scoped.filter(
+                    Invoice.status == validate_enum(status, InvoiceStatus, "status")
+                )
         if proforma_only:
             scoped = scoped.filter(
                 or_(
@@ -494,7 +503,8 @@ def build_ar_aging_data(
     period_filtered_invoices = [
         invoice
         for invoice in invoices
-        if invoice.status not in {InvoiceStatus.paid, InvoiceStatus.void}
+        if invoice.status
+        not in {InvoiceStatus.paid, InvoiceStatus.void, InvoiceStatus.written_off}
         and _in_period(invoice, period=selected_period, today=today)
     ]
     account_ids = {

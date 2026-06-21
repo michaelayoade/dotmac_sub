@@ -6,7 +6,7 @@ import csv
 import io
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -56,9 +56,19 @@ from app.services.customer_notification_policy import (
     is_notification_enabled_for_subscriber,
     resolve_notification_category,
 )
+from app.services.integrations.connectors import whatsapp as whatsapp_connector
 from app.services.notification_template_renderer import render_template_text
 
 logger = logging.getLogger(__name__)
+
+WHATSAPP_VARIABLE_CUSTOMER_FIELDS = {
+    "first_name",
+    "last_name",
+    "full_name",
+    "email",
+    "phone",
+    "account_number",
+}
 
 
 def parse_json_object(value: str | None, field: str) -> dict | None:
@@ -519,6 +529,9 @@ def _notification_template_variables(subscriber: Subscriber) -> dict[str, str]:
                     primary_subscription.provisioning_nas_device.pop_site.name or ""
                 )
     return {
+        "first_name": str(subscriber.first_name or ""),
+        "last_name": str(subscriber.last_name or ""),
+        "full_name": str(subscriber.full_name or "").strip(),
         "customer_name": subscriber.company_name
         or subscriber.display_name
         or subscriber.full_name,
@@ -532,6 +545,57 @@ def _notification_template_variables(subscriber: Subscriber) -> dict[str, str]:
         "nas_name": nas_name,
         "location": pop_site_name,
     }
+
+
+def _parse_whatsapp_registry_template_id(template_id: str) -> tuple[str, str] | None:
+    if not template_id.startswith("whatsapp:"):
+        return None
+    parts = template_id.split(":", 2)
+    if len(parts) != 3 or not parts[1].strip():
+        return None
+    return parts[1].strip(), parts[2].strip() or "en"
+
+
+def _whatsapp_registry_template(db: Session, template_id: str) -> dict[str, str] | None:
+    parsed = _parse_whatsapp_registry_template_id(template_id)
+    if not parsed:
+        return None
+    name, language = parsed
+    config = whatsapp_connector.load_whatsapp_config(db)
+    for item in config.get("templates") or []:
+        item_name = str(item.get("name") or "").strip()
+        item_language = str(item.get("language") or "").strip() or "en"
+        if item_name == name and item_language == language:
+            return {"name": item_name, "language": item_language}
+    return None
+
+
+def whatsapp_template_details(
+    db: Session, *, name: str, language: str | None
+) -> dict[str, Any]:
+    return whatsapp_connector.fetch_template_details(
+        db,
+        template_name=name.strip(),
+        language=(language or "").strip() or None,
+    )
+
+
+def _resolve_whatsapp_variable(
+    spec: object,
+    customer_values: dict[str, str],
+) -> str:
+    if isinstance(spec, dict):
+        source = str(spec.get("source") or "").strip()
+        custom_value = str(spec.get("custom_value") or "")
+    else:
+        source = "custom"
+        custom_value = "" if spec is None else str(spec)
+
+    if source == "custom":
+        return custom_value
+    if source not in WHATSAPP_VARIABLE_CUSTOMER_FIELDS:
+        return ""
+    return str(customer_values.get(source) or "")
 
 
 def queue_bulk_message_from_payload(
@@ -551,13 +615,21 @@ def queue_bulk_message_from_payload(
             status_code=400, detail="Unsupported notification channel"
         ) from exc
 
-    template = db.get(NotificationTemplate, coerce_uuid(template_id))
-    if not template or not template.is_active:
-        raise HTTPException(status_code=404, detail="Template not found")
-    if template.channel != channel:
-        raise HTTPException(
-            status_code=400, detail="Template channel does not match selected channel"
-        )
+    template = None
+    whatsapp_template = None
+    if channel == NotificationChannel.whatsapp:
+        whatsapp_template = _whatsapp_registry_template(db, template_id)
+        if not whatsapp_template:
+            raise HTTPException(status_code=404, detail="WhatsApp template not found")
+    else:
+        template = db.get(NotificationTemplate, coerce_uuid(template_id))
+        if not template or not template.is_active:
+            raise HTTPException(status_code=404, detail="Template not found")
+        if template.channel != channel:
+            raise HTTPException(
+                status_code=400,
+                detail="Template channel does not match selected channel",
+            )
 
     customers, scope = resolve_bulk_customer_scope(db, payload)
     if not customers:
@@ -584,8 +656,34 @@ def queue_bulk_message_from_payload(
             continue
 
         variables = _notification_template_variables(subscriber)
-        subject = render_template_text(template.subject or "Service Update", variables)
-        body = render_template_text(template.body, variables)
+        if whatsapp_template:
+            subject = None
+            payload_variables = payload.get("template_variables") or {}
+            if not isinstance(payload_variables, dict):
+                raise HTTPException(
+                    status_code=400, detail="template_variables must be an object"
+                )
+            resolved_variables: dict[str, str] = {}
+            for key, value in payload_variables.items():
+                resolved_variables[str(key)] = _resolve_whatsapp_variable(
+                    value,
+                    variables,
+                )
+            body = json.dumps(
+                {
+                    "__whatsapp_template__": True,
+                    "name": whatsapp_template["name"],
+                    "language": whatsapp_template["language"],
+                    "variables": resolved_variables,
+                }
+            )
+        else:
+            if template is None:
+                raise HTTPException(status_code=404, detail="Template not found")
+            subject = render_template_text(
+                template.subject or "Service Update", variables
+            )
+            body = render_template_text(template.body, variables)
         status = NotificationStatus.queued
         last_error = None
         if not is_notification_enabled_for_subscriber(
@@ -602,7 +700,7 @@ def queue_bulk_message_from_payload(
             queued_count += 1
 
         notification = Notification(
-            template_id=template.id,
+            template_id=template.id if template else None,
             subscriber_id=subscriber.id,
             channel=channel,
             event_type="service_bulk_message",
@@ -1033,13 +1131,8 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
         email = (data.get("email") or "").strip()
         if not email:
             raise ValueError("email is required")
-        existing = (
-            db.query(Subscriber)
-            .filter(func.lower(Subscriber.email) == email.lower())
-            .first()
-        )
-        if existing:
-            raise ValueError(f"A customer with email {email} already exists.")
+        # Email is contact info, not an identity — duplicates are valid
+        # (customers under one reseller often share a contact address).
         person = _create_subscriber(
             db=db,
             payload={
@@ -1132,15 +1225,7 @@ def create_customer_from_form(
         last_name = _require_text(
             form_data.get("last_name"), "Last name", max_length=80
         )
-        existing = (
-            db.query(Subscriber)
-            .filter(func.lower(Subscriber.email) == normalized_email.lower())
-            .first()
-        )
-        if existing:
-            raise ValueError(
-                f"A customer with email {normalized_email} already exists."
-            )
+        # Email is contact info, not an identity — duplicates are valid.
         customer = _create_subscriber(
             db=db,
             payload={
@@ -1343,20 +1428,9 @@ def update_person_customer(
     raw_status = str(status or "").strip().lower()
     should_block_subscriptions = raw_status == "blocked"
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    # Email is contact info, not an identity — duplicates across customers are
+    # valid, so editing one to match another's address is allowed.
     normalized_email = _normalize_optional(email)
-    if normalized_email:
-        clash = (
-            db.query(Subscriber)
-            .filter(
-                func.lower(Subscriber.email) == normalized_email.lower(),
-                Subscriber.id != before.id,
-            )
-            .first()
-        )
-        if clash:
-            raise ValueError(
-                f"A customer with email {normalized_email} already exists."
-            )
     active = before.is_active if is_active is None else (is_active == "true")
     normalized_status, active = _normalize_status_for_customer_edit(
         status, is_active=active
@@ -1957,28 +2031,92 @@ def update_customer_profile(
     db: Session,
     *,
     subscriber_id: str,
-    name: str,
+    first_name: str,
+    last_name: str,
     email: str,
-    phone: str | None,
+    display_name: str | None = None,
+    phone: str | None = None,
+    date_of_birth: str | None = None,
+    gender: str | None = None,
+    preferred_contact_method: str | None = None,
+    address_line1: str | None = None,
+    address_line2: str | None = None,
+    city: str | None = None,
+    region: str | None = None,
+    postal_code: str | None = None,
+    country_code: str | None = None,
     billing_notifications: bool,
     sms_updates: bool,
 ) -> Subscriber | None:
-    """Update a customer's basic profile fields."""
+    """Update a customer's profile fields."""
     subscriber = db.get(Subscriber, subscriber_id)
     if not subscriber:
         return None
-    name_parts = name.strip().split(None, 1)
     metadata = dict(subscriber.metadata_ or {})
     metadata["billing_notifications"] = bool(billing_notifications)
     metadata["sms_updates"] = bool(sms_updates)
-    return subscriber_service.subscribers.update(
+
+    new_email = email.strip()
+    # A changed email address must be re-verified: reset the flag and dispatch a
+    # fresh verification link so the verified state can never lag the address.
+    email_changed = new_email.lower() != (subscriber.email or "").strip().lower()
+
+    display = (display_name or "").strip()
+    update_fields: dict[str, Any] = {
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "display_name": display or None,
+        "email": new_email,
+        "phone": phone.strip() if phone else None,
+        "metadata_": metadata,
+    }
+
+    # Date of birth: blank clears it; a malformed value is ignored (keep prior).
+    dob = (date_of_birth or "").strip()
+    if not dob:
+        update_fields["date_of_birth"] = None
+    else:
+        try:
+            update_fields["date_of_birth"] = date.fromisoformat(dob)
+        except ValueError:
+            pass
+
+    # gender always carries a value from the form (defaults to "unknown");
+    # contact method is optional ("" → no preference). Pydantic coerces the
+    # string to the enum on the SubscriberUpdate model.
+    gender_value = (gender or "").strip()
+    if gender_value:
+        update_fields["gender"] = gender_value
+    contact_value = (preferred_contact_method or "").strip()
+    update_fields["preferred_contact_method"] = contact_value or None
+
+    # Contact address: each blank field clears it; country is stored uppercase.
+    update_fields["address_line1"] = (address_line1 or "").strip() or None
+    update_fields["address_line2"] = (address_line2 or "").strip() or None
+    update_fields["city"] = (city or "").strip() or None
+    update_fields["region"] = (region or "").strip() or None
+    update_fields["postal_code"] = (postal_code or "").strip() or None
+    update_fields["country_code"] = (country_code or "").strip().upper() or None
+
+    # Set in the constructor so exclude_unset keeps it (post-init assignment
+    # would be dropped by model_dump(exclude_unset=True)).
+    if email_changed:
+        update_fields["email_verified"] = False
+    updated = subscriber_service.subscribers.update(
         db=db,
         subscriber_id=subscriber_id,
-        payload=SubscriberUpdate(
-            first_name=name_parts[0] if name_parts else name.strip(),
-            last_name=name_parts[1] if len(name_parts) > 1 else "",
-            email=email.strip(),
-            phone=phone.strip() if phone else None,
-            metadata_=metadata,
-        ),
+        payload=SubscriberUpdate(**update_fields),
     )
+
+    if email_changed and updated is not None and new_email:
+        try:
+            from app.services import auth_flow
+
+            auth_flow.send_email_verification(db, str(subscriber_id))
+        except Exception:
+            logger.warning(
+                "verification email after profile email change failed for %s",
+                subscriber_id,
+                exc_info=True,
+            )
+    return updated

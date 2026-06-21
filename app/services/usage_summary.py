@@ -149,7 +149,22 @@ def _nearest_enforcement_rule(db: Session, offer_id):
     return min(rows, key=_threshold_gb)
 
 
-def fup_summary(db: Session, subscriber_id: str) -> dict | None:
+async def _fup_used_for_rule(db: Session, sub_id, rule) -> float:
+    """Usage over the rule's consumption window — the SAME reader enforcement
+    uses (#21). Monthly stays on the rated quota bucket; daily/weekly integrate
+    the windowed samples/VM series so the customer card matches enforcement."""
+    from app.services.fup_usage import get_fup_usage_gb_async, period_value
+
+    if period_value(rule.consumption_period) == "monthly":
+        return _current_bucket_used_gb(db, sub_id) or 0.0
+    subscription = db.get(Subscription, sub_id)
+    if subscription is None:
+        return 0.0
+    usage = await get_fup_usage_gb_async(db, subscription, rule.consumption_period)
+    return usage.used_gb
+
+
+async def fup_summary(db: Session, subscriber_id: str) -> dict | None:
     """Customer-facing Fair-Usage status for the caller's subscriptions.
 
     Reads the per-subscription ``FupState`` the enforcement engine maintains and
@@ -192,10 +207,10 @@ def fup_summary(db: Session, subscriber_id: str) -> dict | None:
     for sub_id, offer_id in context_candidates:
         if offer_id is None:
             continue
-        used = _current_bucket_used_gb(db, sub_id)
         rule = _nearest_enforcement_rule(db, offer_id)
         if rule is None:
             continue
+        used = await _fup_used_for_rule(db, sub_id, rule)
         ratio = (used or 0.0) / rule_threshold_gb(rule)
         if context is None or ratio > context[0]:
             context = (ratio, used or 0.0, rule)
@@ -405,6 +420,33 @@ async def _vm_points(
             )
     merged.sort(key=lambda x: x[0])
     return merged
+
+
+async def windowed_used_bytes(
+    db: Session, sub_ids: list, start: datetime, end: datetime, tz: ZoneInfo
+) -> tuple[int, bool]:
+    """Integrate the throughput series over ``[start, end)`` into total bytes.
+
+    Returns ``(bytes, had_data)``. ``had_data`` is False when the window yielded
+    NO throughput points — the subscriber was offline, or (the case that
+    matters) the metrics store was unavailable. A blind zero must not be
+    mistaken for "used nothing": callers should not enforce on it (#21
+    safeguard). The same samples/VM integration the customer usage summary uses,
+    exposed for an explicit window so FUP enforcement and the summary share one
+    definition. Windows inside Postgres' ~24h sample retention use raw samples;
+    older windows use the metrics store.
+    """
+    if not sub_ids:
+        return 0, False
+    now = datetime.now(UTC)
+    if (now - start) <= timedelta(hours=24):
+        points = _raw_samples(db, sub_ids, start, end)
+    else:
+        points = await _vm_points(db, sub_ids, start, end)
+    if not points:
+        return 0, False
+    series = _integrate(points, "day", tz, end=min(end, now))
+    return int(round(sum(series.values()))), True
 
 
 def _coerce_ts(value) -> datetime | None:

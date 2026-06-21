@@ -100,6 +100,23 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
     return web_customer_actions_service.billing_form_defaults(customer)
 
 
+def _customer_audit_items(
+    db: Session, customer, limit: int = 5
+) -> list[dict[str, Any]]:
+    if not customer:
+        return []
+    try:
+        return web_customer_details_service.get_customer_audit_activity_items(
+            db,
+            str(customer.id),
+            limit=limit,
+        )
+    except Exception:
+        logger.exception("Unable to load customer audit items for %s", customer.id)
+        db.rollback()
+        return []
+
+
 def _normalize_usage_period(value: str | None) -> str:
     normalized = str(value or "").strip().lower().rstrip(".,;:!?")
     if normalized in _ALLOWED_USAGE_PERIODS:
@@ -654,12 +671,20 @@ def person_pppoe_password(
     equals takeover of the customer's connection.
     """
     from app.models.audit import AuditActorType
+    from app.services import web_admin as web_admin_service
     from app.services.audit_adapter import record_audit_event
     from app.services.rate_limiter_adapter import allow_operation
-    from app.web.admin import get_current_user
 
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor = web_admin_service.get_current_user(request)
+    actor_id = web_admin_service.get_actor_id(request)
+    actor_metadata = {
+        key: value
+        for key, value in {
+            "actor_name": actor.get("name") if actor else None,
+            "actor_email": actor.get("email") if actor else None,
+        }.items()
+        if value
+    }
 
     decision = allow_operation(
         f"pppoe-reveal:{actor_id or 'unknown'}",
@@ -674,7 +699,11 @@ def person_pppoe_password(
             entity_id=str(customer_id),
             actor_type=AuditActorType.user,
             actor_id=actor_id,
-            metadata={"credential_id": credential_id, "reason": "rate_limited"},
+            metadata={
+                "credential_id": credential_id,
+                "reason": "rate_limited",
+                **actor_metadata,
+            },
             status_code=429,
             is_success=False,
         )
@@ -695,7 +724,11 @@ def person_pppoe_password(
         entity_id=str(customer_id),
         actor_type=AuditActorType.user,
         actor_id=actor_id,
-        metadata={"credential_id": credential_id, "found": bool(found)},
+        metadata={
+            "credential_id": credential_id,
+            "found": bool(found),
+            **actor_metadata,
+        },
         status_code=200 if found else 404,
         is_success=bool(found),
     )
@@ -1097,6 +1130,7 @@ def person_edit(
             "action": "edit",
             "tax_rates": _load_tax_rates(db),
             "billing_form": _billing_form_defaults(db, "person", customer),
+            "customer_audit_items": _customer_audit_items(db, customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1141,6 +1175,7 @@ def business_edit(
             "action": "edit",
             "tax_rates": _load_tax_rates(db),
             "billing_form": _billing_form_defaults(db, "business", customer),
+            "customer_audit_items": _customer_audit_items(db, customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1274,6 +1309,7 @@ def person_update(
                 "error": _safe_form_error(e),
                 "tax_rates": _load_tax_rates(db),
                 "billing_form": _billing_form_defaults(db, "person", customer),
+                "customer_audit_items": _customer_audit_items(db, customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1367,6 +1403,7 @@ def business_update(
                 "error": _safe_form_error(e),
                 "tax_rates": _load_tax_rates(db),
                 "billing_form": _billing_form_defaults(db, "business", customer),
+                "customer_audit_items": _customer_audit_items(db, customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1886,6 +1923,26 @@ def bulk_send_customer_message(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get(
+    "/bulk/whatsapp-template",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def bulk_whatsapp_template_details(
+    name: str = Query(..., min_length=1),
+    language: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Fetch Meta WhatsApp template component details for the broadcast modal."""
+    try:
+        return web_customer_actions_service.whatsapp_template_details(
+            db=db,
+            name=name,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(

@@ -12,7 +12,17 @@ Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -54,7 +64,14 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
+from app.schemas.subscriber import (
+    SubscriberContactCreate,
+    SubscriberContactRead,
+    SubscriberContactUpdate,
+    SubscriberContactWriteResponse,
+)
 from app.schemas.support import (
+    AttachmentMeta,
     MySupportCommentCreate,
     MySupportTicketCreate,
     TicketCommentCreate,
@@ -86,6 +103,7 @@ from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import customer_location_requests as location_service
+from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -98,7 +116,9 @@ from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
 from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
+from app.services import web_support_tickets
 from app.services.auth_dependencies import require_user_auth
+from app.services.topology import selfcare as topology_selfcare
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -262,7 +282,7 @@ def my_balance(
 def my_ledger(
     entry_type: str | None = None,
     source: str | None = None,
-    order_by: str = Query(default="created_at"),
+    order_by: str = Query(default="effective_date"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -363,6 +383,25 @@ def my_plan_change_quote(
     if quote is None:
         raise HTTPException(status_code=404, detail="Plan not available")
     return quote
+
+
+@router.get("/subscriptions/{subscription_id}/connection")
+def my_connection_status(
+    subscription_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Customer-safe connection status: which basestation + healthy/degraded/
+    outage/unknown. No internal IPs/device/topology details are exposed."""
+    customer = _customer(db, principal)
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription or str(subscription.subscriber_id) != str(
+        customer["account_id"]
+    ):
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return topology_selfcare.customer_connection_status(db, subscription)
 
 
 @router.post(
@@ -553,7 +592,15 @@ def my_topup_initiate(
     """Create a top-up checkout intent for the caller's prepaid account."""
     customer = _customer(db, principal)
     try:
-        result = customer_payments.create_topup_intent(db, customer, payload.amount)
+        result = customer_payments.create_topup_intent(
+            db,
+            customer,
+            payload.amount,
+            payment_method_id=(
+                str(payload.payment_method_id) if payload.payment_method_id else None
+            ),
+            idempotency_key=payload.idempotency_key,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TopupInitiateResponse(
@@ -564,6 +611,8 @@ def my_topup_initiate(
         amount=result["requested_amount"],
         currency=result.get("currency", "NGN"),
         customer_email=customer["username"] or None,
+        charged=result.get("charged", False),
+        checkout_url=result.get("checkout_url"),
     )
 
 
@@ -669,7 +718,7 @@ async def my_usage_summary(
     """
     subscriber_id = _subscriber_id(principal)
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
-    summary["fup"] = usage_summary_service.fup_summary(db, subscriber_id)
+    summary["fup"] = await usage_summary_service.fup_summary(db, subscriber_id)
     return summary
 
 
@@ -726,15 +775,47 @@ def my_ticket(
     return _owned_ticket(db, _subscriber_id(principal), ticket_id)
 
 
+MAX_TICKET_ATTACHMENTS = 5
+
+
+def _validate_attachment_count(attachments: list[UploadFile]) -> list[UploadFile]:
+    files = [a for a in (attachments or []) if getattr(a, "filename", "")]
+    if len(files) > MAX_TICKET_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "too_many_attachments",
+                "message": f"At most {MAX_TICKET_ATTACHMENTS} files may be attached.",
+            },
+        )
+    return files
+
+
 @router.post("/support/tickets", response_model=TicketRead, status_code=201)
 def my_create_ticket(
-    payload: MySupportTicketCreate,
     request: Request,
+    title: str = Form(..., min_length=1, max_length=255),
+    description: str | None = Form(default=None),
+    priority: str = Form(default="normal"),
+    ticket_type: str | None = Form(default=None),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
     """Raise a ticket on the caller's own account. Identity/assignment fields
-    are not accepted from the client — subscriber_id is forced to the caller."""
+    are not accepted from the client — subscriber_id is forced to the caller.
+
+    Accepts multipart/form-data: the JSON-equivalent fields (title, description,
+    priority, ticket_type) as form fields plus a repeatable ``attachments`` file
+    field (images + PDF, <=5 MB each, <=5 files). Attachments are stored locally
+    on the ticket and may not sync to the CRM (the CRM push omits them)."""
+    payload = MySupportTicketCreate(
+        title=title,
+        description=description,
+        priority=priority,
+        ticket_type=ticket_type,
+    )
+    files = _validate_attachment_count(attachments)
     subscriber_id = _subscriber_id(principal)
     ticket_payload = TicketCreate(
         title=payload.title,
@@ -747,6 +828,22 @@ def my_create_ticket(
     ticket = support_service.tickets.create(
         db, ticket_payload, actor_id=subscriber_id, request=request
     )
+    if files:
+        try:
+            uploaded = web_support_tickets.upload_ticket_attachments(
+                db,
+                ticket_id=str(ticket.id),
+                attachments=files,
+                entity_type="support_ticket_attachment",
+                actor_id=subscriber_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_attachment", "message": str(exc)},
+            ) from exc
+        support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
+        db.refresh(ticket)
     from app.services.crm_ticket_push import enqueue_crm_ticket_push
 
     if getattr(ticket, "id", None):
@@ -784,19 +881,46 @@ def my_ticket_comments(
 )
 def my_add_ticket_comment(
     ticket_id: str,
-    payload: MySupportCommentCreate,
     request: Request,
+    body: str = Form(..., min_length=1),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
     """Reply to the caller's own ticket. is_internal is forced False so a
-    customer can never create a staff-only note."""
+    customer can never create a staff-only note.
+
+    Accepts multipart/form-data: the ``body`` form field plus a repeatable
+    ``attachments`` file field (images + PDF, <=5 MB each, <=5 files).
+    Attachments are stored locally on the comment and may not sync to the CRM
+    (the CRM push omits them)."""
+    payload = MySupportCommentCreate(body=body)
+    files = _validate_attachment_count(attachments)
     subscriber_id = _subscriber_id(principal)
     _owned_ticket(db, subscriber_id, ticket_id)
+    uploaded: list[dict] = []
+    if files:
+        try:
+            uploaded = web_support_tickets.upload_ticket_attachments(
+                db,
+                ticket_id=ticket_id,
+                attachments=files,
+                entity_type="support_ticket_comment_attachment",
+                actor_id=subscriber_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_attachment", "message": str(exc)},
+            ) from exc
     comment = support_service.tickets.create_comment(
         db,
         ticket_id,
-        TicketCommentCreate(body=payload.body, is_internal=False),
+        TicketCommentCreate(
+            body=payload.body,
+            is_internal=False,
+            attachments=[AttachmentMeta(**item) for item in uploaded],
+        ),
         actor_id=subscriber_id,
         request=request,
     )
@@ -895,6 +1019,112 @@ def my_location_request_cancel(
     )
 
 
+# --- Subscriber contacts (self-scoped) ------------------------------------------
+#
+# Customer-facing parity with the web portal's /portal/contacts feature. The
+# mobile app manages a subscriber's additional contacts (people, not accounts).
+# All ops reuse the web service core (app/services/customer_portal_contacts.py)
+# so normalization, the "at least one contact channel" rule, duplicate
+# detection, and subscriber-id scoping are identical. Ownership is enforced by
+# the service (allowed subscriber ids only); a contact that isn't the caller's
+# returns 404 (not 403), matching the self-scoped pattern used elsewhere.
+
+
+def _contact_form(
+    payload: SubscriberContactCreate | SubscriberContactUpdate,
+) -> contacts_service.ContactForm:
+    """Normalize an API payload into the web service's ContactForm."""
+    return contacts_service.normalize_contact_form(
+        full_name=payload.full_name,
+        phone=payload.phone,
+        email=payload.email,
+        whatsapp=payload.whatsapp,
+        facebook=payload.facebook,
+        instagram=payload.instagram,
+        x_handle=payload.x_handle,
+        telegram=payload.telegram,
+        linkedin=payload.linkedin,
+        other_social=payload.other_social,
+        relationship=payload.relationship,
+        contact_type=payload.contact_type,
+        is_authorized=payload.is_authorized,
+        receives_notifications=payload.receives_notifications,
+        is_billing_contact=payload.is_billing_contact,
+        notes=payload.notes,
+    )
+
+
+@router.get("/contacts", response_model=list[SubscriberContactRead])
+def my_contacts(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's subscriber contacts, newest first."""
+    return contacts_service.list_contacts(db, _customer(db, principal))
+
+
+@router.post(
+    "/contacts", response_model=SubscriberContactWriteResponse, status_code=201
+)
+def my_create_contact(
+    payload: SubscriberContactCreate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Add a contact to the caller's account. Requires at least one contact
+    channel (phone, email, or a social handle). Returns the saved contact plus
+    any duplicate-use warnings (advisory; the save still succeeds)."""
+    try:
+        contact, warnings = contacts_service.create_contact_returning(
+            db, _customer(db, principal), _contact_form(payload)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SubscriberContactWriteResponse(
+        contact=SubscriberContactRead.model_validate(contact), warnings=warnings
+    )
+
+
+@router.patch("/contacts/{contact_id}", response_model=SubscriberContactWriteResponse)
+def my_update_contact(
+    contact_id: str,
+    payload: SubscriberContactUpdate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Update one of the caller's own contacts (full replace). Requires at least
+    one contact channel. 404 if the contact isn't the caller's."""
+    customer = _customer(db, principal)
+    if contacts_service.get_owned_contact(db, customer, contact_id) is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    try:
+        contact, warnings = contacts_service.update_contact_returning(
+            db, customer, contact_id, _contact_form(payload)
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == "Contact not found.":
+            raise HTTPException(status_code=404, detail="Contact not found") from exc
+        raise HTTPException(status_code=400, detail=message) from exc
+    return SubscriberContactWriteResponse(
+        contact=SubscriberContactRead.model_validate(contact), warnings=warnings
+    )
+
+
+@router.delete("/contacts/{contact_id}", status_code=204)
+def my_delete_contact(
+    contact_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Delete one of the caller's own contacts. 404 if it isn't the caller's."""
+    customer = _customer(db, principal)
+    try:
+        contacts_service.delete_contact(db, customer, contact_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Contact not found") from exc
+
+
 # --- VAS wallet (feature-flagged: 404 when vas.enabled is off) -------------------
 
 
@@ -944,11 +1174,18 @@ def my_wallet_pay_bill(
     payload: VasPayBillRequest,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     """Pay the caller's DotMac bill from their wallet (the only wallet→billing
-    bridge; allocation matches an ordinary gateway payment)."""
+    bridge; allocation matches an ordinary gateway payment).
+
+    Pass an ``Idempotency-Key`` header to make the debit safe against
+    double-submit: a replay returns the original payment, never a second
+    wallet debit."""
     subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.pay_bill(db, subscriber_id, payload.amount)
+    result = vas_wallet_service.pay_bill(
+        db, subscriber_id, payload.amount, idempotency_key=idempotency_key
+    )
     return VasPayBillResponse(**result)
 
 

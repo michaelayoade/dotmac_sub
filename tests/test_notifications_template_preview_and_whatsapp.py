@@ -20,34 +20,36 @@ def test_notification_template_test_uses_whatsapp_and_substitution(
             code="wa_invoice",
             channel=NotificationChannel.whatsapp,
             subject=None,
-            body="Hello {{customer_name}}, amount due is {amount_due}",
+            body="Hello {subscriber_name}, amount due is {amount}",
         ),
     )
     captured = {}
 
-    def _fake_send_text_message(*, db, recipient, body, dry_run):
+    def _fake_send_template_message(*, db, recipient, template_name, dry_run):
         captured["recipient"] = recipient
-        captured["body"] = body
+        captured["template_name"] = template_name
         captured["dry_run"] = dry_run
         return {"ok": True, "response": "ok"}
 
     monkeypatch.setattr(
-        "app.services.integrations.connectors.whatsapp.send_text_message",
-        _fake_send_text_message,
+        "app.services.integrations.connectors.whatsapp.send_template_message",
+        _fake_send_template_message,
     )
 
     response = notifications_web.notification_template_test(
         request=_request(),
         template_id=template.id,
         test_recipient="+2348000000000",
-        test_variables_json='{"customer_name":"Ada","amount_due":"12500.00"}',
+        test_variables_json='{"subscriber_name":"Ada","amount":"12500.00"}',
         db=db_session,
     )
 
     assert response.status_code == 303
+    # WhatsApp business sends go through approved Meta templates (by code), not
+    # free text, so the test-send now invokes send_template_message.
     assert captured["recipient"] == "+2348000000000"
     assert captured["dry_run"] is False
-    assert captured["body"] == "Hello Ada, amount due is 12500.00"
+    assert captured["template_name"] == "wa_invoice"
 
 
 def test_notification_template_preview_renders_variables(db_session):
@@ -57,15 +59,15 @@ def test_notification_template_preview_renders_variables(db_session):
             name="Email Invoice",
             code="email_invoice",
             channel=NotificationChannel.email,
-            subject="Invoice {{invoice_number}}",
-            body="Hi {{customer_name}}",
+            subject="Invoice {invoice_number}",
+            body="Hi {subscriber_name}",
         ),
     )
 
     response = notifications_web.notification_template_preview(
         request=_request(),
         template_id=template.id,
-        test_variables_json='{"customer_name":"Jane","invoice_number":"INV-9"}',
+        test_variables_json='{"subscriber_name":"Jane","invoice_number":"INV-9"}',
         db=db_session,
     )
 

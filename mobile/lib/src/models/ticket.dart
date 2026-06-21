@@ -1,3 +1,41 @@
+/// An uploaded file attached to a ticket or comment (mirrors the attachment
+/// objects the support API returns under `attachments`).
+class TicketAttachment {
+  TicketAttachment({
+    required this.id,
+    required this.filename,
+    this.url,
+    this.contentType,
+    this.size,
+  });
+
+  final String id;
+  final String filename;
+  final String? url;
+  final String? contentType;
+  final int? size;
+
+  bool get isImage => (contentType ?? '').startsWith('image/');
+  bool get isPdf => (contentType ?? '').contains('pdf');
+
+  factory TicketAttachment.fromJson(Map<String, dynamic> json) =>
+      TicketAttachment(
+        id: json['id'].toString(),
+        filename: (json['filename'] ?? json['name'] ?? 'attachment').toString(),
+        url: (json['url'] ?? json['download_url'])?.toString(),
+        contentType: (json['content_type'] ?? json['mime_type'])?.toString(),
+        size: (json['size'] as num?)?.toInt(),
+      );
+}
+
+List<TicketAttachment> _toAttachments(dynamic v) {
+  if (v is! List) return const [];
+  return v
+      .whereType<Map>()
+      .map((e) => TicketAttachment.fromJson(e.cast<String, dynamic>()))
+      .toList();
+}
+
 /// Mirrors TicketRead and TicketCommentRead from app/schemas/support.py.
 class Ticket {
   Ticket({
@@ -10,6 +48,7 @@ class Ticket {
     this.ticketType,
     this.channel,
     this.tags = const [],
+    this.attachments = const [],
     this.createdAt,
     this.updatedAt,
     this.resolvedAt,
@@ -25,6 +64,7 @@ class Ticket {
   final String? ticketType;
   final String? channel;
   final List<String> tags;
+  final List<TicketAttachment> attachments;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? resolvedAt;
@@ -45,6 +85,7 @@ class Ticket {
         tags: (json['tags'] as List? ?? const [])
             .map((e) => e.toString())
             .toList(),
+        attachments: _toAttachments(json['attachments']),
         createdAt: _toDate(json['created_at']),
         updatedAt: _toDate(json['updated_at']),
         resolvedAt: _toDate(json['resolved_at']),
@@ -58,6 +99,7 @@ class TicketComment {
     required this.ticketId,
     required this.body,
     this.isInternal = false,
+    this.attachments = const [],
     this.createdAt,
   });
 
@@ -65,6 +107,7 @@ class TicketComment {
   final String ticketId;
   final String body;
   final bool isInternal;
+  final List<TicketAttachment> attachments;
   final DateTime? createdAt;
 
   factory TicketComment.fromJson(Map<String, dynamic> json) => TicketComment(
@@ -72,6 +115,7 @@ class TicketComment {
         ticketId: json['ticket_id'].toString(),
         body: json['body'] as String? ?? '',
         isInternal: json['is_internal'] as bool? ?? false,
+        attachments: _toAttachments(json['attachments']),
         createdAt: _toDate(json['created_at']),
       );
 }

@@ -31,6 +31,7 @@ from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services.bandwidth import bandwidth_samples
+from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -234,35 +235,65 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         elif subscriber.first_name:
             user = {"first_name": subscriber.first_name}
 
+    # Track whether the headline account stats loaded cleanly so the template
+    # can warn the customer that figures may be incomplete instead of silently
+    # showing zeros.
+    stats_error = False
+
     invoices = []
     if account_id:
-        invoices = billing_service.invoices.list(
-            db=db,
-            account_id=account_id,
-            status=None,
-            is_active=None,
-            order_by="issued_at",
-            order_dir="desc",
-            limit=25,
-            offset=0,
-        )
+        try:
+            invoices = billing_service.invoices.list(
+                db=db,
+                account_id=account_id,
+                status=None,
+                is_active=None,
+                order_by="issued_at",
+                order_dir="desc",
+                limit=25,
+                offset=0,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load dashboard invoices for account %s",
+                account_id,
+                exc_info=True,
+            )
+            stats_error = True
 
-    balance = sum(float(inv.balance_due or 0) for inv in invoices)
+    current_balance = 0.0
+    if account_id:
+        try:
+            current_balance = float(get_available_balance(db, str(account_id)))
+        except Exception:
+            logger.warning(
+                "Failed to resolve available balance for dashboard account %s",
+                account_id,
+                exc_info=True,
+            )
     next_bill_amount = float(invoices[0].total or 0) if invoices else 0.0
     next_bill_date = None
 
     subscriptions = []
     if account_id:
-        subscriptions = catalog_service.subscriptions.list(
-            db=db,
-            subscriber_id=account_id,
-            offer_id=None,
-            status=SubscriptionStatus.active.value,
-            order_by="created_at",
-            order_dir="desc",
-            limit=25,
-            offset=0,
-        )
+        try:
+            subscriptions = catalog_service.subscriptions.list(
+                db=db,
+                subscriber_id=account_id,
+                offer_id=None,
+                status=SubscriptionStatus.active.value,
+                order_by="created_at",
+                order_dir="desc",
+                limit=25,
+                offset=0,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load dashboard subscriptions for account %s",
+                account_id,
+                exc_info=True,
+            )
+            stats_error = True
 
     if subscriptions:
         next_bill_date = subscriptions[0].next_billing_at
@@ -272,7 +303,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         next_bill_date = datetime.now(UTC) + timedelta(days=30)
 
     account = SimpleNamespace(
-        balance=balance,
+        balance=current_balance,
         next_bill_amount=next_bill_amount,
         next_bill_date=next_bill_date,
     )
@@ -344,32 +375,29 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         except Exception:
             open_count = 0
 
-    # Billing mode and prepaid balance
+    # Billing mode and available balance
     billing_mode = "postpaid"
-    prepaid_balance = 0.0
+    prepaid_balance = current_balance
     if subscriber and hasattr(subscriber, "billing_mode") and subscriber.billing_mode:
         billing_mode = subscriber.billing_mode.value
-    if billing_mode == "prepaid" and account_id:
-        try:
-            from app.services.collections._core import (
-                _resolve_prepaid_available_balance,
-            )
-
-            prepaid_balance = float(
-                _resolve_prepaid_available_balance(db, str(account_id))
-            )
-        except Exception:
-            logger.warning(
-                "Failed to resolve prepaid balance for account %s",
-                account_id,
-                exc_info=True,
-            )
-            prepaid_balance = 0.0
 
     # Get subscriber's ONT devices
     devices = []
     if subscriber_id:
         devices = _get_subscriber_devices(db, subscriber_id)
+
+    try:
+        amount_due = (
+            get_total_outstanding_balance(db, account_id) if account_id else 0.0
+        )
+    except Exception:
+        logger.warning(
+            "Failed to load outstanding balance for account %s",
+            account_id,
+            exc_info=True,
+        )
+        amount_due = 0.0
+        stats_error = True
 
     return {
         "user": SimpleNamespace(**user),
@@ -381,6 +409,12 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         "recent_activity": [],
         "billing_mode": billing_mode,
         "prepaid_balance": prepaid_balance,
+        # Outstanding invoice balance (what the customer owes right now). Drives
+        # the dashboard "Pay Now" panel's one-tap "pay what you owe" prefill.
+        "amount_due": amount_due,
+        # True when a headline figure (invoices/subscriptions/balance) failed to
+        # load — the template surfaces a "couldn't load, refresh" banner.
+        "stats_error": stats_error,
     }
 
 

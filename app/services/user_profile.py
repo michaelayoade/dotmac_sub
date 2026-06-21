@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Subscriber
+from app.models.subscriber import ContactMethod, Gender, Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.auth_flow import AvatarUploadResponse, MeResponse, MeUpdateRequest
 from app.services import avatar as avatar_service
@@ -44,6 +44,12 @@ def _build_me_response(
         preferred_contact_method=preferred_contact_method,
         locale=getattr(person, "locale", None),
         timezone=getattr(person, "timezone", None),
+        address_line1=getattr(person, "address_line1", None),
+        address_line2=getattr(person, "address_line2", None),
+        city=getattr(person, "city", None),
+        region=getattr(person, "region", None),
+        postal_code=getattr(person, "postal_code", None),
+        country_code=getattr(person, "country_code", None),
         user_type=getattr(getattr(person, "user_type", None), "value", None)
         or "customer",
         roles=roles,
@@ -102,18 +108,46 @@ def update_me(
             "preferred_contact_method",
             "locale",
             "timezone",
+            "address_line1",
+            "address_line2",
+            "city",
+            "region",
+            "postal_code",
+            "country_code",
         }
     else:
         person = _get_subscriber_or_404(db, principal_id)
         disallowed_fields = set()
 
     update_data = payload.model_dump(exclude_unset=True)
+
+    # Email is identity-bearing (unique, NOT NULL) and re-arms verification, so
+    # it goes through the shared helper rather than a raw setattr. This is what
+    # lets a customer who has no email yet add one from the app and verify it.
+    email_change = None
+    if principal_type != "system_user":
+        email_change = update_data.pop("email", None)
+
     for field, value in update_data.items():
         if field in disallowed_fields:
             continue
+        # The DB columns are native enums / a normalised country code, but the
+        # request carries plain strings — coerce so a raw setattr is valid.
+        if field == "gender" and isinstance(value, str):
+            value = Gender(value)
+        elif field == "preferred_contact_method":
+            value = ContactMethod(value) if value else None
+        elif field == "country_code" and isinstance(value, str):
+            value = value.strip().upper() or None
         setattr(person, field, value)
 
     db.flush()
+
+    if email_change is not None:
+        from app.services import auth_flow
+
+        auth_flow.set_subscriber_email(db, str(person.id), email_change)
+
     db.refresh(person)
 
     return _build_me_response(person, roles, scopes)

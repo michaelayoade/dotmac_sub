@@ -13,6 +13,7 @@ All existing import patterns are preserved for backward compatibility:
 
 # Export common helpers used by billing_automation
 from app.services.billing._common import (
+    _assert_invoice_allocatable,
     _recalculate_credit_note_totals,
     _recalculate_invoice_totals,
     _resolve_tax_rate,
@@ -115,6 +116,7 @@ __all__ = [
     "_validate_invoice_line_amount",
     "_resolve_tax_rate",
     "_validate_invoice_currency",
+    "_assert_invoice_allocatable",
     "_recalculate_invoice_totals",
     "_recalculate_credit_note_totals",
     "_validate_payment_linkages",

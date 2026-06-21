@@ -30,6 +30,38 @@
     </div>
     {% endif %}
 
+    {% if verify_sent == '1' %}
+    <div class="rounded-xl border-2 border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Verification email sent. Check your inbox for the link.
+    </div>
+    {% elif verify_sent == '0' %}
+    <div class="rounded-xl border-2 border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+        We couldn&rsquo;t send the verification email right now. Please try again shortly.
+    </div>
+    {% endif %}
+
+    {% if subscriber and not subscriber.email_verified and subscriber.email %}
+    <div class="flex flex-col gap-3 rounded-xl border-2 border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-900/50 dark:bg-amber-900/20 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-start gap-3">
+            <svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0"/>
+            </svg>
+            <div>
+                <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">Your email isn&rsquo;t verified</p>
+                <p class="mt-0.5 text-sm text-amber-800 dark:text-amber-300">Verify {{ subscriber.email }} so you don&rsquo;t miss invoices and important account updates.</p>
+            </div>
+        </div>
+        {% if not (customer and customer.read_only) %}
+        <form method="post" action="/portal/profile/verify-email/resend" class="flex-shrink-0">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
+                Resend verification
+            </button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <form method="post" action="/portal/profile" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
         <!-- Profile Card with Avatar -->
@@ -58,23 +90,113 @@
                 <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Contact Information</h2>
                 <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Update your personal contact details</p>
 
+                {% set _inp = "block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white" %}
+                {% set _lbl = "block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2" %}
                 <div class="grid gap-5 sm:grid-cols-2">
-                    <div class="sm:col-span-2 lg:col-span-1">
-                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Full Name</label>
-                        {% set _full_name = ((subscriber.first_name or '') ~ ' ' ~ (subscriber.last_name or ''))|trim if subscriber else '' %}
-                        <input type="text" name="name" value="{{ _full_name or (customer.name if customer else '') or '' }}" required
-                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
-                    </div>
-                    <div class="sm:col-span-2 lg:col-span-1">
-                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Email Address</label>
-                        <input type="email" name="email" value="{{ (subscriber.email if subscriber else '') or (customer.email if customer else '') or '' }}" required
-                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    <div>
+                        <label class="{{ _lbl }}">First Name</label>
+                        <input type="text" name="first_name" required
+                               value="{{ subscriber.first_name if subscriber else '' }}" class="{{ _inp }}">
                     </div>
                     <div>
-                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Phone Number</label>
-                        <input type="tel" name="phone" value="{{ (subscriber.phone if subscriber else '') or (customer.phone if customer else '') or '' }}"
-                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                        <label class="{{ _lbl }}">Last Name</label>
+                        <input type="text" name="last_name" required
+                               value="{{ subscriber.last_name if subscriber else '' }}" class="{{ _inp }}">
                     </div>
+                    <div class="sm:col-span-2">
+                        <label class="{{ _lbl }}">Display Name <span class="font-normal text-stone-400">(optional)</span></label>
+                        <input type="text" name="display_name"
+                               value="{{ subscriber.display_name if subscriber and subscriber.display_name else '' }}" class="{{ _inp }}">
+                        <p class="mt-1.5 text-xs text-stone-400">How your name appears across the portal. Leave blank to use your full name.</p>
+                    </div>
+                    <div>
+                        <label class="{{ _lbl }}">Email Address</label>
+                        <input type="email" name="email" required
+                               value="{{ (subscriber.email if subscriber else '') or (customer.email if customer else '') or '' }}" class="{{ _inp }}">
+                        {% if subscriber %}
+                        <p class="mt-2 flex items-center gap-1.5 text-xs font-semibold {{ 'text-emerald-600 dark:text-emerald-400' if subscriber.email_verified else 'text-amber-600 dark:text-amber-400' }}">
+                            {% if subscriber.email_verified %}
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            Verified
+                            {% else %}
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            Not verified
+                            {% endif %}
+                        </p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="{{ _lbl }}">Phone Number</label>
+                        <input type="tel" name="phone"
+                               value="{{ (subscriber.phone if subscriber else '') or (customer.phone if customer else '') or '' }}" class="{{ _inp }}">
+                    </div>
+                    <div>
+                        <label class="{{ _lbl }}">Date of Birth</label>
+                        <input type="date" name="date_of_birth"
+                               value="{{ subscriber.date_of_birth.isoformat() if subscriber and subscriber.date_of_birth else '' }}" class="{{ _inp }}">
+                    </div>
+                    <div>
+                        <label class="{{ _lbl }}">Gender</label>
+                        {% set _g = subscriber.gender.value if subscriber and subscriber.gender else 'unknown' %}
+                        <select name="gender" class="{{ _inp }}">
+                            <option value="unknown" {{ 'selected' if _g == 'unknown' }}>Prefer not to say</option>
+                            <option value="female" {{ 'selected' if _g == 'female' }}>Female</option>
+                            <option value="male" {{ 'selected' if _g == 'male' }}>Male</option>
+                            <option value="non_binary" {{ 'selected' if _g == 'non_binary' }}>Non-binary</option>
+                            <option value="other" {{ 'selected' if _g == 'other' }}>Other</option>
+                        </select>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="{{ _lbl }}">Preferred Contact Method</label>
+                        {% set _cm = subscriber.preferred_contact_method.value if subscriber and subscriber.preferred_contact_method else '' %}
+                        <select name="preferred_contact_method" class="{{ _inp }}">
+                            <option value="" {{ 'selected' if not _cm }}>No preference</option>
+                            <option value="email" {{ 'selected' if _cm == 'email' }}>Email</option>
+                            <option value="phone" {{ 'selected' if _cm == 'phone' }}>Phone</option>
+                            <option value="sms" {{ 'selected' if _cm == 'sms' }}>SMS</option>
+                            <option value="push" {{ 'selected' if _cm == 'push' }}>Push notification</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contact Address -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Contact Address</h2>
+            <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Where we reach you for correspondence and account notices</p>
+
+            <div class="grid gap-5 sm:grid-cols-2">
+                <div class="sm:col-span-2">
+                    <label class="{{ _lbl }}">Address Line 1</label>
+                    <input type="text" name="address_line1"
+                           value="{{ subscriber.address_line1 if subscriber and subscriber.address_line1 else '' }}" class="{{ _inp }}">
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="{{ _lbl }}">Address Line 2 <span class="font-normal text-stone-400">(optional)</span></label>
+                    <input type="text" name="address_line2"
+                           value="{{ subscriber.address_line2 if subscriber and subscriber.address_line2 else '' }}" class="{{ _inp }}">
+                </div>
+                <div>
+                    <label class="{{ _lbl }}">City</label>
+                    <input type="text" name="city"
+                           value="{{ subscriber.city if subscriber and subscriber.city else '' }}" class="{{ _inp }}">
+                </div>
+                <div>
+                    <label class="{{ _lbl }}">State / Region</label>
+                    <input type="text" name="region"
+                           value="{{ subscriber.region if subscriber and subscriber.region else '' }}" class="{{ _inp }}">
+                </div>
+                <div>
+                    <label class="{{ _lbl }}">Postal Code</label>
+                    <input type="text" name="postal_code"
+                           value="{{ subscriber.postal_code if subscriber and subscriber.postal_code else '' }}" class="{{ _inp }}">
+                </div>
+                <div>
+                    <label class="{{ _lbl }}">Country</label>
+                    <input type="text" name="country_code" maxlength="2" placeholder="NG"
+                           value="{{ subscriber.country_code if subscriber and subscriber.country_code else '' }}" class="{{ _inp }} uppercase">
+                    <p class="mt-1.5 text-xs text-stone-400">2-letter country code (e.g. NG).</p>
                 </div>
             </div>
         </div>

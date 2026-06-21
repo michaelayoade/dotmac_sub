@@ -46,6 +46,29 @@ def audit_suspension_enforcement() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.radius.audit_ip_consistency")
+def audit_ip_consistency() -> dict:
+    """Periodic read-only check that an active subscriber's IPv4 agrees across
+    its three sources (subscription.ipv4_address column, the IPAM IPAssignment,
+    and the external radreply Framed-IP). Drift here is the structural risk
+    behind silent partial desync — see
+    docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md. Stores the result in
+    Redis where the web process's metrics collector exports it as
+    radius_ip_consistency_drift{kind}."""
+    from app.services.ip_consistency_audit import (
+        audit_ip_consistency as run_audit,
+    )
+    from app.services.ip_consistency_audit import store_latest_ip_audit
+
+    session = SessionLocal()
+    try:
+        result = run_audit(session)
+        store_latest_ip_audit(result)
+        return result
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.radius.run_enforcement_reconciler")
 def run_enforcement_reconciler() -> dict[str, int]:
     """Assert that non-serviceable subscribers are actually unreachable.
@@ -139,45 +162,6 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     stats["reject_pool_sessions"] += 1
                     to_kick[(row[1], row[2])] = row
 
-        # Dual-run guard: never kick a login that is ACTIVE in Splynx.
-        # Sync gaps exist where a Splynx-active service has no dotmac
-        # subscription yet (e.g. 100025599 on 2026-06-11) — those users
-        # are missing from radcheck through no fault of their own, and
-        # kicking them is an outage for a paying customer. Surface them
-        # as sync-gap alerts instead.
-        kick_logins = sorted({row[0] for row in to_kick.values()})
-        splynx_active: set[str] = set()
-        if kick_logins:
-            try:
-                from scripts.migration.db_connections import splynx_connection
-
-                with splynx_connection() as sconn, sconn.cursor() as scur:
-                    placeholders = ",".join(["%s"] * len(kick_logins))
-                    scur.execute(
-                        "SELECT login FROM services_internet "  # nosec B608  # noqa: S608 — %s binds; values passed as params
-                        f"WHERE login IN ({placeholders}) "
-                        "AND deleted='0' AND status='active'",
-                        kick_logins,
-                    )
-                    for r in scur.fetchall():
-                        login = r["login"] if isinstance(r, dict) else r[0]
-                        splynx_active.add(str(login).strip())
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "enforcement reconciler: Splynx guard query failed (%s) — "
-                    "skipping ALL kicks this run (fail-safe)",
-                    exc,
-                )
-                splynx_active = {row[0] for row in to_kick.values()}
-        if splynx_active:
-            stats["sync_gap_logins"] = len(splynx_active)
-            logger.error(
-                "enforcement reconciler: %d logins are ACTIVE in Splynx but "
-                "missing from radcheck — dotmac sync gap, NOT kicking: %s",
-                len(splynx_active),
-                sorted(splynx_active)[:10],
-            )
-
         ghost_rows: list[tuple[int, str]] = []
         for (
             username,
@@ -187,8 +171,6 @@ def run_enforcement_reconciler() -> dict[str, int]:
             radacctid,
             stale,
         ) in to_kick.values():
-            if username in splynx_active:
-                continue
             if stats["kicked"] >= max_kicks:
                 stats["kicks_capped"] = len(to_kick) - stats["kicked"]
                 logger.error(
@@ -259,7 +241,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 )
             ).all()
         }
-        # Mirror populate_radius_from_subs's per-login slot policy: the
+        # Mirror radius_population's per-login slot policy: the
         # ACTIVE sub wins a shared login, so the tag is expected only if
         # the winner's subscriber is blocked — or if the login has no
         # active sub at all (then any blocked/suspended sub carries the
@@ -316,9 +298,9 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 len(drift),
                 sorted(drift)[:5],
             )
-            from app.tasks.splynx_sync import run_refresh_radius_from_subs
+            from app.tasks.radius_population import refresh_radius_from_subs
 
-            run_refresh_radius_from_subs.delay()
+            refresh_radius_from_subs.delay()
 
     logger.info("enforcement reconciler done: %s", stats)
     return stats

@@ -373,6 +373,31 @@ def reconcile_ont(
                 force_proposed_writes=False,
             )
             if verify_plan.drifts:
+                # AUDIT-ONLY (dry-run for the future ACS verify-read grace):
+                # classify the residual drift and record whether this mismatch
+                # is purely ACS inform-lag (would_be_graced) vs genuine. Behaviour
+                # is unchanged — we still fail with VERIFICATION_MISMATCH — so we
+                # can quantify the oscillation cause before enabling any grace.
+                _cache_lag, _genuine = _classify_verify_drifts(
+                    verify_plan.drifts, apply_outcome.actions_applied
+                )
+                logger.warning(
+                    "acs_verify_mismatch",
+                    extra={
+                        "event": "acs_verify_mismatch",
+                        "ont_id": str(ont.id),
+                        "mode": mode,
+                        "total_drifts": len(verify_plan.drifts),
+                        "acs_cache_lag_candidates": len(_cache_lag),
+                        "genuine_drifts": len(_genuine),
+                        # If True, the future grace would treat this as
+                        # converged-pending-reinform instead of out_of_sync.
+                        "would_be_graced": not _genuine,
+                        "drift_fields": [
+                            f"{d.surface}:{d.field}" for d in verify_plan.drifts
+                        ],
+                    },
+                )
                 return _finalise(
                     db,
                     ont,
@@ -601,6 +626,38 @@ def _failure_result(
         duration_ms=int((time.monotonic() - started_monotonic) * 1000),
         reconciled_at=now,
     )
+
+
+def _classify_verify_drifts(drifts, actions_applied):
+    """Split post-apply verify drift into ACS-cache-lag candidates vs genuine.
+
+    The post-apply re-read pulls ACS fields from the GenieACS CWMP cache, which
+    only refreshes on the device's next periodic Inform — so a field we just
+    wrote AND that the ACS accepted can still read back as its old value for one
+    Inform interval, producing a spurious VERIFICATION_MISMATCH that marks the
+    ONT ``out_of_sync`` and (in sync mode) locks it out, so the sweeper re-plans
+    / re-applies / re-verifies-stale: an oscillation.
+
+    A drift is a **cache-lag candidate** when it is on the ``acs`` surface, is
+    repairable (read-verifiable), and names a field we just wrote this pass
+    (present in ``actions_applied`` on the ``acs`` surface). Anything else —
+    OLT-surface drift, a field we didn't touch, an unrepairable field — is
+    **genuine** divergence that must still fail.
+
+    AUDIT-ONLY: callers use this purely to measure how often a verify mismatch
+    is explainable by inform-lag (``would_be_graced``). It does NOT change the
+    reconcile outcome — enforcing the grace is a separate, flag-gated step.
+    """
+    applied_acs_fields = {
+        a.field for a in actions_applied if getattr(a, "surface", None) == "acs"
+    }
+    cache_lag = [
+        d
+        for d in drifts
+        if d.surface == "acs" and d.repairable and d.field in applied_acs_fields
+    ]
+    genuine = [d for d in drifts if d not in cache_lag]
+    return cache_lag, genuine
 
 
 def _summarise_drifts(drifts) -> str:

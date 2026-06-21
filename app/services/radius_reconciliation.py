@@ -27,19 +27,23 @@ from app.services.radius import (
     _external_radius_table,
     _get_external_engine,
 )
+from app.services.radius_access_state import (
+    BLOCKED_STATUSES as _BLOCKED_STATUSES,
+)
+from app.services.radius_access_state import (
+    NO_ACCESS_STATUSES as _NO_ACCESS_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
 
-# A subscriber counts as "fully blocked" when they have at least one sub in
-# a blocked status and no active sub. (Pending/hidden subs grant no access,
-# so they don't lift the block.)
-_BLOCKED_STATUSES = (
-    SubscriptionStatus.suspended,
-    SubscriptionStatus.blocked,
-    SubscriptionStatus.stopped,
-)
+# Statuses that mean "should have no normal access" = walled-garden (blocked)
+# OR removed (terminated). The audit targets this whole set so a `disabled`/
+# `canceled`/`expired` subscriber that still has a usable password or live
+# session is flagged too — previously the audit used only the blocked set and
+# silently under-reported terminated leaks. ``_BLOCKED_STATUSES`` (imported
+# from the canonical classifier) is kept for the mixed-status report below.
 
-# Per-user walled-garden marker written by populate_radius_from_subs.py and
+# Per-user walled-garden marker written by app.services.radius_population and
 # the enforcement address-list path (MikroTik filter rules allow only the
 # portal for IPs on this list).
 WALLED_GARDEN_ADDRESS_LIST = "suspended"
@@ -60,11 +64,11 @@ def _chunked(values: list[str], size: int = _CHUNK):
 
 
 def _fully_blocked_usernames(db: Session) -> list[str]:
-    """Active-credential usernames of subscribers with >=1 blocked sub and
-    no active sub."""
+    """Active-credential usernames of subscribers with >=1 no-access sub
+    (blocked or terminated) and no active sub."""
     blocked_subscribers = (
         select(Subscription.subscriber_id)
-        .where(Subscription.status.in_(_BLOCKED_STATUSES))
+        .where(Subscription.status.in_(_NO_ACCESS_STATUSES))
         .distinct()
         .subquery()
     )

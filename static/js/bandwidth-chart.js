@@ -46,11 +46,15 @@ function bandwidthChart(config = {}) {
         apiBasePath: config.apiBasePath || '/api/v1/bandwidth',
         useMyEndpoints: config.useMyEndpoints || false, // Use /my/ endpoints for customer portal
         enableLive: config.enableLive !== false,
+        directLiveEndpoint: config.directLiveEndpoint || null,
+        directLivePollMs: config.directLivePollMs || 5000,
 
         // State
         chart: null,
         eventSource: null,
         reconnectTimer: null,
+        statsPollTimer: null,
+        directLivePollTimer: null,
         isDestroyed: false,
         loading: true,
         error: null,
@@ -63,6 +67,10 @@ function bandwidthChart(config = {}) {
         peakUpload: 0,
         totalDownload: 0,
         totalUpload: 0,
+        liveStatus: config.directLiveEndpoint ? 'waiting' : 'history',
+        liveSource: '',
+        liveInterface: '',
+        liveUpdatedAt: null,
 
         // Time range
         timeRange: '24h',
@@ -80,6 +88,19 @@ function bandwidthChart(config = {}) {
         get peakUploadFormatted() { return formatBps(this.peakUpload); },
         get totalDownloadFormatted() { return formatBytes(this.totalDownload); },
         get totalUploadFormatted() { return formatBytes(this.totalUpload); },
+        get liveStatusLabel() {
+            if (!this.directLiveEndpoint) return 'Speed history';
+            if (this.liveStatus === 'live') return 'Live from MikroTik';
+            if (this.liveStatus === 'offline') return 'PPP session offline';
+            if (this.liveStatus === 'error') return 'Live read unavailable';
+            return 'Waiting for MikroTik';
+        },
+        get liveUpdatedAtFormatted() {
+            if (!this.liveUpdatedAt) return '';
+            const dt = new Date(this.liveUpdatedAt);
+            if (Number.isNaN(dt.getTime())) return '';
+            return `Updated ${dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+        },
 
         formatTimeLabel(timestamp) {
             const dt = new Date(timestamp);
@@ -95,6 +116,7 @@ function bandwidthChart(config = {}) {
             await this.loadData();
             this.initChart();
             this.connectSSE();
+            this.startDirectLivePolling();
         },
 
         // Cleanup
@@ -104,6 +126,8 @@ function bandwidthChart(config = {}) {
                 clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = null;
             }
+            this.stopCurrentStatsPolling();
+            this.stopDirectLivePolling();
             if (this.eventSource) {
                 this.eventSource.close();
                 this.eventSource = null;
@@ -137,6 +161,95 @@ function bandwidthChart(config = {}) {
                 return `${this.apiBasePath}/my/live`;
             }
             return `${this.apiBasePath}/live/${this.subscriptionId}`;
+        },
+
+        async loadCurrentStats() {
+            try {
+                const statsUrl = new URL(this.getStatsEndpoint(), window.location.origin);
+                statsUrl.searchParams.set('period', this.timeRange);
+
+                const statsResponse = await fetch(statsUrl);
+                if (!statsResponse.ok) {
+                    return;
+                }
+                const stats = await statsResponse.json();
+                if (!this.directLiveEndpoint) {
+                    this.currentDownload = stats.download_bps || 0;
+                    this.currentUpload = stats.upload_bps || 0;
+                }
+                this.peakDownload = stats.peak_download_bps || 0;
+                this.peakUpload = stats.peak_upload_bps || 0;
+                this.totalDownload = stats.total_download_bytes || 0;
+                this.totalUpload = stats.total_upload_bytes || 0;
+            } catch (e) {
+                console.warn('Bandwidth current stats refresh skipped:', e);
+            }
+        },
+
+        startCurrentStatsPolling() {
+            this.stopCurrentStatsPolling();
+            if (this.isDestroyed || this.timeRange !== '1h') {
+                return;
+            }
+            this.statsPollTimer = setInterval(() => {
+                if (this.isDestroyed || this.timeRange !== '1h') {
+                    this.stopCurrentStatsPolling();
+                    return;
+                }
+                this.loadCurrentStats();
+            }, 30000);
+        },
+
+        stopCurrentStatsPolling() {
+            if (this.statsPollTimer) {
+                clearInterval(this.statsPollTimer);
+                this.statsPollTimer = null;
+            }
+        },
+
+        async loadDirectLive() {
+            if (!this.directLiveEndpoint || this.isDestroyed) return;
+
+            try {
+                const response = await fetch(new URL(this.directLiveEndpoint, window.location.origin));
+                if (!response.ok) {
+                    throw new Error('Failed to load live MikroTik bandwidth');
+                }
+                const data = await response.json();
+                const downloadBps = Number(data.download_bps || 0);
+                const uploadBps = Number(data.upload_bps || 0);
+
+                this.currentDownload = Number.isFinite(downloadBps) ? downloadBps : 0;
+                this.currentUpload = Number.isFinite(uploadBps) ? uploadBps : 0;
+                this.liveStatus = data.online === false ? 'offline' : 'live';
+                this.liveSource = data.source || '';
+                this.liveInterface = data.interface || '';
+                this.liveUpdatedAt = data.timestamp || new Date().toISOString();
+
+                if (this.currentDownload > this.peakDownload) this.peakDownload = this.currentDownload;
+                if (this.currentUpload > this.peakUpload) this.peakUpload = this.currentUpload;
+            } catch (e) {
+                console.warn('MikroTik live bandwidth refresh skipped:', e);
+                this.liveStatus = 'error';
+            }
+        },
+
+        startDirectLivePolling() {
+            this.stopDirectLivePolling();
+            if (this.isDestroyed || !this.directLiveEndpoint) {
+                return;
+            }
+            this.loadDirectLive();
+            this.directLivePollTimer = setInterval(() => {
+                this.loadDirectLive();
+            }, this.directLivePollMs);
+        },
+
+        stopDirectLivePolling() {
+            if (this.directLivePollTimer) {
+                clearInterval(this.directLivePollTimer);
+                this.directLivePollTimer = null;
+            }
         },
 
         // Load historical data
@@ -173,8 +286,10 @@ function bandwidthChart(config = {}) {
                 const statsResponse = await fetch(statsUrl);
                 if (statsResponse.ok) {
                     const stats = await statsResponse.json();
-                    this.currentDownload = stats.download_bps || 0;
-                    this.currentUpload = stats.upload_bps || 0;
+                    if (!this.directLiveEndpoint) {
+                        this.currentDownload = stats.download_bps || 0;
+                        this.currentUpload = stats.upload_bps || 0;
+                    }
                     this.peakDownload = stats.peak_download_bps || 0;
                     this.peakUpload = stats.peak_upload_bps || 0;
                     this.totalDownload = stats.total_download_bytes || 0;
@@ -285,11 +400,13 @@ function bandwidthChart(config = {}) {
                 this.eventSource.close();
                 this.eventSource = null;
             }
+            this.stopCurrentStatsPolling();
 
             // Keep live streaming only for 1h to avoid excessive chart updates.
             if (this.timeRange !== '1h') {
                 return;
             }
+            this.startCurrentStatsPolling();
 
             try {
                 const source = new EventSource(this.getLiveEndpoint());
@@ -299,8 +416,10 @@ function bandwidthChart(config = {}) {
                     if (this.isDestroyed || this.eventSource !== source) return;
                     const data = parseSsePayload(event.data);
                     if (!data) return;
-                    this.currentDownload = data.download_bps || 0;
-                    this.currentUpload = data.upload_bps || 0;
+                    if (!this.directLiveEndpoint) {
+                        this.currentDownload = data.download_bps || 0;
+                        this.currentUpload = data.upload_bps || 0;
+                    }
 
                     // Update peak if necessary
                     if (this.currentDownload > this.peakDownload) this.peakDownload = this.currentDownload;

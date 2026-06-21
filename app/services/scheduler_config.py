@@ -802,6 +802,32 @@ def build_beat_schedule() -> dict:
             enabled=suspension_audit_enabled,
             interval_seconds=suspension_audit_interval_seconds,
         )
+        # IPv4 consistency audit (read-only; quantifies column/IPAM/radreply
+        # drift). Shares cadence defaults with the suspension audit.
+        ip_consistency_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.radius,
+            "ip_consistency_audit_enabled",
+            "RADIUS_IP_CONSISTENCY_AUDIT_ENABLED",
+            True,
+        )
+        ip_consistency_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.radius,
+            "ip_consistency_audit_interval_seconds",
+            "RADIUS_IP_CONSISTENCY_AUDIT_INTERVAL_SECONDS",
+            21600,  # Every 6 hours
+        )
+        ip_consistency_audit_interval_seconds = max(
+            ip_consistency_audit_interval_seconds, 900
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_ip_consistency_audit",
+            task_name="app.tasks.radius.audit_ip_consistency",
+            enabled=ip_consistency_audit_enabled,
+            interval_seconds=ip_consistency_audit_interval_seconds,
+        )
         # Subscription expiration enforcement (runs daily)
         subscription_expiration_enabled = _effective_bool(
             session,
@@ -1027,6 +1053,17 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_health_retry_minutes * 60, 60),
         )
 
+        # Reap provisioning runs stuck in 'running' (worker died mid-run) so
+        # they reach a terminal status instead of blocking dedup + order
+        # advancement forever.
+        _sync_scheduled_task(
+            session,
+            name="provisioning_run_reaper",
+            task_name="app.tasks.provisioning.reap_stale_provisioning_runs",
+            enabled=True,
+            interval_seconds=600,
+        )
+
         # ONT telemetry ingest from centralized monitoring data.
         ont_signal_minutes = _resolve_int(
             session,
@@ -1047,6 +1084,51 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest",
             enabled=True,
             interval_seconds=600,
+        )
+        # Topology reconcile: pull Zabbix groups/hosts onto pop_sites +
+        # network_devices. Device graph changes slowly, so hourly is ample.
+        topology_reconcile_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_reconcile_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_reconcile",
+            task_name="app.tasks.topology_sync.run_topology_reconcile",
+            enabled=True,
+            interval_seconds=max(topology_reconcile_minutes * 60, 300),
+        )
+        # Warm cached live status for topology nodes (read by the Network Path
+        # panel). Default 180s, matching the monitoring dashboard cache TTL.
+        topology_status_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_status_warm_interval_seconds",
+            180,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_status_warm",
+            task_name="app.tasks.topology_sync.warm_topology_status",
+            enabled=True,
+            interval_seconds=max(topology_status_seconds, 60),
+        )
+        # LLDP neighbor poll -> directed device graph. Physical adjacency changes
+        # rarely; hourly is ample.
+        lldp_poll_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_lldp_poll_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_lldp_poll",
+            task_name="app.tasks.topology_lldp.run_lldp_topology_poll",
+            enabled=True,
+            interval_seconds=max(lldp_poll_minutes * 60, 300),
         )
         dashboard_cache_seconds = _resolve_int(
             session,
@@ -1490,51 +1572,32 @@ def build_beat_schedule() -> dict:
                     "args": [str(sync_job.id)],
                 }
 
-        # Splynx incremental sync (dual-run period only)
-        splynx_sync_enabled = _effective_bool(
+        # RADIUS refresh safety-net. radcheck/radreply rebuilds are normally
+        # enqueued fire-and-forget on block/restore events; if that enqueue is
+        # lost (worker down, broker hiccup, restart) a paid customer can stay
+        # walled-gardened until the next event touches them. This periodic
+        # whole-table rebuild converges radcheck/radreply on the authoritative
+        # subscription/subscriber status, so a dropped enqueue self-heals within
+        # one interval. Idempotent (per-user DELETE+INSERT). (cutover fix)
+        radius_refresh_safety_enabled = _effective_bool(
             session,
             SettingDomain.subscriber,
-            "splynx_sync_enabled",
-            "SPLYNX_SYNC_ENABLED",
-            False,
+            "radius_refresh_safety_net_enabled",
+            "RADIUS_REFRESH_SAFETY_NET_ENABLED",
+            True,
         )
-        splynx_sync_interval = _effective_int(
+        radius_refresh_safety_interval = _effective_int(
             session,
             SettingDomain.subscriber,
-            "splynx_sync_interval_minutes",
-            "SPLYNX_SYNC_INTERVAL_MINUTES",
-            30,
+            "radius_refresh_safety_net_interval_minutes",
+            "RADIUS_REFRESH_SAFETY_NET_INTERVAL_MINUTES",
+            15,
         )
-        splynx_sync_interval = max(splynx_sync_interval, 5)  # Min: 5 minutes
-        if splynx_sync_enabled:
-            schedule["splynx_incremental_sync"] = {
-                "task": "app.tasks.splynx_sync.run_incremental_sync",
-                "schedule": timedelta(minutes=splynx_sync_interval),
-            }
-
-        # Splynx customer accounts/details sync only. This intentionally stays
-        # separate from invoice, payment, and service sync.
-        splynx_customer_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.subscriber,
-            "splynx_customer_sync_enabled",
-            "SPLYNX_CUSTOMER_SYNC_ENABLED",
-            False,
-        )
-        splynx_customer_sync_interval_hours = _effective_int(
-            session,
-            SettingDomain.subscriber,
-            "splynx_customer_sync_interval_hours",
-            "SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS",
-            24,
-        )
-        splynx_customer_sync_interval_hours = max(
-            splynx_customer_sync_interval_hours, 1
-        )
-        if splynx_customer_sync_enabled:
-            schedule["splynx_customer_accounts_details_sync"] = {
-                "task": "app.tasks.splynx_sync.run_customer_accounts_details_sync",
-                "schedule": timedelta(hours=splynx_customer_sync_interval_hours),
+        radius_refresh_safety_interval = max(radius_refresh_safety_interval, 5)
+        if radius_refresh_safety_enabled:
+            schedule["radius_refresh_safety_net"] = {
+                "task": "app.tasks.radius_population.refresh_radius_from_subs",
+                "schedule": timedelta(minutes=radius_refresh_safety_interval),
             }
 
         # CRM ticket pull: inbound CRM tickets/comments into local support tickets.
@@ -1592,51 +1655,13 @@ def build_beat_schedule() -> dict:
                 "schedule": crontab(hour=4, minute=10),
             }
 
-        # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
-        olt_queue_enabled = _effective_bool(
-            session,
-            SettingDomain.provisioning,
-            "olt_queue_processing_enabled",
-            "OLT_QUEUE_PROCESSING_ENABLED",
-            True,
-        )
-        olt_queue_interval = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "olt_queue_processing_interval_seconds",
-            30,  # 30 seconds
-        )
-        olt_queue_interval = max(olt_queue_interval, 10)  # Min: 10 seconds
-        _sync_scheduled_task(
-            session,
-            name="olt_deferred_queue_processor",
-            task_name="app.tasks.olt_queue.process_deferred_olt_operations",
-            enabled=olt_queue_enabled,
-            interval_seconds=olt_queue_interval,
-        )
-
-        # OLT failed operations retry (Phase 4 - Circuit Breaker recovery)
-        olt_retry_enabled = _effective_bool(
-            session,
-            SettingDomain.provisioning,
-            "olt_failed_retry_enabled",
-            "OLT_FAILED_RETRY_ENABLED",
-            True,
-        )
-        olt_retry_interval = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "olt_failed_retry_interval_seconds",
-            3600,  # 1 hour
-        )
-        olt_retry_interval = max(olt_retry_interval, 300)  # Min: 5 minutes
-        _sync_scheduled_task(
-            session,
-            name="olt_failed_operations_retry",
-            task_name="app.tasks.olt_queue.retry_failed_operations",
-            enabled=olt_retry_enabled,
-            interval_seconds=olt_retry_interval,
-        )
+        # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
+        # subsystem was removed (it was never wired — the queue had no
+        # producers and the real write paths bypassed the breaker, so it gave
+        # false confidence). OLT writes happen directly; reconciliation/cleanup
+        # is handled by the ONT reconcile sweeper. The inert schema
+        # (queued_olt_operations table + OLTDevice circuit_* columns) was
+        # dropped in migration 162.
 
         # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
         zabbix_sync_enabled_by_default = _zabbix_configured_default()

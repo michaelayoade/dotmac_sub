@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,7 @@ from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,30 @@ logger = logging.getLogger(__name__)
 # gateway can confirm a charge a little after our checkout TTL, so give it a
 # generous grace before giving up.
 _EXPIRE_GRACE = timedelta(days=1)
+
+# Only providers with an online verify API belong in this sweep. Manual
+# methods (e.g. ``direct_bank_transfer``) settle via proof upload and have no
+# transaction to verify — feeding them to the gateway adapter just 400s.
+_GATEWAY_PROVIDERS = ("paystack", "flutterwave")
+
+# Gateway HTTP statuses that mean "no such (or no charged) transaction" — the
+# customer never completed checkout. Semantically identical to a not-successful
+# verify, so these expire rather than counting as retryable errors (otherwise
+# abandoned intents re-error every run and jam the bounded sweep).
+_NOT_FOUND_STATUSES = (400, 404)
+
+
+def _park_if_expired(db: Session, intent: TopupIntent, now: datetime) -> bool:
+    """Mark an unconfirmed intent ``expired`` once well past its TTL. Returns
+    True if it was parked."""
+    expires_at = intent.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at and now > expires_at + _EXPIRE_GRACE:
+        set_topup_intent_status(intent, "expired", source="reconcile_expiry")
+        db.commit()
+        return True
+    return False
 
 
 def _settle_intent(
@@ -70,7 +96,7 @@ def _settle_intent(
         )
         created = True
     intent.completed_payment_id = payment.id
-    intent.status = "completed"
+    set_topup_intent_status(intent, "completed", source="reconcile_settle")
     intent.completed_at = now
     intent.actual_amount = amount
     intent.external_id = external_id
@@ -93,6 +119,7 @@ def reconcile_pending_topups(
         select(TopupIntent)
         .where(TopupIntent.status == "pending")
         .where(TopupIntent.completed_payment_id.is_(None))
+        .where(TopupIntent.provider_type.in_(_GATEWAY_PROVIDERS))
         .where(TopupIntent.created_at < stale_before)
         .where(TopupIntent.created_at > oldest)
         .order_by(TopupIntent.created_at.asc())
@@ -111,13 +138,26 @@ def reconcile_pending_topups(
         except ValueError:
             # Gateway says not successful (abandoned, declined, or unknown
             # reference). Once well past expiry, stop re-checking it.
-            expires_at = intent.expires_at
-            if expires_at is not None and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-            if expires_at and now > expires_at + _EXPIRE_GRACE:
-                intent.status = "expired"
-                db.commit()
+            if _park_if_expired(db, intent, now):
                 expired += 1
+            continue
+        except httpx.HTTPStatusError as exc:
+            # 400/404 == the gateway has no such (or no charged) transaction:
+            # the customer never completed checkout. Treat exactly like the
+            # not-successful ValueError path so it expires instead of erroring
+            # forever. Auth (401/403) and 5xx stay errors — they're config or
+            # transient problems we want surfaced and retried.
+            if exc.response.status_code in _NOT_FOUND_STATUSES:
+                if _park_if_expired(db, intent, now):
+                    expired += 1
+                continue
+            logger.warning(
+                "Top-up reconciliation: gateway verify failed for intent %s (http %s)",
+                intent.id,
+                exc.response.status_code,
+                exc_info=True,
+            )
+            errors += 1
             continue
         except Exception:
             logger.warning(

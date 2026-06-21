@@ -15,6 +15,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+
 from app.models.billing import (
     InvoiceStatus,
     Payment,
@@ -432,6 +434,76 @@ def test_reconciliation_skips_fresh_pending_intent(db_session, subscriber):
         expires_at=datetime.now(UTC) + timedelta(minutes=30),
     )
     db_session.add(intent)
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.verify"
+    ) as verify_mock:
+        result = reconcile_pending_topups(db_session)
+
+    assert result["checked"] == 0
+    verify_mock.assert_not_called()
+    db_session.refresh(intent)
+    assert intent.status == "pending"
+
+
+def _http_error(status_code: int, reference: str) -> httpx.HTTPStatusError:
+    request = httpx.Request(
+        "GET", f"https://api.paystack.co/transaction/verify/{reference}"
+    )
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"{status_code}", request=request, response=response)
+
+
+def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscriber):
+    """A 400/404 from the gateway (abandoned, never-charged reference) must
+    expire the intent like a not-successful verify — not count as a retryable
+    error that re-fires every sweep and jams the bounded queue."""
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session, subscriber, reference="DMAC-RECON-404", minutes_old=3 * 24 * 60
+    )
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
+        side_effect=_http_error(400, "DMAC-RECON-404"),
+    ):
+        result = reconcile_pending_topups(db_session)
+
+    assert result["expired"] == 1
+    assert result["errors"] == 0
+    db_session.refresh(intent)
+    assert intent.status == "expired"
+
+
+def test_reconciliation_keeps_5xx_as_retryable_error(db_session, subscriber):
+    """A gateway 5xx is transient — keep it an error (retry next sweep), never
+    silently expire a possibly-paid intent."""
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session, subscriber, reference="DMAC-RECON-503", minutes_old=3 * 24 * 60
+    )
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
+        side_effect=_http_error(503, "DMAC-RECON-503"),
+    ):
+        result = reconcile_pending_topups(db_session)
+
+    assert result["errors"] == 1
+    assert result["expired"] == 0
+    db_session.refresh(intent)
+    assert intent.status == "pending"
+
+
+def test_reconciliation_skips_non_gateway_provider(db_session, subscriber):
+    """direct_bank_transfer settles via proof upload, not a verify API — it
+    must never enter the gateway sweep (it would 400 forever)."""
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session, subscriber, reference="TRF-RECON-1", minutes_old=3 * 24 * 60
+    )
+    intent.provider_type = "direct_bank_transfer"
     db_session.commit()
 
     with patch(

@@ -61,6 +61,16 @@ def customer_forgot_password_submit(
     return web_customer_auth_service.customer_forgot_password_submit(request, db, email)
 
 
+@router.get("/verify-email", response_class=HTMLResponse)
+def customer_verify_email_page(
+    request: Request,
+    token: str,
+    db: Session = Depends(get_db),
+):
+    """Verify a customer's email address from the verification email link."""
+    return web_customer_auth_service.customer_verify_email_page(request, db, token)
+
+
 @router.get("/mfa", response_class=HTMLResponse)
 def customer_mfa_page(
     request: Request,

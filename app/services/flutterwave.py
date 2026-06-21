@@ -86,7 +86,9 @@ def initialize_transaction(
     """
     secret_key = _get_secret_key(db)
     if not secret_key:
-        raise ValueError("Flutterwave secret key is not configured")
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
 
     payload: dict[str, Any] = {
         "tx_ref": reference,
@@ -130,7 +132,9 @@ def verify_transaction(db: Session, tx_ref: str) -> dict[str, Any]:
     """
     secret_key = _get_secret_key(db)
     if not secret_key:
-        raise ValueError("Flutterwave secret key is not configured")
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
 
     resp = httpx.get(
         f"{FLUTTERWAVE_API_BASE}/transactions/verify_by_reference",

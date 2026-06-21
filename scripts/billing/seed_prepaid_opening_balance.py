@@ -1,12 +1,18 @@
 """Seed prepaid opening balances into the AR ledger at cutover.
 
 The prepaid drawdown engine makes the local AR ledger authoritative. This
-one-time step posts, per prepaid Splynx-linked subscriber, a credit
-``LedgerEntry`` equal to the subscriber's synced ``deposit`` (the
-Splynx-authoritative balance at the cutover instant). After it runs, the
-ledger balance equals the deposit and ``_resolve_prepaid_available_balance``
-switches that account from the deposit to the ledger (the seed's memo is the
-switch — see PREPAID_OPENING_BALANCE_MEMO).
+one-time step makes each prepaid Splynx-linked subscriber's ledger balance
+equal its synced ``deposit`` (the Splynx-authoritative balance at the cutover
+instant), then flips ``_resolve_prepaid_available_balance`` from the deposit
+to the ledger (the seed's memo is the switch — see PREPAID_OPENING_BALANCE_MEMO).
+
+IMPORTANT — the seed posts the **true-up delta**, not the full deposit. The
+migrated ledger already carries each account's transaction history, and for
+~83% of accounts its net (unallocated credits − debits − open invoices) already
+equals the deposit; posting the full deposit on top would DOUBLE those. So per
+account we post ``delta = deposit − existing_ledger_net``: ~0 markers for the
+already-correct accounts, and the corrective delta for the rest, landing every
+account's resolved balance exactly on the deposit.
 
 Run AFTER a final ``resync_prepaid_deposits.py --execute`` and BEFORE enabling
 ``billing_enabled`` (see docs/designs/PREPAID_DRAWDOWN_ENGINE.md). Idempotent:
@@ -22,8 +28,12 @@ from __future__ import annotations
 import sys
 from decimal import Decimal
 
+from sqlalchemy import case, func
+
 from app.db import SessionLocal
 from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
     LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
@@ -32,6 +42,9 @@ from app.models.billing import (
 from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber
 from app.services.prepaid_billing import PREPAID_OPENING_BALANCE_MEMO
+
+# Below this, treat the true-up as zero and seed a flip-only marker.
+_TOL = Decimal("0.01")
 
 
 def main(execute: bool) -> None:
@@ -55,20 +68,67 @@ def main(execute: bool) -> None:
         }
 
         to_seed = [s for s in subs if s.id not in seeded_ids]
-        positive = [s for s in to_seed if Decimal(str(s.deposit)) > 0]
-        negative = [s for s in to_seed if Decimal(str(s.deposit)) < 0]
-        zero = [s for s in to_seed if Decimal(str(s.deposit)) == 0]
-        credit_total = sum(Decimal(str(s.deposit)) for s in positive)
-        debit_total = sum(-Decimal(str(s.deposit)) for s in negative)
 
-        print("=== prepaid opening-balance seed ===")
+        # The post-seed balance the resolver reports is the ledger model:
+        #   (Σ unallocated active credits − Σ unallocated active debits)
+        #     − Σ open-invoice balance_due
+        # The migrated ledger already carries this, and for ~83% of accounts it
+        # ALREADY equals the deposit. So the seed must post the TRUE-UP delta
+        #   delta = deposit − existing_ledger_net
+        # (not the full deposit, which would double the already-correct accounts).
+        # Post-seed the resolver then lands exactly on the Splynx deposit.
+        signed = func.sum(
+            case(
+                (LedgerEntry.entry_type == LedgerEntryType.credit, LedgerEntry.amount),
+                else_=-LedgerEntry.amount,
+            )
+        )
+        ledger_net = {
+            aid: Decimal(str(net or 0))
+            for aid, net in db.query(LedgerEntry.account_id, signed)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.is_active.is_(True))
+            .group_by(LedgerEntry.account_id)
+            .all()
+        }
+        open_inv = {
+            aid: Decimal(str(bal or 0))
+            for aid, bal in db.query(Invoice.account_id, func.sum(Invoice.balance_due))
+            .filter(Invoice.is_active.is_(True))
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
+            .group_by(Invoice.account_id)
+            .all()
+        }
+
+        plan: list[tuple] = []  # (sub, signed_delta)
+        for s in to_seed:
+            existing = ledger_net.get(s.id, Decimal("0")) - open_inv.get(
+                s.id, Decimal("0")
+            )
+            delta = Decimal(str(s.deposit)) - existing
+            plan.append((s, delta))
+        credits = [(s, d) for s, d in plan if d > _TOL]
+        debits = [(s, d) for s, d in plan if d < -_TOL]
+        markers = [(s, d) for s, d in plan if -_TOL <= d <= _TOL]
+        credit_total = sum(d for _, d in credits)
+        debit_total = sum(-d for _, d in debits)
+
+        print("=== prepaid opening-balance seed (true-up to Splynx deposit) ===")
         print(f"prepaid splynx-linked subscribers : {len(subs)}")
         print(f"already seeded (skipped)          : {len(subs) - len(to_seed)}")
-        print(f"to seed, positive deposit (credit): {len(positive)}")
-        print(f"  total opening credit            : NGN {credit_total:,.2f}")
-        print(f"to seed, negative deposit (debit) : {len(negative)}")
-        print(f"  total opening arrears (debit)   : NGN {debit_total:,.2f}")
-        print(f"to seed, zero deposit (marker)    : {len(zero)}")
+        print(f"already on deposit (marker only)  : {len(markers)}")
+        print(f"true-up credit (ledger < deposit) : {len(credits)}")
+        print(f"  total credit delta              : NGN {credit_total:,.2f}")
+        print(f"true-up debit  (ledger > deposit) : {len(debits)}")
+        print(f"  total debit delta               : NGN {debit_total:,.2f}")
 
         if not execute:
             print("\nDRY-RUN — nothing changed. Re-run with --execute to seed.")
@@ -88,23 +148,20 @@ def main(execute: bool) -> None:
             )
 
         seeded = 0
-        # Positive deposit -> opening credit.
-        for sub in positive:
-            _seed(sub, LedgerEntryType.credit, Decimal(str(sub.deposit)))
+        for sub, delta in credits:
+            _seed(sub, LedgerEntryType.credit, delta.quantize(_TOL))
             seeded += 1
-        # Negative deposit -> opening debit (arrears preserved as a negative
-        # ledger balance once the account switches to the ledger).
-        for sub in negative:
-            _seed(sub, LedgerEntryType.debit, -Decimal(str(sub.deposit)))
+        for sub, delta in debits:
+            _seed(sub, LedgerEntryType.debit, (-delta).quantize(_TOL))
             seeded += 1
-        # Zero deposit -> zero-amount credit marker, purely to flip the resolver.
-        for sub in zero:
+        # Already-correct accounts: a zero-amount marker just flips the resolver.
+        for sub, _delta in markers:
             _seed(sub, LedgerEntryType.credit, Decimal("0.00"))
             seeded += 1
         db.commit()
         print(
             f"\nDONE — seeded {seeded} accounts "
-            f"({len(positive)} credit / {len(negative)} debit / {len(zero)} marker)."
+            f"({len(credits)} credit / {len(debits)} debit / {len(markers)} marker)."
         )
     finally:
         db.close()

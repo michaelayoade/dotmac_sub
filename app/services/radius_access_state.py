@@ -68,6 +68,38 @@ _UNPROVISIONED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Canonical status → desired-connectivity classification (single source of
+# truth). Other modules MUST reference these instead of redefining their own
+# status sets — those copies had drifted and disagreed (e.g. radius_reject
+# omitted ``stopped``/``disabled``; the suspension audit omitted ``disabled``),
+# which is how terminal subscribers kept connectivity past their transition.
+# The four sets are mutually exclusive and exhaustive over SubscriptionStatus.
+# ---------------------------------------------------------------------------
+ACTIVE_STATUSES = _ACTIVE_STATUSES
+BLOCKED_STATUSES = _BLOCKED_STATUSES
+TERMINATED_STATUSES = _TERMINATED_STATUSES
+UNPROVISIONED_STATUSES = _UNPROVISIONED_STATUSES
+
+# Any subscriber whose only relevant statuses are here should have NO normal
+# (unrestricted) RADIUS access — either walled-garden (blocked) or removed
+# (terminated).
+NO_ACCESS_STATUSES = _BLOCKED_STATUSES | _TERMINATED_STATUSES
+
+# Exhaustiveness guard: every SubscriptionStatus must be classified exactly
+# once, so a newly-added status can't silently fall through to "no rule".
+_ALL_CLASSIFIED = (
+    _ACTIVE_STATUSES
+    | _BLOCKED_STATUSES
+    | _TERMINATED_STATUSES
+    | _UNPROVISIONED_STATUSES
+)
+_UNCLASSIFIED = set(SubscriptionStatus) - _ALL_CLASSIFIED
+if _UNCLASSIFIED:  # pragma: no cover - import-time invariant
+    raise RuntimeError(
+        f"Unclassified SubscriptionStatus in connectivity map: {_UNCLASSIFIED}"
+    )
+
 
 # Map AccessState → external RADIUS group name. Terminated and None
 # both mean "no row in radusergroup", which causes auth to fail with

@@ -84,10 +84,15 @@ class NotificationsScreen extends ConsumerWidget {
                 return _NotificationCard(
                   n: n,
                   unread: !readIds.contains(n.id),
-                  hasAction: route != null,
+                  // Every notification is now tappable: actionable ones open a
+                  // related screen; the rest fall back to home so a tap is
+                  // never a dead no-op.
+                  hasAction: true,
                   onTap: () {
                     ref.read(readNotificationsProvider.notifier).markRead(n.id);
-                    if (route != null) context.go(route);
+                    // Unknown / unmapped types: there's nothing specific to
+                    // open, so route home rather than no-op or crash.
+                    context.go(route ?? '/dashboard');
                   },
                 );
               },

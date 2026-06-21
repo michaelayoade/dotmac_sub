@@ -13,7 +13,7 @@ account-id endpoints simply surface that as a 404 (no IDOR).
 Mounted at ``/api/v1/reseller`` with router-level ``require_user_auth`` (main.py).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -37,6 +37,8 @@ class MfaConfirmRequest(BaseModel):
 
 class PayIntentRequest(BaseModel):
     amount: str = Field(min_length=1, max_length=20)
+    payment_method_id: str | None = Field(default=None, max_length=64)
+    save_card: bool = False
 
 
 class PayVerifyRequest(BaseModel):
@@ -56,12 +58,24 @@ class ServiceRequestCreate(BaseModel):
 
 
 def _reseller_id(db: Session, principal: dict) -> str:
-    """Return the caller's reseller_id, or 403 for non-reseller principals."""
-    if principal.get("principal_type") != "subscriber":
-        raise HTTPException(status_code=403, detail="A reseller account is required")
-    reseller_id = reseller_portal.reseller_id_for_subscriber(
-        db, str(principal["subscriber_id"])
-    )
+    """Return the caller's reseller_id, or 403 for non-reseller principals.
+
+    Handles both a legacy subscriber-backed reseller login and a first-class
+    reseller_user principal (Layer 3).
+    """
+    principal_type = principal.get("principal_type")
+    reseller_id: str | None = None
+    if principal_type == "reseller_user":
+        from app.models.subscriber import ResellerUser
+        from app.services.common import coerce_uuid
+
+        ru = db.get(ResellerUser, coerce_uuid(principal.get("principal_id")))
+        if ru is not None and ru.is_active and ru.reseller_id is not None:
+            reseller_id = str(ru.reseller_id)
+    elif principal_type == "subscriber":
+        reseller_id = reseller_portal.reseller_id_for_subscriber(
+            db, str(principal["subscriber_id"])
+        )
     if not reseller_id:
         raise HTTPException(status_code=403, detail="A reseller account is required")
     return reseller_id
@@ -248,10 +262,64 @@ def my_reseller_pay_intent(
     reseller_id = _reseller_id(db, principal)
     try:
         return reseller_portal_billing.start_consolidated_payment(
-            db, reseller_id, payload.amount
+            db,
+            reseller_id,
+            payload.amount,
+            payment_method_id=payload.payment_method_id,
+            save_card=payload.save_card,
+            login_subscriber_id=str(principal["subscriber_id"]),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/payment-methods")
+def my_reseller_payment_methods(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> list[dict]:
+    """The reseller's saved cards (keyed on the caller's login subscriber)."""
+    from app.services import reseller_portal_billing
+
+    _reseller_id(db, principal)  # 403 unless the caller is a reseller
+    methods = reseller_portal_billing.list_payment_methods(
+        db, str(principal["subscriber_id"])
+    )
+    return [reseller_portal_billing.payment_method_api_dict(m) for m in methods]
+
+
+@router.post("/payment-methods/{method_id}/default")
+def my_reseller_payment_method_default(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Make a saved card the default; 404 if it is not the caller's."""
+    from app.services import reseller_portal_billing
+
+    _reseller_id(db, principal)
+    if not reseller_portal_billing.set_default_payment_method(
+        db, str(principal["subscriber_id"]), method_id
+    ):
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return {"ok": True}
+
+
+@router.delete("/payment-methods/{method_id}", status_code=204)
+def my_reseller_payment_method_delete(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> Response:
+    """Remove a saved card; 404 if it is not the caller's."""
+    from app.services import reseller_portal_billing
+
+    _reseller_id(db, principal)
+    if not reseller_portal_billing.remove_payment_method(
+        db, str(principal["subscriber_id"]), method_id
+    ):
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return Response(status_code=204)
 
 
 @router.post("/billing/pay/verify")
@@ -268,6 +336,24 @@ def my_reseller_pay_verify(
     try:
         return reseller_portal_billing.verify_and_record_consolidated_payment(
             db, reseller_id, payload.reference, provider=payload.provider
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/billing/subscribers/{subscriber_id}/allocate")
+def my_reseller_allocate_subscriber(
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Allocate unallocated reseller funds to one managed subscriber."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    try:
+        return reseller_portal_billing.allocate_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

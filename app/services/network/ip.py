@@ -1,6 +1,7 @@
 """IP management services."""
 
 import logging
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -35,6 +36,16 @@ from app.services.query_builders import apply_active_state, apply_optional_equal
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
+ACTIVE_SUBSCRIPTION_STATUS = "active"
+
+
+def _subscription_model() -> type[Any]:
+    return IPAssignment.subscription.property.mapper.class_
+
+
+def _is_active_subscription(subscription: Any) -> bool:
+    status = getattr(subscription, "status", None)
+    return getattr(status, "value", status) == ACTIVE_SUBSCRIPTION_STATUS
 
 
 class IPAssignments(CRUDManager[IPAssignment]):
@@ -44,20 +55,83 @@ class IPAssignments(CRUDManager[IPAssignment]):
     soft_delete_value = False
 
     @staticmethod
+    def _resolve_owner(db: Session, data: dict) -> None:
+        subscription_id = data.get("subscription_id")
+        subscriber_id = data.get("subscriber_id")
+        if subscription_id is None:
+            return
+        subscription = db.get(_subscription_model(), subscription_id)
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        if subscriber_id is None:
+            data["subscriber_id"] = subscription.subscriber_id
+        elif str(subscriber_id) != str(subscription.subscriber_id):
+            raise HTTPException(
+                status_code=400, detail="Subscription does not belong to subscriber"
+            )
+
+    @staticmethod
+    def _single_active_subscription_for_subscriber(db: Session, subscriber_id) -> Any:
+        subscription_model = _subscription_model()
+        active_subscriptions = (
+            db.query(subscription_model)
+            .filter(subscription_model.subscriber_id == subscriber_id)
+            .filter(subscription_model.status == ACTIVE_SUBSCRIPTION_STATUS)
+            .all()
+        )
+        if len(active_subscriptions) != 1:
+            return None
+        return active_subscriptions[0]
+
+    @classmethod
+    def _sync_subscription_ipv4(
+        cls,
+        db: Session,
+        assignment: IPAssignment,
+        *,
+        released_ip: str | None = None,
+    ) -> None:
+        if assignment.ip_version != IPVersion.ipv4:
+            return
+        subscription = assignment.subscription
+        if subscription is None and assignment.subscriber_id is not None:
+            subscription = cls._single_active_subscription_for_subscriber(
+                db, assignment.subscriber_id
+            )
+        if subscription is None or not _is_active_subscription(subscription):
+            return
+
+        if not assignment.is_active:
+            if released_ip and subscription.ipv4_address == released_ip:
+                subscription.ipv4_address = None
+            return
+
+        address = assignment.ipv4_address
+        if address is not None:
+            subscription.ipv4_address = address.address
+
+    @staticmethod
     def create(db: Session, payload: IPAssignmentCreate):
-        if payload.subscriber_id is not None:
+        data = payload.model_dump()
+        IPAssignments._resolve_owner(db, data)
+        if data.get("subscriber_id") is not None:
             network_validators.validate_ip_assignment_links(
                 db,
-                str(payload.subscriber_id),
-                str(payload.service_address_id) if payload.service_address_id else None,
+                str(data["subscriber_id"]),
+                str(data["service_address_id"])
+                if data.get("service_address_id")
+                else None,
+                str(data["subscription_id"]) if data.get("subscription_id") else None,
             )
-        elif payload.service_address_id is not None:
+        elif data.get("service_address_id") is not None:
             raise HTTPException(
                 status_code=400,
                 detail="service_address_id requires subscriber_id",
             )
-        assignment = IPAssignment(**payload.model_dump())
+        assignment = IPAssignment(**data)
         db.add(assignment)
+        db.flush()
+        IPAssignments._sync_subscription_ipv4(db, assignment)
         db.commit()
         db.refresh(assignment)
         return assignment
@@ -83,6 +157,7 @@ class IPAssignments(CRUDManager[IPAssignment]):
             query,
             {
                 IPAssignment.subscriber_id: subscriber_id,
+                IPAssignment.subscription_id: subscription_id,
                 IPAssignment.ip_version: ip_version,
             },
         )
@@ -103,8 +178,24 @@ class IPAssignments(CRUDManager[IPAssignment]):
         assignment = db.get(IPAssignment, assignment_id)
         if not assignment:
             raise HTTPException(status_code=404, detail="IP assignment not found")
+        previous_ipv4 = (
+            assignment.ipv4_address.address
+            if assignment.ip_version == IPVersion.ipv4 and assignment.ipv4_address
+            else None
+        )
+        previous_subscription = assignment.subscription
+        if previous_subscription is None and assignment.subscriber_id is not None:
+            previous_subscription = (
+                IPAssignments._single_active_subscription_for_subscriber(
+                    db, assignment.subscriber_id
+                )
+            )
         data = payload.model_dump(exclude_unset=True)
+        IPAssignments._resolve_owner(db, data)
         resolved_subscriber_id = data.get("subscriber_id", assignment.subscriber_id)
+        resolved_subscription_id = data.get(
+            "subscription_id", assignment.subscription_id
+        )
         service_address_id = data.get(
             "service_address_id", assignment.service_address_id
         )
@@ -113,6 +204,7 @@ class IPAssignments(CRUDManager[IPAssignment]):
                 db,
                 str(resolved_subscriber_id),
                 str(service_address_id) if service_address_id else None,
+                str(resolved_subscription_id) if resolved_subscription_id else None,
             )
         elif service_address_id is not None:
             raise HTTPException(
@@ -121,13 +213,31 @@ class IPAssignments(CRUDManager[IPAssignment]):
             )
         for key, value in data.items():
             setattr(assignment, key, value)
+        db.flush()
+        if (
+            previous_subscription is not None
+            and previous_ipv4
+            and previous_subscription != assignment.subscription
+            and previous_subscription.ipv4_address == previous_ipv4
+        ):
+            previous_subscription.ipv4_address = None
+        IPAssignments._sync_subscription_ipv4(db, assignment)
         db.commit()
         db.refresh(assignment)
         return assignment
 
     @classmethod
     def delete(cls, db: Session, assignment_id: str):
-        return super().delete(db, assignment_id)
+        assignment = cls._get_or_404(db, assignment_id)
+        released_ip = (
+            assignment.ipv4_address.address
+            if assignment.ip_version == IPVersion.ipv4 and assignment.ipv4_address
+            else None
+        )
+        assignment.is_active = False
+        db.flush()
+        cls._sync_subscription_ipv4(db, assignment, released_ip=released_ip)
+        db.commit()
 
 
 class IpPools(CRUDManager[IpPool]):

@@ -53,6 +53,62 @@ _PORTAL_VISIBLE_SERVICE_STATUSES = [
     SubscriptionStatus.expired,
 ]
 
+_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
+
+
+def _radius_connection_status(
+    db: Session, subscription: Subscription
+) -> dict[str, Any]:
+    """Summarize the newest open RADIUS accounting session for portal display."""
+    if subscription.status != SubscriptionStatus.active:
+        return {
+            "state": "inactive",
+            "label": "Not connected",
+            "detail": "Service is not active",
+            "session": None,
+            "last_seen_at": None,
+            "framed_ip_address": None,
+        }
+
+    session = (
+        db.query(RadiusAccountingSession)
+        .filter(RadiusAccountingSession.subscription_id == subscription.id)
+        .filter(RadiusAccountingSession.session_end.is_(None))
+        .order_by(
+            RadiusAccountingSession.last_update_at.desc().nullslast(),
+            RadiusAccountingSession.session_start.desc().nullslast(),
+            RadiusAccountingSession.created_at.desc(),
+        )
+        .first()
+    )
+    if not session:
+        return {
+            "state": "offline",
+            "label": "Not connected",
+            "detail": "No active RADIUS session",
+            "session": None,
+            "last_seen_at": None,
+            "framed_ip_address": None,
+        }
+
+    last_seen_at = session.last_update_at or session.session_start or session.created_at
+    last_seen_utc = last_seen_at
+    if last_seen_utc and last_seen_utc.tzinfo is None:
+        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
+    is_fresh = bool(
+        last_seen_utc
+        and last_seen_utc
+        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
+    )
+    return {
+        "state": "connected" if is_fresh else "stale",
+        "label": "Connected" if is_fresh else "Last seen",
+        "detail": "Active RADIUS session" if is_fresh else "Accounting update is stale",
+        "session": session,
+        "last_seen_at": last_seen_at,
+        "framed_ip_address": session.framed_ip_address,
+    }
+
 
 def _get_fup_status(
     db: Session, offer_id: str | None, subscription_id: str
@@ -61,6 +117,10 @@ def _get_fup_status(
     if not offer_id:
         return None
     try:
+        offer = db.get(CatalogOffer, coerce_uuid(offer_id))
+        if str(getattr(offer, "plan_family", "") or "").strip().lower() == "unlimited":
+            return None
+
         from app.services.fup import FupPolicies
 
         policy = FupPolicies.get_by_offer(db, offer_id)
@@ -884,6 +944,7 @@ def get_service_detail(
         "current_offer": current_offer,
         "current_offer_summary": get_offer_price_summary(current_offer),
         "next_billing_date": next_billing_date,
+        "connection_status": _radius_connection_status(db, subscription),
         "fup_status": fup_status,
         "pppoe_credentials": pppoe_creds,
         "customer_ont": customer_ont,

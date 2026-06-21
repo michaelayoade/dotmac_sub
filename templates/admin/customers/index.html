@@ -522,10 +522,10 @@
                         </div>
                         <div>
                             <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Template</label>
-                            <select x-model="sendMessageForm.templateId" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <select x-model="sendMessageForm.templateId" @change="handleTemplateSelection()" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
                                 <option value="">Select a template</option>
                                 <template x-for="template in templatesForSelectedChannel()" :key="template.id">
-                                    <option :value="template.id" x-text="template.name"></option>
+                                    <option :value="template.id" x-text="template.label || template.name"></option>
                                 </template>
                             </select>
                         </div>
@@ -545,7 +545,7 @@
                     <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Selected Template</p>
                     <template x-if="selectedTemplate()">
                         <div class="mt-2 space-y-2">
-                            <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedTemplate().name"></p>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedTemplate().label || selectedTemplate().name"></p>
                             <p class="text-xs text-slate-500 dark:text-slate-400" x-text="selectedTemplate().code"></p>
                             <p class="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-show="selectedTemplate().subject" x-text="selectedTemplate().subject"></p>
                         </div>
@@ -553,6 +553,39 @@
                     <template x-if="!selectedTemplate()">
                         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Choose a template to queue the message for this customer scope.</p>
                     </template>
+                </div>
+                <div x-show="selectedTemplate() && sendMessageForm.channel === 'whatsapp'"
+                     class="rounded-xl border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-900">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">WhatsApp Parameters</p>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Values are sent as Meta template body parameters.</p>
+                        </div>
+                        <span x-show="whatsappTemplateLoading" class="text-xs font-semibold text-amber-600 dark:text-amber-300">Loading...</span>
+                    </div>
+                    <p x-show="whatsappTemplateError" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300" x-text="whatsappTemplateError"></p>
+                    <template x-if="whatsappTemplateBody">
+                        <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-text="whatsappTemplateBody"></p>
+                    </template>
+                    <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="whatsappTemplateVariables.length">
+                        <template x-for="variable in whatsappTemplateVariables" :key="variable.key">
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300" x-text="variableLabel(variable)"></label>
+                                <select x-model="sendMessageForm.templateVariables[variable.key].source"
+                                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950 dark:text-white">
+                                    <template x-for="option in whatsappVariableSourceOptions" :key="option.value">
+                                        <option :value="option.value" x-text="option.label"></option>
+                                    </template>
+                                </select>
+                                <input x-show="sendMessageForm.templateVariables[variable.key].source === 'custom'"
+                                       x-model="sendMessageForm.templateVariables[variable.key].custom_value"
+                                       class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950 dark:text-white"
+                                       placeholder="Type a custom value">
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-show="sendMessageForm.templateVariables[variable.key].source && sendMessageForm.templateVariables[variable.key].source !== 'custom'">Resolved separately for each selected customer at send time.</p>
+                            </div>
+                        </template>
+                    </div>
+                    <p class="mt-3 text-sm text-slate-500 dark:text-slate-400" x-show="!whatsappTemplateLoading && !whatsappTemplateVariables.length && !whatsappTemplateError">This template has no body variables.</p>
                 </div>
                 <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
                     <div class="text-slate-500 dark:text-slate-400">
@@ -565,7 +598,7 @@
             </div>
             <div class="mt-6 flex items-center justify-end gap-3">
                 <button @click="resetSendMessageForm(); sendMessageModal = false" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                <button @click="queueBulkMessage()" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || bulkLoading">
+                <button @click="queueBulkMessage()" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || !hasRequiredWhatsAppMappings() || bulkLoading">
                     <span x-show="!bulkLoading">Queue Message</span>
                     <span x-show="bulkLoading" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
@@ -619,14 +652,26 @@ function customersPage() {
         },
         sendMessageForm: {
             channel: 'email',
-            templateId: ''
+            templateId: '',
+            templateVariables: {}
         },
+        whatsappTemplateLoading: false,
+        whatsappTemplateError: '',
+        whatsappTemplateBody: '',
+        whatsappTemplateVariables: [],
+        whatsappVariableSourceOptions: [
+            { value: '', label: 'Select field' },
+            { value: 'first_name', label: 'First Name' },
+            { value: 'last_name', label: 'Last Name' },
+            { value: 'full_name', label: 'Full Name' },
+            { value: 'email', label: 'Email' },
+            { value: 'phone', label: 'Phone Number' },
+            { value: 'account_number', label: 'Account Number' },
+            { value: 'custom', label: 'Custom (free text)' }
+        ],
 
         init() {
-            const firstChannel = this.availableNotificationChannels[0];
-            if (firstChannel) {
-                this.sendMessageForm.channel = firstChannel.id;
-            }
+            this.sendMessageForm.channel = this.preferredMessageChannel();
             this.syncTemplateForChannel();
             this.syncFiltersFromForm();
             this.syncTableState();
@@ -650,6 +695,13 @@ function customersPage() {
                 } else {
                     this.selectedIds = [];
                 }
+            });
+
+            document.addEventListener('customer-send-message', (e) => {
+                const { id, type } = e.detail;
+                this.selectedIds = [{ id, type }];
+                this.resetSendMessageForm();
+                this.sendMessageModal = true;
             });
 
             document.body.addEventListener('htmx:afterSwap', (e) => {
@@ -974,12 +1026,24 @@ function customersPage() {
         },
 
         resetSendMessageForm() {
-            const firstChannel = this.availableNotificationChannels[0];
             this.sendMessageForm = {
-                channel: firstChannel ? firstChannel.id : 'email',
-                templateId: ''
+                channel: this.preferredMessageChannel(),
+                templateId: '',
+                templateVariables: {}
             };
+            this.resetWhatsappTemplateDetails();
             this.syncTemplateForChannel();
+        },
+
+        preferredMessageChannel() {
+            const whatsapp = this.availableNotificationChannels.find(
+                (channel) => channel.id === 'whatsapp' && channel.ready
+            );
+            if (whatsapp) return whatsapp.id;
+            const ready = this.availableNotificationChannels.find((channel) => channel.ready);
+            if (ready) return ready.id;
+            const first = this.availableNotificationChannels[0];
+            return first ? first.id : 'email';
         },
 
         templatesForSelectedChannel() {
@@ -1009,6 +1073,97 @@ function customersPage() {
             const matching = this.templatesForSelectedChannel();
             if (!matching.find((template) => template.id === this.sendMessageForm.templateId)) {
                 this.sendMessageForm.templateId = matching[0] ? matching[0].id : '';
+            }
+            this.handleTemplateSelection();
+        },
+
+        resetWhatsappTemplateDetails() {
+            this.whatsappTemplateLoading = false;
+            this.whatsappTemplateError = '';
+            this.whatsappTemplateBody = '';
+            this.whatsappTemplateVariables = [];
+            this.sendMessageForm.templateVariables = {};
+        },
+
+        variableLabel(variable) {
+            const label = variable.label || `Field ${variable.index}`;
+            const example = variable.example || 'Value';
+            return `${label} (e.g. ${example})`;
+        },
+
+        whatsappMappingStorageKey() {
+            const template = this.selectedTemplate();
+            if (!template) return '';
+            return `whatsapp-template-mapping:${template.code || template.name}:${template.language || ''}`;
+        },
+
+        applySavedWhatsappMapping(values) {
+            const key = this.whatsappMappingStorageKey();
+            if (!key) return values;
+            try {
+                const saved = JSON.parse(localStorage.getItem(key) || '{}');
+                Object.keys(values).forEach((variableKey) => {
+                    if (saved[variableKey] && typeof saved[variableKey] === 'object') {
+                        values[variableKey] = {
+                            source: saved[variableKey].source || '',
+                            custom_value: saved[variableKey].custom_value || ''
+                        };
+                    }
+                });
+            } catch (_error) {
+                return values;
+            }
+            return values;
+        },
+
+        rememberWhatsappMapping() {
+            if (this.sendMessageForm.channel !== 'whatsapp') return;
+            const key = this.whatsappMappingStorageKey();
+            if (!key) return;
+            localStorage.setItem(key, JSON.stringify(this.sendMessageForm.templateVariables || {}));
+        },
+
+        hasRequiredWhatsAppMappings() {
+            if (this.sendMessageForm.channel !== 'whatsapp') return true;
+            return this.whatsappTemplateVariables.every((variable) => {
+                const mapping = this.sendMessageForm.templateVariables[variable.key] || {};
+                return Boolean(mapping.source);
+            });
+        },
+
+        templateBodyFromComponents(components) {
+            const body = (components || []).find((component) => String(component.type || '').toUpperCase() === 'BODY');
+            return body ? (body.text || '') : '';
+        },
+
+        async handleTemplateSelection() {
+            this.resetWhatsappTemplateDetails();
+            const template = this.selectedTemplate();
+            if (!template || this.sendMessageForm.channel !== 'whatsapp') return;
+            this.whatsappTemplateLoading = true;
+            try {
+                const params = new URLSearchParams({
+                    name: template.code || template.name,
+                    language: template.language || ''
+                });
+                const response = await fetch(`/admin/customers/bulk/whatsapp-template?${params.toString()}`, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Could not load WhatsApp template details');
+                }
+                this.whatsappTemplateBody = this.templateBodyFromComponents(data.components || []);
+                this.whatsappTemplateVariables = data.variables || [];
+                const values = {};
+                this.whatsappTemplateVariables.forEach((variable) => {
+                    values[variable.key] = { source: '', custom_value: '' };
+                });
+                this.sendMessageForm.templateVariables = this.applySavedWhatsappMapping(values);
+            } catch (error) {
+                this.whatsappTemplateError = error.message || 'Could not load WhatsApp template details';
+            } finally {
+                this.whatsappTemplateLoading = false;
             }
         },
 
@@ -1049,6 +1204,11 @@ function customersPage() {
 
         async queueBulkMessage() {
             if (!this.sendMessageForm.templateId) return;
+            if (!this.hasRequiredWhatsAppMappings()) {
+                alert('Select a source for every WhatsApp template field before queueing.');
+                return;
+            }
+            this.rememberWhatsappMapping();
 
             this.bulkLoading = true;
             try {
@@ -1063,7 +1223,8 @@ function customersPage() {
                     body: JSON.stringify(
                         this.buildScopePayload({
                             channel: this.sendMessageForm.channel,
-                            template_id: this.sendMessageForm.templateId
+                            template_id: this.sendMessageForm.templateId,
+                            template_variables: this.sendMessageForm.templateVariables || {}
                         })
                     )
                 });

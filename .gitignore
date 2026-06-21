@@ -42,7 +42,6 @@ build/
 logs/
 
 # Secrets
-.env
 .env.bak.*
 .env.local
 .env.*.local
@@ -73,7 +72,6 @@ screenshots/
 uploads/
 *.zip
 mypy_errors.txt
-wifi_credentials.csv
 scripts/export_wifi_credentials.py
 
 # OLT CLI capture samples (auto-generated)
@@ -96,3 +94,14 @@ data/olt_samples/
 
 # Edge-case sweep generated artifacts (screenshots + json)
 docs/testing/results/
+
+# Terminal-IP backlog apply manifests (subscriber/assignment ids) — runtime artifacts
+terminal_ip_*.json
+# Post-cutover finance hand-off artifacts — reproducible, contain customer PII (regenerate from scripts/billing/)
+post_cutover_*.csv
+# Billing-violation finance decision packet — reproducible, customer PII (regenerate from scripts/billing/)
+billing_violations_*.csv
+# Billing dry-run snapshots (operational counts) — runtime artifacts
+billing_dryrun_*.json
+# Billing remediation manifests (invoice line ids, account refs) — runtime artifacts
+remediation_*.json

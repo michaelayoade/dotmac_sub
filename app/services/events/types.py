@@ -175,6 +175,13 @@ SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_canceled: "cancel",
     EventType.subscription_upgraded: "upgrade",
     EventType.subscription_downgraded: "downgrade",
+    # Expiry is a distinct terminal transition. It is recorded as ``other``
+    # (with reason="expired" in the payload) rather than a dedicated
+    # ``expire`` LifecycleEventType: that enum is a native Postgres type and
+    # adding a value needs an ALTER TYPE migration, deferred until the alembic
+    # heads are merged. Mapping it here closes the audit hole where expiry
+    # produced no lifecycle record at all.
+    EventType.subscription_expired: "other",
 }
 
 

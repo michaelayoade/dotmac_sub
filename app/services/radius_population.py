@@ -1,0 +1,393 @@
+"""Populate radcheck + radreply from dotmac_sub authoritative joins.
+
+Source of truth: dotmac_sub Postgres
+  - Subscription (login, status, ipv4_address, offer_id, radius_profile_id)
+  - AccessCredential (username, secret_hash — Fernet-encrypted)
+  - CatalogOffer (speed_download_mbps, speed_upload_mbps)
+  - RadiusProfile (mikrotik_rate_limit, idle_timeout, simultaneous_use)
+
+No external BSS calls. No double-source. Idempotent (DELETE + INSERT per user).
+
+Usage:
+  docker exec -e PYTHONPATH=/app -w /app dotmac_sub_app \\
+      python -m app.services.radius_population --execute
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+from typing import cast
+
+import psycopg
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
+from app.db import SessionLocal
+from app.models.catalog import (
+    AccessCredential,
+    CatalogOffer,
+    RadiusProfile,
+    Subscription,
+    SubscriptionStatus,
+)
+from app.services.credential_crypto import (
+    decrypt_credential_with_key,
+    get_encryption_key,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
+SUSPENDED_ADDRESS_LIST = "suspended"  # MikroTik address-list for blocked customers
+
+
+def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
+    """Pick MikroTik rate-limit string: profile override > offer-derived > None."""
+    if profile and profile.mikrotik_rate_limit:
+        return profile.mikrotik_rate_limit
+    if offer and offer.speed_download_mbps and offer.speed_upload_mbps:
+        return f"{offer.speed_download_mbps}M/{offer.speed_upload_mbps}M"
+    return None
+
+
+def _radreply_attrs(
+    sub: Subscription,
+    offer: CatalogOffer,
+    profile: RadiusProfile | None,
+    subscriber_blocked: bool = False,
+    additional_routes: list[tuple[str, int | None]] | None = None,
+    framed_ipv4: str | None = None,
+) -> list[tuple[str, str, str]]:
+    """Compute the list of (attribute, op, value) tuples for radreply.
+
+    `subscriber_blocked`: customer-level block.
+    Customer-level block dominates: even if subscription is active, the customer
+    gets walled-garden RADIUS treatment.
+
+    `additional_routes`: extra routed IP blocks (subscriber_additional_routes) as
+    (cidr, metric) tuples. Emitted as Framed-Route for non-walled-garden subs only
+    — this is the authoritative single-writer, so the routes must be emitted here
+    or the periodic sweep wipes what build_radius_reply_attributes wrote.
+
+    `framed_ipv4`: the IP to emit as Framed-IP-Address. Defaults to
+    `sub.ipv4_address`, but the caller passes an active-IPAssignment fallback so a
+    stale/cleared `subscriptions.ipv4_address` does NOT silently drop Framed-IP
+    (which de-IPs the customer and the BNG tears the session down). "0.0.0.0" is
+    treated as no address.
+    """
+    ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
+    if ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare, not a bind
+        ipv4 = None
+
+    attrs: list[tuple[str, str, str]] = [
+        ("Service-Type", ":=", "Framed-User"),
+        ("Framed-Protocol", ":=", "PPP"),
+        ("Acct-Interim-Interval", ":=", str(ACCT_INTERIM_SECONDS)),
+    ]
+
+    if ipv4:
+        attrs.append(("Framed-IP-Address", ":=", ipv4))
+
+    rate = _rate_limit(offer, profile)
+    if rate:
+        attrs.append(("Mikrotik-Rate-Limit", ":=", rate))
+
+    sim = (profile.simultaneous_use if profile else None) or 1
+    attrs.append(("Simultaneous-Use", ":=", str(sim)))
+
+    if profile and profile.idle_timeout:
+        attrs.append(("Idle-Timeout", ":=", str(profile.idle_timeout)))
+
+    # Walled-garden: customer-level block OR subscription-level block/suspension
+    if subscriber_blocked or sub.status in (
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+    ):
+        attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
+    elif additional_routes:
+        # Additional routed IP blocks -> one Framed-Route each (+= so multiple
+        # coexist; gateway 0.0.0.0 = via this session, since primaries are CGNAT).
+        # Not for walled-garden subs: a captive customer must not route extra IPs.
+        primary_host = f"{ipv4}/32" if ipv4 else None
+        seen: set[str] = set()
+        for cidr, metric in additional_routes:
+            cidr = (cidr or "").strip()
+            if not cidr or cidr == primary_host or cidr in seen:
+                continue
+            seen.add(cidr)
+            attrs.append(("Framed-Route", "+=", f"{cidr} 0.0.0.0 {metric or 1}"))
+
+    return attrs
+
+
+def populate(dry_run: bool = True) -> dict[str, int]:
+    radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+    if not radius_dsn:
+        raise RuntimeError("RADIUS_DB_DSN not set")
+
+    stats = {
+        "subscriptions_considered": 0,
+        "skipped_no_credential": 0,
+        "skipped_no_password": 0,
+        "skipped_decrypt_failed": 0,
+        "radcheck_upserts": 0,
+        "radreply_upserts": 0,
+        "blocked_users_written": 0,
+    }
+
+    enc_key = get_encryption_key()
+    db = SessionLocal()
+    try:
+        # Active, blocked, or suspended subs with a login — blocked/suspended
+        # subs get a walled-garden radreply so suspension actually takes
+        # effect at the BNG (hard-deleting their rows would fail-closed but
+        # lose the captive pay-page treatment).
+        rows = (
+            db.execute(
+                select(Subscription)
+                .options(
+                    joinedload(Subscription.offer),
+                    joinedload(Subscription.radius_profile),
+                )
+                .where(
+                    Subscription.status.in_(
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.blocked,
+                            SubscriptionStatus.suspended,
+                        ]
+                    ),
+                    Subscription.login.isnot(None),
+                )
+            )
+            .unique()
+            .scalars()
+            .all()
+        )
+        stats["subscriptions_considered"] = len(rows)
+        logger.info(
+            "considering %d active/blocked subscriptions with a login", len(rows)
+        )
+
+        # Pre-fetch all AccessCredentials keyed by username
+        creds_by_username: dict[str, AccessCredential] = {
+            c.username: c
+            for c in db.scalars(
+                select(AccessCredential).where(AccessCredential.is_active.is_(True))
+            ).all()
+        }
+
+        # Pre-fetch blocked subscriber IDs. Customer-level block triggers
+        # walled-garden regardless of subscription status.
+        from app.models.subscriber import Subscriber, SubscriberStatus
+
+        blocked_subscriber_ids: set = {
+            sid
+            for (sid,) in db.execute(
+                select(Subscriber.id).where(
+                    Subscriber.status == SubscriberStatus.blocked
+                )
+            ).all()
+        }
+        logger.info(
+            "%d subscribers in blocked state (walled-garden treatment)",
+            len(blocked_subscriber_ids),
+        )
+
+        # Pre-fetch additional routed IP blocks,
+        # keyed by subscriber_id, so each user's Framed-Routes are O(1) in the
+        # sweep loop below.
+        from app.models.network import SubscriberAdditionalRoute
+
+        routes_by_subscriber: dict = {}
+        for r in db.scalars(
+            select(SubscriberAdditionalRoute).where(
+                SubscriberAdditionalRoute.is_active.is_(True)
+            )
+        ).all():
+            routes_by_subscriber.setdefault(r.subscriber_id, []).append(
+                (r.cidr, r.metric)
+            )
+        logger.info(
+            "%d subscribers with additional routed IP blocks",
+            len(routes_by_subscriber),
+        )
+
+        # Fallback IPv4 from the active IPAssignment so a stale/cleared
+        # subscriptions.ipv4_address doesn't silently drop Framed-IP-Address (which
+        # de-IPs the customer -> BNG teardown -> reconnect flap). One query, keyed
+        # by subscriber_id.
+        from app.models.network import IPAssignment, IPv4Address, IPVersion
+
+        ipv4_by_subscriber: dict = {}
+        for sid, addr in db.execute(
+            select(IPAssignment.subscriber_id, IPv4Address.address)
+            .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .where(IPAssignment.is_active.is_(True))
+            .where(IPAssignment.ip_version == IPVersion.ipv4)
+        ).all():
+            if sid and addr:
+                ipv4_by_subscriber.setdefault(sid, str(addr))
+
+        # Compute the full work list in memory while the dotmac session is
+        # alive, then release it BEFORE the radius writes — holding the read
+        # transaction through the write phase trips the app's 120s
+        # idle-in-transaction timeout on large fleets.
+        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus]] = {}
+        for sub in rows:
+            login = cast(str | None, sub.login)
+            if not login:
+                stats["skipped_no_credential"] += 1
+                continue
+            cred = creds_by_username.get(login)
+            if cred is None:
+                stats["skipped_no_credential"] += 1
+                continue
+            if not cred.secret_hash:
+                stats["skipped_no_password"] += 1
+                continue
+            try:
+                cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("decrypt failed for %s: %s", login, exc)
+                stats["skipped_decrypt_failed"] += 1
+                continue
+            if not cleartext:
+                stats["skipped_no_password"] += 1
+                continue
+
+            sub_blocked = sub.subscriber_id in blocked_subscriber_ids
+            eff_ipv4 = sub.ipv4_address
+            if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
+                eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
+            attrs = _radreply_attrs(
+                sub,
+                sub.offer,
+                sub.radius_profile,
+                sub_blocked,
+                routes_by_subscriber.get(sub.subscriber_id),
+                framed_ipv4=eff_ipv4,
+            )
+            blocked_flag = sub_blocked or sub.status in (
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.suspended,
+            )
+            # Duplicate logins: the ACTIVE sub wins the slot. Subscriber-level
+            # block still dominates via sub_blocked, so a blocked customer stays
+            # walled-gardened either way.
+            existing = by_login.get(login)
+            if existing is not None and existing[4] == SubscriptionStatus.active:
+                continue
+            by_login[login] = (
+                login,
+                cleartext,
+                attrs,
+                blocked_flag,
+                sub.status,
+            )
+
+        active_usernames = {sub.login for sub in rows if sub.login}
+    finally:
+        db.close()
+
+    work = list(by_login.values())
+    stats["radcheck_upserts"] = len(work)
+    stats["radreply_upserts"] = sum(len(w[2]) for w in work)
+    stats["blocked_users_written"] = sum(1 for w in work if w[3])
+
+    if dry_run:
+        logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
+        logger.info("done: %s", stats)
+        return stats
+
+    rconn = psycopg.connect(radius_dsn)
+    rconn.autocommit = False
+    try:
+        with rconn.cursor() as cur:
+            usernames = [w[0] for w in work]
+            cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
+            cur.executemany(
+                "INSERT INTO radcheck (username, attribute, op, value) "
+                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+                [(w[0], w[1]) for w in work],
+            )
+            cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
+            cur.executemany(
+                "INSERT INTO radreply (username, attribute, op, value) "
+                "VALUES (%s, %s, %s, %s)",
+                [(w[0], a, o, v) for w in work for (a, o, v) in w[2]],
+            )
+
+            # --- orphan cleanup: drop radcheck/radreply rows whose username ---
+            # is not in the active+blocked set (e.g. subs that have since been
+            # cancelled/disabled). Keeps the radius DB lean and prevents stale
+            # auth surface from accumulating.
+            if active_usernames:
+                cur.execute("SELECT DISTINCT username FROM radcheck")
+                radcheck_users = {r[0] for r in cur.fetchall()}
+                orphans = list(radcheck_users - active_usernames)
+                if orphans:
+                    cur.execute(
+                        "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
+                    )
+                    stats["radcheck_orphans_deleted"] = cur.rowcount
+                    cur.execute(
+                        "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
+                    )
+                    stats["radreply_orphans_deleted"] = cur.rowcount
+                    logger.info(
+                        "orphan cleanup: %d radcheck + %d radreply rows",
+                        stats["radcheck_orphans_deleted"],
+                        stats["radreply_orphans_deleted"],
+                    )
+
+        rconn.commit()
+        logger.info("committed RADIUS DB writes")
+    finally:
+        rconn.close()
+
+    logger.info("done: %s", stats)
+    return stats
+
+
+if __name__ == "__main__":
+    if "--execute" in sys.argv:
+        populate(dry_run=False)
+    else:
+        populate(dry_run=True)
+        print("\nTo execute: python -m app.services.radius_population --execute")
+
+
+# -----------------------------------------------------------------------------
+# TODO — Celery change-driven handler
+#
+# Replace the periodic resync with event-driven updates. When a subscription
+# changes (status/login/ipv4/offer/profile) or its AccessCredential changes
+# (password rotation), a small per-user upsert runs instead of a full scan.
+#
+# Sketch:
+#
+#   @celery_app.task(name="app.tasks.radius.upsert_one")
+#   def upsert_one(subscription_id: str) -> None:
+#       db = SessionLocal()
+#       sub = db.get(Subscription, subscription_id)
+#       if not sub or sub.login is None:
+#           return
+#       cred = db.scalar(select(AccessCredential)
+#                        .where(AccessCredential.username == sub.login))
+#       # ... same per-user logic from populate(), but for one sub
+#
+#   # In app/services/events/handlers/subscription.py:
+#   def on_subscription_changed(event):
+#       upsert_one.delay(str(event.subscription_id))
+#
+#   def on_access_credential_changed(event):
+#       # find subs sharing this username, queue each
+#       ...
+#
+# Should also handle delete: when a sub is canceled/terminated, DELETE the
+# radcheck + radreply rows so freeradius rejects future auths.
+# -----------------------------------------------------------------------------

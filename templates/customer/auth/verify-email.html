@@ -1,0 +1,39 @@
+{% extends "layouts/customer_auth.html" %}
+
+{% block title %}Verify Email - {{ portal_name or (brand.product_name if brand is defined and brand else 'DotMac Subs') }}{% endblock %}
+
+{% block auth_content %}
+<div class="sm:mx-auto sm:w-full sm:max-w-md">
+    <h2 class="mt-4 text-center text-2xl font-bold leading-9 tracking-tight text-slate-900 dark:text-white">
+        {% if success %}Email verified{% else %}Verification failed{% endif %}
+    </h2>
+    <p class="mt-2 text-center text-sm text-slate-600 dark:text-slate-400">
+        {% if success %}
+        Your email address has been verified. Thank you.
+        {% else %}
+        {{ error or "This verification link is invalid or has expired." }}
+        {% endif %}
+    </p>
+</div>
+
+<div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+    <div class="bg-white dark:bg-slate-800 px-6 py-8 shadow-xl ring-1 ring-slate-900/5 dark:ring-slate-700/50 sm:rounded-xl sm:px-12">
+        <div class="text-center">
+            <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full {% if success %}bg-green-100 dark:bg-green-900/30{% else %}bg-red-100 dark:bg-red-900/30{% endif %}">
+                {% if success %}
+                <svg class="h-7 w-7 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                {% else %}
+                <svg class="h-7 w-7 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                {% endif %}
+            </div>
+            <a href="/portal/auth/login" class="text-sm font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
+                Continue to sign in
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

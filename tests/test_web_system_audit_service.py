@@ -62,3 +62,23 @@ def test_recent_activity_feed_resolves_system_user_actor_names(db_session):
     feed = audit_helpers.build_recent_activity_feed(db_session, [event], limit=5)
 
     assert feed[0]["message"].startswith("Audit Reviewer ")
+
+
+def test_recent_activity_feed_uses_actor_name_metadata_for_unresolved_user(
+    db_session,
+):
+    event = AuditEvent(
+        actor_type=AuditActorType.user,
+        actor_id="missing-user-id",
+        action="update",
+        entity_type="invoice",
+        entity_id="inv-1",
+        is_success=True,
+        metadata_={"actor_name": "Archived Admin"},
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    feed = audit_helpers.build_recent_activity_feed(db_session, [event], limit=5)
+
+    assert feed[0]["message"].startswith("Archived Admin ")

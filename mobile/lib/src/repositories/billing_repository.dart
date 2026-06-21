@@ -165,9 +165,20 @@ class BillingRepository {
   }
 
   /// POST /me/topup/initiate — start a prepaid top-up checkout.
-  Future<TopupInitiation> initiateTopup(num amount) async {
-    final data = await guard(
-        () => dio.post('/me/topup/initiate', data: {'amount': amount}));
+  ///
+  /// When [paymentMethodId] is given the server charges that saved card
+  /// directly (one-tap) and returns `charged: true`; [idempotencyKey] makes
+  /// that charge safe against a double-submit.
+  Future<TopupInitiation> initiateTopup(
+    num amount, {
+    String? paymentMethodId,
+    String? idempotencyKey,
+  }) async {
+    final data = await guard(() => dio.post('/me/topup/initiate', data: {
+          'amount': amount,
+          if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
+          if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
+        }));
     return TopupInitiation.fromJson(data as Map<String, dynamic>);
   }
 

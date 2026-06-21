@@ -1,0 +1,225 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "DotMac Subs" [ref=e5] [cursor=pointer]:
+          - /url: /admin/dashboard
+          - img [ref=e7]
+          - generic [ref=e9]: DotMac Subs
+        - button "Toggle sidebar collapse" [ref=e10]:
+          - img [ref=e11]
+      - navigation [ref=e13]:
+        - generic [ref=e14]:
+          - link "Dashboard" [ref=e16] [cursor=pointer]:
+            - /url: /admin/dashboard
+            - img [ref=e17]
+            - generic [ref=e19]: Dashboard
+          - paragraph [ref=e20]: Core
+          - link "Customers" [ref=e22] [cursor=pointer]:
+            - /url: /admin/customers
+            - img [ref=e23]
+            - generic [ref=e25]: Customers
+          - link "Support" [ref=e27] [cursor=pointer]:
+            - /url: /admin/support/tickets
+            - img [ref=e28]
+            - generic [ref=e30]: Support
+          - paragraph [ref=e31]: Operations
+          - link "Billing" [ref=e33] [cursor=pointer]:
+            - /url: /admin/billing
+            - img [ref=e34]
+            - generic [ref=e36]: Billing
+          - link "Catalog" [ref=e38] [cursor=pointer]:
+            - /url: /admin/catalog/offers
+            - img [ref=e39]
+            - generic [ref=e41]: Catalog
+          - link "Network" [ref=e43] [cursor=pointer]:
+            - /url: /admin/network
+            - img [ref=e44]
+            - generic [ref=e46]: Network
+          - link "VPN" [ref=e48] [cursor=pointer]:
+            - /url: /admin/network/vpn
+            - img [ref=e49]
+            - generic [ref=e51]: VPN
+          - paragraph [ref=e52]: Insights
+          - link "Reports" [ref=e54] [cursor=pointer]:
+            - /url: /admin/reports
+            - img [ref=e55]
+            - generic [ref=e57]: Reports
+          - link "GIS / Map" [ref=e59] [cursor=pointer]:
+            - /url: /admin/gis
+            - img [ref=e60]
+            - generic [ref=e63]: GIS / Map
+          - link "Integrations" [ref=e65] [cursor=pointer]:
+            - /url: /admin/integrations
+            - img [ref=e66]
+            - generic [ref=e68]: Integrations
+          - link "Notifications" [ref=e70] [cursor=pointer]:
+            - /url: /admin/notifications/templates
+            - img [ref=e71]
+            - generic [ref=e73]: Notifications
+          - link "Provisioning" [ref=e75] [cursor=pointer]:
+            - /url: /admin/provisioning
+            - img [ref=e76]
+            - generic [ref=e78]: Provisioning
+          - link "System Overview" [ref=e80] [cursor=pointer]:
+            - /url: /admin/system
+            - img [ref=e81]
+            - generic [ref=e84]: System Overview
+          - link "Settings" [ref=e86] [cursor=pointer]:
+            - /url: /admin/settings
+            - img [ref=e87]
+            - generic [ref=e90]: Settings
+      - generic [ref=e92]:
+        - generic [ref=e93]:
+          - generic [ref=e94]: AU
+          - generic [ref=e95]:
+            - paragraph [ref=e96]: Admin User
+            - paragraph [ref=e97]: admin@example.com
+        - generic [ref=e98]:
+          - generic [ref=e99]:
+            - paragraph [ref=e100]: Tenant
+            - paragraph [ref=e101]: DotMac Subs
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: Unread
+            - paragraph [ref=e104]: "5"
+    - generic [ref=e105]:
+      - banner [ref=e106]:
+        - button "Back" [ref=e108]:
+          - img [ref=e109]
+          - generic [ref=e111]: Back
+        - generic [ref=e112]:
+          - generic [ref=e115]:
+            - 'searchbox "Operational lookup: name, phone, account, PPPoE, ONT, IP, MAC..." [ref=e116]'
+            - img [ref=e117]
+            - generic: Cmd+K
+          - button "Take a tour" [ref=e119]:
+            - img [ref=e120]
+          - button "Toggle dark mode" [ref=e123]:
+            - img [ref=e124]
+          - button "View notifications" [ref=e127]:
+            - img [ref=e128]
+            - generic "5 unread notifications" [ref=e130]
+          - button "Open user menu" [ref=e134]:
+            - generic [ref=e135]: AU
+            - img [ref=e136]
+      - main [ref=e138]:
+        - generic [ref=e140]:
+          - generic [ref=e141]:
+            - generic [ref=e142]:
+              - link [ref=e143] [cursor=pointer]:
+                - /url: /admin/billing/invoices
+                - img [ref=e144]
+              - img [ref=e147]
+              - generic [ref=e149]:
+                - generic [ref=e150]:
+                  - heading "Invoice" [level=1] [ref=e151]
+                  - 'status "Issued status: draft" [ref=e152]':
+                    - img [ref=e153]
+                    - text: Issued
+                - paragraph [ref=e155]: "Invoice Number: INV-000001"
+            - generic [ref=e156]:
+              - link "Edit" [ref=e157] [cursor=pointer]:
+                - /url: /admin/billing/invoices/fa14a7c6-dca4-4554-bbaf-ed8d0da3e865/edit
+                - img [ref=e159]
+                - text: Edit
+              - link "Download PDF" [ref=e161] [cursor=pointer]:
+                - /url: /admin/billing/invoices/fa14a7c6-dca4-4554-bbaf-ed8d0da3e865/pdf
+                - img [ref=e163]
+                - text: Download PDF
+          - generic [ref=e165]:
+            - generic [ref=e166]:
+              - generic [ref=e167]:
+                - generic [ref=e169]:
+                  - img [ref=e171]
+                  - heading "Invoice Summary" [level=2] [ref=e173]
+                - generic [ref=e174]:
+                  - generic [ref=e175]:
+                    - generic [ref=e177]:
+                      - paragraph [ref=e178]: Billed To
+                      - paragraph [ref=e179]:
+                        - link "Test Customer" [ref=e180] [cursor=pointer]:
+                          - /url: /admin/customers/person/4d011620-e46c-470f-8e30-bdcd166b708a
+                        - text: test.customer@example.com
+                    - generic [ref=e182]:
+                      - paragraph [ref=e183]: Dates
+                      - paragraph [ref=e184]:
+                        - text: "Issued: Jun 12, 2026"
+                        - text: "Due: N/A"
+                  - generic [ref=e185]:
+                    - generic [ref=e186]:
+                      - generic [ref=e189]: Subtotal
+                      - generic [ref=e190]: ₦15,000.00
+                    - generic [ref=e191]:
+                      - generic [ref=e194]: Tax
+                      - generic [ref=e195]: ₦0.00
+                    - generic [ref=e196]:
+                      - generic [ref=e197]: Total
+                      - generic [ref=e198]: ₦15,000.00
+              - generic [ref=e199]:
+                - generic [ref=e201]:
+                  - img [ref=e203]
+                  - heading "Line Items" [level=2] [ref=e205]
+                - generic [ref=e206]:
+                  - generic [ref=e208]:
+                    - generic [ref=e209]:
+                      - generic [ref=e210]: Description
+                      - textbox [ref=e211]
+                    - generic [ref=e212]:
+                      - generic [ref=e213]: Qty
+                      - spinbutton [ref=e214]: "1"
+                    - generic [ref=e215]:
+                      - generic [ref=e216]: Unit Price
+                      - spinbutton [ref=e217]: "0.00"
+                    - generic [ref=e218]:
+                      - generic [ref=e219]: Tax Rate
+                      - combobox [ref=e220]:
+                        - option "None" [selected]
+                    - button "Add Line Item" [ref=e222]
+                  - table [ref=e224]:
+                    - rowgroup [ref=e225]:
+                      - row "Description Qty Unit Amount" [ref=e226]:
+                        - columnheader "Description" [ref=e227]
+                        - columnheader "Qty" [ref=e228]
+                        - columnheader "Unit" [ref=e229]
+                        - columnheader "Amount" [ref=e230]
+                    - rowgroup [ref=e231]:
+                      - row "Home Fiber 100 1.000 ₦15,000.00 ₦15,000.00" [ref=e232]:
+                        - cell "Home Fiber 100" [ref=e233]
+                        - cell "1.000" [ref=e234]
+                        - cell "₦15,000.00" [ref=e235]
+                        - cell "₦15,000.00" [ref=e236]
+            - generic [ref=e237]:
+              - generic [ref=e238]:
+                - generic [ref=e240]:
+                  - img [ref=e242]
+                  - heading "Payment Status" [level=2] [ref=e244]
+                - generic [ref=e245]:
+                  - generic [ref=e246]:
+                    - paragraph [ref=e247]: ₦15,000.00
+                    - paragraph [ref=e248]: Balance due
+                  - generic [ref=e249]:
+                    - generic [ref=e252]: Payments
+                    - generic [ref=e253]: ₦0.00
+                  - generic [ref=e254]:
+                    - generic [ref=e257]: Credits
+                    - generic [ref=e258]: ₦0.00
+                  - link "Record Payment" [ref=e260] [cursor=pointer]:
+                    - /url: /admin/billing/payments/new?invoice=fa14a7c6-dca4-4554-bbaf-ed8d0da3e865
+                    - img [ref=e261]
+                    - text: Record Payment
+              - generic [ref=e263]:
+                - generic [ref=e265]:
+                  - img [ref=e267]
+                  - heading "Apply Credit" [level=2] [ref=e269]
+                - paragraph [ref=e271]: No available credit notes for this account.
+              - generic [ref=e272]:
+                - generic [ref=e274]:
+                  - img [ref=e276]
+                  - heading "Customer Notes" [level=2] [ref=e278]
+                - paragraph [ref=e280]: No notes added for this invoice.
+          - generic [ref=e281]:
+            - generic [ref=e283]:
+              - img [ref=e285]
+              - heading "Recent Activity" [level=2] [ref=e287]
+            - paragraph [ref=e289]: No activity yet.
+  - status

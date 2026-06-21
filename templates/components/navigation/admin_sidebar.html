@@ -47,6 +47,9 @@
 {# ── Module visibility ── #}
 {% set module_states = sidebar_stats.module_states if sidebar_stats is defined and sidebar_stats and sidebar_stats.module_states is defined else {} %}
 
+{# ── Pending customer pin-correction requests (GIS badge) ── #}
+{% set pending_location_requests = sidebar_stats.pending_location_requests if sidebar_stats is defined and sidebar_stats and sidebar_stats.pending_location_requests is defined else 0 %}
+
 {# ── Reusable class strings ── #}
 {% set cls_active = 'bg-indigo-500/10 text-indigo-600 border-l-2 border-indigo-500 dark:text-indigo-400 dark:bg-indigo-500/10' %}
 {% set cls_inactive = 'border-l-2 border-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' %}
@@ -179,12 +182,12 @@
     {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn") }}
     {% endif %}
 
-    {{ section_label("Insights") }}
+    {{ section_label("ADMIN") }}
     {% if module_states.get('reports', True) %}
     {{ nav_link("Reports", "/admin/reports", icon_reports, "reports") }}
     {% endif %}
     {% if module_states.get('gis', True) %}
-    {{ nav_link("GIS / Map", "/admin/gis", icon_gis, "gis") }}
+    {{ nav_link("GIS / Map", "/admin/gis", icon_gis, "gis", badge=(pending_location_requests or None)) }}
     {% endif %}
     {% if module_states.get('integrations', True) %}
     {{ nav_link("Integrations", "/admin/integrations", icon_integrations, "integrations") }}

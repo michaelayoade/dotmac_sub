@@ -5,30 +5,45 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
-from datetime import UTC, datetime
+from bisect import bisect_left
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, joinedload, selectinload
 from starlette.datastructures import FormData
 
 from app.models.billing import InvoiceStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
+    AddOn,
+    AddOnPrice,
+    AddOnType,
     BillingMode,
     ContractTerm,
     NasDevice,
+    OfferPrice,
     OfferStatus,
+    PriceType,
     RadiusProfile,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
-from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
+from app.models.network import (
+    IPAssignment,
+    IpBlock,
+    IpPool,
+    IPv4Address,
+    IPVersion,
+    SubscriberAdditionalRoute,
+)
 from app.models.notification import Notification, NotificationTemplate
 from app.models.radius import (
     RadiusClient,
@@ -37,9 +52,9 @@ from app.models.radius import (
     RadiusSyncRun,
     RadiusUser,
 )
-from app.models.radius_active_session import RadiusActiveSession
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
+from app.models.usage import RadiusAccountingSession
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
@@ -67,6 +82,12 @@ from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
 
+PUBLIC_IP_ADDON_PREFIXES = (24, 29, 30, 32)
+MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK = 512
+PUBLIC_IP_PRIORITY_PREFIXES = ("160.", "102.")
+POOL_IPV4_SELECTOR_PREFIX = "pool:"
+UNSPECIFIED_IPV4 = ipaddress.IPv4Address(0)
+
 
 def _format_offer_price_summary(amount: object | None) -> str:
     value = _coerce_setting_decimal(amount)
@@ -92,6 +113,43 @@ def _offer_option(offer: object) -> dict[str, str]:
     }
 
 
+def _offer_options(
+    db: Session, offers: list[object], *, include_prices: bool = True
+) -> list[dict[str, str]]:
+    offer_ids = [
+        getattr(offer, "id", None) for offer in offers if getattr(offer, "id", None)
+    ]
+    first_amount_by_offer_id: dict[str, object] = {}
+    if include_prices and offer_ids:
+        price_rows = (
+            db.query(OfferPrice.offer_id, OfferPrice.amount)
+            .filter(OfferPrice.offer_id.in_(offer_ids))
+            .filter(OfferPrice.is_active.is_(True))
+            .order_by(OfferPrice.created_at.asc())
+            .all()
+        )
+        for offer_id, amount in price_rows:
+            first_amount_by_offer_id.setdefault(str(offer_id), amount)
+
+    options: list[dict[str, str]] = []
+    for offer in offers:
+        offer_id = str(getattr(offer, "id", "") or "")
+        name = str(getattr(offer, "name", "") or "")
+        price_summary = _format_offer_price_summary(
+            first_amount_by_offer_id.get(offer_id)
+        )
+        label = f"{name} - {price_summary}" if price_summary else name
+        options.append(
+            {
+                "id": offer_id,
+                "name": name,
+                "price_summary": price_summary,
+                "label": label,
+            }
+        )
+    return options
+
+
 def active_offer_options(db: Session) -> list[dict[str, str]]:
     """Return active offers shaped for plan-change dropdowns."""
     offers = catalog_service.offers.list(
@@ -105,7 +163,7 @@ def active_offer_options(db: Session) -> list[dict[str, str]]:
         limit=500,
         offset=0,
     )
-    return [_offer_option(offer) for offer in offers]
+    return _offer_options(db, list(offers))
 
 
 def _coerce_setting_int(value: object | None) -> int | None:
@@ -407,6 +465,10 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
         "ipv4_method": "permanent_static",
         "ipv4_block_ids": [],
         "ipv4_addresses": [],
+        "ip_addon_id": "",
+        "ip_addon_quantity": "1",
+        "additional_route_cidrs": [""],
+        "additional_route_metrics": [""],
     }
 
 
@@ -418,11 +480,17 @@ def parse_subscription_form(
         str(value).strip()
         for value in form.getlist("ipv4_block_ids")
         if str(value).strip()
-    ]
+    ][:1]
     ipv4_addresses = [
         str(value).strip()
         for value in form.getlist("ipv4_addresses")
         if str(value).strip()
+    ][:1]
+    additional_route_cidrs = [
+        str(value).strip() for value in form.getlist("additional_route_cidrs")
+    ]
+    additional_route_metrics = [
+        str(value).strip() for value in form.getlist("additional_route_metrics")
     ]
     data = {
         "account_id": _form_str(form, "account_id").strip(),
@@ -463,6 +531,10 @@ def parse_subscription_form(
         or "permanent_static",
         "ipv4_block_ids": ipv4_block_ids,
         "ipv4_addresses": ipv4_addresses,
+        "ip_addon_id": _form_str(form, "ip_addon_id").strip(),
+        "ip_addon_quantity": _form_str(form, "ip_addon_quantity", "1").strip() or "1",
+        "additional_route_cidrs": additional_route_cidrs,
+        "additional_route_metrics": additional_route_metrics,
     }
     if subscription_id:
         data["id"] = subscription_id
@@ -520,6 +592,19 @@ def validate_subscription_form(
     return None
 
 
+def _valid_assigned_ipv4(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = ipaddress.ip_address(text)
+    except ValueError:
+        return None
+    if parsed.version != 4 or parsed == UNSPECIFIED_IPV4:
+        return None
+    return str(parsed)
+
+
 def build_payload_data(subscription: dict[str, object]) -> dict[str, object]:
     """Build Subscription create/update payload dict."""
     ipv4_method = str(subscription.get("ipv4_method") or "").strip().lower()
@@ -557,6 +642,8 @@ def build_payload_data(subscription: dict[str, object]) -> dict[str, object]:
     ]
     for field in optional_fields:
         value = subscription.get(field)
+        if field == "ipv4_address":
+            value = _valid_assigned_ipv4(value)
         if value:
             payload_data[field] = value
     return payload_data
@@ -641,6 +728,326 @@ def _available_ipv4_strings_for_block(db: Session, *, block: IpBlock) -> list[st
     return available
 
 
+def _ipv4_address_state_by_pool(
+    db: Session,
+) -> dict[str, dict[str, tuple[bool, bool]]]:
+    address_rows = (
+        db.query(
+            IPv4Address.pool_id,
+            IPv4Address.address,
+            IPv4Address.is_reserved,
+            IPAssignment.id,
+        )
+        .outerjoin(
+            IPAssignment,
+            and_(
+                IPAssignment.ipv4_address_id == IPv4Address.id,
+                IPAssignment.is_active.is_(True),
+            ),
+        )
+        .all()
+    )
+    by_pool: dict[str, dict[str, tuple[bool, bool]]] = {}
+    for pool_id, address, is_reserved, assignment_id in address_rows:
+        pool_id = str(pool_id or "")
+        if not pool_id:
+            continue
+        by_pool.setdefault(pool_id, {})[str(address)] = (
+            bool(is_reserved),
+            assignment_id is not None,
+        )
+    return by_pool
+
+
+def _available_ipv4_strings_for_network_state(
+    *,
+    network: ipaddress.IPv4Network,
+    pool: IpPool | None,
+    address_state: dict[str, tuple[bool, bool]],
+) -> list[str]:
+    available: list[str] = []
+    for ip_text in _iter_service_ipv4_hosts(network, pool=pool):
+        row = address_state.get(ip_text)
+        if not row:
+            available.append(ip_text)
+            continue
+        is_reserved, is_assigned = row
+        if not is_assigned and not is_reserved:
+            available.append(ip_text)
+    return available
+
+
+def _iter_service_ipv4_hosts(
+    network: ipaddress.IPv4Network,
+    *,
+    pool: IpPool | None,
+) -> list[str]:
+    if _pool_allows_network_broadcast(pool) or network.prefixlen >= 31:
+        return [str(ip) for ip in network]
+    return [str(ip) for ip in network.hosts()]
+
+
+def _available_ipv4_strings_for_network(
+    db: Session,
+    *,
+    network: ipaddress.IPv4Network,
+    pool_id: object,
+    pool: IpPool | None,
+    address_state: dict[str, tuple[IPv4Address, IPAssignment | None]] | None = None,
+) -> list[str]:
+    host_ips = _iter_service_ipv4_hosts(network, pool=pool)
+    pool_key = str(pool_id)
+    if address_state is None:
+        address_state = {}
+        for offset in range(0, len(host_ips), 1000):
+            chunk = host_ips[offset : offset + 1000]
+            address_rows = (
+                db.query(IPv4Address, IPAssignment)
+                .outerjoin(
+                    IPAssignment,
+                    and_(
+                        IPAssignment.ipv4_address_id == IPv4Address.id,
+                        IPAssignment.is_active.is_(True),
+                    ),
+                )
+                .filter(IPv4Address.pool_id == pool_id)
+                .filter(IPv4Address.address.in_(chunk))
+                .all()
+            )
+            address_state.update(
+                {
+                    str(address.address): (address, assignment)
+                    for address, assignment in address_rows
+                }
+            )
+    available: list[str] = []
+    for ip_text in host_ips:
+        row = address_state.get(ip_text)
+        if not row:
+            available.append(ip_text)
+            continue
+        address, assignment = row
+        if str(address.pool_id or "") != pool_key:
+            continue
+        if assignment is None and not bool(address.is_reserved):
+            available.append(ip_text)
+    return available
+
+
+def _pool_ipv4_selector(pool_id: object, cidr: object) -> str:
+    return f"{POOL_IPV4_SELECTOR_PREFIX}{pool_id}:{cidr}"
+
+
+def _service_ipv4_selector_for_range(
+    *,
+    pool_id: object,
+    cidr: object,
+    block_id: object | None = None,
+) -> str:
+    block_text = str(block_id or "").strip()
+    if block_text:
+        return block_text
+    return _pool_ipv4_selector(pool_id, cidr)
+
+
+def _service_ipv4_ranges_for_ipam(
+    db: Session,
+) -> list[tuple[ipaddress.IPv4Network, str, str, str]]:
+    ranges: list[tuple[ipaddress.IPv4Network, str, str, str]] = []
+    pools = (
+        db.query(IpPool)
+        .options(selectinload(IpPool.blocks))
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .order_by(IpPool.name.asc())
+        .all()
+    )
+    for pool in pools:
+        active_blocks = [block for block in pool.blocks if block.is_active]
+        if active_blocks:
+            for block in active_blocks:
+                try:
+                    network = ipaddress.ip_network(str(block.cidr), strict=False)
+                except ValueError:
+                    continue
+                if network.version == 4:
+                    ranges.append(
+                        (
+                            cast(ipaddress.IPv4Network, network),
+                            str(pool.name or "Pool"),
+                            str(pool.id),
+                            str(block.id),
+                        )
+                    )
+            continue
+        try:
+            network = ipaddress.ip_network(str(pool.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            ranges.append(
+                (
+                    cast(ipaddress.IPv4Network, network),
+                    str(pool.name or "Pool"),
+                    str(pool.id),
+                    "",
+                )
+            )
+    return sorted(ranges, key=lambda item: _network_priority_key(item[0]))
+
+
+def _service_ipv4_block_options(
+    db: Session, *, include_available_ips: bool = False
+) -> list[dict[str, object]]:
+    options: list[dict[str, object]] = []
+    address_state_by_pool = _ipv4_address_state_by_pool(db)
+    for network, pool_name, pool_id, block_id in _service_ipv4_ranges_for_ipam(db):
+        pool = db.get(IpPool, pool_id)
+        if not pool or not pool.is_active or pool.ip_version != IPVersion.ipv4:
+            continue
+        selector = _service_ipv4_selector_for_range(
+            pool_id=pool_id,
+            cidr=network,
+            block_id=block_id,
+        )
+        option: dict[str, object] = {
+            "id": selector,
+            "pool_id": str(pool_id),
+            "block_id": str(block_id or ""),
+            "pool_name": pool_name,
+            "name": pool_name,
+            "cidr": str(network),
+            "display": f"{pool_name} - {network}",
+        }
+        if include_available_ips:
+            available_ips = _available_ipv4_strings_for_network_state(
+                network=network,
+                pool=pool,
+                address_state=address_state_by_pool.get(str(pool_id), {}),
+            )
+            option["available_count"] = len(available_ips)
+            option["available_ips"] = available_ips
+            option["display"] = f"{pool_name} - {network} ({len(available_ips)} free)"
+        options.append(option)
+    return options
+
+
+def _service_ipv4_block_option_summaries(db: Session) -> list[dict[str, object]]:
+    options: list[dict[str, object]] = []
+    for network, pool_name, pool_id, block_id in _service_ipv4_ranges_for_ipam(db):
+        selector = _service_ipv4_selector_for_range(
+            pool_id=pool_id,
+            cidr=network,
+            block_id=block_id,
+        )
+        options.append(
+            {
+                "id": selector,
+                "pool_id": str(pool_id),
+                "block_id": str(block_id or ""),
+                "pool_name": pool_name,
+                "name": pool_name,
+                "cidr": str(network),
+                "display": f"{pool_name} - {network}",
+            }
+        )
+    return options
+
+
+def available_ipv4_options_for_selector(
+    db: Session,
+    *,
+    selector: str,
+    current_ip: str | None = None,
+) -> list[str]:
+    selector = str(selector or "").strip()
+    if not selector:
+        return []
+    if selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
+        resolved_pool, resolved_network = _resolve_pool_ipv4_selector(db, selector)
+    else:
+        try:
+            block_uuid = UUID(selector)
+        except ValueError as exc:
+            raise ValueError("Invalid IPv4 block selected.") from exc
+        block = db.get(IpBlock, block_uuid)
+        if not block or not block.is_active:
+            raise ValueError("Selected IPv4 block is not active.")
+        block_pool = db.get(IpPool, block.pool_id)
+        if (
+            not block_pool
+            or not block_pool.is_active
+            or block_pool.ip_version != IPVersion.ipv4
+        ):
+            raise ValueError("Selected IPv4 block is not active.")
+        try:
+            parsed_network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError as exc:
+            raise ValueError("Selected IPv4 block is invalid.") from exc
+        if parsed_network.version != 4:
+            raise ValueError("Selected IPv4 block is invalid.")
+        resolved_pool = block_pool
+        resolved_network = cast(ipaddress.IPv4Network, parsed_network)
+
+    available = _available_ipv4_strings_for_network(
+        db,
+        network=resolved_network,
+        pool_id=resolved_pool.id,
+        pool=resolved_pool,
+    )
+    current = str(current_ip or "").strip()
+    if current:
+        try:
+            current_addr = ipaddress.ip_address(current)
+        except ValueError:
+            current_addr = None
+        if (
+            current_addr
+            and current_addr.version == 4
+            and current_addr in resolved_network
+        ):
+            if current not in available:
+                available.insert(0, current)
+    return available
+
+
+def _service_ipv4_selector_for_address(
+    db: Session,
+    *,
+    address: IPv4Address,
+) -> str:
+    ip_text = str(address.address or "").strip()
+    if not ip_text or not address.pool_id:
+        return ""
+    try:
+        ip_obj = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return ""
+    pool = db.get(IpPool, address.pool_id)
+    if not pool:
+        return ""
+    blocks = (
+        db.query(IpBlock)
+        .filter(IpBlock.pool_id == address.pool_id)
+        .filter(IpBlock.is_active.is_(True))
+        .order_by(IpBlock.created_at.asc())
+        .all()
+    )
+    for block in blocks:
+        try:
+            if ip_obj in ipaddress.ip_network(str(block.cidr), strict=False):
+                return str(block.id)
+        except ValueError:
+            continue
+    try:
+        pool_network = ipaddress.ip_network(str(pool.cidr), strict=False)
+    except ValueError:
+        return ""
+    if pool_network.version != 4 or ip_obj not in pool_network:
+        return ""
+    return _pool_ipv4_selector(address.pool_id, pool_network)
+
+
 def _subscription_ipv4_form_rows(
     db: Session,
     *,
@@ -661,43 +1068,18 @@ def _subscription_ipv4_form_rows(
             [subscription_obj.ipv4_address] if subscription_obj.ipv4_address else [],
         )
 
-    block_ids: list[str] = []
+    selectors: list[str] = []
     addresses: list[str] = []
-    pool_blocks: dict[str, list[IpBlock]] = {}
     for assignment in assignments:
         address = getattr(assignment, "ipv4_address", None)
+        if not isinstance(address, IPv4Address):
+            continue
         ip_text = str(getattr(address, "address", "") or "").strip()
         if not ip_text:
             continue
         addresses.append(ip_text)
-        block_id = ""
-        pool_id = getattr(address, "pool_id", None)
-        if pool_id:
-            pool_key = str(pool_id)
-            if pool_key not in pool_blocks:
-                pool_blocks[pool_key] = (
-                    db.query(IpBlock)
-                    .filter(IpBlock.pool_id == pool_id)
-                    .filter(IpBlock.is_active.is_(True))
-                    .order_by(IpBlock.created_at.asc())
-                    .all()
-                )
-            try:
-                ip_obj = ipaddress.ip_address(ip_text)
-            except ValueError:
-                ip_obj = None
-            if ip_obj is not None:
-                for block in pool_blocks[pool_key]:
-                    try:
-                        if ip_obj in ipaddress.ip_network(
-                            str(block.cidr), strict=False
-                        ):
-                            block_id = str(block.id)
-                            break
-                    except ValueError:
-                        continue
-        block_ids.append(block_id)
-    return block_ids, addresses
+        selectors.append(_service_ipv4_selector_for_address(db, address=address))
+    return selectors, addresses
 
 
 def _validate_unique_selected_ipv4s(selected_ips: list[str] | None) -> None:
@@ -706,6 +1088,12 @@ def _validate_unique_selected_ipv4s(selected_ips: list[str] | None) -> None:
         ip_text = str(raw_ip or "").strip()
         if not ip_text:
             continue
+        try:
+            parsed = ipaddress.ip_address(ip_text)
+        except ValueError as exc:
+            raise ValueError(f"IPv4 address {ip_text} is invalid.") from exc
+        if parsed.version != 4 or parsed == UNSPECIFIED_IPV4:
+            raise ValueError(f"IPv4 address {ip_text} is not assignable.")
         if ip_text in seen:
             raise ValueError(f"IPv4 address {ip_text} was selected more than once.")
         seen.add(ip_text)
@@ -765,12 +1153,40 @@ def _upsert_access_credential(
     plain_password: str | None = None,
     radius_profile_id: str | None = None,
 ) -> None:
+    normalized_username = str(username or "").strip()
+    same_username_query = db.query(AccessCredential).filter(
+        AccessCredential.subscriber_id == subscriber_id,
+        AccessCredential.username == normalized_username,
+    )
     credential = (
-        db.query(AccessCredential)
-        .filter(AccessCredential.subscriber_id == subscriber_id)
+        same_username_query.filter(AccessCredential.is_active.is_(True))
         .order_by(AccessCredential.created_at.desc())
         .first()
     )
+    if credential is None:
+        credential = same_username_query.order_by(
+            AccessCredential.created_at.desc()
+        ).first()
+    if credential is None:
+        credential = (
+            db.query(AccessCredential)
+            .filter(AccessCredential.subscriber_id == subscriber_id)
+            .filter(AccessCredential.is_active.is_(True))
+            .order_by(AccessCredential.created_at.desc())
+            .first()
+        )
+    conflicting_username = db.query(AccessCredential).filter(
+        AccessCredential.username == normalized_username
+    )
+    if credential is not None:
+        conflicting_username = conflicting_username.filter(
+            AccessCredential.id != credential.id
+        )
+    if normalized_username and conflicting_username.first() is not None:
+        raise ValueError(
+            f"Service login {normalized_username} is already used by another "
+            "customer or credential."
+        )
     secret_hash = (
         auth_flow_service.hash_service_secret(plain_password)
         if plain_password
@@ -783,26 +1199,40 @@ def _upsert_access_credential(
         except ValueError:
             radius_profile_uuid = None
     if credential:
-        credential.username = username
+        credential.username = normalized_username
         if secret_hash:
             credential.secret_hash = secret_hash
         credential.is_active = True
         if radius_profile_uuid:
             credential.radius_profile_id = radius_profile_uuid
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ValueError(
+                f"Service login {normalized_username} is already used by another "
+                "customer or credential."
+            ) from exc
         return
     if not secret_hash:
         return
     db.add(
         AccessCredential(
             subscriber_id=subscriber_id,
-            username=username,
+            username=normalized_username,
             secret_hash=secret_hash,
             is_active=True,
             radius_profile_id=radius_profile_uuid,
         )
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError(
+            f"Service login {normalized_username} is already used by another "
+            "customer or credential."
+        ) from exc
 
 
 def _current_access_credential(
@@ -963,13 +1393,60 @@ def _reconcile_active_subscription_after_credential_sync(
         )
 
 
+def _refresh_subscription_radius_session(
+    db: Session,
+    subscription_id: str | None,
+    *,
+    reason: str,
+) -> None:
+    """Push updated RADIUS replies and force a fresh Access-Accept."""
+    if not subscription_id:
+        return
+    _reconcile_active_subscription_after_credential_sync(db, subscription_id)
+    try:
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=str(subscription_id)
+        )
+    except Exception:
+        logger.warning(
+            "Subscription lookup failed during session refresh for %s",
+            subscription_id,
+            exc_info=True,
+        )
+        return
+    if subscription.status != SubscriptionStatus.active:
+        return
+    try:
+        from app.services.enforcement import disconnect_subscription_sessions
+
+        disconnect_subscription_sessions(db, str(subscription.id), reason=reason)
+    except Exception:
+        logger.warning(
+            "Session disconnect failed during subscription refresh for %s",
+            subscription.id,
+            exc_info=True,
+        )
+
+
 def _resolve_ipv4_for_block(
     db: Session,
     *,
     block: IpBlock,
     requested_ip: str | None = None,
 ) -> IPv4Address | None:
-    available_ips = _available_ipv4_strings_for_block(db, block=block)
+    try:
+        network = ipaddress.ip_network(str(block.cidr), strict=False)
+    except ValueError:
+        return None
+    if network.version != 4:
+        return None
+    pool = db.get(IpPool, block.pool_id)
+    available_ips = _available_ipv4_strings_for_network(
+        db,
+        network=cast(ipaddress.IPv4Network, network),
+        pool_id=block.pool_id,
+        pool=pool,
+    )
     if not available_ips:
         return None
     selected_ip = str(requested_ip or "").strip() or available_ips[0]
@@ -985,6 +1462,161 @@ def _resolve_ipv4_for_block(
     db.commit()
     db.refresh(address)
     return address
+
+
+def _resolve_pool_ipv4_selector(
+    db: Session,
+    selector: str,
+) -> tuple[IpPool, ipaddress.IPv4Network]:
+    payload = selector[len(POOL_IPV4_SELECTOR_PREFIX) :]
+    pool_id_text, separator, cidr_text = payload.partition(":")
+    if not separator or not pool_id_text or not cidr_text:
+        raise ValueError("Invalid IPv4 block selected.")
+    try:
+        pool_uuid = UUID(pool_id_text)
+    except ValueError as exc:
+        raise ValueError("Invalid IPv4 block selected.") from exc
+    pool = db.get(IpPool, pool_uuid)
+    if not pool or not pool.is_active or pool.ip_version != IPVersion.ipv4:
+        raise ValueError("Selected IPv4 block is not active.")
+    try:
+        selected_network = ipaddress.ip_network(cidr_text, strict=False)
+        pool_network = ipaddress.ip_network(str(pool.cidr), strict=False)
+    except ValueError as exc:
+        raise ValueError("Invalid IPv4 block selected.") from exc
+    if (
+        selected_network.version != 4
+        or pool_network.version != 4
+        or not selected_network.subnet_of(pool_network)
+    ):
+        raise ValueError("Selected IPv4 block is not part of its IPAM pool.")
+    return pool, cast(ipaddress.IPv4Network, selected_network)
+
+
+def available_ipv4_addresses_for_selector(
+    db: Session,
+    *,
+    selector: str,
+    query: str = "",
+    limit: int = 1000,
+) -> dict[str, object]:
+    """Return available IPv4 addresses for one subscription-form block selector."""
+    selector = str(selector or "").strip()
+    if not selector:
+        raise ValueError("IPv4 block is required.")
+    if limit < 1:
+        limit = 1
+
+    block: IpBlock | None = None
+    if selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
+        pool, network = _resolve_pool_ipv4_selector(db, selector)
+    else:
+        try:
+            block_uuid = UUID(selector)
+        except ValueError as exc:
+            raise ValueError("Invalid IPv4 block selected.") from exc
+        block = db.get(IpBlock, block_uuid)
+        if not block or not block.is_active:
+            raise ValueError("Selected IPv4 block is not active.")
+        block_pool = cast(IpPool | None, db.get(IpPool, block.pool_id))
+        if (
+            not block_pool
+            or not block_pool.is_active
+            or block_pool.ip_version != IPVersion.ipv4
+        ):
+            raise ValueError("Selected IPv4 block is not active.")
+        pool = block_pool
+        try:
+            parsed_network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError as exc:
+            raise ValueError("Invalid IPv4 block selected.") from exc
+        if parsed_network.version != 4:
+            raise ValueError("Selected IPv4 block is not IPv4.")
+        network = cast(ipaddress.IPv4Network, parsed_network)
+
+    available_ips = _available_ipv4_strings_for_network(
+        db,
+        network=network,
+        pool_id=pool.id,
+        pool=pool,
+    )
+    needle = str(query or "").strip()
+    if needle:
+        available_ips = [ip for ip in available_ips if ip.startswith(needle)]
+    limited_ips = available_ips[:limit]
+    return {
+        "selector": selector,
+        "pool_id": str(pool.id),
+        "block_id": str(block.id) if block else "",
+        "cidr": str(network),
+        "available_count": len(available_ips),
+        "addresses": limited_ips,
+        "has_more": len(available_ips) > len(limited_ips),
+    }
+
+
+def _resolve_ipv4_for_selector(
+    db: Session,
+    *,
+    selector: str,
+    requested_ip: str | None = None,
+) -> tuple[IPv4Address | None, IpBlock | None, str]:
+    selector = str(selector or "").strip()
+    if selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
+        pool, network = _resolve_pool_ipv4_selector(db, selector)
+        available_ips = _available_ipv4_strings_for_network(
+            db,
+            network=network,
+            pool_id=pool.id,
+            pool=pool,
+        )
+        label = str(network)
+        if not available_ips:
+            return None, None, label
+        selected_ip = str(requested_ip or "").strip() or available_ips[0]
+        if selected_ip not in available_ips:
+            raise ValueError(
+                f"Selected IPv4 address {selected_ip} is not available in block {label}."
+            )
+        address = (
+            db.query(IPv4Address).filter(IPv4Address.address == selected_ip).first()
+        )
+        if address:
+            return address, None, label
+        address = IPv4Address(address=selected_ip, pool_id=pool.id, is_reserved=False)
+        db.add(address)
+        db.commit()
+        db.refresh(address)
+        return address, None, label
+
+    try:
+        block_uuid = UUID(selector)
+    except ValueError as exc:
+        raise ValueError("Invalid IPv4 block selected.") from exc
+    block = db.get(IpBlock, block_uuid)
+    if not block or not block.is_active:
+        raise ValueError("Selected IPv4 block is not active.")
+    address = _resolve_ipv4_for_block(
+        db,
+        block=block,
+        requested_ip=requested_ip,
+    )
+    return address, block, str(block.cidr)
+
+
+def _pool_id_for_ipv4_selector(db: Session, selector: str) -> object | None:
+    selector = str(selector or "").strip()
+    if selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
+        pool, _network = _resolve_pool_ipv4_selector(db, selector)
+        return pool.id
+    try:
+        block_uuid = UUID(selector)
+    except ValueError as exc:
+        raise ValueError("Invalid IPv4 block selected.") from exc
+    block = db.get(IpBlock, block_uuid)
+    if not block or not block.is_active:
+        raise ValueError("Selected IPv4 block is not active.")
+    return block.pool_id
 
 
 def _append_block_usage_note(
@@ -1023,19 +1655,13 @@ def _allocate_ipv4_assignments_for_subscription(
     if not subscriber:
         return []
     allocated: list[str] = []
-    for index, block_id in enumerate(block_ids):
-        try:
-            block_uuid = UUID(str(block_id))
-        except ValueError as exc:
-            raise ValueError("Invalid IPv4 block selected.") from exc
-        block = db.get(IpBlock, block_uuid)
-        if not block or not block.is_active:
-            raise ValueError("Selected IPv4 block is not active.")
+    for index, selector in enumerate(block_ids):
         requested_ip = ""
         if selected_ips and index < len(selected_ips):
             requested_ip = str(selected_ips[index] or "").strip()
         address = None
         if requested_ip:
+            selector_pool_id = _pool_id_for_ipv4_selector(db, str(selector))
             existing_address = (
                 db.query(IPv4Address)
                 .filter(IPv4Address.address == requested_ip)
@@ -1051,19 +1677,22 @@ def _allocate_ipv4_assignments_for_subscription(
                 and existing_assignment
                 and existing_assignment.subscriber_id == subscription_obj.subscriber_id
                 and existing_assignment.is_active
-                and existing_address.pool_id == block.pool_id
+                and existing_address.pool_id == selector_pool_id
             ):
                 address = existing_address
+                block = None
+                block_label = requested_ip
         if address is None:
-            address = _resolve_ipv4_for_block(
+            address, block, block_label = _resolve_ipv4_for_selector(
                 db,
-                block=block,
+                selector=str(selector),
                 requested_ip=requested_ip or None,
             )
         if not address:
-            raise ValueError(f"No available IPv4 address in block {block.cidr}.")
+            raise ValueError(f"No available IPv4 address in block {block_label}.")
         assignment_payload = {
             "account_id": subscription_obj.subscriber_id,
+            "subscription_id": subscription_obj.id,
             "ip_version": IPVersion.ipv4,
             "ipv4_address_id": address.id,
             "is_active": True,
@@ -1082,12 +1711,13 @@ def _allocate_ipv4_assignments_for_subscription(
             )
         allocated_ip = str(address.address)
         allocated.append(allocated_ip)
-        _append_block_usage_note(
-            db,
-            block=block,
-            subscriber=subscriber,
-            allocated_ip=allocated_ip,
-        )
+        if block is not None:
+            _append_block_usage_note(
+                db,
+                block=block,
+                subscriber=subscriber,
+                allocated_ip=allocated_ip,
+            )
     return allocated
 
 
@@ -1097,18 +1727,30 @@ def _sync_ipv4_assignments_for_subscription(
     subscription_obj: Subscription,
     block_ids: list[str] | None,
     selected_ips: list[str] | None = None,
+    assignment_submitted: bool = False,
 ) -> list[str]:
+    if not assignment_submitted:
+        return []
+    if not block_ids:
+        raise ValueError("Select a valid IPv4 block before changing service IPv4.")
     desired_ips = _allocate_ipv4_assignments_for_subscription(
         db,
         subscription_obj=subscription_obj,
-        block_ids=block_ids or [],
+        block_ids=block_ids,
         selected_ips=selected_ips,
     )
     desired_set = {ip for ip in desired_ips if ip}
-    # Query by subscriber_id since IP assignments link to subscribers, not subscriptions
     active_assignments = (
         db.query(IPAssignment)
-        .filter(IPAssignment.subscriber_id == subscription_obj.subscriber_id)
+        .filter(
+            or_(
+                IPAssignment.subscription_id == subscription_obj.id,
+                and_(
+                    IPAssignment.subscription_id.is_(None),
+                    IPAssignment.subscriber_id == subscription_obj.subscriber_id,
+                ),
+            )
+        )
         .filter(IPAssignment.ip_version == IPVersion.ipv4)
         .filter(IPAssignment.is_active.is_(True))
         .all()
@@ -1122,6 +1764,952 @@ def _sync_ipv4_assignments_for_subscription(
     return desired_ips
 
 
+def _additional_route_form_rows(
+    db: Session,
+    *,
+    subscriber_id,
+) -> tuple[list[str], list[str]]:
+    if not subscriber_id:
+        return [""], [""]
+    routes = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber_id)
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .order_by(SubscriberAdditionalRoute.cidr.asc())
+        .all()
+    )
+    if not routes:
+        return [""], [""]
+    return (
+        [str(route.cidr or "") for route in routes],
+        [str(route.metric or 1) for route in routes],
+    )
+
+
+def normalize_additional_routes(
+    cidrs: list[str] | None,
+    metrics: list[str] | None = None,
+) -> list[tuple[str, int, int]]:
+    """Validate additional routed blocks from the admin form.
+
+    Returns normalized (cidr, prefix_length, metric) tuples and rejects duplicate
+    routes before any DB writes happen.
+    """
+    routes: list[tuple[str, int, int]] = []
+    seen: set[str] = set()
+    for index, raw_cidr in enumerate(cidrs or []):
+        text = str(raw_cidr or "").strip()
+        if not text:
+            continue
+        if "/" not in text:
+            text = f"{text}/32"
+        try:
+            network = ipaddress.ip_network(text, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"Invalid additional routed IP block: {raw_cidr}") from exc
+        if network.version != 4:
+            raise ValueError("Additional routed IP blocks must be IPv4 CIDRs.")
+        cidr = str(network)
+        if cidr in seen:
+            raise ValueError(f"Duplicate additional routed IP block: {cidr}")
+        seen.add(cidr)
+
+        metric_raw = str((metrics or [])[index] if index < len(metrics or []) else "")
+        metric_text = metric_raw.strip()
+        if not metric_text:
+            metric = 1
+        else:
+            try:
+                metric = int(metric_text)
+            except ValueError as exc:
+                raise ValueError(f"Invalid route metric for {cidr}.") from exc
+            if metric < 1:
+                raise ValueError(f"Route metric for {cidr} must be 1 or higher.")
+        routes.append((cidr, int(network.prefixlen), metric))
+    return routes
+
+
+def validate_additional_route_billing(
+    db: Session,
+    *,
+    cidrs: list[str] | None,
+    metrics: list[str] | None = None,
+) -> None:
+    """Validate that every desired routed block has priced billing coverage."""
+    desired = normalize_additional_routes(cidrs, metrics)
+    _priced_public_ip_addons_for_routes(db, desired)
+
+
+def _validate_additional_routes_available(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    desired_cidrs: list[str],
+) -> None:
+    if not desired_cidrs or not subscription_obj.subscriber_id:
+        return
+
+    desired_networks: list[ipaddress.IPv4Network] = []
+    for cidr in desired_cidrs:
+        network = ipaddress.ip_network(cidr, strict=False)
+        if network.version == 4:
+            desired_networks.append(cast(ipaddress.IPv4Network, network))
+    for desired in desired_networks:
+        if _subnet_starts_at_zero_address(desired):
+            raise ValueError(
+                f"Additional routed IP block {desired} cannot start at .0."
+            )
+
+    assigned_networks = _active_route_networks(
+        db,
+        current_subscriber_id=subscription_obj.subscriber_id,
+    )
+    current_subscriber_routes: list[ipaddress.IPv4Network] = []
+    current_routes = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(
+            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
+        )
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .all()
+    )
+    for route in current_routes:
+        try:
+            route_network = ipaddress.ip_network(str(route.cidr), strict=False)
+        except ValueError:
+            continue
+        if route_network.version == 4:
+            current_subscriber_routes.append(cast(ipaddress.IPv4Network, route_network))
+
+    for desired in desired_networks:
+        for assigned in assigned_networks:
+            if desired.overlaps(assigned):
+                raise ValueError(
+                    f"Additional routed IP block {desired} is already assigned."
+                )
+        if _additional_route_has_ipam_conflict(
+            db,
+            desired,
+            current_subscriber_routes=current_subscriber_routes,
+        ):
+            raise ValueError(
+                f"Additional routed IP block {desired} contains an IP already "
+                "reserved or assigned in IPAM."
+            )
+
+
+def _additional_route_has_ipam_conflict(
+    db: Session,
+    desired: ipaddress.IPv4Network,
+    *,
+    current_subscriber_routes: list[ipaddress.IPv4Network],
+) -> bool:
+    addresses = [str(ip) for ip in desired]
+    for offset in range(0, len(addresses), 1000):
+        chunk = addresses[offset : offset + 1000]
+        rows = (
+            db.query(IPv4Address, IPAssignment)
+            .outerjoin(
+                IPAssignment,
+                and_(
+                    IPAssignment.ipv4_address_id == IPv4Address.id,
+                    IPAssignment.is_active.is_(True),
+                ),
+            )
+            .filter(IPv4Address.address.in_(chunk))
+            .all()
+        )
+        for address, assignment in rows:
+            if assignment is not None:
+                return True
+            if address.ont_unit_id is not None:
+                return True
+            allocation_type = str(address.allocation_type or "").strip().lower()
+            if allocation_type == "management":
+                return True
+            if not bool(address.is_reserved) and not allocation_type:
+                continue
+            try:
+                ip_obj = ipaddress.ip_address(str(address.address))
+            except ValueError:
+                return True
+            if any(
+                route == desired and ip_obj in route
+                for route in current_subscriber_routes
+            ):
+                continue
+            return True
+    return False
+
+
+def _public_ip_addon_prefix(db: Session, add_on_id: str | None) -> int | None:
+    selected = str(add_on_id or "").strip()
+    if not selected:
+        return None
+    try:
+        selected_uuid = UUID(selected)
+    except ValueError as exc:
+        raise ValueError("Selected additional IP add-on is invalid.") from exc
+    add_on = db.get(AddOn, selected_uuid)
+    if not add_on or not add_on.is_active:
+        raise ValueError("Selected additional IP add-on is not available.")
+    if add_on.ip_prefix_length is None:
+        return None
+    return int(add_on.ip_prefix_length)
+
+
+def _validate_additional_routes_match_addon(
+    db: Session,
+    *,
+    desired: list[tuple[str, int, int]],
+    add_on_id: str | None = None,
+    quantity: str | int | None = None,
+) -> None:
+    if not desired:
+        return
+    expected_prefix = _public_ip_addon_prefix(db, add_on_id)
+    if expected_prefix is None:
+        return
+    for cidr, prefix_length, _metric in desired:
+        if prefix_length != expected_prefix:
+            raise ValueError(
+                f"Additional routed IP block {cidr} must match the selected "
+                f"/{expected_prefix} add-on."
+            )
+    try:
+        qty = int(str(quantity or "1").strip() or "1")
+    except ValueError as exc:
+        raise ValueError("Additional IP add-on quantity must be a number.") from exc
+    if len(desired) > qty:
+        raise ValueError(
+            "Additional routed IP block count cannot exceed the selected add-on "
+            "quantity."
+        )
+
+
+def _priced_public_ip_addon_by_prefix(db: Session, prefix_length: int) -> AddOn | None:
+    return (
+        db.query(AddOn)
+        .join(AddOnPrice, AddOnPrice.add_on_id == AddOn.id)
+        .filter(AddOn.is_active.is_(True))
+        .filter(AddOn.ip_is_public.is_(True))
+        .filter(AddOn.ip_prefix_length == prefix_length)
+        .filter(AddOnPrice.is_active.is_(True))
+        .filter(AddOnPrice.price_type == PriceType.recurring)
+        .order_by(AddOn.name.asc(), AddOnPrice.created_at.asc())
+        .first()
+    )
+
+
+def _priced_public_ip_addons_for_routes(
+    db: Session,
+    desired: list[tuple[str, int, int]],
+    *,
+    require: bool = True,
+) -> dict[int, AddOn]:
+    addons: dict[int, AddOn] = {}
+    for cidr, prefix_length, _metric in desired:
+        if prefix_length in addons:
+            continue
+        add_on = _priced_public_ip_addon_by_prefix(db, prefix_length)
+        if add_on is None:
+            if not require:
+                # Grandfathered/existing route with no priced add-on: resolve
+                # what exists, skip what doesn't (the new-route requirement is
+                # enforced earlier in sync_additional_routes_for_subscription).
+                continue
+            raise ValueError(
+                f"Additional routed IP block {cidr} requires an active "
+                f"/{prefix_length} public IP add-on with a recurring price."
+            )
+        addons[prefix_length] = add_on
+    return addons
+
+
+def sync_additional_routes_for_subscription(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    cidrs: list[str] | None,
+    metrics: list[str] | None = None,
+    add_on_id: str | None = None,
+    quantity: str | int | None = None,
+) -> list[str]:
+    """Upsert active subscriber additional routes and deactivate removed ones."""
+    if not subscription_obj.subscriber_id:
+        return []
+    desired = normalize_additional_routes(cidrs, metrics)
+    _validate_additional_routes_match_addon(
+        db,
+        desired=desired,
+        add_on_id=add_on_id,
+        quantity=quantity,
+    )
+    desired_map = {
+        cidr: (prefix_length, metric) for cidr, prefix_length, metric in desired
+    }
+    _validate_additional_routes_available(
+        db,
+        subscription_obj=subscription_obj,
+        desired_cidrs=list(desired_map),
+    )
+    existing = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(
+            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
+        )
+        .all()
+    )
+    existing_by_cidr = {str(route.cidr): route for route in existing}
+    # Only NEW routes require a priced /30 public IP add-on. Existing routes
+    # (already provisioned, possibly migrated/legacy reserved guard rows) are
+    # grandfathered so an admin can re-save the subscription form without an
+    # add-on being required for a route that already exists.
+    new_desired = [
+        (cidr, prefix_length, metric)
+        for cidr, prefix_length, metric in desired
+        if cidr not in existing_by_cidr
+    ]
+    _priced_public_ip_addons_for_routes(db, new_desired)
+
+    for cidr, (prefix_length, metric) in desired_map.items():
+        route = existing_by_cidr.get(cidr)
+        if route is None:
+            db.add(
+                SubscriberAdditionalRoute(
+                    subscriber_id=subscription_obj.subscriber_id,
+                    cidr=cidr,
+                    prefix_length=prefix_length,
+                    metric=metric,
+                    is_active=True,
+                    source="admin_subscription_form",
+                )
+            )
+            continue
+        route.prefix_length = prefix_length
+        route.metric = metric
+        route.is_active = True
+        if not route.source:
+            route.source = "admin_subscription_form"
+
+    for route in existing:
+        if str(route.cidr) not in desired_map and route.is_active:
+            route.is_active = False
+
+    db.commit()
+    return list(desired_map)
+
+
+def sync_public_ip_addons_for_routes(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    routes: list[tuple[str, int, int]],
+) -> dict[int, str]:
+    """Sync public-IP billing add-ons to the active routed blocks."""
+    now = datetime.now(UTC)
+    desired_counts: dict[int, int] = {}
+    for _cidr, prefix_length, _metric in routes:
+        desired_counts[prefix_length] = desired_counts.get(prefix_length, 0) + 1
+    desired_addons = _priced_public_ip_addons_for_routes(db, routes, require=False)
+    active_rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription_obj.id)
+        .filter(AddOn.ip_is_public.is_(True))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .all()
+    )
+    rows_by_addon_id = {
+        str(sub_addon.add_on_id): sub_addon for sub_addon, _ in active_rows
+    }
+    desired_addon_ids = {str(add_on.id) for add_on in desired_addons.values()}
+
+    for sub_addon, add_on in active_rows:
+        if str(sub_addon.add_on_id) not in desired_addon_ids:
+            sub_addon.end_at = now
+
+    synced: dict[int, str] = {}
+    for prefix_length, add_on in desired_addons.items():
+        qty = desired_counts[prefix_length]
+        row = rows_by_addon_id.get(str(add_on.id))
+        if row is None:
+            row = SubscriptionAddOn(
+                subscription_id=subscription_obj.id,
+                add_on_id=add_on.id,
+                quantity=qty,
+                start_at=now,
+            )
+            db.add(row)
+        else:
+            row.quantity = qty
+        synced[prefix_length] = str(add_on.id)
+
+    db.commit()
+    return synced
+
+
+def _public_ip_addon_options(db: Session) -> list[AddOn]:
+    options: list[AddOn] = (
+        db.query(AddOn)
+        .filter(AddOn.is_active.is_(True))
+        .filter(
+            or_(
+                AddOn.ip_is_public.is_(True),
+                AddOn.addon_type.in_([AddOnType.extra_ip, AddOnType.static_ip]),
+                AddOn.name.ilike("%ip%"),
+                AddOn.name.ilike("%ipv4%"),
+            )
+        )
+        .order_by(AddOn.name.asc())
+        .all()
+    )
+    prefixes: set[int] = set()
+    blocks = (
+        db.query(IpBlock)
+        .join(IpPool, IpPool.id == IpBlock.pool_id)
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .filter(IpBlock.is_active.is_(True))
+        .all()
+    )
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            prefixes.add(int(network.prefixlen))
+            for prefix in PUBLIC_IP_ADDON_PREFIXES:
+                if network.prefixlen <= prefix:
+                    prefixes.add(prefix)
+
+    existing_prefixes = {
+        int(add_on.ip_prefix_length)
+        for add_on in options
+        if add_on.ip_prefix_length is not None
+    }
+    existing_names = {str(add_on.name or "").strip().lower() for add_on in options}
+
+    for prefix in sorted(prefixes):
+        if prefix in existing_prefixes or f"/{prefix} ip" in existing_names:
+            continue
+        add_on = AddOn(
+            name=f"/{prefix} IP",
+            addon_type=AddOnType.static_ip if prefix == 32 else AddOnType.extra_ip,
+            description=f"Public IPv4 /{prefix} block.",
+            is_active=True,
+            ip_is_public=True,
+            ip_prefix_length=prefix,
+        )
+        db.add(add_on)
+        options.append(add_on)
+    if options:
+        db.commit()
+        for add_on in options:
+            if add_on in db:
+                db.refresh(add_on)
+    return sorted(options, key=lambda add_on: str(add_on.name or ""))
+
+
+def _network_priority_key(network: ipaddress.IPv4Network) -> tuple[int, int]:
+    network_text = str(network.network_address)
+    priority = 0 if network_text.startswith(PUBLIC_IP_PRIORITY_PREFIXES) else 1
+    return priority, int(network.network_address)
+
+
+def _active_route_networks(
+    db: Session,
+    *,
+    current_subscriber_id: object | None = None,
+) -> list[ipaddress.IPv4Network]:
+    query = db.query(SubscriberAdditionalRoute).filter(
+        SubscriberAdditionalRoute.is_active.is_(True)
+    )
+    if current_subscriber_id:
+        query = query.filter(
+            SubscriberAdditionalRoute.subscriber_id != current_subscriber_id
+        )
+    networks: list[ipaddress.IPv4Network] = []
+    for route in query.all():
+        try:
+            network = ipaddress.ip_network(str(route.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            networks.append(network)
+    return networks
+
+
+def _used_ipam_address_ints(db: Session) -> list[int]:
+    """Return IPv4 addresses already unavailable in IPAM host inventory."""
+    rows = (
+        db.query(IPv4Address, IPAssignment)
+        .outerjoin(
+            IPAssignment,
+            and_(
+                IPAssignment.ipv4_address_id == IPv4Address.id,
+                IPAssignment.is_active.is_(True),
+            ),
+        )
+        .all()
+    )
+    used: set[int] = set()
+    for address, assignment in rows:
+        if (
+            assignment is None
+            and not bool(address.is_reserved)
+            and not str(address.allocation_type or "").strip()
+            and address.ont_unit_id is None
+        ):
+            continue
+        try:
+            used.add(int(ipaddress.ip_address(str(address.address))))
+        except ValueError:
+            continue
+    return sorted(used)
+
+
+def _subnet_contains_used_ipam_address(
+    subnet: ipaddress.IPv4Network,
+    used_ip_ints: list[int],
+) -> bool:
+    if not used_ip_ints:
+        return False
+    first = int(subnet.network_address)
+    last = int(subnet.broadcast_address)
+    index = bisect_left(used_ip_ints, first)
+    return index < len(used_ip_ints) and used_ip_ints[index] <= last
+
+
+def _subnet_starts_at_zero_address(subnet: ipaddress.IPv4Network) -> bool:
+    if subnet.prefixlen <= 24:
+        return False
+    return int(str(subnet.network_address).rsplit(".", 1)[-1]) == 0
+
+
+def _route_parent_networks_for_ipam(
+    db: Session,
+) -> list[tuple[ipaddress.IPv4Network, str, str, str]]:
+    """Return active IPv4 IPAM ranges collapsed to /24 parent options."""
+    ranges: dict[str, tuple[ipaddress.IPv4Network, str, str, str]] = {}
+
+    pools = (
+        db.query(IpPool)
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .order_by(IpPool.name.asc())
+        .all()
+    )
+    for pool in pools:
+        try:
+            network = ipaddress.ip_network(str(pool.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        network = cast(ipaddress.IPv4Network, network)
+        parent_networks = (
+            [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
+        )
+        for parent in parent_networks:
+            if parent.prefixlen > 24:
+                parent = cast(
+                    ipaddress.IPv4Network,
+                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
+                )
+            key = str(parent)
+            ranges.setdefault(
+                key,
+                (
+                    parent,
+                    str(getattr(pool, "name", "Pool") or "Pool"),
+                    str(pool.id),
+                    "",
+                ),
+            )
+
+    blocks = (
+        db.query(IpBlock)
+        .join(IpPool, IpPool.id == IpBlock.pool_id)
+        .filter(IpPool.ip_version == IPVersion.ipv4)
+        .filter(IpPool.is_active.is_(True))
+        .filter(IpBlock.is_active.is_(True))
+        .order_by(IpPool.name.asc(), IpBlock.cidr.asc())
+        .all()
+    )
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        network = cast(ipaddress.IPv4Network, network)
+        parent_networks = (
+            [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
+        )
+        for parent in parent_networks:
+            if parent.prefixlen > 24:
+                parent = cast(
+                    ipaddress.IPv4Network,
+                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
+                )
+            key = str(parent)
+            ranges[key] = (
+                parent,
+                str(getattr(block.pool, "name", "Pool") or "Pool"),
+                str(block.pool_id),
+                str(block.id),
+            )
+
+    return sorted(ranges.values(), key=lambda item: _network_priority_key(item[0]))
+
+
+def _route_range_options_for_ipam(
+    db: Session,
+    *,
+    current_subscriber_id: object | None = None,
+) -> list[dict[str, object]]:
+    assigned_networks = _active_route_networks(
+        db, current_subscriber_id=current_subscriber_id
+    )
+    used_ip_ints = _used_ipam_address_ints(db)
+    options: list[dict[str, object]] = []
+    for network, pool_name, pool_id, block_id in _route_parent_networks_for_ipam(db):
+        children_by_prefix: dict[str, list[dict[str, object]]] = {}
+        for prefix in PUBLIC_IP_ADDON_PREFIXES:
+            if network.prefixlen > prefix:
+                continue
+            subnet_count = 2 ** (prefix - network.prefixlen)
+            if subnet_count > MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK:
+                continue
+            children: list[dict[str, object]] = []
+            for subnet in network.subnets(new_prefix=prefix):
+                if _subnet_starts_at_zero_address(subnet):
+                    continue
+                if any(subnet.overlaps(assigned) for assigned in assigned_networks):
+                    continue
+                if _subnet_contains_used_ipam_address(subnet, used_ip_ints):
+                    continue
+                children.append(
+                    {
+                        "id": str(subnet),
+                        "cidr": str(subnet),
+                        "prefix": prefix,
+                        "parent_cidr": str(network),
+                        "pool_name": pool_name,
+                        "display": str(subnet),
+                    }
+                )
+            children_by_prefix[str(prefix)] = children
+        options.append(
+            {
+                "id": str(network),
+                "cidr": str(network),
+                "prefix": network.prefixlen,
+                "pool_id": pool_id,
+                "block_id": block_id,
+                "pool_name": pool_name,
+                "display": f"{pool_name} - {network}",
+                "children_by_prefix": children_by_prefix,
+            }
+        )
+    return options
+
+
+def _route_range_parent_options_for_ipam(db: Session) -> list[dict[str, object]]:
+    return [
+        {
+            "id": str(network),
+            "cidr": str(network),
+            "prefix": network.prefixlen,
+            "pool_id": pool_id,
+            "block_id": block_id,
+            "pool_name": pool_name,
+            "display": f"{pool_name} - {network}",
+        }
+        for network, pool_name, pool_id, block_id in _route_parent_networks_for_ipam(db)
+    ]
+
+
+def route_child_options_for_parent(
+    db: Session,
+    *,
+    parent_cidr: str,
+    prefix: int,
+    current_subscriber_id: object | None = None,
+) -> list[dict[str, object]]:
+    try:
+        network = ipaddress.ip_network(str(parent_cidr), strict=False)
+    except ValueError as exc:
+        raise ValueError("Selected route parent is invalid.") from exc
+    if network.version != 4:
+        raise ValueError("Selected route parent is invalid.")
+    network = cast(ipaddress.IPv4Network, network)
+    if prefix not in PUBLIC_IP_ADDON_PREFIXES or network.prefixlen > prefix:
+        return []
+    subnet_count = 2 ** (prefix - network.prefixlen)
+    if subnet_count > MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK:
+        return []
+
+    parent_lookup = {
+        str(parent): (pool_name, pool_id, block_id)
+        for parent, pool_name, pool_id, block_id in _route_parent_networks_for_ipam(db)
+    }
+    parent_meta = parent_lookup.get(str(network))
+    if parent_meta is None:
+        raise ValueError("Selected route parent is not active.")
+    pool_name, _pool_id, _block_id = parent_meta
+
+    assigned_networks = _active_route_networks(
+        db, current_subscriber_id=current_subscriber_id
+    )
+    used_ip_ints = _used_ipam_address_ints(db)
+    children: list[dict[str, object]] = []
+    for subnet in network.subnets(new_prefix=prefix):
+        if _subnet_starts_at_zero_address(subnet):
+            continue
+        if any(subnet.overlaps(assigned) for assigned in assigned_networks):
+            continue
+        if _subnet_contains_used_ipam_address(subnet, used_ip_ints):
+            continue
+        children.append(
+            {
+                "id": str(subnet),
+                "cidr": str(subnet),
+                "prefix": prefix,
+                "parent_cidr": str(network),
+                "pool_name": pool_name,
+                "display": str(subnet),
+            }
+        )
+    return children
+
+
+def initial_route_rows_for_form(
+    db: Session,
+    *,
+    cidrs: list[str],
+    metrics: list[str],
+) -> list[dict[str, str]]:
+    parents = _route_range_parent_options_for_ipam(db)
+    parsed_parents: list[tuple[ipaddress.IPv4Network, dict[str, object]]] = []
+    for parent in parents:
+        try:
+            network = ipaddress.ip_network(str(parent["cidr"]), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            parsed_parents.append((cast(ipaddress.IPv4Network, network), parent))
+
+    rows: list[dict[str, str]] = []
+    for index, raw_cidr in enumerate(cidrs):
+        cidr = str(raw_cidr or "").strip()
+        metric = str(metrics[index] if index < len(metrics) else "1").strip() or "1"
+        parent_id = ""
+        parent_query = ""
+        child_id = cidr
+        if cidr:
+            try:
+                child_network = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                child_network = None
+            if child_network and child_network.version == 4:
+                for parent_network, parent in parsed_parents:
+                    if cast(ipaddress.IPv4Network, child_network).subnet_of(
+                        parent_network
+                    ):
+                        parent_id = str(parent["id"])
+                        parent_query = str(parent["display"])
+                        break
+        rows.append(
+            {
+                "parentId": parent_id,
+                "parentQuery": parent_query,
+                "childId": child_id,
+                "cidr": cidr,
+                "metric": metric,
+            }
+        )
+    return rows
+
+
+def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, object]]:
+    """Compatibility wrapper for tests/older callers."""
+    options: list[dict[str, object]] = []
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        pool_name = getattr(block.pool, "name", "Pool")
+        children_by_prefix: dict[str, list[dict[str, object]]] = {}
+        for prefix in PUBLIC_IP_ADDON_PREFIXES:
+            if network.prefixlen > prefix:
+                continue
+            subnet_count = 2 ** (prefix - network.prefixlen)
+            if subnet_count > MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK:
+                continue
+            children_by_prefix[str(prefix)] = [
+                {
+                    "id": str(subnet),
+                    "cidr": str(subnet),
+                    "prefix": prefix,
+                    "parent_cidr": str(network),
+                    "pool_name": pool_name,
+                    "display": str(subnet),
+                }
+                for subnet in network.subnets(new_prefix=prefix)
+            ]
+        options.append(
+            {
+                "id": str(network),
+                "cidr": str(network),
+                "prefix": network.prefixlen,
+                "parent_cidr": str(network),
+                "pool_name": pool_name,
+                "display": f"{pool_name} - {network}",
+                "children_by_prefix": children_by_prefix,
+            }
+        )
+    return sorted(
+        options,
+        key=lambda item: _network_priority_key(
+            cast(
+                ipaddress.IPv4Network,
+                ipaddress.ip_network(str(item["cidr"]), strict=False),
+            )
+        ),
+    )
+
+
+def _subscription_public_ip_addon_form_row(
+    db: Session,
+    *,
+    subscription_id,
+) -> tuple[str, str]:
+    if not subscription_id:
+        return "", "1"
+    row = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .filter(AddOn.ip_is_public.is_(True))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .order_by(SubscriptionAddOn.start_at.desc().nullslast())
+        .first()
+    )
+    if row is None:
+        return "", "1"
+    sub_addon, _add_on = row
+    return str(sub_addon.add_on_id), str(sub_addon.quantity or 1)
+
+
+def sync_public_ip_addon_for_subscription(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    add_on_id: str | None,
+    quantity: str | int | None,
+) -> str | None:
+    """Sync the active public-IP billing add-on from the admin form."""
+    selected = str(add_on_id or "").strip()
+    try:
+        qty = int(str(quantity or "1").strip() or "1")
+    except ValueError as exc:
+        raise ValueError("Additional IP add-on quantity must be a number.") from exc
+    if qty < 1:
+        raise ValueError("Additional IP add-on quantity must be 1 or higher.")
+
+    now = datetime.now(UTC)
+    active_rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription_obj.id)
+        .filter(AddOn.ip_is_public.is_(True))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .all()
+    )
+
+    if not selected:
+        for sub_addon, _add_on in active_rows:
+            sub_addon.end_at = now
+        db.commit()
+        return None
+
+    try:
+        selected_uuid = UUID(selected)
+    except ValueError as exc:
+        raise ValueError("Selected additional IP add-on is invalid.") from exc
+    add_on = db.get(AddOn, selected_uuid)
+    if not add_on or not add_on.is_active:
+        raise ValueError("Selected additional IP add-on is not available.")
+    addon_type = getattr(add_on.addon_type, "value", add_on.addon_type)
+    name = str(add_on.name or "").lower()
+    if (
+        not add_on.ip_is_public
+        and addon_type not in {AddOnType.extra_ip.value, AddOnType.static_ip.value}
+        and "ip" not in name
+        and "ipv4" not in name
+    ):
+        raise ValueError("Selected additional IP add-on is not available.")
+
+    matched = None
+    for sub_addon, _add_on in active_rows:
+        if str(sub_addon.add_on_id) == selected:
+            matched = sub_addon
+            sub_addon.quantity = qty
+        else:
+            sub_addon.end_at = now
+    if matched is None:
+        db.add(
+            SubscriptionAddOn(
+                subscription_id=subscription_obj.id,
+                add_on_id=selected_uuid,
+                quantity=qty,
+                start_at=now,
+            )
+        )
+    db.commit()
+    return selected
+
+
+def validate_public_ip_addon_selection(
+    db: Session,
+    *,
+    add_on_id: str | None,
+    quantity: str | int | None,
+) -> None:
+    selected = str(add_on_id or "").strip()
+    try:
+        qty = int(str(quantity or "1").strip() or "1")
+    except ValueError as exc:
+        raise ValueError("Additional IP add-on quantity must be a number.") from exc
+    if qty < 1:
+        raise ValueError("Additional IP add-on quantity must be 1 or higher.")
+    if not selected:
+        return
+    try:
+        selected_uuid = UUID(selected)
+    except ValueError as exc:
+        raise ValueError("Selected additional IP add-on is invalid.") from exc
+    add_on = db.get(AddOn, selected_uuid)
+    if not add_on or not add_on.is_active:
+        raise ValueError("Selected additional IP add-on is not available.")
+    addon_type = getattr(add_on.addon_type, "value", add_on.addon_type)
+    name = str(add_on.name or "").lower()
+    if (
+        not add_on.ip_is_public
+        and addon_type not in {AddOnType.extra_ip.value, AddOnType.static_ip.value}
+        and "ip" not in name
+        and "ipv4" not in name
+    ):
+        raise ValueError("Selected additional IP add-on is not available.")
+
+
 def ensure_ipv4_blocks_allocatable(
     db: Session,
     block_ids: list[str],
@@ -1129,24 +2717,19 @@ def ensure_ipv4_blocks_allocatable(
 ) -> None:
     """Validate selected IPv4 blocks before subscription creation."""
     _validate_unique_selected_ipv4s(selected_ips)
-    for index, block_id in enumerate(block_ids):
-        try:
-            block_uuid = UUID(str(block_id))
-        except ValueError as exc:
-            raise ValueError("Invalid IPv4 block selected.") from exc
-        block = db.get(IpBlock, block_uuid)
-        if not block or not block.is_active:
-            raise ValueError("Selected IPv4 block is not active.")
+    if selected_ips and not block_ids:
+        raise ValueError("Select an IPv4 block before entering an IPv4 address.")
+    for index, selector in enumerate(block_ids):
         requested_ip = ""
         if selected_ips and index < len(selected_ips):
             requested_ip = str(selected_ips[index] or "").strip()
-        address = _resolve_ipv4_for_block(
+        address, _block, block_label = _resolve_ipv4_for_selector(
             db,
-            block=block,
+            selector=str(selector),
             requested_ip=requested_ip or None,
         )
         if not address:
-            raise ValueError(f"No available IPv4 address in block {block.cidr}.")
+            raise ValueError(f"No available IPv4 address in block {block_label}.")
 
 
 def apply_create_quick_options(
@@ -1245,6 +2828,14 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         db,
         subscription_obj=subscription_obj,
     )
+    additional_route_cidrs, additional_route_metrics = _additional_route_form_rows(
+        db,
+        subscriber_id=subscription_obj.subscriber_id,
+    )
+    ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
+        db,
+        subscription_id=subscription_obj.id,
+    )
     return {
         "id": str(subscription_obj.id),
         "account_id": str(subscription_obj.subscriber_id),
@@ -1303,6 +2894,10 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         ),
         "ipv4_block_ids": ipv4_block_ids,
         "ipv4_addresses": ipv4_addresses,
+        "ip_addon_id": ip_addon_id,
+        "ip_addon_quantity": ip_addon_quantity,
+        "additional_route_cidrs": additional_route_cidrs,
+        "additional_route_metrics": additional_route_metrics,
     }
 
 
@@ -1671,11 +3266,150 @@ def _subscription_external_radius_rows(
     )
 
 
+_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
+
+
+def _subscription_connection_status(
+    db: Session,
+    subscription: Subscription,
+    credential: AccessCredential | None,
+) -> dict[str, object]:
+    if subscription.status != SubscriptionStatus.active:
+        return {
+            "state": "inactive",
+            "label": "Not connected",
+            "detail": "Service is not active",
+            "session": None,
+            "last_seen_at": None,
+            "framed_ip_address": None,
+            "identifier": None,
+        }
+
+    query = db.query(RadiusAccountingSession).filter(
+        RadiusAccountingSession.session_end.is_(None)
+    )
+    if credential:
+        query = query.filter(
+            or_(
+                RadiusAccountingSession.subscription_id == subscription.id,
+                RadiusAccountingSession.access_credential_id == credential.id,
+            )
+        )
+    else:
+        query = query.filter(RadiusAccountingSession.subscription_id == subscription.id)
+
+    session = query.order_by(
+        RadiusAccountingSession.last_update_at.desc().nullslast(),
+        RadiusAccountingSession.session_start.desc().nullslast(),
+        RadiusAccountingSession.created_at.desc(),
+    ).first()
+    if not session:
+        return {
+            "state": "offline",
+            "label": "Not connected",
+            "detail": "No open RADIUS accounting session",
+            "session": None,
+            "last_seen_at": None,
+            "framed_ip_address": None,
+            "identifier": None,
+        }
+
+    last_seen_at = session.last_update_at or session.session_start or session.created_at
+    last_seen_utc = last_seen_at
+    if last_seen_utc and last_seen_utc.tzinfo is None:
+        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
+    is_fresh = bool(
+        last_seen_utc
+        and last_seen_utc
+        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
+    )
+    return {
+        "state": "connected" if is_fresh else "stale",
+        "label": "Connected" if is_fresh else "Last seen",
+        "detail": "Open RADIUS accounting session"
+        if is_fresh
+        else "Open session has stale accounting updates",
+        "session": session,
+        "last_seen_at": last_seen_at,
+        "framed_ip_address": session.framed_ip_address,
+        "identifier": session.framed_ip_address or session.session_id,
+    }
+
+
+def _active_public_ip_addons_for_subscription(
+    db: Session,
+    subscription_id: object,
+) -> dict[int, SubscriptionAddOn]:
+    rows = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .filter(AddOn.ip_is_public.is_(True))
+        .all()
+    )
+    result: dict[int, SubscriptionAddOn] = {}
+    for sub_addon, add_on in rows:
+        if add_on.ip_prefix_length is None:
+            continue
+        result[int(add_on.ip_prefix_length)] = sub_addon
+    return result
+
+
+def _additional_route_rows_for_subscription(
+    db: Session,
+    *,
+    subscription: Subscription,
+    routes: list[SubscriberAdditionalRoute],
+) -> list[dict[str, object]]:
+    active_addons = _active_public_ip_addons_for_subscription(db, subscription.id)
+    counts_by_prefix: dict[int, int] = {}
+    for route in routes:
+        counts_by_prefix[int(route.prefix_length)] = (
+            counts_by_prefix.get(int(route.prefix_length), 0) + 1
+        )
+    rows: list[dict[str, object]] = []
+    for route in routes:
+        prefix = int(route.prefix_length)
+        sub_addon = active_addons.get(prefix)
+        qty = int(getattr(sub_addon, "quantity", 0) or 0) if sub_addon else 0
+        expected_qty = counts_by_prefix.get(prefix, 0)
+        billing_ok = bool(sub_addon and qty >= expected_qty)
+        rows.append(
+            {
+                "cidr": route.cidr,
+                "prefix_length": prefix,
+                "type_label": "Additional IP" if prefix == 32 else "Routed IP Block",
+                "billing_ok": billing_ok,
+                "billing_label": f"Billed /{prefix} IP x{qty}"
+                if billing_ok
+                else "Billing add-on missing",
+            }
+        )
+    return rows
+
+
 def subscription_detail_context(
     db: Session, subscription: Subscription
 ) -> dict[str, object]:
     from app.services.connection_type_provisioning import build_radius_reply_attributes
 
+    active_additional_routes = []
+    if subscription.subscriber_id is not None:
+        active_additional_routes = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id == subscription.subscriber_id
+            )
+            .filter(SubscriberAdditionalRoute.is_active.is_(True))
+            .order_by(SubscriberAdditionalRoute.cidr.asc())
+            .all()
+        )
+    active_additional_route_rows = _additional_route_rows_for_subscription(
+        db,
+        subscription=subscription,
+        routes=active_additional_routes,
+    )
     credential = _current_access_credential(db, subscription.subscriber_id)
     password_sync = _password_sync_evidence(credential)
     commercial_policy = _subscription_commercial_policy(db, subscription)
@@ -1685,15 +3419,7 @@ def subscription_detail_context(
         profile=subscription.radius_profile,
         nas_device=subscription.provisioning_nas_device,
     )
-    active_session = (
-        db.query(RadiusActiveSession)
-        .filter(
-            (RadiusActiveSession.subscription_id == subscription.id)
-            | (RadiusActiveSession.subscriber_id == subscription.subscriber_id)
-        )
-        .order_by(RadiusActiveSession.session_start.desc())
-        .first()
-    )
+    connection_status = _subscription_connection_status(db, subscription, credential)
     recent_auth_errors = (
         db.query(RadiusAuthError)
         .filter(
@@ -1724,12 +3450,15 @@ def subscription_detail_context(
         "access_credential": credential,
         "password_sync": password_sync,
         "radius_reply_attributes": reply_attributes,
-        "active_session": active_session,
+        "connection_status": connection_status,
+        "active_session": connection_status.get("session"),
         "recent_auth_errors": recent_auth_errors,
         "lifecycle_events": lifecycle_events,
         "ip_assignment_mode": ip_assignment_mode,
         "ip_assignment_detail": ip_assignment_detail,
         "ip_pool": ip_pool,
+        "active_additional_routes": active_additional_routes,
+        "active_additional_route_rows": active_additional_route_rows,
         "direct_active_workflow": subscription.status == SubscriptionStatus.active
         and not has_service_orders,
         "commercial_policy": commercial_policy,
@@ -1814,31 +3543,7 @@ def subscription_form_context(
         .order_by(IpPool.name.asc())
         .all()
     )
-    ipv4_blocks = (
-        db.query(IpBlock)
-        .join(IpPool, IpPool.id == IpBlock.pool_id)
-        .filter(IpPool.ip_version == IPVersion.ipv4)
-        .filter(IpPool.is_active.is_(True))
-        .filter(IpBlock.is_active.is_(True))
-        .order_by(IpPool.name.asc(), IpBlock.cidr.asc())
-        .all()
-    )
-    block_options: list[dict[str, object]] = []
-    for block in ipv4_blocks:
-        in_block = _available_ipv4_strings_for_block(db, block=block)
-        pool_name = getattr(block.pool, "name", "Pool")
-        block_options.append(
-            {
-                "id": str(block.id),
-                "pool_id": str(block.pool_id),
-                "pool_name": pool_name,
-                "cidr": str(block.cidr),
-                "available_count": len(in_block),
-                "available_ips": in_block,
-                "display": f"{pool_name} - {block.cidr} ({len(in_block)} free)",
-            }
-        )
-
+    block_options = _service_ipv4_block_option_summaries(db)
     rp_stmt = (
         select(RadiusProfile)
         .where(RadiusProfile.is_active.is_(True))
@@ -1849,6 +3554,7 @@ def subscription_form_context(
     subscriber_id = (
         subscription.get("subscriber_id") if isinstance(subscription, dict) else None
     )
+    route_range_options = _route_range_parent_options_for_ipam(db)
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
     current_password = _current_service_password(db, str(subscriber_id or ""))
     current_credential = _current_access_credential(db, str(subscriber_id or ""))
@@ -1922,17 +3628,55 @@ def subscription_form_context(
         subscription["ipv4_block_ids"] = []
     if not isinstance(subscription.get("ipv4_addresses"), list):
         subscription["ipv4_addresses"] = []
+    if not subscription.get("ip_addon_quantity"):
+        subscription["ip_addon_quantity"] = "1"
+    if not isinstance(subscription.get("additional_route_cidrs"), list):
+        subscription["additional_route_cidrs"] = [""]
+    if not isinstance(subscription.get("additional_route_metrics"), list):
+        subscription["additional_route_metrics"] = [""]
+    additional_route_cidrs = cast(
+        list[object],
+        subscription.get("additional_route_cidrs", []),
+    )
+    additional_route_metrics = cast(
+        list[object],
+        subscription.get("additional_route_metrics", []),
+    )
+    initial_route_rows = initial_route_rows_for_form(
+        db,
+        cidrs=[str(value or "") for value in additional_route_cidrs],
+        metrics=[str(value or "") for value in additional_route_metrics],
+    )
+
+    ip_addon_options = _public_ip_addon_options(db)
+    ip_addon_options_json = json.dumps(
+        [
+            {
+                "id": str(add_on.id),
+                "name": str(add_on.name or ""),
+                "prefix": int(add_on.ip_prefix_length)
+                if add_on.ip_prefix_length is not None
+                else None,
+            }
+            for add_on in ip_addon_options
+        ]
+    )
 
     context: dict[str, object] = {
         "subscription": subscription,
         "accounts": accounts,
         "offers": offers,
-        "offer_options": [_offer_option(offer) for offer in offers],
+        "offer_options": _offer_options(db, list(offers), include_prices=False),
         "nas_devices": nas_devices,
         "router_devices": nas_devices,
         "ipv4_pools": ipv4_pools,
         "ipv4_blocks": block_options,
         "ipv4_blocks_json": json.dumps(block_options),
+        "route_range_options": route_range_options,
+        "route_range_options_json": json.dumps(route_range_options),
+        "initial_route_rows_json": json.dumps(initial_route_rows),
+        "ip_addon_options": ip_addon_options,
+        "ip_addon_options_json": ip_addon_options_json,
         "radius_profiles": radius_profiles,
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],
@@ -2208,6 +3952,16 @@ def create_subscription_with_audit(
         for value in form.getlist("ipv4_addresses")
         if str(value).strip()
     ]
+    additional_route_cidrs = [
+        str(value).strip() for value in form.getlist("additional_route_cidrs")
+    ]
+    additional_route_metrics = [
+        str(value).strip() for value in form.getlist("additional_route_metrics")
+    ]
+    desired_additional_routes = normalize_additional_routes(
+        additional_route_cidrs,
+        additional_route_metrics,
+    )
     allocated_ips = _allocate_ipv4_assignments_for_subscription(
         db,
         subscription_obj=created,
@@ -2222,6 +3976,29 @@ def create_subscription_with_audit(
                 "ipv4_address": allocated_ips[0],
             },
         )
+    additional_routes = sync_additional_routes_for_subscription(
+        db,
+        subscription_obj=created,
+        cidrs=additional_route_cidrs,
+        metrics=additional_route_metrics,
+        add_on_id=str(form.get("ip_addon_id") or ""),
+        quantity=str(form.get("ip_addon_quantity") or "1"),
+    )
+    route_fields_supplied = bool(additional_route_cidrs)
+    if desired_additional_routes or route_fields_supplied:
+        public_ip_addon_ids = sync_public_ip_addons_for_routes(
+            db,
+            subscription_obj=created,
+            routes=desired_additional_routes,
+        )
+        public_ip_addon_id = next(iter(public_ip_addon_ids.values()), None)
+    else:
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
+            db,
+            subscription_obj=created,
+            add_on_id=str(form.get("ip_addon_id") or ""),
+            quantity=str(form.get("ip_addon_quantity") or "1"),
+        )
 
     if subscriber:
         try:
@@ -2234,14 +4011,24 @@ def create_subscription_with_audit(
                 if created.radius_profile_id
                 else None,
             )
-        except Exception:
+        except ValueError:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
             logger.warning(
                 "Access credential sync failed during subscription create for %s",
                 created.id,
                 exc_info=True,
             )
+            raise ValueError(
+                "Unable to update the service credential. Please check the service "
+                "login and try again."
+            ) from exc
         else:
             _reconcile_active_subscription_after_credential_sync(db, str(created.id))
+    elif additional_routes:
+        _reconcile_active_subscription_after_credential_sync(db, str(created.id))
 
     record_audit_event(
         db,
@@ -2259,6 +4046,9 @@ def create_subscription_with_audit(
             "ipv4_method": str(form.get("ipv4_method") or "permanent_static"),
             "allocated_ipv4_count": len(allocated_ips),
             "allocated_ipv4_addresses": allocated_ips,
+            "public_ip_addon_id": public_ip_addon_id,
+            "additional_route_count": len(additional_routes),
+            "additional_routes": additional_routes,
         },
     )
 
@@ -2280,6 +4070,11 @@ def update_subscription_with_audit(
     ipv4_addresses: list[str] | None,
     request: object,
     actor_id: str | None,
+    additional_route_cidrs: list[str] | None = None,
+    additional_route_metrics: list[str] | None = None,
+    ip_addon_id: str | None = None,
+    ip_addon_quantity: str | int | None = None,
+    ipv4_assignment_submitted: bool = False,
 ) -> object:
     """Update subscription, compute diff, and log audit.
 
@@ -2288,17 +4083,54 @@ def update_subscription_with_audit(
     before = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     update_subscription(db, subscription_id, payload_data)
     after = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+    manage_ipv4_assignment = ipv4_assignment_submitted or bool(
+        ipv4_block_ids or ipv4_addresses
+    )
     allocated_ips = _sync_ipv4_assignments_for_subscription(
         db,
         subscription_obj=after,
         block_ids=ipv4_block_ids,
         selected_ips=ipv4_addresses,
+        assignment_submitted=manage_ipv4_assignment,
     )
-    primary_ipv4 = allocated_ips[0] if allocated_ips else ""
-    if (after.ipv4_address or "") != primary_ipv4:
-        after.ipv4_address = primary_ipv4 or None
-        db.commit()
-        db.refresh(after)
+    if manage_ipv4_assignment and allocated_ips:
+        primary_ipv4 = allocated_ips[0]
+        if (after.ipv4_address or "") != primary_ipv4:
+            after.ipv4_address = primary_ipv4
+            db.commit()
+            db.refresh(after)
+    additional_routes: list[str] = []
+    desired_additional_routes: list[tuple[str, int, int]] = []
+    additional_routes_supplied = additional_route_cidrs is not None
+    if additional_route_cidrs is not None:
+        desired_additional_routes = normalize_additional_routes(
+            additional_route_cidrs,
+            additional_route_metrics,
+        )
+        additional_routes = sync_additional_routes_for_subscription(
+            db,
+            subscription_obj=after,
+            cidrs=additional_route_cidrs,
+            metrics=additional_route_metrics,
+            add_on_id=ip_addon_id,
+            quantity=ip_addon_quantity,
+        )
+    public_ip_addon_id: str | None = None
+    public_ip_addon_supplied = ip_addon_id is not None
+    if additional_routes_supplied:
+        public_ip_addon_ids = sync_public_ip_addons_for_routes(
+            db,
+            subscription_obj=after,
+            routes=desired_additional_routes,
+        )
+        public_ip_addon_id = next(iter(public_ip_addon_ids.values()), None)
+    elif ip_addon_id is not None:
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
+            db,
+            subscription_obj=after,
+            add_on_id=ip_addon_id,
+            quantity=ip_addon_quantity,
+        )
     entered_password = str(service_password or "").strip()
     try:
         _upsert_access_credential(
@@ -2310,19 +4142,36 @@ def update_subscription_with_audit(
             if after.radius_profile_id
             else None,
         )
-    except Exception:
+    except ValueError:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
         logger.warning(
             "Access credential sync failed during subscription update for %s",
             subscription_id,
             exc_info=True,
         )
+        raise ValueError(
+            "Unable to update the service credential. Please check the service "
+            "login and try again."
+        ) from exc
     else:
         _reconcile_active_subscription_after_credential_sync(db, subscription_id)
+    if additional_routes_supplied or public_ip_addon_supplied:
+        _refresh_subscription_radius_session(
+            db,
+            subscription_id,
+            reason="additional_ip_update",
+        )
     metadata_payload = build_changes_metadata(before, after) or {}
     metadata_payload["service_password_changed"] = bool(entered_password)
     if allocated_ips:
         metadata_payload["allocated_ipv4_count"] = len(allocated_ips)
         metadata_payload["allocated_ipv4_addresses"] = allocated_ips
+    metadata_payload["public_ip_addon_id"] = public_ip_addon_id
+    metadata_payload["additional_route_count"] = len(additional_routes)
+    metadata_payload["additional_routes"] = additional_routes
 
     record_audit_event(
         db,

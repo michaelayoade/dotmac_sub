@@ -1,5 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../core/messenger.dart';
+import '../router/app_router.dart';
 import 'auth_controller.dart';
 import 'data_providers.dart';
 
@@ -41,6 +45,23 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
     ref.read(apiClientProvider).impersonationToken = null;
     state = null;
     _refreshCustomerData();
+  }
+
+  /// The short-lived "view as" grant lapsed mid-session (a request returned 401
+  /// while impersonating). Clear it, route back to the reseller area, and tell
+  /// the user — never fail silently. Idempotent: a no-op once already cleared,
+  /// so concurrent 401s don't double-notify.
+  void expire() {
+    if (state == null) return;
+    stop();
+    rootNavigatorKey.currentContext?.go('/reseller');
+    ref.read(scaffoldMessengerKeyProvider).currentState?.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'View-as session expired — returned to your reseller account.',
+            ),
+          ),
+        );
   }
 
   /// Cached customer-scope data must not leak across identities.

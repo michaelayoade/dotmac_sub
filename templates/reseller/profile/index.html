@@ -6,6 +6,10 @@
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Profile Settings</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage your reseller profile and contact information</p>
     </div>
+    <a href="/reseller/contacts" class="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+        <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4z"/></svg>
+        Contacts
+    </a>
 </div>
 {% endblock %}
 
@@ -24,6 +28,44 @@
     <div class="flex items-center gap-3 rounded-2xl border border-emerald-200/60 bg-emerald-50/80 px-5 py-4 text-sm text-emerald-700 shadow-sm dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300">
         <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
         <span>{{ success }}</span>
+    </div>
+    {% endif %}
+
+    {% if verify_sent == '1' %}
+    <div class="rounded-2xl border border-emerald-200/60 bg-emerald-50/80 px-5 py-4 text-sm text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Verification email sent. Check your inbox for the link.
+    </div>
+    {% elif verify_sent == '0' %}
+    <div class="rounded-2xl border border-amber-200/60 bg-amber-50/80 px-5 py-4 text-sm text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+        We couldn&rsquo;t send the verification email right now. Please try again shortly.
+    </div>
+    {% endif %}
+
+    <!-- Email verification tile -->
+    {% if subscriber and subscriber.email %}
+    <div class="flex flex-col gap-3 rounded-2xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between
+                {{ 'border-emerald-200/60 bg-emerald-50/80 dark:border-emerald-800/60 dark:bg-emerald-900/20' if subscriber.email_verified else 'border-amber-200/60 bg-amber-50/80 dark:border-amber-800/60 dark:bg-amber-900/20' }}">
+        <div class="flex items-start gap-3">
+            {% if subscriber.email_verified %}
+            <svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <div>
+                <p class="text-sm font-semibold text-emerald-900 dark:text-emerald-200">Email verified</p>
+                <p class="mt-0.5 text-sm text-emerald-800 dark:text-emerald-300">{{ subscriber.email }} is verified.</p>
+            </div>
+            {% else %}
+            <svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0"/></svg>
+            <div>
+                <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">Your email isn&rsquo;t verified</p>
+                <p class="mt-0.5 text-sm text-amber-800 dark:text-amber-300">Verify {{ subscriber.email }} so you don&rsquo;t miss important account updates.</p>
+            </div>
+            {% endif %}
+        </div>
+        {% if not subscriber.email_verified %}
+        <form method="post" action="/reseller/profile/verify-email/resend" class="flex-shrink-0">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">Resend verification</button>
+        </form>
+        {% endif %}
     </div>
     {% endif %}
 

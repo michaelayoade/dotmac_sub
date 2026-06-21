@@ -3,7 +3,15 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
+from app.models.network import (
+    IPAssignment,
+    IpBlock,
+    IpPool,
+    IPv4Address,
+    IPVersion,
+    SubscriberAdditionalRoute,
+)
+from app.models.network_monitoring import NetworkDevice
 from app.services import web_network_ip
 
 
@@ -130,6 +138,74 @@ def test_pool_utilization_counts_ont_management_allocations_as_used(monkeypatch)
     assert util["available"] == 0
 
 
+def test_pool_and_block_utilization_count_network_device_ips(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Device Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.0.2.0/30",
+        is_active=True,
+    )
+    block = IpBlock(
+        id=uuid.uuid4(),
+        pool_id=pool.id,
+        cidr="10.0.2.0/30",
+        is_active=True,
+    )
+    block.pool = pool
+    device_ip = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.0.2.1",
+        pool_id=pool.id,
+        is_reserved=True,
+    )
+    assigned_ip = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.0.2.2",
+        pool_id=pool.id,
+        is_reserved=False,
+    )
+    device_ip.assignment = None
+    assigned_ip.assignment = IPAssignment(
+        id=uuid.uuid4(),
+        subscriber_id=uuid.uuid4(),
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=assigned_ip.id,
+        is_active=True,
+    )
+    device = NetworkDevice(
+        id=uuid.uuid4(),
+        name="Aggregation Switch",
+        mgmt_ip="10.0.2.1",
+        is_active=True,
+    )
+
+    db = FakeSession({IPv4Address: [device_ip, assigned_ip], NetworkDevice: [device]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_pools,
+        "list",
+        lambda **_kwargs: [pool],
+    )
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_blocks,
+        "list",
+        lambda **_kwargs: [block],
+    )
+
+    state = web_network_ip.build_ip_pools_data(db)
+    pool_util = state["pool_utilization"][str(pool.id)]
+    block_util = state["block_utilization"][str(block.id)]
+
+    assert pool_util["used"] == 2
+    assert pool_util["reserved"] == 0
+    assert pool_util["available"] == 0
+    assert pool_util["percent"] == 100
+    assert block_util["used"] == 2
+    assert block_util["reserved"] == 0
+    assert block_util["available"] == 0
+    assert block_util["percent"] == 100
+
+
 def test_reconcile_ipv4_pool_memberships_maps_existing_addresses_to_pool(monkeypatch):
     pool = IpPool(
         id=uuid.uuid4(),
@@ -227,6 +303,109 @@ def test_ipv4_block_detail_marks_assigned_reserved_and_available(monkeypatch):
     assert state["stats"]["available"] == 0
 
 
+def test_ipv4_address_list_annotates_additional_route_owner(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Routed Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.20.40.0/29",
+        is_active=True,
+    )
+    routed_ip = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.20.40.2",
+        pool_id=pool.id,
+        is_reserved=True,
+    )
+    routed_ip.assignment = None
+    subscriber_id = uuid.uuid4()
+    subscriber = SimpleNamespace(
+        id=subscriber_id,
+        display_name="Routed Customer",
+        full_name="Routed Customer",
+        email="routed@example.com",
+    )
+    route = SubscriberAdditionalRoute(
+        id=uuid.uuid4(),
+        subscriber_id=subscriber_id,
+        cidr="10.20.40.0/30",
+        prefix_length=30,
+        metric=1,
+        is_active=True,
+    )
+    route.__dict__["subscriber"] = subscriber
+
+    db = FakeSession({SubscriberAdditionalRoute: [route]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ipv4_addresses,
+        "list",
+        lambda **_kwargs: [routed_ip],
+    )
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_pools,
+        "list",
+        lambda **_kwargs: [pool],
+    )
+
+    state = web_network_ip.build_ip_addresses_data(db, ip_version="ipv4")
+
+    owner = state["addresses"][0].additional_route_owner
+    assert owner["subscriber_name"] == "Routed Customer"
+    assert owner["subscriber_id"] == str(subscriber_id)
+    assert owner["cidr"] == "10.20.40.0/30"
+
+
+def test_ipv4_block_detail_marks_additional_route_hosts(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Routed Detail Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.20.41.0/29",
+        is_active=True,
+    )
+    block = IpBlock(
+        id=uuid.uuid4(),
+        pool_id=pool.id,
+        cidr="10.20.41.0/30",
+        is_active=True,
+    )
+    block.pool = pool
+    subscriber_id = uuid.uuid4()
+    subscriber = SimpleNamespace(
+        id=subscriber_id,
+        display_name="Block Route Customer",
+        full_name="Block Route Customer",
+        email="block-route@example.com",
+    )
+    route = SubscriberAdditionalRoute(
+        id=uuid.uuid4(),
+        subscriber_id=subscriber_id,
+        cidr="10.20.41.0/30",
+        prefix_length=30,
+        metric=1,
+        is_active=True,
+    )
+    route.__dict__["subscriber"] = subscriber
+
+    db = FakeSession({SubscriberAdditionalRoute: [route]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_blocks,
+        "get",
+        lambda **_kwargs: block,
+    )
+
+    state = web_network_ip.build_ipv4_block_detail_data(
+        db, block_id=str(block.id), limit=10
+    )
+
+    assert state is not None
+    rows = {row["ip_address"]: row for row in state["ip_rows"]}
+    assert rows["10.20.41.1"]["status"] == "routed"
+    assert rows["10.20.41.1"]["subscriber_name"] == "Block Route Customer"
+    assert rows["10.20.41.1"]["service_ref"] == "10.20.41.0/30"
+    assert rows["10.20.41.1"]["notes"] == "Additional routed block"
+
+
 def test_ipv4_block_detail_marks_ont_management_allocation(monkeypatch):
     pool = IpPool(
         id=uuid.uuid4(),
@@ -266,4 +445,52 @@ def test_ipv4_block_detail_marks_ont_management_allocation(monkeypatch):
     assert state is not None
     rows = {row["ip_address"]: row["status"] for row in state["ip_rows"]}
     assert rows["10.20.31.1"] == "ont_management"
+    assert state["stats"]["assigned"] == 1
+
+
+def test_ipv4_block_detail_marks_network_device_management_ip(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Device Range Detail",
+        ip_version=IPVersion.ipv4,
+        cidr="10.20.32.0/30",
+        is_active=True,
+    )
+    block = IpBlock(
+        id=uuid.uuid4(),
+        pool_id=pool.id,
+        cidr="10.20.32.0/30",
+        is_active=True,
+    )
+    block.pool = pool
+    address = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.20.32.1",
+        pool_id=pool.id,
+        is_reserved=False,
+    )
+    address.assignment = None
+    device = NetworkDevice(
+        id=uuid.uuid4(),
+        name="Aggregation Switch",
+        mgmt_ip="10.20.32.1",
+        is_active=True,
+    )
+
+    db = FakeSession({IPv4Address: [address], NetworkDevice: [device]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_blocks,
+        "get",
+        lambda **_kwargs: block,
+    )
+
+    state = web_network_ip.build_ipv4_block_detail_data(
+        db, block_id=str(block.id), limit=10
+    )
+
+    assert state is not None
+    rows = {row["ip_address"]: row for row in state["ip_rows"]}
+    assert rows["10.20.32.1"]["status"] == "device"
+    assert rows["10.20.32.1"]["device"] == "Aggregation Switch"
+    assert rows["10.20.32.1"]["notes"] == "Network device"
     assert state["stats"]["assigned"] == 1

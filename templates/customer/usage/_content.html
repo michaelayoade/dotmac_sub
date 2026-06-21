@@ -10,6 +10,7 @@
 {% set usage_anchor = usage_anchor | default('') %}
 {% set bandwidth_chart_api_base = bandwidth_chart_api_base | default('/portal/bandwidth') %}
 {% set bandwidth_chart_use_my_endpoints = bandwidth_chart_use_my_endpoints if bandwidth_chart_use_my_endpoints is defined else true %}
+{% set bandwidth_chart_direct_live_endpoint = bandwidth_chart_direct_live_endpoint | default(none) %}
 {% set usage_page_title = usage_page_title | default('Usage') %}
 {% set usage_records_title = usage_records_title | default('Usage Records') %}
 {% set usage_chart_records = usage_chart_records | default(chart_records | default([])) %}
@@ -65,7 +66,7 @@
 
     <div class="{{ usage_panel_class }}"
          {% if has_subscription %}
-         x-data='window.BandwidthChart && typeof window.BandwidthChart.bandwidthChart === "function" ? BandwidthChart.bandwidthChart({ apiBasePath: "{{ bandwidth_chart_api_base }}", useMyEndpoints: {{ "true" if bandwidth_chart_use_my_endpoints else "false" }}{% if bandwidth_chart_subscription_id %}, subscriptionId: "{{ bandwidth_chart_subscription_id }}"{% endif %} }) : {}'
+         x-data='window.BandwidthChart && typeof window.BandwidthChart.bandwidthChart === "function" ? BandwidthChart.bandwidthChart({ apiBasePath: "{{ bandwidth_chart_api_base }}", useMyEndpoints: {{ "true" if bandwidth_chart_use_my_endpoints else "false" }}{% if bandwidth_chart_subscription_id %}, subscriptionId: "{{ bandwidth_chart_subscription_id }}"{% endif %}{% if bandwidth_chart_direct_live_endpoint %}, directLiveEndpoint: "{{ bandwidth_chart_direct_live_endpoint }}"{% endif %} }) : {}'
          x-init="if (typeof init === 'function') init()"
          x-on:destroy.window="if (typeof destroy === 'function') destroy()"
          {% endif %}>
@@ -74,7 +75,7 @@
                 <svg class="h-5 w-5 {{ usage_accent_icon }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                 </svg>
-                Real-Time Bandwidth
+                {% if bandwidth_chart_direct_live_endpoint %}Live Bandwidth{% else %}Bandwidth Speed History{% endif %}
             </h2>
             <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-700">
                 <template x-for="range in timeRanges" :key="range.value">
@@ -102,17 +103,39 @@
             </div>
 
             <div x-show="!loading && !error">
+                {% if bandwidth_chart_direct_live_endpoint %}
+                <div class="mb-5 grid gap-3 sm:grid-cols-3">
+                    <div class="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Live Download</p>
+                        <p class="mt-1 text-2xl font-bold text-brand-600 dark:text-brand-400" x-text="currentDownloadFormatted">{{ bandwidth_chart_initial_stats.current_download_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Live Upload</p>
+                        <p class="mt-1 text-2xl font-bold text-purple-600 dark:text-purple-400" x-text="currentUploadFormatted">{{ bandwidth_chart_initial_stats.current_upload_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Live Source</p>
+                        <p class="mt-1 text-sm font-semibold {{ usage_primary_text }}" x-text="liveStatusLabel">Waiting for MikroTik</p>
+                        <p class="mt-1 text-xs {{ usage_muted_text }}" x-show="liveInterface" x-text="liveInterface"></p>
+                        <p class="mt-1 text-xs {{ usage_muted_text }}" x-show="liveUpdatedAtFormatted" x-text="liveUpdatedAtFormatted"></p>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if bandwidth_chart_direct_live_endpoint %}
+                <p class="mb-3 text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Speed History</p>
+                {% endif %}
                 <div class="h-48 mb-4">
                     <canvas x-ref="canvas"></canvas>
                 </div>
 
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-slate-200/60 dark:border-slate-700/60">
                     <div class="text-center">
-                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Download</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">{% if bandwidth_chart_direct_live_endpoint %}Live Download{% else %}Latest Download{% endif %}</p>
                         <p class="mt-1 text-xl font-bold text-brand-600 dark:text-brand-400" x-text="currentDownloadFormatted">{{ bandwidth_chart_initial_stats.current_download_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
                     </div>
                     <div class="text-center">
-                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Upload</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">{% if bandwidth_chart_direct_live_endpoint %}Live Upload{% else %}Latest Upload{% endif %}</p>
                         <p class="mt-1 text-xl font-bold text-purple-600 dark:text-purple-400" x-text="currentUploadFormatted">{{ bandwidth_chart_initial_stats.current_upload_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
                     </div>
                     <div class="text-center">
@@ -128,7 +151,7 @@
         </div>
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-3">
+    <div class="grid gap-4 sm:grid-cols-1">
         <div class="{{ usage_card_class }}">
             <div class="absolute inset-0 bg-gradient-to-br from-brand-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="relative">
@@ -139,36 +162,6 @@
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Total Usage</p>
                         <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:.2f}".format(totals.amount) }} <span class="text-sm font-semibold text-stone-500">GB</span></p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="{{ usage_card_class }}">
-            <div class="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
-            <div class="relative">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    </div>
-                    <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Period</p>
-                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ period | default('Current') | title }}</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="{{ usage_card_class }}">
-            <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
-            <div class="relative">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                    </div>
-                    <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Records</p>
-                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ usage_records | length }}</p>
                     </div>
                 </div>
             </div>

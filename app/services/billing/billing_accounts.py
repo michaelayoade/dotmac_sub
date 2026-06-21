@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -182,10 +182,12 @@ class BillingAccounts(ListResponseMixin):
         *,
         subscribers_limit: int = 25,
         subscribers_offset: int = 0,
+        subscriber_search: str | None = None,
         payments_limit: int = 25,
         payments_offset: int = 0,
     ) -> BillingAccountStatement:
         ba = BillingAccounts.get(db, billing_account_id)
+        search = (subscriber_search or "").strip()
 
         # Aggregates: do these in SQL so they don't depend on the page being
         # rendered. The per-subscriber rows below are then a pure page-of-data.
@@ -212,8 +214,7 @@ class BillingAccounts(ListResponseMixin):
             or 0
         )
 
-        # Per-subscriber open balance (paginated page)
-        rows = (
+        subscriber_rows_query = (
             db.query(
                 Subscriber.id,
                 Subscriber.first_name,
@@ -230,7 +231,23 @@ class BillingAccounts(ListResponseMixin):
             .filter(Invoice.is_active.is_(True))
             .filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
             .filter(Invoice.balance_due > 0)
-            .group_by(
+        )
+        if search:
+            pattern = f"%{search}%"
+            subscriber_rows_query = subscriber_rows_query.filter(
+                or_(
+                    Subscriber.first_name.ilike(pattern),
+                    Subscriber.last_name.ilike(pattern),
+                    Subscriber.display_name.ilike(pattern),
+                    Subscriber.company_name.ilike(pattern),
+                    Subscriber.email.ilike(pattern),
+                    Subscriber.subscriber_number.ilike(pattern),
+                )
+            )
+
+        # Per-subscriber open balance (paginated page)
+        rows = (
+            subscriber_rows_query.group_by(
                 Subscriber.id,
                 Subscriber.first_name,
                 Subscriber.last_name,

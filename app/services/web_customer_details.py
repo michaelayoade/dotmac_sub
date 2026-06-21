@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,26 +17,36 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
+    AddOn,
     ConnectionType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.network import CPEDevice, IPAssignment, OntAssignment
+from app.models.gis import (
+    CustomerLocationChangeRequest,
+    CustomerLocationChangeRequestStatus,
+)
+from app.models.network import (
+    CPEDevice,
+    IPAssignment,
+    OntAssignment,
+    SubscriberAdditionalRoute,
+)
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import (
     ChannelType,
-    NINVerificationStatus,
     Reseller,
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
-    SubscriberNINVerification,
     UserType,
 )
 from app.models.support import Ticket
+from app.models.usage import RadiusAccountingSession
 from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
@@ -56,6 +66,8 @@ from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
+
+_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
 
 RESOLVED_TICKET_STATUSES = {
     "resolved",
@@ -360,11 +372,11 @@ def _build_audit_activity_items(
         comment_text = str(metadata.get("comment") or "").strip()
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
-        description = actor_name
+        description = ""
         if comment_text:
-            description = f"{actor_name} · {comment_text}"
+            description = comment_text
         elif change_summary:
-            description = f"{actor_name} · {change_summary}"
+            description = change_summary
         items.append(
             {
                 "type": "audit",
@@ -372,6 +384,7 @@ def _build_audit_activity_items(
                     f"{humanize_entity(getattr(event, 'entity_type', None))} "
                     f"{humanize_action(getattr(event, 'action', None))}"
                 ),
+                "actor_name": actor_name,
                 "description": description,
                 "timestamp": getattr(event, "occurred_at", None),
                 "link": _audit_entity_link(
@@ -381,6 +394,17 @@ def _build_audit_activity_items(
             }
         )
     return items
+
+
+def get_customer_audit_activity_items(
+    db: Session, customer_id: str, limit: int = 5
+) -> list[dict[str, object]]:
+    """Return recent structured audit activity for a customer edit surface."""
+    return _build_audit_activity_items(
+        db,
+        [("subscriber", str(customer_id))],
+        limit=limit,
+    )
 
 
 def _build_activity_items(
@@ -605,14 +629,14 @@ def _build_common_financials(db: Session, account_ids):
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
-            .order_by(Invoice.created_at.desc())
+            .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .limit(10)
             .all()
         )
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
-            .order_by(Payment.created_at.desc())
+            .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .limit(10)
             .all()
         )
@@ -699,6 +723,8 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
             "access_credentials": [],
             "cpe_devices": [],
             "ip_assignments": [],
+            "active_additional_routes": [],
+            "active_additional_route_rows": [],
             "ont_assignments": [],
             "linked_resellers": [],
             "relationship_summary": empty_summary,
@@ -765,6 +791,50 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         .limit(10)
         .all()
     )
+    active_additional_routes = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id.in_(account_ids))
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .order_by(SubscriberAdditionalRoute.cidr.asc())
+        .all()
+    )
+    active_public_ip_addons = (
+        db.query(SubscriptionAddOn, AddOn)
+        .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
+        .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .filter(Subscription.subscriber_id.in_(account_ids))
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .filter(AddOn.ip_is_public.is_(True))
+        .all()
+    )
+    addon_qty_by_prefix: dict[int, int] = {}
+    for sub_addon, add_on in active_public_ip_addons:
+        if add_on.ip_prefix_length is None:
+            continue
+        prefix = int(add_on.ip_prefix_length)
+        addon_qty_by_prefix[prefix] = addon_qty_by_prefix.get(prefix, 0) + int(
+            sub_addon.quantity or 0
+        )
+    route_counts_by_prefix: dict[int, int] = {}
+    for route in active_additional_routes:
+        prefix = int(route.prefix_length)
+        route_counts_by_prefix[prefix] = route_counts_by_prefix.get(prefix, 0) + 1
+    active_additional_route_rows = []
+    for route in active_additional_routes:
+        prefix = int(route.prefix_length)
+        qty = addon_qty_by_prefix.get(prefix, 0)
+        billing_ok = qty >= route_counts_by_prefix.get(prefix, 0)
+        active_additional_route_rows.append(
+            {
+                "cidr": route.cidr,
+                "prefix_length": prefix,
+                "type_label": "Additional IP" if prefix == 32 else "Routed IP Block",
+                "billing_ok": billing_ok,
+                "billing_label": f"Billed /{prefix} IP x{qty}"
+                if billing_ok
+                else "Billing add-on missing",
+            }
+        )
     ont_assignments = (
         db.query(OntAssignment)
         .options(
@@ -835,6 +905,8 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         "access_credentials": access_credentials,
         "cpe_devices": cpe_devices,
         "ip_assignments": ip_assignments,
+        "active_additional_routes": active_additional_routes,
+        "active_additional_route_rows": active_additional_route_rows,
         "ont_assignments": ont_assignments,
         "linked_resellers": linked_resellers,
         "relationship_summary": relationship_summary,
@@ -973,21 +1045,169 @@ def _build_map_payload(primary_address, customer_name: str):
     return map_data, geocode_target
 
 
-def _build_network_access_cards(subscriptions: list) -> list[dict]:
-    """Build network access info cards from active subscriptions."""
-    cards = []
+def _connection_status_for_session(
+    subscription: Subscription,
+    session: RadiusAccountingSession | None,
+) -> dict[str, object]:
+    if subscription.status != SubscriptionStatus.active:
+        return {
+            "state": "inactive",
+            "label": "Not connected",
+            "detail": "Service is not active",
+            "last_seen_at": None,
+            "identifier": None,
+        }
+    if not session:
+        return {
+            "state": "offline",
+            "label": "Not connected",
+            "detail": "No open RADIUS accounting session",
+            "last_seen_at": None,
+            "identifier": None,
+        }
+
+    last_seen_at = session.last_update_at or session.session_start or session.created_at
+    last_seen_utc = last_seen_at
+    if last_seen_utc and last_seen_utc.tzinfo is None:
+        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
+    is_fresh = bool(
+        last_seen_utc
+        and last_seen_utc
+        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
+    )
+    return {
+        "state": "connected" if is_fresh else "stale",
+        "label": "Connected" if is_fresh else "Last seen",
+        "detail": "Open RADIUS accounting session"
+        if is_fresh
+        else "Open session has stale accounting updates",
+        "last_seen_at": last_seen_at,
+        "identifier": session.framed_ip_address or session.session_id,
+    }
+
+
+def _build_network_connection_snapshot(
+    db: Session, subscriptions: list[Subscription]
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    sub_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
+    sessions_by_sub: dict[UUID, RadiusAccountingSession] = {}
+    if sub_ids:
+        rows = (
+            db.query(RadiusAccountingSession)
+            .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
+            .filter(RadiusAccountingSession.session_end.is_(None))
+            .order_by(
+                RadiusAccountingSession.subscription_id.asc(),
+                RadiusAccountingSession.last_update_at.desc().nullslast(),
+                RadiusAccountingSession.session_start.desc().nullslast(),
+                RadiusAccountingSession.created_at.desc(),
+            )
+            .all()
+        )
+        for row in rows:
+            if row.subscription_id and row.subscription_id not in sessions_by_sub:
+                sessions_by_sub[row.subscription_id] = row
+
+    by_subscription: dict[str, dict[str, object]] = {}
     for sub in subscriptions:
+        by_subscription[str(sub.id)] = _connection_status_for_session(
+            sub,
+            sessions_by_sub.get(sub.id),
+        )
+
+    connected = [
+        status for status in by_subscription.values() if status["state"] == "connected"
+    ]
+    stale = [
+        status for status in by_subscription.values() if status["state"] == "stale"
+    ]
+    active_count = sum(
+        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+    )
+    if connected:
+        label = "Connected"
+        state = "connected"
+        detail = f"{len(connected)} active service session"
+        if len(connected) != 1:
+            detail += "s"
+    elif stale:
+        label = "Last seen"
+        state = "stale"
+        detail = "Open session has stale accounting updates"
+    else:
+        label = "Not connected"
+        state = "offline"
+        detail = "No open RADIUS accounting session"
+
+    return (
+        {
+            "state": state,
+            "label": label,
+            "detail": detail,
+            "connected_count": len(connected),
+            "active_count": active_count,
+        },
+        by_subscription,
+    )
+
+
+def _active_additional_routes_by_subscriber(
+    db: Session, account_ids: list[UUID]
+) -> dict[UUID, list[dict[str, object]]]:
+    if not account_ids:
+        return {}
+    rows = (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id.in_(account_ids))
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .order_by(SubscriberAdditionalRoute.cidr.asc())
+        .all()
+    )
+    routes_by_subscriber: dict[UUID, list[dict[str, object]]] = {}
+    for route in rows:
+        routes_by_subscriber.setdefault(route.subscriber_id, []).append(
+            {
+                "cidr": route.cidr,
+                "metric": route.metric,
+            }
+        )
+    return routes_by_subscriber
+
+
+def _build_network_access_cards(
+    subscriptions: list,
+    connection_by_subscription: dict[str, dict[str, object]],
+    additional_routes_by_subscriber: dict[UUID, list[dict[str, object]]] | None = None,
+) -> list[dict]:
+    """Build network access info cards from subscriptions with live access."""
+    cards = []
+    additional_routes_by_subscriber = additional_routes_by_subscriber or {}
+    for sub in subscriptions:
+        raw_status = getattr(sub, "status", None)
+        status_value = getattr(raw_status, "value", None)
+        status = str(
+            status_value if status_value is not None else raw_status or "unknown"
+        )
+        if status == SubscriptionStatus.disabled.value:
+            continue
         if not sub.login and not sub.ipv4_address:
             continue
+        sub_id = str(sub.id)
         nas = getattr(sub, "provisioning_nas_device", None)
         pop_site = getattr(nas, "pop_site", None) if nas else None
         cards.append(
             {
-                "subscription_id": str(sub.id),
+                "subscription_id": sub_id,
                 "offer_name": sub.offer.name if sub.offer else "Subscription",
-                "status": sub.status.value if sub.status else "unknown",
+                "status": status,
+                "connection_status": connection_by_subscription.get(sub_id, {}),
                 "login": sub.login,
                 "ipv4_address": sub.ipv4_address,
+                "additional_routes": additional_routes_by_subscriber.get(
+                    sub.subscriber_id, []
+                )
+                if status == SubscriptionStatus.active.value
+                else [],
                 "ipv6_address": getattr(sub, "ipv6_address", None),
                 "mac_address": getattr(sub, "mac_address", None),
                 "nas_name": nas.name if nas else None,
@@ -1234,11 +1454,25 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         customer_user_access = {"error": str(exc)}
 
     pppoe_access = _build_pppoe_access_snapshot(db, account_ids)
-    network_access_cards = _build_network_access_cards(subscriptions)
-    nin_verification = (
-        db.query(SubscriberNINVerification)
-        .filter(SubscriberNINVerification.subscriber_id == customer.id)
-        .order_by(SubscriberNINVerification.created_at.desc())
+    network_connection_status, connection_by_subscription = (
+        _build_network_connection_snapshot(db, subscriptions)
+    )
+    additional_routes_by_subscriber = _active_additional_routes_by_subscriber(
+        db, account_ids
+    )
+    network_access_cards = _build_network_access_cards(
+        subscriptions,
+        connection_by_subscription,
+        additional_routes_by_subscriber,
+    )
+    pending_location_request = (
+        db.query(CustomerLocationChangeRequest)
+        .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)
+        .filter(
+            CustomerLocationChangeRequest.status
+            == CustomerLocationChangeRequestStatus.pending
+        )
+        .order_by(CustomerLocationChangeRequest.created_at.desc())
         .first()
     )
 
@@ -1267,10 +1501,10 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "customer_user_access": customer_user_access,
         "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
+        "network_connection_status": network_connection_status,
+        "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
-        "nin_verification": nin_verification,
-        "nin_verified": bool((customer.metadata_ or {}).get("nin_verified")),
-        "nin_verification_statuses": NINVerificationStatus,
+        "pending_location_request": pending_location_request,
         **relationship_data,
     }
 

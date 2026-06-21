@@ -13,6 +13,7 @@ import '../features/auth/mfa_screen.dart';
 import '../features/auth/profile_screen.dart';
 import '../features/auth/reset_password_screen.dart';
 import '../features/auth/sessions_screen.dart';
+import '../features/profile/contacts_screen.dart';
 import '../features/profile/service_location_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
 import '../features/billing/invoices_screen.dart';
@@ -29,6 +30,7 @@ import '../features/reseller/reseller_billing_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
 import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
+import '../features/reseller/reseller_payment_methods_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
 import '../features/reseller/reseller_revenue_screen.dart';
 import '../features/reseller/reseller_service_requests_screen.dart';
@@ -139,7 +141,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       // shell and keeps the bottom bar.
       GoRoute(
         path: '/topup',
-        builder: (_, __) => const TopUpScreen(),
+        // `extra == true` (passed by "Add card") pre-enables the Paystack
+        // "Save this card" toggle so a top-up doubles as saving a card.
+        builder: (_, state) =>
+            TopUpScreen(saveCardInitial: state.extra == true),
       ),
       GoRoute(
         path: '/wallet',
@@ -183,6 +188,16 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'profile',
             builder: (_, __) => const ResellerProfileScreen(),
+          ),
+          GoRoute(
+            path: 'payment-methods',
+            builder: (_, __) => const ResellerPaymentMethodsScreen(),
+          ),
+          // Reuses the customer Contacts screen: /me/contacts is self-scoped
+          // and works for reseller users (they're Subscribers too).
+          GoRoute(
+            path: 'contacts',
+            builder: (_, __) => const ContactsScreen(),
           ),
           GoRoute(
             path: 'revenue',
@@ -314,6 +329,10 @@ final routerProvider = Provider<GoRouter>((ref) {
                 GoRoute(
                   path: 'service-location',
                   builder: (_, __) => const ServiceLocationScreen(),
+                ),
+                GoRoute(
+                  path: 'contacts',
+                  builder: (_, __) => const ContactsScreen(),
                 ),
               ],
             ),

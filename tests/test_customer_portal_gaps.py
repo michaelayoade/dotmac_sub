@@ -476,6 +476,35 @@ class TestPlanChangeUiHelpers:
         assert status["usage_gb"] == 40.0
         assert status["usage_pct"] == 50.0
 
+    def test_get_fup_status_ignores_unlimited_offer_fup_rules(
+        self, db_session, subscription, catalog_offer
+    ) -> None:
+        from app.models.fup import FupAction, FupDataUnit, FupPolicy, FupRule
+        from app.services.customer_portal_flow_services import _get_fup_status
+
+        catalog_offer.plan_family = "unlimited"
+        subscription.offer_id = catalog_offer.id
+        policy = FupPolicy(offer_id=catalog_offer.id, is_active=True)
+        db_session.add(policy)
+        db_session.flush()
+        db_session.add(
+            FupRule(
+                policy_id=policy.id,
+                name="stale-unlimited-fup",
+                sort_order=1,
+                threshold_amount=100,
+                threshold_unit=FupDataUnit.gb,
+                action=FupAction.reduce_speed,
+            )
+        )
+        db_session.commit()
+
+        status = _get_fup_status(
+            db_session, str(catalog_offer.id), str(subscription.id)
+        )
+
+        assert status is None
+
     def test_get_fup_status_prefers_usage_records_over_bandwidth_estimate(
         self, db_session, subscription, catalog_offer
     ) -> None:
@@ -831,6 +860,21 @@ class TestAdminUsageTemplateDefaults:
 
         assert "{% set usage_records_default_view = 'chart' %}" in template
 
+    def test_admin_stats_configures_direct_mikrotik_live_read(self) -> None:
+        stats_panel = Path("templates/admin/customers/_stats_panel.html").read_text(
+            encoding="utf-8"
+        )
+        usage_content = Path("templates/customer/usage/_content.html").read_text(
+            encoding="utf-8"
+        )
+
+        assert "/api/v1/bandwidth/mikrotik-live/" in stats_panel
+        assert "bandwidth_chart_direct_live_endpoint" in stats_panel
+        assert "directLiveEndpoint" in usage_content
+        assert "Live from MikroTik" in Path("static/js/bandwidth-chart.js").read_text(
+            encoding="utf-8"
+        )
+
 
 class TestPortalNotificationsPage:
     def test_notifications_page_merges_event_queue_and_customer_notification_events(
@@ -1064,7 +1108,8 @@ class TestCustomerProfileNotifications:
             updated = update_customer_profile(
                 db_session,
                 subscriber_id=str(subscriber.id),
-                name="Updated Customer",
+                first_name="Updated",
+                last_name="Customer",
                 email="updated@example.com",
                 phone="+2348000000012",
                 billing_notifications=False,

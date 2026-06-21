@@ -78,7 +78,7 @@ def test_queue_bulk_message_from_selected_scope_renders_template_and_skips_missi
         name="Outage SMS",
         code="outage_sms",
         channel=NotificationChannel.sms,
-        body="Hello {{customer_name}} on {{account_number}}",
+        body="Hello {customer_name} on {account_number}",
         is_active=True,
     )
     db_session.add_all([reachable, missing_phone, template])

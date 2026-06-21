@@ -35,7 +35,8 @@
             <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">₦{{ min_topup }} – ₦{{ '%,d'|format(max_topup) }} per top-up.</p>
             <div class="mt-4">
                 <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="wallet-amount">Amount (₦)</label>
-                <input type="number" id="wallet-amount" x-model="amount" min="{{ min_topup }}" max="{{ max_topup }}" step="50"
+                <input type="number" id="wallet-amount" x-model="amount" min="{{ min_topup }}" max="{{ max_topup }}" step="0.01"
+                       oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
                        class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                 <p class="mt-2 text-sm text-rose-600" x-text="fundError" x-show="fundError"></p>
                 <button type="button" x-on:click="fund()" :disabled="processing"
@@ -54,16 +55,20 @@
             {% else %}
             <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">No outstanding balance — payments become account credit.</p>
             {% endif %}
-            <form method="post" action="/portal/wallet/pay-bill" class="mt-4 space-y-4">
+            <form method="post" action="/portal/wallet/pay-bill" class="mt-4 space-y-4"
+                  x-data="{ billKey: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) }"
+                  @submit="$el.querySelector('button[type=submit]').disabled = true">
                 {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="idempotency_key" :value="billKey">
                 <div>
                     <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="bill-amount">Amount (₦)</label>
-                    <input type="number" id="bill-amount" name="amount" min="1" step="0.01"
+                    <input type="number" id="bill-amount" name="amount" min="0.01" step="0.01" required
+                           oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
                            value="{{ '%.2f'|format(open_bill_due) if open_bill_due > 0 else '' }}"
                            class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                 </div>
                 <button type="submit"
-                        class="inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700">
+                        class="inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
                     Pay from wallet
                 </button>
             </form>
@@ -120,7 +125,11 @@ function walletPage() {
             const self = this;
             const value = parseFloat(this.amount);
             if (!value || value <= 0) {
-                this.fundError = 'Enter an amount to fund.';
+                this.fundError = 'Enter an amount greater than ₦0 to fund.';
+                return;
+            }
+            if (Math.round(value * 100) !== value * 100) {
+                this.fundError = 'Amount can have at most 2 decimal places.';
                 return;
             }
             this.fundError = '';

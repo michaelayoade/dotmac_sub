@@ -823,6 +823,19 @@ def _web_auth_refresh_candidate(request: Request) -> bool:
     return any(path.startswith(prefix) for prefix in _WEB_AUTH_REFRESH_PATHS)
 
 
+async def _terminated_request_response(
+    request: Request, method: str, path: str
+) -> Response:
+    disconnected = await request.is_disconnected()
+    logger.info(
+        "No response returned from downstream app; request terminated (%s): %s %s",
+        "client_disconnected" if disconnected else "reload_or_shutdown",
+        method,
+        path,
+    )
+    return Response(status_code=204)
+
+
 @app.middleware("http")
 async def web_auth_refresh_middleware(request: Request, call_next):
     """Refresh expired web access cookies before protected routes handle the request."""
@@ -1061,16 +1074,9 @@ async def csrf_middleware(request: Request, call_next):
         response = await call_next(request)
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
-            disconnected = await request.is_disconnected()
             # During client disconnects and dev auto-reload windows Starlette may not
             # produce a downstream response; treat it as a benign terminated request.
-            logger.info(
-                "No response returned from downstream app; request terminated (%s): %s %s",
-                "client_disconnected" if disconnected else "reload_or_shutdown",
-                method,
-                path,
-            )
-            return Response(status_code=204)
+            return await _terminated_request_response(request, method, path)
         raise
 
     # Set CSRF cookie on responses if not present
@@ -1152,7 +1158,14 @@ async def view_as_readonly_middleware(request: Request, call_next):
                     },
                     status_code=403,
                 )
-    return await call_next(request)
+    try:
+        return await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return await _terminated_request_response(
+                request, request.method.upper(), request.url.path
+            )
+        raise
 
 
 @app.middleware("http")
@@ -1183,7 +1196,14 @@ async def login_rate_limit_middleware(request: Request, call_next):
 async def security_headers_middleware(request: Request, call_next):
     """Emit baseline security headers from the app itself, independent of the
     reverse proxy (the deployed proxy config can drift from the repo)."""
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return await _terminated_request_response(
+                request, request.method.upper(), request.url.path
+            )
+        raise
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")

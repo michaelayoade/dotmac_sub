@@ -832,6 +832,7 @@ class ZabbixClient:
         host_id: str | None = None,
         limit: int = 1000,
         host_ids: list[str] | None = None,
+        group_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         method = "host.get"
         params: dict[str, Any] = {
@@ -860,6 +861,10 @@ class ZabbixClient:
             params["hostids"] = list(host_ids)
         elif host_id:
             params["hostids"] = [host_id]
+        # ``group_ids`` scopes the fetch to specific host groups (e.g. the
+        # ``*BTS*`` groups the topology reconcile cares about).
+        if group_ids:
+            params["groupids"] = list(group_ids)
         payload = {
             "jsonrpc": "2.0",
             "method": method,

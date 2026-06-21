@@ -3,6 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -46,6 +47,7 @@ from app.schemas.billing import (
 )
 from app.services import settings_spec
 from app.services.billing._common import (
+    _assert_invoice_allocatable,
     _recalculate_invoice_totals,
     _resolve_collection_account,
     _resolve_payment_channel,
@@ -72,15 +74,50 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
+# Allowed payment status transitions for the gateway/webhook-driven
+# ``mark_status`` path. Gateways re-deliver and deliver out of order, so a late
+# ``charge.success`` after a refund, or a late ``charge.failed`` after success,
+# must NOT regress committed financial state. ``refunded``/``canceled`` are
+# sinks; ``succeeded`` cannot go to ``failed`` here (use ``reverse_payment``).
+_ALLOWED_PAYMENT_TRANSITIONS: dict[PaymentStatus, set[PaymentStatus]] = {
+    PaymentStatus.pending: {
+        PaymentStatus.succeeded,
+        PaymentStatus.failed,
+        PaymentStatus.canceled,
+    },
+    PaymentStatus.failed: {PaymentStatus.succeeded, PaymentStatus.canceled},
+    PaymentStatus.succeeded: {
+        PaymentStatus.refunded,
+        PaymentStatus.partially_refunded,
+    },
+    PaymentStatus.partially_refunded: {PaymentStatus.refunded},
+    PaymentStatus.refunded: set(),
+    PaymentStatus.canceled: set(),
+}
+
+
 class PaymentMethods(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentMethodCreate):
-        _validate_account(db, str(payload.account_id))
+        # Exactly one owner: account (customer subscriber) or reseller org
+        # (Layer 3 #329). Validate the account only when account-owned.
+        if (payload.account_id is None) == (payload.reseller_id is None):
+            raise HTTPException(
+                status_code=400,
+                detail="Exactly one of account_id or reseller_id is required",
+            )
+        if payload.account_id is not None:
+            _validate_account(db, str(payload.account_id))
         if payload.payment_channel_id:
             _validate_payment_channel(db, str(payload.payment_channel_id))
         if payload.is_default:
+            owner_filter = (
+                PaymentMethod.account_id == payload.account_id
+                if payload.account_id is not None
+                else PaymentMethod.reseller_id == payload.reseller_id
+            )
             db.query(PaymentMethod).filter(
-                PaymentMethod.account_id == payload.account_id,
+                owner_filter,
                 PaymentMethod.is_default.is_(True),
             ).update({"is_default": False})
         data = payload.model_dump()
@@ -143,15 +180,23 @@ class PaymentMethods(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Payment method not found")
         data = payload.model_dump(exclude_unset=True)
         account_id = data.get("account_id", method.account_id)
-        _validate_account(db, str(account_id))
+        # Reseller-org-owned methods (Layer 3 #329) have no account_id; only
+        # validate/scope by account when account-owned, else by reseller.
+        if account_id is not None:
+            _validate_account(db, str(account_id))
         if "payment_channel_id" in data:
             _validate_payment_channel(
                 db,
                 str(data["payment_channel_id"]) if data["payment_channel_id"] else None,
             )
         if data.get("is_default"):
+            owner_filter = (
+                PaymentMethod.account_id == account_id
+                if account_id is not None
+                else PaymentMethod.reseller_id == method.reseller_id
+            )
             db.query(PaymentMethod).filter(
-                PaymentMethod.account_id == account_id,
+                owner_filter,
                 PaymentMethod.id != method.id,
                 PaymentMethod.is_default.is_(True),
             ).update({"is_default": False})
@@ -407,6 +452,23 @@ def _record_unallocated_payment_credit(
     _create_payment_ledger_entry(db, payment, None, remaining)
 
 
+def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
+    """Recompute invoice totals, restore eligible service, then derive account status."""
+    _recalculate_invoice_totals(db, invoice)
+
+    if invoice.status == InvoiceStatus.paid:
+        from app.services import collections as collections_service
+
+        if not collections_service.has_overdue_balance(db, str(invoice.account_id)):
+            collections_service.restore_account_services(
+                db, str(invoice.account_id), invoice_id=str(invoice.id)
+            )
+
+    from app.services.account_lifecycle import compute_account_status
+
+    compute_account_status(db, str(invoice.account_id))
+
+
 def _create_refund_ledger_entry(
     db: Session,
     payment: Payment,
@@ -620,6 +682,7 @@ class Payments(ListResponseMixin):
                     status_code=400, detail="Invoice does not belong to account"
                 )
             _validate_invoice_currency(invoice, payment.currency)
+            _assert_invoice_allocatable(invoice)
 
             # Cap the allocation at the invoice's outstanding balance so an
             # overpayment cannot over-allocate (allocations summing above the
@@ -763,6 +826,7 @@ class Payments(ListResponseMixin):
                 invoice = get_by_id(db, Invoice, alloc.invoice_id)
                 if invoice:
                     _validate_invoice_currency(invoice, data.get("currency"))
+                    _assert_invoice_allocatable(invoice)
         payment = Payment(**data)
         db.add(payment)
         db.flush()
@@ -796,13 +860,7 @@ class Payments(ListResponseMixin):
         for invoice_id in invoices_to_recalculate:
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
-                _recalculate_invoice_totals(db, invoice)
-                if invoice.status == InvoiceStatus.paid:
-                    from app.services import collections as collections_service
-
-                    collections_service.restore_account_services(
-                        db, str(invoice.account_id), invoice_id=str(invoice.id)
-                    )
+                _finalize_invoice_payment_effects(db, invoice)
         db.commit()
         db.refresh(payment)
 
@@ -825,7 +883,196 @@ class Payments(ListResponseMixin):
                 invoice_id=allocation_invoice_id,
             )
 
+        # The payment_received handlers (resolve dunning case, restore service)
+        # run inline on this session with commit=False. The payment itself is
+        # already committed above; commit again so those resolve/restore
+        # mutations are durable instead of left pending for the caller to drop.
+        db.commit()
         return payment
+
+    @staticmethod
+    def allocate_consolidated_balance_to_subscriber(
+        db: Session, billing_account_id: str, subscriber_id: str
+    ) -> dict:
+        """Allocate a reseller billing account's unallocated balance to one subscriber.
+
+        The credit is consumed from the billing account's existing unallocated
+        consolidated payments, oldest first, and applied to the selected
+        subscriber's oldest open invoices.
+        """
+        from app.models.billing import BillingAccount
+        from app.models.subscriber import Subscriber
+        from app.services.billing.billing_accounts import BillingAccounts
+
+        ba = (
+            db.query(BillingAccount)
+            .filter(BillingAccount.id == billing_account_id)
+            .with_for_update()
+            .first()
+        )
+        if not ba:
+            raise HTTPException(status_code=404, detail="Billing account not found")
+        available_balance = round_money(to_decimal(ba.balance))
+        if available_balance <= 0:
+            raise HTTPException(
+                status_code=400, detail="No unallocated reseller funds available"
+            )
+
+        subscriber = get_by_id(db, Subscriber, subscriber_id)
+        if subscriber is None or str(subscriber.reseller_id) != str(ba.reseller_id):
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+
+        invoices = (
+            db.query(Invoice)
+            .filter(Invoice.account_id == subscriber.id)
+            .filter(Invoice.is_active.is_(True))
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
+            .filter(Invoice.balance_due > 0)
+            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
+            .all()
+        )
+        if not invoices:
+            raise HTTPException(
+                status_code=400, detail="Subscriber has no open invoices"
+            )
+
+        allocated_sq = (
+            db.query(
+                PaymentAllocation.payment_id.label("payment_id"),
+                func.coalesce(
+                    func.sum(PaymentAllocation.amount), Decimal("0.00")
+                ).label("allocated"),
+            )
+            .group_by(PaymentAllocation.payment_id)
+            .subquery()
+        )
+        payment_result_rows = (
+            db.query(
+                Payment,
+                func.coalesce(allocated_sq.c.allocated, Decimal("0.00")).label(
+                    "allocated"
+                ),
+            )
+            .outerjoin(allocated_sq, allocated_sq.c.payment_id == Payment.id)
+            .filter(Payment.billing_account_id == ba.id)
+            .filter(Payment.is_active.is_(True))
+            .filter(Payment.status == PaymentStatus.succeeded)
+            .order_by(Payment.paid_at.asc().nulls_last(), Payment.created_at.asc())
+            .all()
+        )
+        payment_rows: list[tuple[Payment, Decimal]] = [
+            (payment, cast(Decimal, allocated))
+            for payment, allocated in payment_result_rows
+        ]
+        payment_backing_available = round_money(
+            sum(
+                (
+                    round_money(to_decimal(payment.amount) - to_decimal(allocated))
+                    for payment, allocated in payment_rows
+                    if payment.currency == ba.currency
+                ),
+                Decimal("0.00"),
+            )
+        )
+        if payment_backing_available < available_balance:
+            backing_amount = round_money(available_balance - payment_backing_available)
+            backing_payment = Payment(
+                billing_account_id=ba.id,
+                amount=backing_amount,
+                currency=ba.currency,
+                status=PaymentStatus.succeeded,
+                memo="Reseller unallocated balance credit",
+                paid_at=datetime.now(UTC),
+            )
+            db.add(backing_payment)
+            db.flush()
+            payment_rows.append((backing_payment, Decimal("0.00")))
+
+        remaining_balance = available_balance
+        total_allocated = Decimal("0.00")
+        invoice_ids: set = set()
+        allocations_by_payment: dict[Payment, list[PaymentAllocation]] = {}
+        payment_remaining_by_id = {
+            payment.id: round_money(to_decimal(payment.amount) - to_decimal(allocated))
+            for payment, allocated in payment_rows
+        }
+
+        for invoice in invoices:
+            invoice_remaining = round_money(to_decimal(invoice.balance_due))
+            if invoice_remaining <= 0:
+                continue
+
+            for payment, _already_allocated in payment_rows:
+                if remaining_balance <= 0 or invoice_remaining <= 0:
+                    break
+                if payment.currency != invoice.currency:
+                    continue
+
+                payment_available = payment_remaining_by_id.get(
+                    payment.id, Decimal("0.00")
+                )
+                if payment_available <= 0:
+                    continue
+
+                amount = min(remaining_balance, invoice_remaining, payment_available)
+                allocation, applied_amount = _apply_payment_allocation(
+                    db,
+                    payment,
+                    invoice,
+                    amount,
+                    memo="Allocated from reseller unallocated funds",
+                )
+                allocations_by_payment.setdefault(payment, []).append(allocation)
+                total_allocated = round_money(total_allocated + applied_amount)
+                remaining_balance = round_money(remaining_balance - applied_amount)
+                invoice_remaining = round_money(invoice_remaining - applied_amount)
+                payment_remaining_by_id[payment.id] = round_money(
+                    payment_available - applied_amount
+                )
+                invoice_ids.add(invoice.id)
+
+            if remaining_balance <= 0:
+                break
+
+        if total_allocated <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No eligible unallocated reseller funds could be applied",
+            )
+        if total_allocated > available_balance:
+            raise HTTPException(
+                status_code=400, detail="Allocation exceeds unallocated reseller funds"
+            )
+
+        db.flush()
+        for invoice_id in invoice_ids:
+            recalculated_invoice = get_by_id(db, Invoice, invoice_id)
+            if recalculated_invoice:
+                _finalize_invoice_payment_effects(db, recalculated_invoice)
+
+        BillingAccounts.debit_balance(db, str(ba.id), total_allocated)
+        db.commit()
+
+        for payment, allocations in allocations_by_payment.items():
+            _emit_consolidated_payment_events(db, payment, allocations)
+
+        return {
+            "subscriber_id": str(subscriber.id),
+            "allocated_total": total_allocated,
+            "currency": ba.currency,
+            "remaining_unallocated_balance": round_money(
+                available_balance - total_allocated
+            ),
+            "invoice_count": len(invoice_ids),
+        }
 
     @staticmethod
     def get(db: Session, payment_id: str):
@@ -929,13 +1176,7 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
-                if invoice.status == InvoiceStatus.paid:
-                    from app.services import collections as collections_service
-
-                    collections_service.restore_account_services(
-                        db, str(invoice.account_id), invoice_id=str(invoice.id)
-                    )
+                _finalize_invoice_payment_effects(db, invoice)
         db.commit()
         db.refresh(payment)
         return payment
@@ -950,7 +1191,7 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
         db.commit()
 
     @staticmethod
@@ -962,6 +1203,22 @@ class Payments(ListResponseMixin):
         normalized = validate_enum(status, PaymentStatus, "status")
         if not normalized:
             raise HTTPException(status_code=400, detail="Invalid status")
+        # Guard against out-of-order / replayed gateway webhooks regressing
+        # committed financial state (e.g. success after refunded, late failed
+        # after success). An illegal transition is a no-op that still returns
+        # the payment so the webhook gets a 200 and stops retrying.
+        if (
+            previous_status != normalized
+            and normalized
+            not in _ALLOWED_PAYMENT_TRANSITIONS.get(previous_status, set())
+        ):
+            logger.warning(
+                "Ignoring illegal payment transition %s -> %s for payment %s",
+                previous_status.value if previous_status else None,
+                normalized.value,
+                payment_id,
+            )
+            return payment
         payment.status = normalized
         if normalized == PaymentStatus.succeeded:
             payment.paid_at = datetime.now(UTC)
@@ -969,7 +1226,7 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
         if normalized == PaymentStatus.succeeded:
             # Deferred import to avoid circular dependency
             from app.services import collections as collections_service
@@ -1018,6 +1275,9 @@ class Payments(ListResponseMixin):
                     account_id=payment.account_id,
                     invoice_id=allocation_invoice_id,
                 )
+            # Persist the inline payment_received handlers' resolve/restore work
+            # (run with commit=False); the payment is already committed above.
+            db.commit()
 
         return payment
 
@@ -1041,6 +1301,7 @@ class PaymentAllocations(ListResponseMixin):
                 status_code=400, detail="Invoice does not belong to account"
             )
         _validate_invoice_currency(invoice, payment.currency)
+        _assert_invoice_allocatable(invoice)
         # Idempotency check: return existing allocation for same (payment_id, invoice_id)
         existing = (
             db.query(PaymentAllocation)
@@ -1066,13 +1327,7 @@ class PaymentAllocations(ListResponseMixin):
         db.add(allocation)
         db.flush()
         _create_payment_ledger_entry(db, payment, invoice, allocation.amount)
-        _recalculate_invoice_totals(db, invoice)
-        if invoice.status == InvoiceStatus.paid:
-            from app.services import collections as collections_service
-
-            collections_service.restore_account_services(
-                db, str(invoice.account_id), invoice_id=str(invoice.id)
-            )
+        _finalize_invoice_payment_effects(db, invoice)
         db.commit()
         db.refresh(allocation)
         return allocation
@@ -1119,7 +1374,7 @@ class PaymentAllocations(ListResponseMixin):
         allocation.is_active = False
         if invoice:
             db.flush()
-            _recalculate_invoice_totals(db, invoice)
+            _finalize_invoice_payment_effects(db, invoice)
         db.commit()
 
 
@@ -1398,6 +1653,12 @@ class Refunds:
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
+        # Lock the payment row so the "sum already-refunded, then add" below is
+        # serialized. Without it two concurrent refunds both read the same
+        # already_refunded total, both compute the full refundable amount, and
+        # both insert a refund — refunding up to N× the captured amount. The
+        # lock forces the second caller to re-read the first's committed refund.
+        db.refresh(payment, with_for_update=True)
 
         if payment.status == PaymentStatus.refunded:
             raise HTTPException(
@@ -1422,9 +1683,20 @@ class Refunds:
             )
             .scalar()
         )
-        refundable_amount = payment.amount - already_refunded
+        already_refunded = round_money(to_decimal(already_refunded))
+        refundable_amount = round_money(to_decimal(payment.amount) - already_refunded)
 
-        amount_to_refund = refund_amount or refundable_amount
+        # ``refund_amount or ...`` would treat 0 as "refund everything"; be
+        # explicit and reject non-positive amounts (incl. a negative that would
+        # otherwise pass the upper-bound check and INCREASE the payment).
+        if refund_amount is None:
+            amount_to_refund = refundable_amount
+        else:
+            amount_to_refund = round_money(to_decimal(refund_amount))
+        if amount_to_refund <= 0:
+            raise HTTPException(
+                status_code=400, detail="Refund amount must be positive"
+            )
         if amount_to_refund > refundable_amount:
             raise HTTPException(
                 status_code=400,
@@ -1451,7 +1723,7 @@ class Refunds:
                 if is_full_refund:
                     db.delete(allocation)
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
 
         # Create credit note if requested
         if create_credit_note and payment.allocations:
@@ -1573,7 +1845,7 @@ class Refunds:
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
                 db.flush()
-                _recalculate_invoice_totals(db, invoice)
+                _finalize_invoice_payment_effects(db, invoice)
 
         db.commit()
         db.refresh(payment)

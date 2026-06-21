@@ -54,6 +54,15 @@ class Me {
     this.avatarUrl,
     this.emailVerified = false,
     this.phone,
+    this.dateOfBirth,
+    this.gender,
+    this.preferredContactMethod,
+    this.addressLine1,
+    this.addressLine2,
+    this.city,
+    this.region,
+    this.postalCode,
+    this.countryCode,
     this.locale,
     this.timezone,
     this.userType = 'customer',
@@ -69,6 +78,17 @@ class Me {
   final String? avatarUrl;
   final bool emailVerified;
   final String? phone;
+
+  /// ISO date string (yyyy-MM-dd) as returned by the API; null if unset.
+  final String? dateOfBirth;
+  final String? gender;
+  final String? preferredContactMethod;
+  final String? addressLine1;
+  final String? addressLine2;
+  final String? city;
+  final String? region;
+  final String? postalCode;
+  final String? countryCode;
   final String? locale;
   final String? timezone;
 
@@ -118,6 +138,15 @@ class Me {
         'avatar_url': avatarUrl,
         'email_verified': emailVerified,
         'phone': phone,
+        'date_of_birth': dateOfBirth,
+        'gender': gender,
+        'preferred_contact_method': preferredContactMethod,
+        'address_line1': addressLine1,
+        'address_line2': addressLine2,
+        'city': city,
+        'region': region,
+        'postal_code': postalCode,
+        'country_code': countryCode,
         'locale': locale,
         'timezone': timezone,
         'roles': roles,
@@ -133,6 +162,15 @@ class Me {
         avatarUrl: json['avatar_url'] as String?,
         emailVerified: json['email_verified'] as bool? ?? false,
         phone: json['phone'] as String?,
+        dateOfBirth: json['date_of_birth'] as String?,
+        gender: json['gender'] as String?,
+        preferredContactMethod: json['preferred_contact_method'] as String?,
+        addressLine1: json['address_line1'] as String?,
+        addressLine2: json['address_line2'] as String?,
+        city: json['city'] as String?,
+        region: json['region'] as String?,
+        postalCode: json['postal_code'] as String?,
+        countryCode: json['country_code'] as String?,
         locale: json['locale'] as String?,
         timezone: json['timezone'] as String?,
         userType: json['user_type'] as String? ?? 'customer',
