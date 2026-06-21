@@ -70,15 +70,39 @@ class Subscription {
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
-  /// When the service lapses: explicit end date, else the next billing date
-  /// (for prepaid this is effectively the expiry).
-  DateTime? get expiresAt => endAt ?? nextBillingAt;
+  /// Whether the service has a date-based expiry at all. Postpaid bills in
+  /// arrears — it does NOT lapse on [nextBillingAt] (that's just the next
+  /// invoice date), so postpaid has no expiry unless a contract [endAt] is set.
+  /// Only prepaid validity (or an explicit contract end) is a real expiry.
+  bool get hasExpiry => endAt != null || isPrepaid;
 
-  /// Whole days until [expiresAt]; negative if already expired, null if unknown.
+  /// When the service lapses, or null when it has no date-based expiry (e.g.
+  /// postpaid). Explicit contract end wins over the prepaid validity date.
+  DateTime? get expiresAt => hasExpiry ? (endAt ?? nextBillingAt) : null;
+
+  /// Whole days until [expiresAt]; negative if already past, null when there is
+  /// no date-based expiry (postpaid) or it's unknown.
   int? get daysUntilExpiry {
     final e = expiresAt;
     if (e == null) return null;
     return e.difference(DateTime.now()).inDays;
+  }
+
+  /// Genuinely lapsed: a past expiry on a service that is NOT active. An active
+  /// service is never "expired" — `status` is the source of truth, and a
+  /// momentarily-stale billing date (e.g. a prepaid validity date the runner
+  /// hasn't advanced yet) must not override a running service.
+  bool get isExpired {
+    if (isActive) return false;
+    final d = daysUntilExpiry;
+    return d != null && d < 0;
+  }
+
+  /// Within the 3-day renewal-nudge window and not already past. False for
+  /// services without a date-based expiry (postpaid).
+  bool get expiresSoon {
+    final d = daysUntilExpiry;
+    return d != null && d >= 0 && d <= 3;
   }
 
   factory Subscription.fromJson(Map<String, dynamic> json) {

@@ -92,19 +92,22 @@ class DashboardScreen extends ConsumerWidget {
 
     // Expiry urgency: lift a renew prompt to the banner area when the current
     // service is within 3 days of lapsing (the payment banner takes priority).
+    // An *active* service is never "expired" — a momentarily-stale billing date
+    // must not nag a running service; genuine lapses surface via [isExpired]
+    // (a non-active current service). Postpaid has no date expiry at all.
     final daysLeft = currentService?.daysUntilExpiry;
     String? renewMessage;
-    if (currentService != null &&
-        needsPayment.isEmpty &&
-        daysLeft != null &&
-        daysLeft <= 3) {
+    if (currentService != null && needsPayment.isEmpty) {
       final name = currentService.displayName;
-      renewMessage = switch (daysLeft) {
-        < 0 => '$name has expired — renew now',
-        0 => '$name expires today — renew now',
-        1 => '$name expires tomorrow — renew now',
-        final d => '$name expires in $d days — renew now',
-      };
+      if (currentService.isExpired) {
+        renewMessage = '$name has expired — renew now';
+      } else if (daysLeft != null && daysLeft >= 0 && daysLeft <= 3) {
+        renewMessage = switch (daysLeft) {
+          0 => '$name expires today — renew now',
+          1 => '$name expires tomorrow — renew now',
+          final d => '$name expires in $d days — renew now',
+        };
+      }
     }
 
     // Connection status: an open RADIUS accounting session (no end) means the
@@ -198,7 +201,7 @@ class DashboardScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               _RenewBanner(
                 message: renewMessage,
-                expired: (daysLeft ?? 0) < 0,
+                expired: currentService?.isExpired ?? false,
                 // Straight to the pay/add-funds flow (renewal = top-up in the
                 // prepaid model), not the invoices list.
                 onTap: () => context.push('/topup'),
@@ -271,8 +274,10 @@ class DashboardScreen extends ConsumerWidget {
                     icon: Icons.hourglass_bottom_outlined,
                     label: 'Days left',
                     value: _daysLeftLabel(subList, currentService),
-                    // Urgent when expiring within 3 days or already expired.
-                    highlight: (currentService?.daysUntilExpiry ?? 99) <= 3,
+                    // Urgent when expiring within 3 days or genuinely expired
+                    // (never for an active service with a stale billing date).
+                    highlight: (currentService?.expiresSoon ?? false) ||
+                        (currentService?.isExpired ?? false),
                     onTap: () => context.go('/billing'),
                   ),
                 ),
@@ -349,10 +354,13 @@ class DashboardScreen extends ConsumerWidget {
 /// (urgency-worded) day count.
 String? _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
   if (subList == null) return null;
-  final days = service?.daysUntilExpiry;
+  if (service == null) return '—';
+  if (service.isExpired) return 'Expired';
+  final days = service.daysUntilExpiry;
   return switch (days) {
     null => '—',
-    < 0 => 'Expired',
+    // Active service with a stale billing date: not expired, just no countdown.
+    < 0 => '—',
     0 => 'Today',
     _ => '$days',
   };
@@ -797,13 +805,28 @@ class _CurrentServiceCard extends StatelessWidget {
     final s = service;
     final theme = Theme.of(context);
     final days = s.daysUntilExpiry;
-    final (expiryColor, expiryText) = switch (days) {
-      null => (theme.colorScheme.outline, null),
-      < 0 => (theme.colorScheme.error, 'Expired'),
-      0 => (theme.colorScheme.error, 'Expires today'),
-      <= 3 => (Colors.orange.shade800, '$days day${days == 1 ? '' : 's'} left'),
-      _ => (Colors.green.shade700, '$days days left'),
-    };
+    // The validity stat sits next to the IP address; it must never show a red
+    // "Expired" for a running (active) service, or it reads as "the IP expired".
+    final (expiryColor, expiryLabel, expiryText) = s.isExpired
+        ? (theme.colorScheme.error, 'Validity', 'Expired')
+        : switch (days) {
+            // Postpaid / no date expiry: show the next bill date, not a
+            // (meaningless) validity countdown.
+            null => s.nextBillingAt != null
+                ? (theme.colorScheme.outline, 'Next bill',
+                    Fmt.date(s.nextBillingAt))
+                : (theme.colorScheme.outline, null, null),
+            0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
+            // Active service with a momentarily-stale billing date: running, not
+            // expired — show nothing rather than alarm next to the IP.
+            < 0 => (theme.colorScheme.outline, null, null),
+            <= 3 => (
+                Colors.orange.shade800,
+                'Validity',
+                '$days day${days == 1 ? '' : 's'} left'
+              ),
+            _ => (Colors.green.shade700, 'Validity', '$days days left'),
+          };
 
     return Card(
       child: InkWell(
@@ -847,7 +870,7 @@ class _CurrentServiceCard extends StatelessWidget {
                     Expanded(
                       child: _MiniStat(
                         icon: Icons.schedule,
-                        label: 'Validity',
+                        label: expiryLabel ?? 'Validity',
                         value: expiryText,
                         color: expiryColor,
                       ),

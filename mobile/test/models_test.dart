@@ -185,6 +185,83 @@ void main() {
       expect(s.daysUntilExpiry! < 0, isTrue);
     });
 
+    test('postpaid never expires on next_billing_at (no false expiry)', () {
+      final s = Subscription.fromJson({
+        'id': 's3',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'active',
+        'billing_mode': 'postpaid',
+        'next_billing_at': '2020-01-01T00:00:00Z',
+      });
+      expect(s.hasExpiry, isFalse);
+      expect(s.expiresAt, isNull);
+      expect(s.daysUntilExpiry, isNull);
+      expect(s.isExpired, isFalse);
+      expect(s.expiresSoon, isFalse);
+    });
+
+    test('active service is never expired despite a stale billing date', () {
+      final s = Subscription.fromJson({
+        'id': 's4',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'active',
+        'billing_mode': 'prepaid',
+        'next_billing_at': '2020-01-01T00:00:00Z',
+      });
+      expect(s.daysUntilExpiry! < 0, isTrue);
+      expect(s.isExpired, isFalse, reason: 'active = running, not expired');
+    });
+
+    test('non-active prepaid with a past validity date is expired', () {
+      final s = Subscription.fromJson({
+        'id': 's5',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'suspended',
+        'billing_mode': 'prepaid',
+        'next_billing_at': '2020-01-01T00:00:00Z',
+      });
+      expect(s.isExpired, isTrue);
+    });
+
+    test('postpaid honours an explicit past contract end_at as expiry', () {
+      final s = Subscription.fromJson({
+        'id': 's6',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'stopped',
+        'billing_mode': 'postpaid',
+        'end_at': '2020-01-01T00:00:00Z',
+      });
+      expect(s.hasExpiry, isTrue);
+      expect(s.isExpired, isTrue);
+    });
+
+    test('expiresSoon only inside the 3-day window for date-based expiry', () {
+      final soon = Subscription.fromJson({
+        'id': 's7',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'active',
+        'billing_mode': 'prepaid',
+        'next_billing_at':
+            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+      });
+      expect(soon.expiresSoon, isTrue);
+      final postpaid = Subscription.fromJson({
+        'id': 's8',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'active',
+        'billing_mode': 'postpaid',
+        'next_billing_at':
+            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+      });
+      expect(postpaid.expiresSoon, isFalse);
+    });
+
     Subscription withStatus(String status) => Subscription(
           id: 's',
           accountId: 'a',

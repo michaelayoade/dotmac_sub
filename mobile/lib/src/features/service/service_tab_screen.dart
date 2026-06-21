@@ -238,10 +238,18 @@ class _ServiceHeader extends StatelessWidget {
             Text(details,
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.outline)),
-            if (days != null) ...[
+            // Only show a renewal line for a real, upcoming date-based expiry.
+            // An active service with a stale billing date isn't "due"; postpaid
+            // has no date expiry. Genuine lapses show "Expired".
+            if (service.isExpired) ...[
+              const SizedBox(height: 4),
+              Text('Expired',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.error)),
+            ] else if (days != null && days >= 0) ...[
               const SizedBox(height: 4),
               Text(
-                days <= 0 ? 'Renews today' : 'Renews in $days days',
+                days == 0 ? 'Renews today' : 'Renews in $days days',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.outline),
               ),
