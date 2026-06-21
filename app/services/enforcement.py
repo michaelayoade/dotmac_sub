@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
-from pyrad.packet import CoAACK, CoARequest, DisconnectACK, DisconnectRequest
+from pyrad.packet import CoARequest, DisconnectNAK, DisconnectRequest
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -118,19 +118,14 @@ def _mark_coa_supported(nas_id: Any) -> None:
 
 
 def reset_coa_cache(nas_id: Any = None) -> None:
-    """Clear the CoA negative cache (and cached fallback secrets). Pass a
-    nas_id to clear one entry, or call with no args to wipe everything
-    (e.g., after a NAS config change re-enables CoA)."""
+    """Clear the CoA negative cache. Pass a nas_id to clear one entry,
+    or call with no args to wipe everything (e.g., after a NAS config
+    change re-enables CoA)."""
     with _COA_CACHE_LOCK:
         if nas_id is None:
             _COA_NEG_CACHE.clear()
         else:
             _COA_NEG_CACHE.pop(nas_id, None)
-    with _COA_SECRET_CACHE_LOCK:
-        if nas_id is None:
-            _COA_SECRET_CACHE.clear()
-        else:
-            _COA_SECRET_CACHE.pop(str(nas_id), None)
 
 
 def _mikrotik_kill_enabled(db: Session) -> bool:
@@ -203,6 +198,28 @@ def _resolve_nas_device(
         if client and client.nas_device_id:
             return db.get(NasDevice, client.nas_device_id)
     return None
+
+
+def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
+    """Operative shared secret from the radius ``nas`` table — the value
+    FreeRADIUS actually authenticates this NAS with. Fallback for
+    nas_devices rows whose Fernet-encrypted secret no longer decrypts
+    (key-rotation drift, see 2026-06-11)."""
+    import os
+
+    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    if not dsn or not nas_ip:
+        return None
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT secret FROM nas WHERE nasname = %s LIMIT 1", (nas_ip,))
+            row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("radius nas-table secret lookup failed for %s: %s", nas_ip, exc)
+        return None
 
 
 # Per-process cache of CoA secrets resolved from the external FreeRADIUS
@@ -301,23 +318,15 @@ def _send_coa_disconnect(
     session_id: str | None,
 ) -> bool:
     if not _coa_enabled(db):
-        logger.info("CoA disabled by radius.coa_enabled — skipping disconnect.")
         return False
     if _coa_disabled_for_nas(nas_device.id):
-        logger.info(
-            "Skipping CoA disconnect for NAS %s (%s): negative-cached after "
-            "a recent timeout.",
-            nas_device.name,
-            nas_device.id,
+        logger.debug(
+            "Skipping CoA disconnect for NAS %s (negative-cached).", nas_device.id
         )
         return False
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
-        logger.warning(
-            "Missing NAS host for CoA disconnect (NAS %s / %s).",
-            nas_device.name,
-            nas_device.id,
-        )
+        logger.warning("Missing NAS host for CoA disconnect.")
         return False
     dict_path = _radius_dictionary_path(db)
     if not dict_path:
@@ -329,12 +338,16 @@ def _send_coa_disconnect(
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
     decrypted_secret = _resolve_coa_secret(db, nas_device)
-    if decrypted_secret is None:
+    if not decrypted_secret:
+        # Last resort: direct radius `nas` table lookup by NAS host IP via
+        # RADIUS_DB_DSN (the 2026-06-11 decrypt-drift hotfix path) — covers
+        # devices whose radius_client link is missing.
+        decrypted_secret = _nas_secret_from_radius_db(str(host))
+    if not decrypted_secret:
         logger.warning(
-            "No usable shared secret for CoA disconnect (NAS %s / %s) — "
-            "not on the device record nor in the external RADIUS nas table.",
-            nas_device.name,
-            nas_device.id,
+            "No usable shared secret for CoA disconnect to NAS %s "
+            "(nas_devices decrypt failed and no radius.nas row).",
+            host,
         )
         return False
     client = Client(
@@ -353,24 +366,20 @@ def _send_coa_disconnect(
     if session_id:
         req["Acct-Session-Id"] = session_id
     try:
-        reply = client.SendPacket(req)
-        # Any reply means the NAS speaks CoA — keep the negative cache clear.
+        response = client.SendPacket(req)
         _mark_coa_supported(nas_device.id)
-        # Only an ACK actually killed the session. A Disconnect-NAK (e.g. the
-        # AND-matched Framed-IP-Address is stale) must fall through to the
-        # SSH kick instead of counting as a kill.
-        reply_code = getattr(reply, "code", None)
-        if reply_code == DisconnectACK:
-            return True
-        logger.warning(
-            "CoA disconnect NAKed/unexpected reply (code=%s) for user=%s on "
-            "NAS %s (%s) — falling back to SSH kick.",
-            reply_code,
-            username,
-            nas_device.name,
-            nas_device.id,
-        )
-        return False
+        if getattr(response, "code", None) == DisconnectNAK:
+            # The NAS speaks CoA but refused the disconnect (e.g. stale
+            # Framed-IP-Address AND-match) — not a kill, so the SSH
+            # fallback must still run. Do NOT negative-cache the NAS.
+            logger.warning(
+                "Disconnect-NAK from NAS %s for session %s — session not "
+                "killed, falling back to SSH kick.",
+                nas_device.id,
+                session_id,
+            )
+            return False
+        return True
     except Timeout:
         _mark_coa_unsupported(nas_device.id)
         logger.warning(
@@ -424,20 +433,11 @@ def _send_coa_update(
     if not _coa_enabled(db):
         return False
     if _coa_disabled_for_nas(nas_device.id):
-        logger.info(
-            "Skipping CoA update for NAS %s (%s): negative-cached after a "
-            "recent timeout.",
-            nas_device.name,
-            nas_device.id,
-        )
+        logger.debug("Skipping CoA update for NAS %s (negative-cached).", nas_device.id)
         return False
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
-        logger.warning(
-            "Missing NAS host for CoA update (NAS %s / %s).",
-            nas_device.name,
-            nas_device.id,
-        )
+        logger.warning("Missing NAS host for CoA update.")
         return False
     dict_path = _radius_dictionary_path(db)
     if not dict_path:
@@ -448,11 +448,14 @@ def _send_coa_update(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
+    # Same secret resolution as the disconnect path: device record first,
+    # external radius nas table second (decrypt-drift devices have no
+    # usable local secret — bare decrypt_credential left profile-change
+    # CoA broken on those NAS).
     decrypted_secret = _resolve_coa_secret(db, nas_device)
     if decrypted_secret is None:
         logger.warning(
-            "No usable shared secret for CoA update (NAS %s / %s) — not on "
-            "the device record nor in the external RADIUS nas table.",
+            "No usable shared secret for CoA update (NAS %s / %s).",
             nas_device.name,
             nas_device.id,
         )
@@ -485,21 +488,10 @@ def _send_coa_update(
         except KeyError:
             pass
     try:
-        reply = client.SendPacket(req)
+        client.SendPacket(req)
         _mark_coa_supported(nas_device.id)
-        reply_code = getattr(reply, "code", None)
-        if reply_code != CoAACK:
-            logger.warning(
-                "CoA update NAKed/unexpected reply (code=%s) for user=%s on "
-                "NAS %s (%s).",
-                reply_code,
-                username,
-                nas_device.name,
-                nas_device.id,
-            )
-            return False
         logger.info(
-            "CoA update acknowledged for user=%s on NAS %s (profile=%s).",
+            "CoA update sent for user=%s on NAS %s (profile=%s).",
             username,
             nas_device.id,
             profile.name,
@@ -676,43 +668,136 @@ def _remove_mikrotik_address_list(
         return False
 
 
+def _open_radacct_sessions_for_username(username: str) -> list[dict]:
+    """Open sessions straight from radacct (the source of truth).
+
+    The imported RadiusAccountingSession rows lag behind radacct and their
+    subscription_id linkage is unreliable for multi-subscription
+    subscribers, so live sessions were silently missed on suspend/disable
+    (incident 2026-06-11).
+    """
+    import os
+
+    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    if not dsn or not username:
+        return []
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT acctsessionid, host(nasipaddress), "
+                    "host(framedipaddress) FROM radacct "
+                    "WHERE username = %s AND acctstoptime IS NULL",
+                    (username,),
+                )
+                rows = cur.fetchall()
+        return [
+            {"session_id": r[0], "nas_ip": r[1], "framed_ip": r[2] or None}
+            for r in rows
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("radacct open-session lookup failed for %s: %s", username, exc)
+        return []
+
+
+def _nas_device_by_ip(db: Session, nas_ip: str) -> NasDevice | None:
+    if not nas_ip:
+        return None
+    from sqlalchemy import or_
+
+    return (
+        db.query(NasDevice)
+        .filter(
+            or_(
+                NasDevice.nas_ip == nas_ip,
+                NasDevice.management_ip == nas_ip,
+                NasDevice.ip_address == nas_ip,
+            )
+        )
+        .filter(NasDevice.is_active.is_(True))
+        .first()
+    )
+
+
 def disconnect_subscription_sessions(
     db: Session, subscription_id: str, reason: str | None = None
 ) -> int:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    sessions = (
+
+    login = (subscription.login or "").strip()
+
+    # Primary source: open radacct sessions by login. Keyed by session_id
+    # to dedupe against the legacy app-side rows added below.
+    targets: dict[str, tuple[Any, str | None, str, str | None]] = {}
+    found = 0
+    for sess in _open_radacct_sessions_for_username(login):
+        found += 1
+        nas_device = _nas_device_by_ip(db, sess["nas_ip"])
+        if not nas_device:
+            logger.warning(
+                "No active NasDevice matches NAS IP %s (session %s, user %s)",
+                sess["nas_ip"],
+                sess["session_id"],
+                login,
+            )
+            continue
+        targets[sess["session_id"]] = (
+            nas_device,
+            login,
+            sess["session_id"],
+            sess["framed_ip"],
+        )
+
+    # Secondary source: app-side imported sessions (covers sessions whose
+    # login changed after they started).
+    legacy_sessions = (
         db.query(RadiusAccountingSession)
         .filter(RadiusAccountingSession.subscription_id == subscription.id)
         .filter(RadiusAccountingSession.session_end.is_(None))
         .filter(RadiusAccountingSession.status_type != AccountingStatus.stop)
         .all()
     )
-    if not sessions:
-        return 0
-    framed_ip = subscription.ipv4_address
-
-    # Group sessions by NAS so we open at most one SSH connection per device
-    # for the SSH-kick fallback, instead of one per session.
-    by_nas: dict[Any, list[tuple[Any, str | None, str]]] = {}
-    for session in sessions:
+    for session in legacy_sessions:
+        if session.session_id in targets:
+            continue
+        found += 1
         nas_device = _resolve_nas_device(db, session)
         if not nas_device:
             logger.warning(
-                "Cannot kick session %s for subscription %s: no NAS device "
-                "resolvable (nas_device_id=%s, radius_client_id=%s).",
+                "Open session %s for subscription %s has no NAS device — "
+                "cannot target a disconnect.",
                 session.session_id,
                 subscription_id,
-                session.nas_device_id,
-                session.radius_client_id,
             )
             continue
         credential = db.get(AccessCredential, session.access_credential_id)
-        username = credential.username if credential else None
-        by_nas.setdefault(nas_device.id, []).append(
-            (nas_device, username, session.session_id)
+        username = (credential.username if credential else None) or login or None
+        targets[session.session_id] = (
+            nas_device,
+            username,
+            session.session_id,
+            subscription.ipv4_address,
         )
+
+    if not targets:
+        if found:
+            logger.warning(
+                "Failed to disconnect any of %s open sessions for "
+                "subscription %s — no NAS device resolvable.",
+                found,
+                subscription_id,
+            )
+        return 0
+
+    # Group sessions by NAS so we open at most one SSH connection per device
+    # for the SSH-kick fallback, instead of one per session.
+    by_nas: dict[Any, list[tuple[Any, str | None, str, str | None]]] = {}
+    for entry in targets.values():
+        by_nas.setdefault(entry[0].id, []).append(entry)
 
     count = 0
     for entries in by_nas.values():
@@ -720,7 +805,7 @@ def disconnect_subscription_sessions(
         # Try CoA for every session first (UDP, no connection cost worth sharing).
         coa_ok: set[int] = set()
         needs_ssh_kick = False
-        for idx, (_, username, session_id) in enumerate(entries):
+        for idx, (_, username, session_id, framed_ip) in enumerate(entries):
             if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
                 coa_ok.add(idx)
                 count += 1
@@ -733,7 +818,7 @@ def disconnect_subscription_sessions(
         # Only open SSH if at least one session needs the fallback.
         try:
             with DeviceProvisioner.ssh_session(nas_device) as ssh:
-                for idx, (_, username, _session_id) in enumerate(entries):
+                for idx, (_, username, _session_id, _framed_ip) in enumerate(entries):
                     if idx in coa_ok:
                         continue
                     if _disconnect_mikrotik_session(db, nas_device, username, ssh=ssh):
@@ -751,23 +836,16 @@ def disconnect_subscription_sessions(
 
     if count:
         logger.info(
-            "Disconnected %s of %s active sessions for subscription %s (%s).",
+            "Disconnected %s active sessions for subscription %s (%s).",
             count,
-            len(sessions),
             subscription_id,
             reason or "no_reason",
         )
     else:
-        # An enforcement action found live sessions and killed none of them —
-        # the subscriber stays online until their session drops naturally.
-        # This must never be silent.
         logger.warning(
-            "Failed to disconnect any of %s active sessions for "
-            "subscription %s (%s) — subscriber remains online until "
-            "natural session end.",
-            len(sessions),
+            "Failed to disconnect any of %s open sessions for subscription %s.",
+            found,
             subscription_id,
-            reason or "no_reason",
         )
     return count
 
@@ -908,6 +986,85 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
                 exc,
             )
     return count
+
+
+def lift_fup_enforcement(db: Session, subscription_id: str) -> dict[str, Any]:
+    """Undo whatever FUP enforcement is active, then clear the FUP state row.
+
+    Called at the quota period boundary (and on a qualifying top-up). The old
+    reset path only nulled the ``FupState`` row, leaving the throttle profile /
+    address-list block / suspension in place on the wire — so a subscriber
+    stayed throttled or blocked indefinitely. This reverses the action recorded
+    in the state *before* clearing it:
+
+    - ``throttled`` → re-apply the captured original (or offer-effective)
+      RADIUS profile and re-sync to RADIUS.
+    - ``blocked``   → remove the address-list block AND resume any FUP
+      suspension (both idempotent; ``blocked`` covers both apply paths).
+    """
+    from app.models.fup_state import FupActionStatus
+    from app.services.fup_state import fup_state
+
+    state = fup_state.get(db, subscription_id)
+    if not state:
+        return {"lifted": False, "reason": "no_state", "actions": []}
+
+    prior = state.action_status
+    actions: list[str] = []
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+
+    if prior == FupActionStatus.throttled:
+        target = str(state.original_profile_id) if state.original_profile_id else None
+        if not target and subscription is not None:
+            prof = _resolve_effective_profile(db, subscription)
+            target = str(prof.id) if prof else None
+        if target and subscription is not None:
+            try:
+                apply_radius_profile_to_account(
+                    db, str(subscription.subscriber_id), target
+                )
+                actions.append("restore_profile")
+            except Exception as exc:
+                logger.warning(
+                    "FUP lift: profile restore failed for %s: %s",
+                    subscription_id,
+                    exc,
+                )
+    elif prior == FupActionStatus.blocked:
+        try:
+            remove_subscription_address_list_block(db, subscription_id)
+            actions.append("remove_block")
+        except Exception as exc:
+            logger.warning(
+                "FUP lift: address-list unblock failed for %s: %s",
+                subscription_id,
+                exc,
+            )
+        # Resume only if a FUP suspension actually flipped the status.
+        from app.services.account_lifecycle import SUSPENDED_EQUIVALENT
+
+        if subscription is not None and subscription.status in SUSPENDED_EQUIVALENT:
+            try:
+                from app.models.enforcement_lock import EnforcementReason
+                from app.services.account_lifecycle import restore_subscription
+
+                restored = restore_subscription(
+                    db,
+                    subscription_id,
+                    trigger="cap_reset",
+                    resolved_by="fup_cap_reset",
+                    reason=EnforcementReason.fup,
+                )
+                if restored:
+                    actions.append("resume")
+            except Exception as exc:
+                logger.warning(
+                    "FUP lift: resume failed for %s: %s", subscription_id, exc
+                )
+
+    fup_state.clear(db, subscription_id)
+    db.flush()
+    return {"lifted": True, "prior": prior.value, "actions": actions}
 
 
 # ---------------------------------------------------------------------------

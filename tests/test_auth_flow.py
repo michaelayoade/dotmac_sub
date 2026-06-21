@@ -96,7 +96,11 @@ def test_login_rejects_unsupported_provider(db_session, person):
     assert exc.value.status_code == 400
 
 
-def test_login_local_allows_email_identifier(db_session, person, monkeypatch):
+def test_login_local_uses_username_not_subscriber_email(
+    db_session, person, monkeypatch
+):
+    # Subscriber email is non-unique contact info, not a login key. Login must
+    # use the credential username; the subscriber email must NOT authenticate.
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     person.email = "person-login@example.com"
     credential = UserCredential(
@@ -110,14 +114,21 @@ def test_login_local_allows_email_identifier(db_session, person, monkeypatch):
     db_session.commit()
 
     request = _make_request()
-    tokens = AuthFlow.login(
-        db_session, "person-login@example.com", "secret", request, None
-    )
+    tokens = AuthFlow.login(db_session, "admin-username", "secret", request, None)
     assert tokens.get("access_token")
     assert tokens.get("refresh_token")
 
+    # The subscriber email no longer resolves to a login.
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(
+            db_session, "person-login@example.com", "secret", _make_request(), None
+        )
+    assert exc.value.status_code == 401
 
-def test_login_radius_allows_email_identifier(monkeypatch, db_session, person):
+
+def test_login_radius_uses_username_not_subscriber_email(
+    monkeypatch, db_session, person
+):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     person.email = "radius-login@example.com"
     called = {"username": None}
@@ -140,12 +151,23 @@ def test_login_radius_allows_email_identifier(monkeypatch, db_session, person):
 
     AuthFlow.login(
         db_session,
-        "radius-login@example.com",
+        "radius-user-001",
         "secret",
         _make_request(),
         AuthProvider.radius,
     )
     assert called["username"] == "radius-user-001"
+
+    # The subscriber email no longer resolves to a RADIUS login.
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(
+            db_session,
+            "radius-login@example.com",
+            "secret",
+            _make_request(),
+            AuthProvider.radius,
+        )
+    assert exc.value.status_code == 401
 
 
 def test_mfa_setup_confirm(db_session, person, monkeypatch):

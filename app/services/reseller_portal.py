@@ -19,8 +19,9 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentStatus,
 )
-from app.models.catalog import CatalogOffer, Subscription
+from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import (
     Reseller,
     ResellerUser,
@@ -30,6 +31,13 @@ from app.models.subscriber import (
 )
 from app.services import catalog as catalog_service
 from app.services import customer_portal
+from app.services.account_lifecycle import (
+    compute_account_status,
+    get_active_locks,
+    resolve_all_locks,
+    restore_subscription,
+    suspend_subscription,
+)
 from app.services.common import coerce_uuid
 from app.services.session_store import (
     delete_session,
@@ -76,6 +84,16 @@ def _initials(subscriber: Subscriber) -> str:
     last = (subscriber.last_name or "").strip()[:1]
     initials = f"{first}{last}".upper()
     return initials or "RS"
+
+
+def _initials_from_name(name: str) -> str:
+    """Initials for a reseller_user principal (no first/last split)."""
+    parts = [p for p in (name or "").strip().split() if p]
+    if not parts:
+        return "RS"
+    if len(parts) == 1:
+        return parts[0][:2].upper() or "RS"
+    return f"{parts[0][:1]}{parts[-1][:1]}".upper()
 
 
 def _subscriber_label(subscriber: Subscriber | None) -> str:
@@ -192,6 +210,50 @@ def reseller_id_for_subscriber(db: Session, subscriber_id: str) -> str | None:
     return str(reseller_user.reseller_id)
 
 
+def create_reseller_user_principal(
+    db: Session,
+    *,
+    reseller_id: str,
+    username: str,
+    password: str,
+    email: str | None = None,
+    full_name: str | None = None,
+    must_change_password: bool = False,
+) -> ResellerUser:
+    """Create a first-class reseller portal login (Layer 3).
+
+    A ``ResellerUser`` identity plus its local ``UserCredential`` — no backing
+    Subscriber. Used by reseller onboarding (post-cutover) and by the backfill
+    that repoints existing reseller credentials. The login only authenticates
+    when ``RESELLER_USER_PRINCIPAL_ENABLED`` is on.
+    """
+    from datetime import UTC, datetime
+
+    from app.models.auth import AuthProvider, UserCredential
+
+    reseller_user = ResellerUser(
+        reseller_id=coerce_uuid(reseller_id),
+        email=email,
+        full_name=full_name,
+        is_active=True,
+    )
+    db.add(reseller_user)
+    db.flush()
+    credential = UserCredential(
+        reseller_user_id=reseller_user.id,
+        provider=AuthProvider.local,
+        username=username,
+        password_hash=auth_flow_service.hash_password(password),
+        must_change_password=must_change_password,
+        password_updated_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db.add(credential)
+    db.commit()
+    db.refresh(reseller_user)
+    return reseller_user
+
+
 def _create_session(
     username: str,
     reseller_id: str,
@@ -200,11 +262,17 @@ def _create_session(
     db: Session | None = None,
     person_id: str | None = None,
     auth_session_id: str | None = None,
+    reseller_user_id: str | None = None,
 ) -> str:
     if not subscriber_id:
         subscriber_id = person_id
-    if not subscriber_id:
-        raise ValueError("subscriber_id/person_id is required")
+    if not subscriber_id and not reseller_user_id:
+        raise ValueError("subscriber_id/person_id or reseller_user_id is required")
+    # Layer 3: a reseller login may be a first-class ResellerUser principal (no
+    # backing subscriber). principal_type/principal_id generalise the session
+    # key; subscriber_id/person_id stay populated for the legacy path.
+    principal_type = "reseller_user" if reseller_user_id else "subscriber"
+    principal_id = reseller_user_id or subscriber_id
     session_token = secrets.token_urlsafe(32)
     ttl_seconds = _session_ttl_seconds(remember, db)
     session_payload = {
@@ -212,6 +280,9 @@ def _create_session(
         "subscriber_id": subscriber_id,
         # Backwards-compat: older tests/callers use "person_id".
         "person_id": subscriber_id,
+        "reseller_user_id": reseller_user_id,
+        "principal_type": principal_type,
+        "principal_id": principal_id,
         "reseller_id": reseller_id,
         # Backing auth_flow session, so logout can revoke it (not just drop
         # the local portal session).
@@ -246,11 +317,15 @@ def _get_session(session_token: str) -> dict | None:
 
 def _reseller_session_revoked(session: dict) -> bool:
     """True when a revoke-all epoch postdates this session's creation."""
-    subscriber_id = session.get("subscriber_id") or session.get("person_id")
-    if not subscriber_id:
+    principal_id = (
+        session.get("principal_id")
+        or session.get("subscriber_id")
+        or session.get("person_id")
+    )
+    if not principal_id:
         return False
     epoch = get_session_revocation_epoch(
-        _RESELLER_SESSION_PREFIX, str(subscriber_id), _RESELLER_SESSION_EPOCHS
+        _RESELLER_SESSION_PREFIX, str(principal_id), _RESELLER_SESSION_EPOCHS
     )
     if not epoch:
         return False
@@ -341,9 +416,10 @@ def _session_from_access_token(
     remember: bool,
 ) -> dict:
     payload = auth_flow_service.decode_access_token(db, access_token)
-    subscriber_id = payload.get("sub")
+    principal_id = payload.get("sub")
+    principal_type = payload.get("principal_type") or "subscriber"
     session_id = payload.get("session_id")
-    if not subscriber_id or not session_id:
+    if not principal_id or not session_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
         )
@@ -353,12 +429,55 @@ def _session_from_access_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
         )
-    if auth_session.expires_at and auth_session.expires_at <= _now():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
-        )
+    session_expires = auth_session.expires_at
+    if session_expires:
+        # Normalise both sides: SQLite returns naive datetimes and some callers
+        # patch _now() to a naive value, so compare consistently in UTC.
+        now = _now()
+        if session_expires.tzinfo is None:
+            session_expires = session_expires.replace(tzinfo=UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        if session_expires <= now:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
+            )
 
-    reseller_user = _get_reseller_user(db, str(subscriber_id))
+    # Layer 3: a reseller_user principal is its own identity — resolve the
+    # reseller directly, with no backing subscriber.
+    if principal_type == "reseller_user":
+        reseller_user = db.get(ResellerUser, coerce_uuid(principal_id))
+        if (
+            not reseller_user
+            or not reseller_user.is_active
+            or not reseller_user.reseller_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
+            )
+        display = reseller_user.full_name or reseller_user.email or "Reseller"
+        session_token = _create_session(
+            username=username or reseller_user.email or display,
+            reseller_user_id=str(reseller_user.id),
+            reseller_id=str(reseller_user.reseller_id),
+            remember=remember,
+            db=db,
+            auth_session_id=str(session_id),
+        )
+        _emit_reseller_event(
+            db,
+            "reseller_login",
+            {
+                "reseller_id": str(reseller_user.reseller_id),
+                "reseller_user_id": str(reseller_user.id),
+            },
+        )
+        return {
+            "session_token": session_token,
+            "reseller_id": str(reseller_user.reseller_id),
+        }
+
+    reseller_user = _get_reseller_user(db, str(principal_id))
     if not reseller_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
@@ -387,7 +506,7 @@ def _session_from_access_token(
         },
     )
     return {
-        "session_token": session_token,
+        "session_token": str(session_token),
         "reseller_id": str(reseller_user.reseller_id),
     }
 
@@ -397,9 +516,39 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     if not session:
         return None
 
-    subscriber = db.get(Subscriber, coerce_uuid(session["subscriber_id"]))
     reseller = db.get(Reseller, coerce_uuid(session["reseller_id"]))
-    if not subscriber or not reseller:
+    if not reseller:
+        return None
+
+    # Layer 3: reseller_user principal — identity comes from the ResellerUser
+    # row, with no backing subscriber.
+    if (session.get("principal_type") or "subscriber") == "reseller_user":
+        ru_id = session.get("reseller_user_id") or session.get("principal_id")
+        reseller_user = db.get(ResellerUser, coerce_uuid(ru_id)) if ru_id else None
+        if not reseller_user or not reseller_user.is_active:
+            return None
+        display = reseller_user.full_name or reseller_user.email or "Reseller"
+        current_user = {
+            "name": display,
+            "email": reseller_user.email or "",
+            "initials": _initials_from_name(display),
+        }
+        return {
+            "session": session,
+            "current_user": current_user,
+            "person": None,
+            "subscriber": None,
+            "reseller": reseller,
+            "reseller_user": reseller_user,
+            # Principal-agnostic acting identity (Layer 3): handlers should key
+            # MFA/audit/personal-feature scoping off these, not context["subscriber"]
+            # which is None for a first-class reseller_user principal.
+            "principal_type": "reseller_user",
+            "principal_id": str(reseller_user.id),
+        }
+
+    subscriber = db.get(Subscriber, coerce_uuid(session["subscriber_id"]))
+    if not subscriber:
         return None
 
     reseller_user = _get_reseller_user(db, str(subscriber.id))
@@ -420,6 +569,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         "subscriber": subscriber,
         "reseller": reseller,
         "reseller_user": reseller_user,
+        "principal_type": "subscriber",
+        "principal_id": str(subscriber.id),
     }
 
 
@@ -513,7 +664,11 @@ def get_remember_max_age(db: Session | None = None) -> int:
 
 
 ACCOUNT_ORDER_FIELDS = ("created_at", "balance", "overdue", "name")
-ACCOUNT_STATUS_FILTERS = ("overdue", "suspended")
+ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
+    status.value for status in SubscriberStatus
+)
+ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
+RESELLER_ACCOUNT_STATUS_ACTIONS = ("deactivate", "restore", "disable")
 
 
 def _apply_account_search(query, search: str | None):
@@ -567,10 +722,13 @@ def _filtered_accounts_query(
     query = _apply_account_search(query, search)
     if status_filter == "overdue":
         query = query.filter(func.coalesce(invoice_sq.c.overdue_invoices, 0) > 0)
-    elif status_filter == "suspended":
+    elif status_filter in ACCOUNT_LIST_STATUS_OPTIONS:
+        query = query.filter(Subscriber.status == SubscriberStatus(status_filter))
+    else:
         query = query.filter(
-            Subscriber.status.in_(
-                [SubscriberStatus.suspended, SubscriberStatus.blocked]
+            or_(
+                Subscriber.status.is_(None),
+                Subscriber.status != SubscriberStatus.disabled,
             )
         )
     return query
@@ -733,11 +891,7 @@ def get_dashboard_summary(
     suspended_count = (
         _customer_accounts_query(db, reseller_id)
         .with_entities(func.count(Subscriber.id))
-        .filter(
-            Subscriber.status.in_(
-                [SubscriberStatus.suspended, SubscriberStatus.blocked]
-            )
-        )
+        .filter(Subscriber.status == SubscriberStatus.suspended)
         .scalar()
         or 0
     )
@@ -749,7 +903,7 @@ def get_dashboard_summary(
                 "level": "warning",
                 "icon": "clock",
                 "message": f"{overdue_count} overdue invoice{'s' if overdue_count != 1 else ''} require attention",
-                "action_url": "/reseller/accounts",
+                "action_url": "/reseller/billing",
             }
         )
     if suspended_count > 0:
@@ -851,6 +1005,150 @@ def get_account_detail(
         "created_at": account.created_at,
         "subscriptions": sub_list,
         "open_balance": open_balance,
+    }
+
+
+def update_customer_account_status(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    action: str,
+    *,
+    actor_id: str | None = None,
+) -> dict | None:
+    """Deactivate, restore, or disable a reseller-owned customer account."""
+    normalized_action = (action or "").strip().lower()
+    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        raise ValueError("Unsupported account status action")
+
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
+        return None
+
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == account.id)
+        .with_for_update()
+        .all()
+    )
+    source = f"reseller:{reseller_id}"
+    if actor_id:
+        source = f"{source}:user:{actor_id}"
+
+    changed = 0
+    skipped = 0
+    if normalized_action == "deactivate":
+        for subscription in subscriptions:
+            if subscription.status in {
+                SubscriptionStatus.active,
+                SubscriptionStatus.pending,
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.stopped,
+            }:
+                if get_active_locks(db, subscription_id=str(subscription.id)):
+                    skipped += 1
+                    continue
+                # Route through the domain op so deactivation creates an
+                # enforcement lock (single writer). A bare ``status = stopped``
+                # produced a lock-less state that the domain ``restore`` path
+                # could not reactivate (resolved_count == 0) — the split-brain
+                # this fixes. active/pending → suspended; an already-down
+                # blocked/stopped keeps its status but gains the missing lock.
+                suspend_subscription(
+                    db,
+                    str(subscription.id),
+                    reason=EnforcementReason.admin,
+                    source=source,
+                    notes="Deactivated from reseller portal.",
+                    emit=False,
+                )
+                changed += 1
+            else:
+                skipped += 1
+        db.flush()
+        compute_account_status(db, str(account.id))
+    elif normalized_action == "restore":
+        restorable_statuses = {
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.blocked,
+            SubscriptionStatus.stopped,
+        }
+        for subscription in subscriptions:
+            if subscription.status not in restorable_statuses:
+                skipped += 1
+                continue
+            before = subscription.status
+            restored = restore_subscription(
+                db,
+                str(subscription.id),
+                trigger="admin",
+                resolved_by=source,
+                reason=EnforcementReason.admin,
+                notes="Restored from reseller portal.",
+            )
+            if restored:
+                changed += 1
+                continue
+            if not get_active_locks(db, subscription_id=str(subscription.id)):
+                subscription.status = SubscriptionStatus.active
+                changed += 1 if before != subscription.status else 0
+            else:
+                skipped += 1
+        db.flush()
+        compute_account_status(db, str(account.id))
+    else:
+        terminal_statuses = {
+            SubscriptionStatus.disabled,
+            SubscriptionStatus.canceled,
+            SubscriptionStatus.expired,
+            SubscriptionStatus.hidden,
+            SubscriptionStatus.archived,
+        }
+        for subscription in subscriptions:
+            if subscription.status in terminal_statuses:
+                skipped += 1
+                continue
+            resolve_all_locks(db, subscription, source)
+            subscription.status = SubscriptionStatus.disabled
+            changed += 1
+        db.flush()
+        # Forward fix: terminal service owns no service IPs (idempotent, guarded).
+        try:
+            from app.services.ip_lifecycle import (
+                release_service_ips_for_subscription,
+            )
+
+            for subscription in subscriptions:
+                if subscription.status == SubscriptionStatus.disabled:
+                    release_service_ips_for_subscription(db, subscription)
+        except Exception:
+            logger.warning(
+                "service-IP release on reseller disable failed for account %s",
+                account.id,
+                exc_info=True,
+            )
+        compute_account_status(db, str(account.id))
+
+    if not subscriptions:
+        if normalized_action == "deactivate":
+            account.status = SubscriberStatus.blocked
+            account.is_active = True
+        elif normalized_action == "restore":
+            account.status = SubscriberStatus.active
+            account.is_active = True
+        else:
+            account.status = SubscriberStatus.disabled
+            account.is_active = False
+        changed = 1
+        db.flush()
+
+    db.commit()
+    db.refresh(account)
+    return {
+        "account_id": str(account.id),
+        "status": account.status.value if account.status else None,
+        "changed": changed,
+        "skipped": skipped,
     }
 
 
@@ -1225,6 +1523,10 @@ def create_customer_impersonation_session(
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        # Reseller "view as customer" uses the same customer portal capabilities
+        # as the customer. The impersonation marker remains for attribution and
+        # the Exit View banner.
+        read_only=False,
         return_to=return_to,
     )
     _emit_reseller_event(

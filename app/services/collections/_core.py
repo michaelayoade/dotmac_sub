@@ -6,7 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceStatus
@@ -100,8 +100,44 @@ def _set_prepaid_last_run_date(db: Session, run_date: date) -> None:
 
 
 def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
-    """Compute prepaid available balance as credit minus open invoice balance."""
+    """Authoritative prepaid available balance.
+
+    For Splynx-linked accounts the synced ``deposit`` IS the balance: Splynx's
+    billing engine already nets invoices, payments and transactions into it,
+    and it does not reconcile to any naive local recomputation (verified —
+    e.g. cust 25313 deposit 31,965.11 vs payments-minus-invoices 163,236).
+    Re-deriving it locally is what produced the phantom-invoice divergence, so
+    we trust the net rather than recompute it.
+
+    Native (non-Splynx) accounts have no authoritative deposit, so they fall
+    back to the local ledger model: credit minus open invoice balance.
+
+    At cutover the local ledger takes over: once a Splynx-linked account has its
+    one-time opening-balance seed (see the prepaid drawdown engine), we switch
+    that account to the ledger so drawdown debits and top-up credits take
+    effect. The seed is the per-account switch — no risky global flip.
+    """
+    from app.models.billing import LedgerEntry
     from app.services.billing._common import get_account_credit_balance
+    from app.services.prepaid_billing import PREPAID_OPENING_BALANCE_MEMO
+
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if (
+        account is not None
+        and account.splynx_customer_id is not None
+        and account.deposit is not None
+    ):
+        # The seed (credit for positive deposits, debit for arrears) marks the
+        # account as switched to the ledger; match on memo regardless of type.
+        seeded = (
+            db.query(LedgerEntry.id)
+            .filter(LedgerEntry.account_id == coerce_uuid(account_id))
+            .filter(LedgerEntry.memo == PREPAID_OPENING_BALANCE_MEMO)
+            .filter(LedgerEntry.is_active.is_(True))
+            .first()
+        )
+        if seeded is None:
+            return Decimal(str(account.deposit))
 
     credit_balance = get_account_credit_balance(db, account_id)
     open_balance = (
@@ -835,6 +871,50 @@ def _deactivate_prepaid_subscriptions(
     return canceled_count
 
 
+def _dunning_shield_reason(db: Session, account_id) -> str | None:
+    """Return why dunning enforcement should be skipped, or None.
+
+    Mirrors the event-driven overdue path (``EnforcementHandler.
+    _suspension_shield_reason``) so the two enforcement systems agree: a
+    customer with an admin-approved payment arrangement or a bank-transfer
+    proof under review must NOT be dunned/suspended. The scheduled dunning
+    runner previously ignored this shield entirely.
+    """
+    from app.models.payment_arrangement import (
+        ArrangementStatus,
+        PaymentArrangement,
+    )
+    from app.models.payment_proof import PaymentProof, PaymentProofStatus
+
+    arrangement_id = (
+        db.query(PaymentArrangement.id)
+        .filter(PaymentArrangement.subscriber_id == account_id)
+        .filter(PaymentArrangement.status == ArrangementStatus.active)
+        .filter(PaymentArrangement.is_active.is_(True))
+        .limit(1)
+        .scalar()
+    )
+    if arrangement_id:
+        return f"active payment arrangement {arrangement_id}"
+    proof_id = (
+        db.query(PaymentProof.id)
+        .filter(PaymentProof.account_id == account_id)
+        .filter(PaymentProof.status == PaymentProofStatus.submitted)
+        .limit(1)
+        .scalar()
+    )
+    if proof_id:
+        return f"payment proof {proof_id} pending review"
+    return None
+
+
+# Dunning actions that enforce against the account (and so must re-check the
+# live balance + shield right before acting, not trust the run's snapshot).
+_ENFORCING_ACTIONS = frozenset(
+    {DunningAction.suspend, DunningAction.reject, DunningAction.throttle}
+)
+
+
 def _execute_dunning_action(
     db: Session,
     case: DunningCase,
@@ -855,6 +935,30 @@ def _execute_dunning_action(
         Outcome string describing what was done
     """
     account_id = str(case.account_id)
+
+    # Race + shield guard for enforcing actions. The run reads every account's
+    # balance once at the top and only gets here much later, so the decision is
+    # stale: a payment may have landed, or an arrangement been granted, in the
+    # meantime. Lock the subscriber row, then RE-READ the live balance and the
+    # arrangement/proof shield before acting — so we never suspend a customer
+    # who just paid or who has an approved payment plan.
+    if action in _ENFORCING_ACTIONS:
+        subscriber = db.execute(
+            select(Subscriber).where(Subscriber.id == case.account_id).with_for_update()
+        ).scalar_one_or_none()
+        if subscriber is None:
+            return "account_not_found"
+        if not has_overdue_balance(db, account_id):
+            return "balance_cleared"
+        shield = _dunning_shield_reason(db, case.account_id)
+        if shield:
+            logger.info(
+                "Dunning %s skipped for account %s: %s",
+                action.value,
+                account_id,
+                shield,
+            )
+            return "shielded"
 
     if action == DunningAction.notify:
         _create_suspension_warning_notification(db, account_id, day_offset, note)
@@ -1384,11 +1488,10 @@ class DunningWorkflow(ListResponseMixin):
             if overdue_accounts:
                 open_cases = (
                     db.query(DunningCase)
-                    .filter(
-                        DunningCase.status.in_(
-                            [DunningCaseStatus.open, DunningCaseStatus.paused]
-                        )
-                    )
+                    # Only auto-resolve OPEN cases. A paused case is an operator
+                    # hold ("human owns this") and must not be silently resolved
+                    # by a clean run / incoming payment.
+                    .filter(DunningCase.status == DunningCaseStatus.open)
                     .filter(
                         DunningCase.account_id.notin_(list(overdue_accounts.keys()))
                     )
@@ -1397,11 +1500,7 @@ class DunningWorkflow(ListResponseMixin):
             else:
                 open_cases = (
                     db.query(DunningCase)
-                    .filter(
-                        DunningCase.status.in_(
-                            [DunningCaseStatus.open, DunningCaseStatus.paused]
-                        )
-                    )
+                    .filter(DunningCase.status == DunningCaseStatus.open)
                     .all()
                 )
             if open_cases:
@@ -1451,11 +1550,9 @@ class DunningWorkflow(ListResponseMixin):
         cases = (
             db.query(DunningCase)
             .filter(DunningCase.account_id == account_id)
-            .filter(
-                DunningCase.status.in_(
-                    [DunningCaseStatus.open, DunningCaseStatus.paused]
-                )
-            )
+            # Only auto-resolve OPEN cases on payment; a paused case is an
+            # operator hold and must be released by a human, not by a payment.
+            .filter(DunningCase.status == DunningCaseStatus.open)
             .all()
         )
         if not cases:
@@ -1703,11 +1800,9 @@ class PrepaidEnforcement(ListResponseMixin):
         cases = (
             db.query(DunningCase)
             .filter(DunningCase.account_id == account_id)
-            .filter(
-                DunningCase.status.in_(
-                    [DunningCaseStatus.open, DunningCaseStatus.paused]
-                )
-            )
+            # Only auto-resolve OPEN cases on payment; a paused case is an
+            # operator hold and must be released by a human, not by a payment.
+            .filter(DunningCase.status == DunningCaseStatus.open)
             .all()
         )
         if not cases:
@@ -1730,6 +1825,23 @@ class PrepaidEnforcement(ListResponseMixin):
         return len(cases)
 
 
+def _clear_prepaid_dunning_flags(db: Session, account_id: str) -> None:
+    """Clear the prepaid low-balance / scheduled-deactivation timestamps.
+
+    A payment or top-up that restores the account makes these stale; clearing
+    them here — instead of waiting for the next collections sweep — stops a
+    just-paid customer from being deactivated on a pending timer. The sweep
+    re-sets them if the account is still below its minimum balance.
+    """
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if account is not None and (
+        account.prepaid_low_balance_at is not None
+        or account.prepaid_deactivation_at is not None
+    ):
+        account.prepaid_low_balance_at = None
+        account.prepaid_deactivation_at = None
+
+
 def restore_account_services(
     db: Session,
     account_id: str,
@@ -1743,6 +1855,7 @@ def restore_account_services(
         invoice_id=invoice_id,
         commit=False,
     )
+    _clear_prepaid_dunning_flags(db, account_id)
     return restored
 
 

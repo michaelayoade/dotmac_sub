@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+from ipaddress import IPv4Address as ParsedIPv4Address
 from typing import Any
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, not_
+from sqlalchemy import and_, func, not_, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.catalog import NasDevice, Subscription
+from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.network import IPAssignment, IPv4Address, OntAssignment, OntUnit
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import (
     Subscriber,
@@ -22,6 +24,7 @@ from app.models.subscriber import (
 from app.services.subscriber import splynx_deleted_import_clause
 
 _SUBSCRIBER_CATEGORY_COL: Any = Subscriber.metadata_["subscriber_category"].as_string()
+_UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
 
 
 def _customer_user_clause():
@@ -49,6 +52,64 @@ def _customer_display_identifier(*values: str | None) -> str | None:
     return None
 
 
+def _parse_ipv4_search(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = ParsedIPv4Address(normalized)
+    except ValueError:
+        return None
+    if parsed == _UNSPECIFIED_IPV4:
+        return None
+    return str(parsed)
+
+
+def _valid_ipv4_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = ParsedIPv4Address(text)
+    except ValueError:
+        return None
+    if parsed == _UNSPECIFIED_IPV4:
+        return None
+    return str(parsed)
+
+
+def _active_subscription_clause():
+    return Subscription.status == SubscriptionStatus.active
+
+
+def _active_ipam_ipv4_match(ip_address: str):
+    return Subscriber.ip_assignments.any(
+        and_(
+            IPAssignment.is_active.is_(True),
+            IPAssignment.ipv4_address.has(IPv4Address.address == ip_address),
+            or_(
+                IPAssignment.subscription.has(_active_subscription_clause()),
+                and_(
+                    IPAssignment.subscription_id.is_(None),
+                    Subscriber.subscriptions.any(_active_subscription_clause()),
+                ),
+            ),
+        )
+    )
+
+
+def _active_ont_ipv4_match(ip_address: str):
+    return Subscriber.ont_assignments.any(
+        and_(
+            OntAssignment.active.is_(True),
+            or_(
+                OntAssignment.static_ip == ip_address,
+                OntAssignment.ont_unit.has(OntUnit.observed_wan_ip == ip_address),
+            ),
+        )
+    )
+
+
 def _business_customer_clause():
     return (
         (
@@ -64,164 +125,74 @@ def _individual_customer_clause():
     return not_(_business_customer_clause())
 
 
-def build_contacts_index_context(
-    db: Session,
-    *,
-    search: str | None,
-    status: str | None,
-    entity_type: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, Any]:
-    """Build contacts list — all contacts are subscribers."""
-    offset = (page - 1) * per_page
-
-    _not_deleted = not_(splynx_deleted_import_clause())
-    query = db.query(Subscriber).filter(
-        _customer_user_clause(),
-        _not_deleted,
-    )
-
-    # Filter by business vs individual
-    if entity_type == "business":
-        query = query.filter(_business_customer_clause())
-    elif entity_type in {"individual", "person"}:
-        query = query.filter(_individual_customer_clause())
-
-    if status:
-        normalized_status = status.strip().lower()
-        if normalized_status in {"active", "customer", "subscriber", "lead", "contact"}:
-            query = query.filter(Subscriber.status == SubscriberStatus.active)
-        elif normalized_status == "blocked":
-            query = query.filter(Subscriber.status == SubscriberStatus.blocked)
-        elif normalized_status in {"inactive", "suspended"}:
-            query = query.filter(Subscriber.status == SubscriberStatus.suspended)
-        elif normalized_status == "disabled":
-            query = query.filter(Subscriber.status == SubscriberStatus.disabled)
-        elif normalized_status == "new":
-            query = query.filter(Subscriber.status == SubscriberStatus.new)
-        elif normalized_status in {"delinquent", "canceled"}:
-            query = query.filter(
-                Subscriber.status == SubscriberStatus(normalized_status)
-            )
-
-    if search:
-        search_filter = f"%{search}%"
-        query = query.filter(
-            (Subscriber.first_name.ilike(search_filter))
-            | (Subscriber.last_name.ilike(search_filter))
-            | (Subscriber.email.ilike(search_filter))
-            | (Subscriber.phone.ilike(search_filter))
-        )
-
-    _base_count = (
-        db.query(func.count(Subscriber.id))
-        .filter(_customer_user_clause())
-        .filter(_not_deleted)
-    )
-    active_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.active).scalar() or 0
-    )
-    blocked_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.blocked).scalar() or 0
-    )
-    suspended_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.suspended).scalar()
-        or 0
-    )
-    disabled_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.disabled).scalar() or 0
-    )
-    new_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.new).scalar() or 0
-    )
-    delinquent_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.delinquent).scalar()
-        or 0
-    )
-    canceled_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.canceled).scalar() or 0
-    )
-
-    people = (
-        query.order_by(Subscriber.created_at.desc())
-        .limit(per_page)
-        .offset(offset)
-        .all()
-    )
-    contacts: list[dict[str, Any]] = []
-    for person in people:
-        contacts.append(
-            {
-                "id": str(person.id),
-                "type": "person",
-                "name": f"{person.first_name} {person.last_name}".strip(),
-                "email": person.email,
-                "phone": person.phone,
-                "status": person.status.value if person.status else "active",
-                "organization": person.company_name if person.is_business else None,
-                "is_active": person.is_active,
-                "is_business": person.is_business,
-                "created_at": person.created_at,
-                "raw": person,
-            }
-        )
-
-    total = query.count()
-    total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-
-    stats_total = (
-        active_count
-        + blocked_count
-        + suspended_count
-        + disabled_count
-        + new_count
-        + delinquent_count
-        + canceled_count
-    )
-
-    return {
-        "contacts": contacts,
-        "search": search or "",
-        "status": status or "",
-        "entity_type": entity_type or "",
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-        "stats": {
-            "active": active_count,
-            "blocked": blocked_count,
-            "suspended": suspended_count,
-            "disabled": disabled_count,
-            "new": new_count,
-            "delinquent": delinquent_count,
-            "canceled": canceled_count,
-            "customers": active_count,
-            "subscribers": active_count,
-            "total": stats_total,
-        },
-    }
-
-
 def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
     """Build a customer dict from a subscriber, including subscription info."""
-    # Get first active subscription's login/IP/NAS
     pppoe_login = None
     ipv4 = None
+    ipv4_label = None
     nas_name = None
     pop_site_name = None
-    for sub in person.subscriptions or []:
+    active_subscriptions = [
+        sub
+        for sub in (person.subscriptions or [])
+        if sub.status == SubscriptionStatus.active
+    ]
+    active_subscription_ids = {sub.id for sub in active_subscriptions}
+    active_ipam_assignments = sorted(
+        (
+            assignment
+            for assignment in (person.ip_assignments or [])
+            if assignment.is_active
+            and assignment.ipv4_address
+            and (
+                (
+                    assignment.subscription_id is not None
+                    and assignment.subscription_id in active_subscription_ids
+                )
+                or (assignment.subscription_id is None and bool(active_subscriptions))
+            )
+        ),
+        key=lambda assignment: assignment.created_at,
+        reverse=True,
+    )
+    if active_ipam_assignments:
+        ipv4 = _valid_ipv4_text(active_ipam_assignments[0].ipv4_address.address)
+        ipv4_label = "Current IPAM IPv4"
+
+    for sub in active_subscriptions:
         if sub.login:
             pppoe_login = sub.login
-        if sub.ipv4_address:
-            ipv4 = sub.ipv4_address
+        if not ipv4 and sub.ipv4_address:
+            service_ipv4 = _valid_ipv4_text(sub.ipv4_address)
+            if service_ipv4:
+                ipv4 = service_ipv4
+                ipv4_label = "Service IPv4"
         if sub.provisioning_nas_device:
             nas_name = sub.provisioning_nas_device.name
             if getattr(sub.provisioning_nas_device, "pop_site", None):
                 pop_site_name = sub.provisioning_nas_device.pop_site.name
         if pppoe_login:
             break
+
+    if not ipv4:
+        active_ont_assignments = [
+            assignment
+            for assignment in (person.ont_assignments or [])
+            if assignment.active
+        ]
+        for assignment in active_ont_assignments:
+            static_ip = _valid_ipv4_text(assignment.static_ip)
+            if static_ip:
+                ipv4 = static_ip
+                ipv4_label = "ONT WAN IPv4"
+                break
+            observed_ip = _valid_ipv4_text(
+                getattr(assignment.ont_unit, "observed_wan_ip", None)
+            )
+            if observed_ip:
+                ipv4 = observed_ip
+                ipv4_label = "Observed ONT WAN IPv4"
+                break
 
     display_name = person.company_name or person.display_name or person.full_name
     return {
@@ -241,6 +212,7 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
         ),
         "pppoe_login": pppoe_login,
         "ipv4": ipv4,
+        "ipv4_label": ipv4_label,
         "nas_name": nas_name,
         "pop_site_name": pop_site_name,
         "email": person.email,
@@ -301,18 +273,34 @@ def _apply_customer_filters(
     if status_filter is not None:
         query = query.filter(status_filter)
     if search:
-        like = f"%{search}%"
-        query = query.filter(
-            Subscriber.first_name.ilike(like)
-            | Subscriber.last_name.ilike(like)
-            | Subscriber.display_name.ilike(like)
-            | Subscriber.email.ilike(like)
-            | Subscriber.phone.ilike(like)
-            | Subscriber.subscriber_number.ilike(like)
-            | Subscriber.account_number.ilike(like)
-            | Subscriber.subscriptions.any(Subscription.login.ilike(like))
-            | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
-        )
+        exact_ipv4 = _parse_ipv4_search(search)
+        if exact_ipv4:
+            query = query.filter(
+                or_(
+                    Subscriber.subscriptions.any(
+                        and_(
+                            _active_subscription_clause(),
+                            Subscription.ipv4_address == exact_ipv4,
+                        )
+                    ),
+                    _active_ipam_ipv4_match(exact_ipv4),
+                    _active_ont_ipv4_match(exact_ipv4),
+                )
+            )
+        else:
+            like = f"%{search}%"
+            query = query.filter(
+                Subscriber.first_name.ilike(like)
+                | Subscriber.last_name.ilike(like)
+                | Subscriber.display_name.ilike(like)
+                | Subscriber.email.ilike(like)
+                | Subscriber.phone.ilike(like)
+                | Subscriber.subscriber_number.ilike(like)
+                | Subscriber.account_number.ilike(like)
+                | Subscriber.subscriptions.any(
+                    and_(_active_subscription_clause(), Subscription.login.ilike(like))
+                )
+            )
     if nas_id:
         query = query.filter(
             Subscriber.subscriptions.any(
@@ -346,6 +334,12 @@ def customer_scope_query(
             selectinload(Subscriber.subscriptions)
             .selectinload(Subscription.provisioning_nas_device)
             .selectinload(NasDevice.pop_site),
+            selectinload(Subscriber.ip_assignments).selectinload(
+                IPAssignment.ipv4_address
+            ),
+            selectinload(Subscriber.ont_assignments).selectinload(
+                OntAssignment.ont_unit
+            ),
             selectinload(Subscriber.channels),
         )
     query = query.filter(_customer_user_clause()).filter(

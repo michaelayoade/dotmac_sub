@@ -699,8 +699,8 @@ class TestBuildBeatSchedule:
 
         assert schedule["gis_sync"]["schedule"] == timedelta(minutes=1)
 
-    def test_builds_splynx_customer_sync_schedule(self, monkeypatch):
-        """Test builds customer-only Splynx sync schedule when enabled."""
+    def test_ignores_retired_splynx_sync_settings(self, monkeypatch):
+        """Retired Splynx sync env toggles must not create beat entries."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_ENABLED", "true")
         monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS", "24")
@@ -721,14 +721,7 @@ class TestBuildBeatSchedule:
             ):
                 schedule = scheduler_config.build_beat_schedule()
 
-        assert "splynx_customer_accounts_details_sync" in schedule
-        assert (
-            schedule["splynx_customer_accounts_details_sync"]["task"]
-            == "app.tasks.splynx_sync.run_customer_accounts_details_sync"
-        )
-        assert schedule["splynx_customer_accounts_details_sync"][
-            "schedule"
-        ] == timedelta(hours=24)
+        assert "splynx_customer_accounts_details_sync" not in schedule
         assert "splynx_incremental_sync" not in schedule
 
     def test_handles_exception_gracefully(self, monkeypatch, caplog):

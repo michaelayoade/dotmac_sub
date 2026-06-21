@@ -26,6 +26,23 @@
     </div>
     {% endif %}
 
+    {% if in_arrears %}
+    <div class="rounded-xl border border-red-200 bg-red-50 p-5 shadow-sm dark:border-red-900/40 dark:bg-red-900/20">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <h3 class="text-base font-semibold text-red-800 dark:text-red-300">Settle your balance to change plans</h3>
+                <p class="mt-1 text-sm text-red-700 dark:text-red-400">
+                    Your account has an overdue balance of {{ current_offer_summary.currency }} {{ '{:,.2f}'.format(arrears_amount or 0) }}.
+                    Please clear it before changing your plan.
+                </p>
+            </div>
+            <a href="/portal/billing" class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
+                Pay now
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
     {% if insufficient_balance %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-900/20">
         <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Additional Wallet Balance Required</h2>
@@ -78,6 +95,7 @@
     </div>
     {% endif %}
 
+    {% if not in_arrears %}
     <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6" @submit.prevent="confirmAndSubmit($event)">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="requested_offer_id" x-model="selectedOfferId">
@@ -176,10 +194,11 @@
         </div>
         {% endif %}
 
-        <div x-show="selectedOfferId && selectedChangeMode === 'instant' && changeQuote" x-cloak class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <template x-if="selectedOfferId && selectedChangeMode === 'instant' && changeQuote">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
-                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Upgrade Summary</h2>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white" x-text="changeQuote.is_upgrade ? 'Upgrade Summary' : (changeQuote.is_downgrade ? 'Downgrade Summary' : 'Plan Change Summary')">Plan Change Summary</h2>
                     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
                         Review the remaining value on your current plan and the prorated amount required for the selected plan.
                     </p>
@@ -207,7 +226,7 @@
                 </div>
             </div>
             <p class="mt-4 text-sm text-slate-600 dark:text-slate-300" x-show="changeQuote">
-                Your current plan has <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span> remaining value.
+                <span x-show="changeQuote.current_remaining_value > 0">Your current plan has <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span> remaining value.</span>
                 <span x-show="changeQuote.required_amount > 0">
                     To upgrade today, an additional <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span> is required.
                 </span>
@@ -221,6 +240,7 @@
                 </a>
             </div>
         </div>
+        </template>
 
         <!-- Notes -->
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -240,6 +260,7 @@
             </button>
         </div>
     </form>
+    {% endif %}
 
     <!-- Confirmation Modal -->
     <div x-show="showConfirm" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @keydown.escape.window="showConfirm = false">
@@ -262,12 +283,14 @@
                     This plan is in a different family, so a support ticket will be created for review.
                 </p>
                 <p class="mt-4 text-sm text-slate-500 dark:text-slate-400" x-show="quoteLoading">Calculating prorated charges…</p>
-                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40" x-show="selectedChangeMode === 'instant' && changeQuote">
+                <template x-if="selectedChangeMode === 'instant' && changeQuote">
+                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40">
                     <p class="text-sm text-slate-700 dark:text-slate-200">Remaining value: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Required today: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Wallet balance: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_balance)"></span></p>
                     <p class="mt-1 text-sm text-amber-700 dark:text-amber-300" x-show="changeQuote.shortfall > 0">Shortfall: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.shortfall)"></span></p>
                 </div>
+                </template>
                 <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">{{ billing_message }}</p>
                 <template x-if="priceDifference > 0">
                     <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">

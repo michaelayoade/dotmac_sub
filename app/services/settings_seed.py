@@ -27,6 +27,7 @@ from app.services.domain_settings import (
     subscriber_settings,
     tr069_settings,
     usage_settings,
+    vas_settings,
 )
 from app.services.secrets import is_openbao_ref
 from app.timezone import APP_TIMEZONE_NAME
@@ -448,12 +449,14 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "subscription_suspended",
             "name": "Subscription Suspended",
             "channel": NotificationChannel.email,
-            "subject": "Service suspended — action required",
+            "subject": "Your service has been paused",
             "body": (
                 "Dear {subscriber_name},\n\n"
-                "Your {offer_name} subscription has been suspended. "
-                "This may be due to an outstanding balance or a policy violation.\n\n"
-                "Please contact our support team or make a payment to restore your service.\n\n"
+                "Your {offer_name} service has been paused. This is usually due "
+                "to an outstanding balance.\n\n"
+                "To restore it, you can make a payment from your account "
+                "({portal_url}/billing) or contact our support team — we're happy "
+                "to help.\n\n"
                 "Thank you."
             ),
         },
@@ -463,8 +466,8 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "channel": NotificationChannel.sms,
             "subject": None,
             "body": (
-                "Hi {subscriber_name}, your {offer_name} service is suspended. "
-                "Please pay outstanding invoices or contact support."
+                "Hi {subscriber_name}, your {offer_name} service has been paused. "
+                "Pay at {portal_url}/billing or contact support to restore it."
             ),
         },
         {
@@ -493,14 +496,15 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "suspension_warning",
             "name": "Suspension Warning",
             "channel": NotificationChannel.email,
-            "subject": "Payment reminder — suspension in {grace_hours} hours",
+            "subject": "A reminder about invoice #{invoice_number}",
             "body": (
                 "Dear {subscriber_name},\n\n"
-                "Invoice #{invoice_number} for {amount} is overdue. "
-                "Your service may be suspended if payment is not received within "
-                "{grace_hours} hours.\n\n"
-                "Pay now: {portal_url}/billing\n\n"
-                "If you have already paid, please disregard this message."
+                "Invoice #{invoice_number} for {amount} is currently unpaid. To "
+                "avoid any interruption to your service, please arrange payment "
+                "when you can.\n\n"
+                "Pay anytime: {portal_url}/billing\n\n"
+                "If you have already paid, please disregard this message. For any "
+                "questions, please contact our support team."
             ),
         },
         {
@@ -509,8 +513,8 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "channel": NotificationChannel.sms,
             "subject": None,
             "body": (
-                "Reminder: invoice #{invoice_number} for {amount} is overdue. "
-                "Pay within {grace_hours} hours to avoid suspension. {portal_url}/billing"
+                "Reminder: invoice #{invoice_number} for {amount} is unpaid. "
+                "Please pay to avoid any service interruption: {portal_url}/billing"
             ),
         },
         {
@@ -661,14 +665,16 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "invoice_overdue",
             "name": "Invoice Overdue",
             "channel": NotificationChannel.email,
-            "subject": "Overdue invoice #{invoice_number} — immediate payment required",
+            "subject": "Invoice #{invoice_number} is now due",
             "body": (
                 "Dear {subscriber_name},\n\n"
-                "Invoice #{invoice_number} for {amount} is now overdue. "
-                "Your service may be suspended if payment is not received promptly.\n\n"
-                "Please make your payment immediately to avoid disruption.\n\n"
-                "Pay online: {portal_url}/billing\n\n"
-                "If you have already paid, please disregard this notice."
+                "Our records show invoice #{invoice_number} for {amount} is now "
+                "past its due date of {due_date}.\n\n"
+                "If you have already paid, please disregard this message — thank "
+                "you. Otherwise you can pay anytime from your account: "
+                "{portal_url}/billing\n\n"
+                "If you have any questions or would like to discuss payment "
+                "options, please contact our support team."
             ),
         },
         {
@@ -677,8 +683,9 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "channel": NotificationChannel.sms,
             "subject": None,
             "body": (
-                "Invoice #{invoice_number} for {amount} is overdue. "
-                "Pay now to avoid service disruption: {portal_url}/billing"
+                "Invoice #{invoice_number} for {amount} is now past due. "
+                "If you have already paid, please ignore this. "
+                "Pay anytime: {portal_url}/billing"
             ),
         },
         {
@@ -836,50 +843,55 @@ def _seed_missing_notification_templates(db: Session) -> int:
         },
         {
             "code": "ont_offline",
-            "name": "ONT Offline Alert",
+            "name": "Connection Offline",
             "channel": NotificationChannel.email,
-            "subject": "Network device offline — {device_serial}",
+            "subject": "We've noticed an issue with your connection",
             "body": (
-                "ONT {device_serial} has gone offline.\n\n"
-                "Subscriber: {subscriber_name}\n"
-                "Location: {location}\n\n"
-                "Please investigate the connectivity issue."
+                "Dear {subscriber_name},\n\n"
+                "We've detected that your service may currently be offline, and "
+                "our team is looking into it.\n\n"
+                "If your equipment has lost power, please check that it is "
+                "switched on. If the issue continues, please contact our support "
+                "team."
             ),
         },
         {
             "code": "ont_online",
-            "name": "ONT Online Alert",
+            "name": "Connection Restored",
             "channel": NotificationChannel.email,
-            "subject": "Network device back online — {device_serial}",
+            "subject": "Your connection is back online",
             "body": (
-                "ONT {device_serial} is back online.\n\n"
-                "Subscriber: {subscriber_name}\n"
-                "Downtime resolved."
+                "Dear {subscriber_name},\n\n"
+                "Good news — your service is back online. Thank you for your "
+                "patience.\n\n"
+                "If you continue to experience any issues, please contact our "
+                "support team."
             ),
         },
         {
             "code": "ont_signal_degraded",
-            "name": "ONT Signal Degraded",
+            "name": "Connection Quality Check",
             "channel": NotificationChannel.email,
-            "subject": "Fiber signal degraded — {device_serial}",
+            "subject": "We're checking on your connection quality",
             "body": (
-                "ONT {device_serial} is reporting degraded optical signal levels.\n\n"
-                "Subscriber: {subscriber_name}\n"
-                "Signal level: {signal_level} dBm\n\n"
-                "Please check the fiber path for potential issues."
+                "Dear {subscriber_name},\n\n"
+                "Our monitoring suggests your connection quality may be reduced, "
+                "and our team is looking into it. There is nothing you need to do "
+                "right now.\n\n"
+                "If you notice any problems, please contact our support team."
             ),
         },
         {
             "code": "ont_discovered",
-            "name": "ONT Discovered",
+            "name": "ONT Discovered (internal)",
             "channel": NotificationChannel.email,
             "subject": "New ONT discovered — {device_serial}",
             "body": (
                 "A new ONT has been discovered on the network.\n\n"
                 "Serial: {device_serial}\n"
-                "OLT: {olt_name}\n"
-                "PON Port: {pon_port}\n\n"
-                "This device is awaiting assignment to a subscriber."
+                "OLT: {location}\n\n"
+                "This device is awaiting assignment to a subscriber. (Internal "
+                "notification — not customer-facing.)"
             ),
         },
     ]
@@ -1044,6 +1056,12 @@ def seed_geocoding_settings(db: Session) -> None:
     )
     geocoding_settings.ensure_by_key(
         db,
+        key="country_codes",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_COUNTRY_CODES", "ng"),
+    )
+    geocoding_settings.ensure_by_key(
+        db,
         key="user_agent",
         value_type=SettingValueType.string,
         value_text=os.getenv("GEOCODING_USER_AGENT", "dotmac_sm"),
@@ -1071,6 +1089,47 @@ def seed_geocoding_settings(db: Session) -> None:
         key="batch_geocode_log_rows",
         value_type=SettingValueType.json,
         value_json=[],
+    )
+
+
+def seed_vas_settings(db: Session) -> None:
+    vas_settings.ensure_by_key(
+        db,
+        key="enabled",
+        value_type=SettingValueType.boolean,
+        value_text=os.getenv("VAS_ENABLED", "false"),
+        value_json=os.getenv("VAS_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="topup_min",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_TOPUP_MIN", "100"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="topup_max_per_txn",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_TOPUP_MAX_PER_TXN", "50000"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="topup_daily_limit",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_TOPUP_DAILY_LIMIT", "100000"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="purchase_txn_limit",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_PURCHASE_TXN_LIMIT", "50000"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="auth_threshold",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_AUTH_THRESHOLD", "5000"),
     )
 
 
@@ -1328,6 +1387,17 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.boolean,
         value_text=auto_suspend_raw,
         value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    customer_balance_notifications_raw = os.getenv(
+        "BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED", "true"
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="customer_balance_notifications_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=customer_balance_notifications_raw,
+        value_json=customer_balance_notifications_raw.lower()
+        in {"1", "true", "yes", "on"},
     )
     billing_settings.ensure_by_key(
         db,

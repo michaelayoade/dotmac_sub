@@ -1,0 +1,142 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - img [ref=e6]
+        - paragraph [ref=e9]: Viewing as customer
+      - button "Exit View" [ref=e11]:
+        - img [ref=e12]
+        - text: Exit View
+    - banner [ref=e14]:
+      - generic [ref=e16]:
+        - link "DotMac Subs" [ref=e17] [cursor=pointer]:
+          - /url: /portal
+          - img [ref=e19]
+          - generic [ref=e21]: DotMac Subs
+        - navigation [ref=e22]:
+          - link "Dashboard" [ref=e23] [cursor=pointer]:
+            - /url: /portal/dashboard
+          - link "Services" [ref=e24] [cursor=pointer]:
+            - /url: /portal/services
+          - link "Billing" [ref=e26] [cursor=pointer]:
+            - /url: /portal/billing
+          - link "Usage" [ref=e27] [cursor=pointer]:
+            - /url: /portal/usage
+          - link "Speed Test" [ref=e28] [cursor=pointer]:
+            - /url: /portal/speedtest
+          - link "Support" [ref=e29] [cursor=pointer]:
+            - /url: /portal/support
+          - link "Contacts" [ref=e30] [cursor=pointer]:
+            - /url: /portal/contacts
+          - button "More" [ref=e32]:
+            - text: More
+            - img [ref=e33]
+        - generic [ref=e35]:
+          - button "View notifications" [ref=e37]:
+            - img [ref=e38]
+          - button "Toggle dark mode" [ref=e40]:
+            - img [ref=e41]
+          - button "Open user menu" [ref=e44]:
+            - generic [ref=e45]: TC
+            - generic [ref=e46]: Test Customer
+            - img [ref=e47]
+    - main [ref=e49]:
+      - generic [ref=e52]:
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - navigation [ref=e55]:
+              - link "Services" [ref=e56] [cursor=pointer]:
+                - /url: /portal/services
+              - img [ref=e57]
+              - generic [ref=e59]: Change Plan
+            - heading "Change Your Plan" [level=1] [ref=e60]
+            - paragraph [ref=e61]: Select a new plan. Changes take effect immediately.
+            - paragraph [ref=e62]: Because this subscription is prepaid, any same-family upgrade is charged from your wallet using the prorated difference for the rest of this billing cycle.
+          - link "View change history" [ref=e63] [cursor=pointer]:
+            - /url: /portal/change-requests
+        - generic [ref=e65]:
+          - generic [ref=e66]:
+            - heading "Current Plan" [level=3] [ref=e67]
+            - paragraph [ref=e68]: Home Fiber 50
+          - generic [ref=e69]:
+            - paragraph [ref=e70]: NGN 8,000.00
+            - paragraph [ref=e71]: /month
+        - generic [ref=e72]:
+          - generic [ref=e73]:
+            - heading "Instant Plan Changes" [level=2] [ref=e74]
+            - paragraph [ref=e75]: These plans are in your current plan family and can be applied immediately.
+            - generic [ref=e76]:
+              - generic [ref=e77] [cursor=pointer]:
+                - radio "Home Fiber 100 NGN 15,000.00 /month +NGN 7,000.00/month" [checked] [ref=e78]
+                - generic [ref=e79]:
+                  - generic [ref=e80]:
+                    - heading "Home Fiber 100" [level=3] [ref=e82]
+                    - img [ref=e85]
+                  - generic [ref=e87]:
+                    - paragraph [ref=e88]: NGN 15,000.00 /month
+                    - paragraph [ref=e89]: +NGN 7,000.00/month
+              - generic [ref=e90] [cursor=pointer]:
+                - radio "Home Fiber 200 NGN 25,000.00 /month +NGN 17,000.00/month" [ref=e91]
+                - generic [ref=e92]:
+                  - generic [ref=e93]:
+                    - heading "Home Fiber 200" [level=3] [ref=e95]
+                    - img [ref=e98]
+                  - generic [ref=e100]:
+                    - paragraph [ref=e101]: NGN 25,000.00 /month
+                    - paragraph [ref=e102]: +NGN 17,000.00/month
+          - generic [ref=e117]:
+            - generic [ref=e118]:
+              - generic [ref=e119]:
+                - heading "Upgrade Summary" [level=2] [ref=e120]
+                - paragraph [ref=e121]: Review the remaining value on your current plan and the prorated amount required for the selected plan.
+              - generic [ref=e122]: Prepaid Upgrade
+            - generic [ref=e123]:
+              - generic [ref=e124]:
+                - paragraph [ref=e125]: Remaining Value
+                - paragraph [ref=e126]: NGN 7,975.78
+              - generic [ref=e127]:
+                - paragraph [ref=e128]: Required Today
+                - paragraph [ref=e129]: NGN 6,978.81
+              - generic [ref=e130]:
+                - paragraph [ref=e131]: Wallet Balance
+                - paragraph [ref=e132]: NGN 0.00
+              - generic [ref=e133]:
+                - paragraph [ref=e134]: Shortfall
+                - paragraph [ref=e135]: NGN 6,978.81
+            - paragraph [ref=e136]:
+              - generic [ref=e137]: Your current plan has NGN 7,975.78 remaining value.
+              - generic [ref=e138]: To upgrade today, an additional NGN 6,978.81 is required.
+            - link "Top Up Wallet" [ref=e140] [cursor=pointer]:
+              - /url: /portal/billing/topup
+          - generic [ref=e103]:
+            - generic [ref=e104]: Notes (optional)
+            - textbox "Notes (optional)" [ref=e105]:
+              - /placeholder: Any additional notes...
+          - generic [ref=e106]:
+            - link "Cancel" [ref=e107] [cursor=pointer]:
+              - /url: /portal/services
+            - button "Change Plan Now" [active] [ref=e108]
+        - generic [ref=e142]:
+          - generic [ref=e143]:
+            - img [ref=e145]
+            - heading "Confirm Plan Change" [level=3] [ref=e147]
+            - paragraph [ref=e148]: You are switching to Home Fiber 100. The recurring rate will be NGN 15,000.00 /month.
+            - generic [ref=e149]:
+              - paragraph [ref=e150]: "Remaining value: NGN 7,975.78"
+              - paragraph [ref=e151]: "Required today: NGN 6,978.81"
+              - paragraph [ref=e152]: "Wallet balance: NGN 0.00"
+              - paragraph [ref=e153]: "Shortfall: NGN 6,978.81"
+            - paragraph [ref=e154]: Because this subscription is prepaid, any same-family upgrade is charged from your wallet using the prorated difference for the rest of this billing cycle.
+            - paragraph [ref=e155]: This is an increase of NGN 7,000.00/month.
+          - generic [ref=e156]:
+            - button "Cancel" [ref=e157]
+            - button "Change Plan Now" [ref=e158]
+    - contentinfo [ref=e109]:
+      - generic [ref=e111]:
+        - generic [ref=e112]:
+          - link "Privacy Policy" [ref=e113] [cursor=pointer]:
+            - /url: /legal/privacy
+          - link "Terms of Service" [ref=e114] [cursor=pointer]:
+            - /url: /legal/terms
+        - paragraph [ref=e115]: © 2026 Dotmac Technologies. All rights reserved.
+  - status

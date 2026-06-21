@@ -26,12 +26,14 @@
             <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Manage invoices and payment history</p>
         </div>
         <div class="flex flex-col gap-3 sm:flex-row">
+            {% if not (customer and customer.read_only) %}
             <a href="/portal/billing/topup" class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:-translate-y-0.5">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                 </svg>
                 Add Funds
             </a>
+            {% endif %}
         </div>
     </div>
 
@@ -289,6 +291,47 @@
                 </div>
             </div>
         </div>
+        {% endif %}
+    </div>
+
+    <!-- Account Activity (ledger) -->
+    <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
+        <div class="border-b border-stone-100 px-6 py-4 dark:border-stone-700">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Account Activity</h2>
+            <p class="text-sm text-stone-500 dark:text-stone-400">Charges, payments, and credits on your account</p>
+        </div>
+        {% if billing_activity %}
+        <ul class="divide-y divide-stone-100 dark:divide-stone-700">
+            {% for entry in billing_activity %}
+            {% set is_credit = entry.direction == 'credit' %}
+            <li class="flex items-center gap-4 px-6 py-4">
+                <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full {{ 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' if is_credit else 'bg-stone-100 text-stone-500 dark:bg-stone-700 dark:text-stone-300' }}">
+                    {% if is_credit %}
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                    {% else %}
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                    {% endif %}
+                </span>
+                <div class="min-w-0 flex-1">
+                    <p class="truncate text-sm font-semibold text-stone-900 dark:text-white">
+                        {{ entry.title }}
+                    </p>
+                    <p class="text-xs text-stone-500 dark:text-stone-400">
+                        {{ entry.occurred_at.strftime('%b %d, %Y · %H:%M') if entry.occurred_at else 'Date unavailable' }}
+                        {% if entry.reference %} · {{ entry.reference }}{% endif %}
+                    </p>
+                    {% if entry.description and entry.description != entry.title %}
+                    <p class="mt-0.5 truncate text-xs text-stone-500 dark:text-stone-400">{{ entry.description }}</p>
+                    {% endif %}
+                </div>
+                <span class="flex-shrink-0 text-sm font-bold {{ 'text-emerald-600 dark:text-emerald-400' if is_credit else 'text-stone-700 dark:text-stone-200' }}">
+                    {{ '+' if is_credit else '−' }}{{ entry.currency }} {{ "{:,.2f}".format(entry.amount) }}
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="px-6 py-10 text-center text-sm text-stone-500 dark:text-stone-400">No account activity yet.</div>
         {% endif %}
     </div>
 </div>

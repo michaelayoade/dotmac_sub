@@ -67,8 +67,8 @@ def resolve_olt_device_for_network_device(
         "vendor": device.vendor,
         "model": device.model,
         "serial_number": device.serial_number,
-        "notes": device.notes,
-        "is_active": bool(device.is_active),
+        "notes": _promoted_olt_notes(device.notes),
+        "is_active": False,
     }
     try:
         return network_service.olt_devices.create(db=db, payload=payload)
@@ -92,6 +92,19 @@ def resolve_olt_device_for_network_device(
         if matched:
             return matched
         raise
+
+
+def _promoted_olt_notes(notes: str | None) -> str:
+    marker = (
+        "Auto-created from monitoring inventory. Complete the OLT config pack "
+        "and activate before provisioning."
+    )
+    existing = str(notes or "").strip()
+    if not existing:
+        return marker
+    if marker in existing:
+        return existing
+    return f"{existing}\n\n{marker}"
 
 
 def _status_presenter(raw_status: str | None) -> tuple[str, str]:

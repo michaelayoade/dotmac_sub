@@ -25,6 +25,32 @@ logger = logging.getLogger(__name__)
 
 _SERVICEABLE_RADIUS_KM = 1.5
 
+# Legal status transitions. ``completed`` and ``rejected`` are terminal — a
+# request there cannot be reopened or flipped (open a new request instead);
+# this stops a replayed/admin call from resurrecting a closed request and
+# re-firing the reseller notification. Re-setting the same status is a no-op.
+_ALLOWED_STATUS_TRANSITIONS: dict[ServiceRequestStatus, set[ServiceRequestStatus]] = {
+    ServiceRequestStatus.new: {
+        ServiceRequestStatus.reviewing,
+        ServiceRequestStatus.scheduled,
+        ServiceRequestStatus.completed,
+        ServiceRequestStatus.rejected,
+    },
+    ServiceRequestStatus.reviewing: {
+        ServiceRequestStatus.new,
+        ServiceRequestStatus.scheduled,
+        ServiceRequestStatus.completed,
+        ServiceRequestStatus.rejected,
+    },
+    ServiceRequestStatus.scheduled: {
+        ServiceRequestStatus.reviewing,
+        ServiceRequestStatus.completed,
+        ServiceRequestStatus.rejected,
+    },
+    ServiceRequestStatus.completed: set(),
+    ServiceRequestStatus.rejected: set(),
+}
+
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
@@ -97,6 +123,14 @@ def create_request(
     longitude: float | None,
     notes: str | None,
 ) -> dict:
+    # Normalize before validating: the guard must see whitespace-only input as
+    # empty, otherwise "   " is truthy here yet stored as None below — letting a
+    # blank-contact request through the exact check meant to block it.
+    contact_name = (contact_name or "").strip() or None
+    contact_phone = (contact_phone or "").strip() or None
+    contact_email = (contact_email or "").strip() or None
+    address = (address or "").strip() or None
+    notes = (notes or "").strip() or None
     if not subscriber_id and not (contact_name and contact_phone):
         raise HTTPException(
             status_code=400,
@@ -112,14 +146,14 @@ def create_request(
     req = ResellerServiceRequest(
         reseller_id=coerce_uuid(reseller_id),
         subscriber_id=coerce_uuid(subscriber_id) if subscriber_id else None,
-        contact_name=(contact_name or "").strip() or None,
-        contact_phone=(contact_phone or "").strip() or None,
-        contact_email=(contact_email or "").strip() or None,
-        address=(address or "").strip() or None,
+        contact_name=contact_name,
+        contact_phone=contact_phone,
+        contact_email=contact_email,
+        address=address,
         latitude=latitude,
         longitude=longitude,
         serviceability=flag,
-        notes=(notes or "").strip() or None,
+        notes=notes,
     )
     db.add(req)
     db.commit()
@@ -174,6 +208,16 @@ def update_status(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid status") from None
     old_status = req.status
+    if new_status != old_status and (
+        new_status not in _ALLOWED_STATUS_TRANSITIONS.get(old_status, set())
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Illegal service-request status transition: "
+                f"{old_status.value} -> {new_status.value}"
+            ),
+        )
     req.status = new_status
     if admin_notes is not None:
         req.admin_notes = admin_notes.strip() or None

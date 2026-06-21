@@ -1,0 +1,199 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Pay Bills - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-8" x-data="billsPage()">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+            <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Pay Bills</h1>
+            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Airtime, data and more — paid from your wallet.</p>
+        </div>
+        <a href="/portal/wallet" class="rounded-2xl border border-stone-200 bg-white px-6 py-4 text-right shadow-premium transition-colors hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:hover:bg-stone-700/60">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Wallet balance</p>
+            <p class="mt-1 text-2xl font-display font-bold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(balance) }}</p>
+        </a>
+    </div>
+
+    {% if form_error %}
+    {% set error = form_error %}
+    {% include "components/feedback/form_error.html" %}
+    {% endif %}
+
+    {% if not catalog %}
+    <div class="rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <p class="text-sm text-stone-500 dark:text-stone-400">Bill payments are coming soon.</p>
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(20rem,1fr)]">
+        <div class="space-y-6">
+            {% for bucket in catalog %}
+            <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+                <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+                    <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">{{ bucket.category | replace('-', ' ') | title }}</h2>
+                </div>
+                <div class="grid gap-3 p-6 sm:grid-cols-2">
+                    {% for service in bucket.services %}
+                    <button type="button"
+                            data-service="{{ service | tojson | forceescape }}"
+                            x-on:click="selectService(JSON.parse($el.dataset.service))"
+                            class="rounded-xl border-2 px-4 py-3 text-left text-sm font-semibold transition-colors"
+                            :class="selected && selected.service_id === '{{ service.service_id }}' ? 'border-[var(--color-brand-500)] bg-[var(--color-brand-500)]/5 text-stone-900 dark:text-white' : 'border-stone-200 text-stone-700 hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700/50'">
+                        {{ service.name }}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+
+            <!-- Recent purchases -->
+            <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+                <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+                    <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Recent purchases</h2>
+                </div>
+                <div class="divide-y divide-stone-200 dark:divide-stone-700">
+                    {% for txn in transactions %}
+                    <a href="/portal/bills/receipt/{{ txn.id }}" class="flex items-center justify-between px-6 py-3 text-sm transition-colors hover:bg-stone-50 dark:hover:bg-stone-700/40">
+                        <div>
+                            <p class="font-medium text-stone-900 dark:text-white">{{ txn.service.name if txn.service else 'Purchase' }} · {{ txn.identifier }}</p>
+                            <p class="text-xs text-stone-500 dark:text-stone-400">{{ txn.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="font-mono font-semibold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(txn.amount) }}</p>
+                            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium
+                                {% if txn.status.value == 'delivered' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300
+                                {% elif txn.status.value in ['refunded', 'failed'] %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300
+                                {% elif txn.status.value == 'review' %}bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300
+                                {% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% endif %}">
+                                {{ txn.status.value | title }}
+                            </span>
+                        </div>
+                    </a>
+                    {% else %}
+                    <p class="px-6 py-8 text-sm text-stone-500 dark:text-stone-400">No purchases yet.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Purchase form -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800" x-show="selected" x-cloak>
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white" x-text="selected ? selected.name : ''"></h2>
+            <form method="post" action="/portal/bills/purchase" class="mt-4 space-y-4" x-on:submit="return submitGuard($event)">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="service_id" :value="selected ? selected.service_id : ''">
+                <div>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" x-text="selected ? selected.identifier_label : 'Number'"></label>
+                    <input type="text" name="identifier" x-model="identifier" required
+                           :disabled="verifying"
+                           x-on:input="verifiedName = ''; verifyError = ''"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    <template x-if="selected && selected.requires_verify">
+                        <div class="mt-2">
+                            <button type="button" x-on:click="verify()" :disabled="verifying" class="inline-flex items-center gap-1.5 text-sm font-semibold text-[var(--color-brand-600)] hover:underline disabled:opacity-60">
+                                <svg x-show="verifying" class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                <span x-text="verifying ? 'Checking…' : 'Check name'"></span>
+                            </button>
+                            <p class="mt-1 text-sm" :class="verifyError ? 'text-rose-600' : 'text-emerald-700 dark:text-emerald-400'" x-text="verifyError || verifiedName"></p>
+                        </div>
+                    </template>
+                </div>
+                <template x-if="selected && selected.variations && selected.variations.length">
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Plan</label>
+                        <select name="variation_code" x-model="variation"
+                                class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                            <option value="">Select a plan…</option>
+                            <template x-for="v in selected.variations" :key="v.code">
+                                <option :value="v.code" x-text="v.name + (v.amount ? ' — ₦' + v.amount : '')"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+                <div x-show="!variationHasPrice()">
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Amount (₦)</label>
+                    <input type="number" name="amount" x-model="amount" min="0.01" step="0.01"
+                           oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </div>
+                <button type="submit" :disabled="submitting"
+                        class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60">
+                    <svg x-show="submitting" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span x-text="submitting ? 'Processing…' : 'Pay from wallet'"></span>
+                </button>
+                <p class="text-xs text-stone-500 dark:text-stone-400">If delivery fails, the money returns to your wallet instantly.</p>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function billsPage() {
+    return {
+        selected: null,
+        identifier: '',
+        variation: '',
+        amount: '',
+        verifying: false,
+        submitting: false,
+        verifiedName: '',
+        verifyError: '',
+        selectService(service) {
+            this.selected = service;
+            this.identifier = '';
+            this.variation = '';
+            this.amount = '';
+            this.verifiedName = '';
+            this.verifyError = '';
+        },
+        variationHasPrice() {
+            if (!this.selected || !this.variation) return false;
+            const v = (this.selected.variations || []).find(x => x.code === this.variation);
+            return !!(v && v.amount);
+        },
+        submitGuard(event) {
+            if (this.selected && this.selected.requires_verify && !this.verifiedName) {
+                event.preventDefault();
+                this.verifyError = 'Check the customer name before paying.';
+                return false;
+            }
+            if (!this.variationHasPrice()) {
+                const value = parseFloat(this.amount);
+                if (!value || value <= 0) {
+                    event.preventDefault();
+                    this.verifyError = 'Enter an amount greater than ₦0.';
+                    return false;
+                }
+                if (Math.round(value * 100) !== value * 100) {
+                    event.preventDefault();
+                    this.verifyError = 'Amount can have at most 2 decimal places.';
+                    return false;
+                }
+            }
+            this.submitting = true;
+            return true;
+        },
+        async verify() {
+            this.verifying = true;
+            this.verifyError = '';
+            this.verifiedName = '';
+            try {
+                const response = await fetch('/portal/bills/verify', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({service_id: this.selected.service_id, identifier: this.identifier})
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.detail || 'Could not verify.');
+                this.verifiedName = payload.customer_name || 'Verified';
+            } catch (error) {
+                this.verifyError = error.message || 'Could not verify.';
+            } finally {
+                this.verifying = false;
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

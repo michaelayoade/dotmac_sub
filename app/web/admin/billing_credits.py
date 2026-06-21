@@ -99,6 +99,7 @@ def billing_credit_create(
             memo=memo,
         )
     except Exception as exc:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(

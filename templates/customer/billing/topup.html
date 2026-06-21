@@ -4,8 +4,7 @@
 
 {% block content %}
 {% set topup_options = payment_options|default([
-    {"provider_type": "paystack", "label": "Pay with Paystack"},
-    {"provider_type": "flutterwave", "label": "Pay with Flutterwave"}
+    {"provider_type": "paystack", "label": "Pay with Paystack"}
 ], true) %}
 <div class="space-y-6" x-data="topupPage()">
     <div>
@@ -19,6 +18,28 @@
             Add money to your account online. Any overdue invoices are settled first, and any remainder is kept as account credit.
         </p>
     </div>
+    {% if transfer_success %}
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
+        {{ transfer_success }}
+    </div>
+    {% endif %}
+    {% if add_card %}
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
+        <p class="font-semibold">Adding a card</p>
+        <p class="mt-1">Pay with Paystack and we&rsquo;ll save the card for next time. Choose any amount &mdash; it&rsquo;s added to your account balance, nothing is wasted. &ldquo;Save this card&rdquo; is already ticked below.</p>
+    </div>
+    {% endif %}
+    {% if pending_direct_transfer %}
+    <div class="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <p class="font-semibold">You have a pending bank transfer top-up.</p>
+            <p class="mt-1">Reference {{ pending_direct_transfer.reference }} for {{ pending_direct_transfer.currency }} {{ "{:,.2f}".format(pending_direct_transfer.amount) }}.</p>
+        </div>
+        <a href="/portal/billing/topup/transfer" class="inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
+            Continue
+        </a>
+    </div>
+    {% endif %}
 
     <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
         <div class="space-y-6">
@@ -41,20 +62,8 @@
                 </div>
             </div>
 
-            <div class="mt-6 grid gap-3 sm:grid-cols-3">
-                {% for amount in preset_amounts %}
-                <button
-                    type="button"
-                    @click="setAmount({{ amount }})"
-                    :class="currentAmount() === {{ amount }} ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700/50'"
-                    class="rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-all">
-                    &#8358;{{ "{:,.0f}".format(amount) }}
-                </button>
-                {% endfor %}
-            </div>
-
             <div class="mt-6 rounded-2xl border border-dashed border-stone-300 bg-stone-50/70 p-5 dark:border-stone-600 dark:bg-stone-900/20">
-                <label for="custom_amount" class="block text-sm font-semibold text-stone-900 dark:text-white">Custom amount</label>
+                <label for="custom_amount" class="block text-sm font-semibold text-stone-900 dark:text-white">Amount</label>
                 <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Enter any amount within the configured limits.</p>
                 <div class="mt-4 flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 dark:border-stone-700 dark:bg-stone-800">
                     <span class="text-lg font-semibold text-stone-500 dark:text-stone-400">&#8358;</span>
@@ -93,64 +102,24 @@
             <div>
                 <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Payment method</h2>
                 <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Choose how you want to pay after setting the amount.</p>
+                <button
+                    type="button"
+                    @click="showTopupHelp = true"
+                    class="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
+                    <span>What happens after I pay?</span>
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white dark:bg-emerald-500">?</span>
+                </button>
             </div>
 
             <div class="mt-5 space-y-3">
                 {% for option in topup_options %}
-                <label
-                    :class="selectedPaymentChoice === 'provider:{{ option.provider_type }}' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600'"
-                    class="flex cursor-pointer items-center gap-4 rounded-2xl border p-4 transition-colors">
-                    <input
-                        type="radio"
-                        name="payment_choice"
-                        value="provider:{{ option.provider_type }}"
-                        x-model="selectedPaymentChoice"
-                        class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
-                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
-                        <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4-3h5M7 19h10a4 4 0 004-4V9a4 4 0 00-4-4H7a4 4 0 00-4 4v6a4 4 0 004 4z"/>
-                        </svg>
-                    </span>
-                    <span class="min-w-0 flex-1">
-                        <span class="block text-sm font-semibold text-stone-900 dark:text-white">{{ option.label }}</span>
-                        <span class="mt-0.5 block text-sm text-stone-500 dark:text-stone-400">
-                            Secure online checkout
-                        </span>
-                    </span>
-                </label>
+                {% set payment_choice_type = "provider" %}
+                {% include "customer/billing/_payment_method_choice.html" %}
                 {% endfor %}
 
                 {% for method in payment_methods|default([]) %}
-                <label
-                    :class="selectedPaymentChoice === 'card:{{ method.id }}' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:hover:border-stone-600'"
-                    class="flex cursor-pointer items-center gap-4 rounded-2xl border p-4 transition-colors">
-                    <input
-                        type="radio"
-                        name="payment_choice"
-                        value="card:{{ method.id }}"
-                        x-model="selectedPaymentChoice"
-                        class="h-4 w-4 border-stone-300 text-emerald-600 focus:ring-emerald-500">
-                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-stone-100 dark:bg-stone-700">
-                        <svg class="h-5 w-5 text-stone-600 dark:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
-                        </svg>
-                    </span>
-                    <span class="min-w-0 flex-1">
-                        <span class="block truncate text-sm font-semibold text-stone-900 dark:text-white">
-                            {{ method.label or ((method.brand or "Card") ~ (" ending in " ~ method.last4 if method.last4 else "")) }}
-                        </span>
-                        <span class="mt-0.5 block text-sm text-stone-500 dark:text-stone-400">
-                            {% if method.expires_month and method.expires_year %}
-                            Expires {{ "%02d"|format(method.expires_month) }}/{{ method.expires_year }}
-                            {% else %}
-                            Saved payment method
-                            {% endif %}
-                        </span>
-                    </span>
-                    {% if method.is_default %}
-                    <span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Default</span>
-                    {% endif %}
-                </label>
+                {% set payment_choice_type = "card" %}
+                {% include "customer/billing/_payment_method_choice.html" %}
                 {% endfor %}
             </div>
 
@@ -185,66 +154,13 @@
         </div>
 
         <!-- Autopay -->
-        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
-            <div class="flex items-start justify-between gap-4">
-                <div>
-                    <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Autopay</h2>
-                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
-                        Automatically charge your saved card when invoices fall due.
-                    </p>
-                </div>
-                {% if autopay and autopay.enabled %}
-                <span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">On</span>
-                {% else %}
-                <span class="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-300">Off</span>
-                {% endif %}
-            </div>
-
-            {% if autopay_success %}
-            <p class="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">{{ autopay_success }}</p>
-            {% endif %}
-            {% if autopay_error %}
-            <p class="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">{{ autopay_error }}</p>
-            {% endif %}
-
-            {% if autopay and autopay.enabled %}
-                {% if autopay.suspended %}
-                <p class="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                    Autopay is paused after {{ autopay.failure_count }} failed charge attempts{% if autopay.last_failure_reason %} ({{ autopay.last_failure_reason }}){% endif %}.
-                    Set a new default card or turn autopay off and on again to retry.
-                </p>
-                {% endif %}
-                {% set autopay_ns = namespace(card=none) %}
-                {% for method in payment_methods|default([]) %}
-                    {% if autopay.payment_method_id and method.id|string == autopay.payment_method_id %}
-                        {% set autopay_ns.card = method %}
-                    {% endif %}
-                {% endfor %}
-                {% if autopay_ns.card %}
-                <p class="mt-4 text-sm text-stone-600 dark:text-stone-300">
-                    Charging {{ autopay_ns.card.label or ((autopay_ns.card.brand or "Card") ~ (" ending in " ~ autopay_ns.card.last4 if autopay_ns.card.last4 else "")) }}.
-                </p>
-                {% endif %}
-                <form method="post" action="/portal/billing/autopay/disable" class="mt-4">
-                    {% include "components/forms/csrf_input.html" %}
-                    <button type="submit" class="rounded-xl border border-stone-300 px-4 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700/50">
-                        Turn off autopay
-                    </button>
-                </form>
-            {% elif payment_methods|default([]) %}
-                <form method="post" action="/portal/billing/autopay/enable" class="mt-4">
-                    {% include "components/forms/csrf_input.html" %}
-                    <button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700">
-                        Turn on autopay
-                    </button>
-                    <p class="mt-2 text-xs text-stone-500 dark:text-stone-400">Uses your default saved card.</p>
-                </form>
-            {% else %}
-                <p class="mt-4 text-sm text-stone-500 dark:text-stone-400">
-                    Save a card during a Paystack payment (tick &ldquo;Save this card&rdquo;) and you can turn on autopay here.
-                </p>
-            {% endif %}
-        </div>
+        {% set autopay_cards = payment_methods|default([]) %}
+        {% set autopay_success_message = autopay_success %}
+        {% set autopay_error_message = autopay_error %}
+        {% set autopay_suspended_message = 'Set a new default card or turn autopay off and on again to retry.' %}
+        {% set autopay_empty_message = 'Save a card during a Paystack payment (tick "Save this card") and you can turn on autopay here.' %}
+        {% set autopay_read_only = false %}
+        {% include "customer/billing/_autopay_panel.html" %}
         </div>
 
         <div class="space-y-4">
@@ -264,15 +180,42 @@
                     </div>
                 </dl>
             </div>
+        </div>
+    </div>
 
-            <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
-                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">What happens next</h2>
-                <ol class="mt-4 space-y-3 text-sm text-stone-600 dark:text-stone-300">
-                    <li>1. Pay the amount you choose.</li>
-                    <li>2. We verify the payment when you return from the gateway.</li>
-                    <li>3. Any overdue invoices are paid first, then the remainder becomes account credit.</li>
-                </ol>
+    <div
+        x-show="showTopupHelp"
+        x-cloak
+        class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/50 px-4 py-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="topup-help-title"
+        @keydown.escape.window="showTopupHelp = false">
+        <div class="absolute inset-0" @click="showTopupHelp = false"></div>
+        <div
+            x-show="showTopupHelp"
+            x-transition
+            class="relative w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-2xl dark:border-stone-700 dark:bg-stone-900">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Top-up details</p>
+                    <h2 id="topup-help-title" class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">What happens next</h2>
+                </div>
+                <button
+                    type="button"
+                    @click="showTopupHelp = false"
+                    class="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-stone-200 text-stone-500 transition-colors hover:bg-stone-50 hover:text-stone-700 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800 dark:hover:text-white">
+                    <span class="sr-only">Close</span>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
             </div>
+            <ol class="mt-5 space-y-3 text-sm text-stone-600 dark:text-stone-300">
+                <li>1. Pay the amount you choose.</li>
+                <li>2. We verify the payment when you return from the gateway.</li>
+                <li>3. Any overdue invoices are paid first, then the remainder becomes account credit.</li>
+            </ol>
         </div>
     </div>
 </div>
@@ -282,18 +225,23 @@ function topupPage() {
     return {
         processing: false,
         liveReference: '',
-        customAmount: '',
+        customAmount: '{{ prefill_amount if prefill_amount else "" }}',
         validationError: '',
-        saveCard: false,
+        providerErrors: {},
+        showTopupHelp: false,
+        saveCard: {{ 'true' if add_card else 'false' }},
         selectedPaymentChoice: 'provider:{{ provider_type }}',
+        idempotencyKey: null,
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
-        setAmount(amount) {
-            this.customAmount = String(amount);
-            this.validationError = '';
-        },
         syncCustomAmount() {
             this.validationError = '';
+        },
+        providerErrorFor(providerType) {
+            return this.providerErrors[providerType] || '';
+        },
+        clearProviderErrors() {
+            this.providerErrors = {};
         },
         currentAmount() {
             const parsed = parseInt(this.customAmount, 10);
@@ -342,6 +290,7 @@ function topupPage() {
         },
         async startPayment() {
             const amount = this.currentAmount();
+            this.clearProviderErrors();
             if (!amount) {
                 this.validationError = 'Enter a valid amount before continuing.';
                 return;
@@ -357,50 +306,49 @@ function topupPage() {
 
             this.processing = true;
             this.validationError = '';
+            this.clearProviderErrors();
             const self = this;
-            let intent;
             const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
-            const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : 'paystack';
+            const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
+            const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
+            // One idempotency key per page session (not per click): a saved-card
+            // charge that succeeded but lost its response replays on re-click
+            // instead of charging twice.
+            if (!this.idempotencyKey) {
+                this.idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
+            }
 
+            let result;
             try {
-                const response = await fetch('/portal/billing/topup/intent', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': this.csrfToken(),
-                    },
-                    body: JSON.stringify({
+                result = await submitPaymentIntent({
+                    endpoint: '/portal/billing/topup/intent',
+                    verifyPath: '/portal/billing/topup/verify',
+                    csrfToken: this.csrfToken(),
+                    idempotencyKey: this.idempotencyKey,
+                    body: {
                         amount: amount,
-                        provider: selectedProvider,
+                        provider: requestProvider,
                         payment_method_id: selectedPaymentMethodId,
-                    }),
+                    },
                 });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Unable to start payment.');
-                }
-                intent = payload;
-                this.liveReference = intent.reference || '';
-                if (intent.charged) {
-                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(intent.reference) + '&provider=paystack';
-                    return;
-                }
-                if (intent.checkout_url) {
-                    window.location.href = intent.checkout_url;
-                    return;
-                }
             } catch (error) {
                 this.processing = false;
-                this.validationError = error.message || 'Unable to start payment.';
+                if (selectedProvider) {
+                    this.providerErrors = {
+                        ...this.providerErrors,
+                        [selectedProvider]: error.message || 'Unable to start payment.',
+                    };
+                } else {
+                    this.validationError = error.message || 'Unable to start payment.';
+                }
                 return;
             }
-
-            if (intent.provider_type === 'flutterwave') {
-                this.processing = false;
-                this.validationError = 'Unable to start Flutterwave checkout.';
+            if (result.handled) {
                 return;
             }
+            const intent = result.intent;
+            this.liveReference = intent.reference || '';
 
             const handler = PaystackPop.setup({
                 key: intent.provider_public_key,
@@ -422,6 +370,7 @@ function topupPage() {
 }
 </script>
 
+{% include "customer/billing/_payment_intent_js.html" %}
 {% set topup_provider_types = topup_options|map(attribute="provider_type")|list %}
 {% if "paystack" in topup_provider_types %}
 <script src="https://js.paystack.co/v1/inline.js"></script>

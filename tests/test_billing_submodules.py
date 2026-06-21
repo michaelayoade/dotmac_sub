@@ -223,7 +223,8 @@ class TestInvoiceWriteOffVoid:
         )
         result = billing_service.invoices.write_off(db_session, str(invoice.id))
         assert result.balance_due == Decimal("0.00")
-        assert result.status == InvoiceStatus.void
+        # Bad-debt write-off is closed-but-not-collected, NOT void/paid.
+        assert result.status == InvoiceStatus.written_off
 
     def test_write_off_invoice_zero_balance(self, db_session, subscriber):
         invoice = _make_invoice(
@@ -250,6 +251,36 @@ class TestInvoiceWriteOffVoid:
         assert result.status == InvoiceStatus.void
         assert result.balance_due == Decimal("0.00")
         assert result.memo == "Void reason"
+
+    def test_void_paid_invoice_rejected(self, db_session, subscriber):
+        # Voiding a paid invoice would strand its payment / desync AR. The
+        # canonical service must refuse it (matching bulk-void's skip rule).
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("0.00"),
+            status=InvoiceStatus.paid,
+        )
+        with pytest.raises(HTTPException) as exc:
+            billing_service.invoices.void(db_session, str(invoice.id))
+        assert exc.value.status_code == 400
+        refreshed = db_session.get(Invoice, invoice.id)
+        assert refreshed.status == InvoiceStatus.paid
+
+    def test_void_already_void_rejected(self, db_session, subscriber):
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("50.00"),
+        )
+        billing_service.invoices.void(db_session, str(invoice.id))
+        with pytest.raises(HTTPException) as exc:
+            billing_service.invoices.void(db_session, str(invoice.id))
+        assert exc.value.status_code == 400
 
     def test_bulk_write_off(self, db_session, subscriber):
         inv1 = _make_invoice(
@@ -1198,6 +1229,31 @@ class TestPaymentCRUD:
         assert payment.amount == Decimal("100.00")
         assert payment.currency == "USD"
 
+    def test_duplicate_manual_payment_blocked(self, db_session, subscriber):
+        # #29: a double-clicked manual "record payment" must not double-credit.
+        billing_service.payments.create(
+            db_session,
+            PaymentCreate(account_id=subscriber.id, amount=Decimal("5000.00")),
+        )
+        with pytest.raises(HTTPException) as exc:
+            billing_service.payments.create(
+                db_session,
+                PaymentCreate(account_id=subscriber.id, amount=Decimal("5000.00")),
+            )
+        assert exc.value.status_code == 409
+
+    def test_manual_payment_different_amount_not_blocked(self, db_session, subscriber):
+        # The guard is amount-specific: a genuinely different amount goes through.
+        billing_service.payments.create(
+            db_session,
+            PaymentCreate(account_id=subscriber.id, amount=Decimal("5000.00")),
+        )
+        second = billing_service.payments.create(
+            db_session,
+            PaymentCreate(account_id=subscriber.id, amount=Decimal("5001.00")),
+        )
+        assert second.id is not None
+
     def test_create_payment_zero_amount(self, db_session, subscriber):
         with pytest.raises(Exception):
             billing_service.payments.create(
@@ -1865,3 +1921,73 @@ class TestPaymentMarkStatus:
                 db_session, str(uuid.uuid4()), PaymentStatus.succeeded
             )
         assert exc.value.status_code == 404
+
+
+class TestOverpaymentAllocation:
+    """Regression #11: an overpayment must cap the allocation at the invoice's
+    remaining balance and credit the surplus to the account — not over-allocate
+    the invoice and silently absorb the extra."""
+
+    def test_overpayment_caps_allocation_and_credits_surplus(
+        self, db_session, subscriber
+    ):
+        from app.models.billing import PaymentAllocation
+        from app.services.customer_portal_flow_changes import _customer_credit_balance
+
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            currency="NGN",
+            subtotal=Decimal("10000.00"),
+            total=Decimal("10000.00"),
+            balance_due=Decimal("10000.00"),
+            status=InvoiceStatus.issued,
+        )
+        # Partial payment leaves NGN 6,000 due.
+        billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("4000.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                allocations=[
+                    PaymentAllocationApply(
+                        invoice_id=invoice.id, amount=Decimal("4000.00")
+                    )
+                ],
+            ),
+        )
+        # Overpay: NGN 10,000 against the NGN 6,000 remaining.
+        billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("10000.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                allocations=[
+                    PaymentAllocationApply(
+                        invoice_id=invoice.id, amount=Decimal("10000.00")
+                    )
+                ],
+            ),
+        )
+        db_session.refresh(invoice)
+
+        alloc_total = sum(
+            (
+                a.amount
+                for a in db_session.query(PaymentAllocation)
+                .filter(PaymentAllocation.invoice_id == invoice.id)
+                .all()
+            ),
+            Decimal("0.00"),
+        )
+        # Allocations never exceed the invoice total (was 14,000 before the fix).
+        assert alloc_total == Decimal("10000.00")
+        assert invoice.balance_due == Decimal("0.00")
+        # The NGN 4,000 surplus is credited to the account, not lost.
+        assert _customer_credit_balance(db_session, str(subscriber.id)) == Decimal(
+            "4000.00"
+        )

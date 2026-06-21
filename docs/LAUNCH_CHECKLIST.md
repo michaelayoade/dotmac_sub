@@ -1,7 +1,7 @@
 # Customer Onboarding Launch Checklist
 
 Pre-launch test checklist before bringing real customers onto the platform.
-Status as of **2026-06-11**. Update the checkboxes and dates as items are verified.
+Status as of **2026-06-12**. Update the checkboxes and dates as items are verified.
 
 Legend:
 - `[x]` verified working (date + how in parentheses)
@@ -42,11 +42,10 @@ final gate.
       separate GlitchTip mobile project) — note the DSN is plain http://, which
       mobile release builds block by default (cleartext); HTTPS or a cleartext
       exemption needed — then set in brand.json + rebuild.
-- [ ] ⚠️ Migration-number coordination: merged PR #196 took revision 138
-      (service extensions; not yet applied to prod DB — run `make
-      docker-migrate` on next deploy). Open PR #192's MFA-lockout migration
-      also claims 138 off 137 and MUST be renumbered to 139 before merging,
-      or main gets two alembic heads (same failure repaired 2026-06-11 AM).
+- [x] Migration-number coordination resolved (2026-06-12): #192 (MFA lockout)
+      and #196 (service extensions) both merged; alembic heads merged on the
+      prelaunch branch (commit cf7e82b2), main's single head is 141. Operator
+      remainder: run `make docker-migrate` on next deploy to apply on prod DB.
 
 ## 1. Auth & account access
 
@@ -64,19 +63,19 @@ final gate.
       first login
 - [ ] MFA: enroll, login challenge, wrong-code rejection — on all three portals.
       Status: PR #192 (login lockout, MFA wrong-code lockout, session epochs +
-      30d absolute cap, admin remember-me fix) is OPEN and CI-green; deploy
-      needs its migration (renumber to 139 first) + restart.
-      Wrong-code lockout (5 codes / 15 min per method, migration 138) and the
-      admin "Reset MFA" recovery button on the customer page are new in the
-      auth-hardening PR — include both in the manual pass.
+      30d absolute cap, admin remember-me fix) MERGED 2026-06-12; deploy needs
+      its migration (138) + restart. Wrong-code lockout (5 codes / 15 min per
+      method) and the admin "Reset MFA" recovery button on the customer page
+      shipped in that PR — include both in the manual real-portal pass.
 - [ ] Account lockout after 5 failed attempts, 15 min unlock; "account
-      disabled" and canceled-subscriber rejections. Hardening PR notes: lock is
-      now checked before password verify (no oracle, no indefinite re-locking);
+      disabled" and canceled-subscriber rejections. Shipped in #192 (merged
+      2026-06-12), manual pass owed: lock is checked before password verify (no oracle, no indefinite re-locking);
       the customer RADIUS/PPPoE web path gets a per-username attempt throttle
       (10/15min, in-memory per-worker) plus canceled/disabled status checks;
       admin "reset password" now clears an existing lockout.
 - [ ] Session expiry/refresh, remember-me duration, logout, revoke-all-sessions
-      (mobile sessions screen). Hardening PR notes: admin remember-me now real
+      (mobile sessions screen). Shipped in #192 (merged 2026-06-12), manual
+      pass owed: admin remember-me now real
       (session cookies unless ticked — verify a non-remembered admin is logged
       out after browser restart); portal sessions capped at 30 days absolute
       (`customer/reseller_session_absolute_ttl_seconds`); password change/reset
@@ -100,23 +99,26 @@ final gate.
       (2026-06-11 lifecycle/network launch review: PASS; session observability
       PR #142, reaper 1h/15min)
 - [ ] ⚠️ Suspend → customer actually loses access (enforcement) → resume
-      restores. 2026-06-11 review found enforcement LEAKY: zero CoA
-      disconnects had ever fired (NAS records lack local shared secret) and
-      ~42 suspended users stayed online. Fixes in flight, both CI-green:
-      PR #194 (secret fallback + loud logging; review wants Disconnect-NAK
-      treated as failure before merge) and PR #197 (6-hourly leak audit;
-      review: gauge isn't exported from celery workers + audited population
-      too broad — rework). Re-test end-to-end after they land.
+      restores. The 2026-06-11 review found enforcement LEAKY (no CoA
+      disconnects ever fired — NAS records lacked the local shared secret —
+      ~42 suspended users stayed online). FIXED & MERGED 2026-06-12: #194
+      (CoA secret fallback + loud logging), #197 (suspension leak-audit gauge),
+      single-writer radcheck (#209), enforcement reconciler (ce93079f) with
+      billing-aware suspend guards, and _send_coa_update repair (af2983f4);
+      15-min reconciler + hourly password sync firing on cadence, platform
+      converged overnight. Remaining: end-to-end manual re-test against a live
+      line; operator flip of group_routing_enabled; Splynx multi-sub cleanup.
 - [ ] Self-service ONT reboot reaches the device (TR-069/GenieACS).
       Notes: only ~17% of ONTs are TR-069-managed (2026-06-11 review);
-      PR #198 adds a 5-min per-device cooldown (CI-green; review: filter out
-      failed attempts so they don't arm the cooldown).
+      PR #198 (5-min per-device cooldown, failed attempts excluded) MERGED
+      2026-06-12. Device round-trip on a real TR-069-managed ONT still owed.
 - [ ] Self-service WiFi SSID/password change reaches the device
 - [ ] Live bandwidth on portal/mobile shows correct download/upload direction
       (rx=upload / tx=download NAS convention — regression-prone; use
       download_bps/upload_bps naming only). Status: portal/mobile paths
       verified correct in review; admin chart showed zeros (schema stripped
-      the fields) — fix PR #195 is CI-green and reviewed clean, merge-ready.
+      the fields) — fix PR #195 MERGED 2026-06-12. Manual verify of the admin
+      chart still owed.
 
 ## 3. Billing & money (highest risk)
 
@@ -124,7 +126,8 @@ final gate.
       2026-06-09, first scheduled success verified 2026-06-10) —
       **re-verify on the next cycle before launch**
 - [ ] Invoice correctness on a real plan: amounts, tax, due date, PDF renders
-      with branding
+      with branding (configurable default VAT — off by default — + white-label
+      invoice PDF name are in PR #212, OPEN — verify once merged)
 - [ ] Paystack with **live keys**: pay an invoice end-to-end including verify
       callback and webhook → invoice marked paid, ledger entry created
 - [ ] Flutterwave with **live keys**: same end-to-end
@@ -135,7 +138,9 @@ final gate.
 - [ ] Failure paths: declined card, abandoned webview, double-submit,
       webhook retry idempotency
 - [ ] Dunning experience: what a non-paying customer sees (restricted
-      dashboard, captive redirect), and recovery after payment
+      dashboard, captive redirect), and recovery after payment (dunning guards
+      + autopay + proofs/arrangements back office hardened in #204, merged
+      2026-06-12 — manual live-key walkthrough still owed)
 - [ ] ⚠️ Outage service-extensions (bulk validity compensation, PR #196,
       MERGED 2026-06-11): post-merge review found a double-apply race (no row
       lock on the pending check — two clicks = 2× compensation days) and an
@@ -171,9 +176,12 @@ final gate.
 - [ ] Email deliverability from prod: SPF/DKIM/DMARC for dotmac.ng senders;
       spam-folder check on Gmail and Outlook
 - [ ] Push notifications on real Android + iOS devices (FCM): usage alerts,
-      bundle expiry
-- [ ] SMS channel if enabled (Twilio config)
+      bundle expiry. Mobile FCM client merged (#210, 2026-06-12) but inert until
+      operator drops in Firebase config; queue runner still OFF in prod by design.
+- [ ] SMS channel if enabled (Twilio config) — disabled in prod (no creds)
 - [ ] All transactional emails carry branding and correct expiry wording (24h)
+      — queued-email branding + dead-sender fix shipped in #200 (merged
+      2026-06-12); real-mailbox deliverability pass still owed
 
 ## 6. Mobile release readiness
 
@@ -181,6 +189,7 @@ final gate.
       API_BASE_URL currently points at `10.0.2.2:8000` (emulator value)
 - [ ] Store metadata, signed builds, app identity (applicationId / bundle id)
 - [ ] Payment deep-link scheme `dotmacpay` returns from gateway webview
+      (wired in #201, merged 2026-06-12 — verify on a real gateway round-trip)
 - [ ] Token refresh after the app sits idle for days; forced-logout UX when a
       session is revoked server-side
 
@@ -188,14 +197,14 @@ final gate.
 
 - [x] RBAC mount-registry guards: 290 customer-reachable staff routes closed,
       build-failing arch test (PRs #178/#181/#182/#183, deployed 2026-06-10)
-- [ ] Run /security-review on the accumulated diff since the RBAC overhaul;
-      resolve pending P1b endpoint-scoping decisions. Targeted manual pass done
-      2026-06-11 (no new auth bypasses; email templates escape user input).
+- [ ] Resolve pending P1b endpoint-scoping decision. Security sweep done via
+      #203 (merged 2026-06-12) + targeted manual pass 2026-06-11 (no new auth
+      bypasses; IDOR verified clean; email templates escape user input).
       **P1b still pending product decision**: object-scoped grants (migration
       136) are enforced at the endpoint level but not consistently at object
       level — decide which admin endpoints must additionally enforce
       object-scope so a staff member scoped to customers X,Y can't act on Z.
-- [x] Cookies + headers hardened (security-hardening PR): app now emits
+- [x] Cookies + headers hardened (#203, merged 2026-06-12): app now emits
       HSTS (on HTTPS) + X-Frame-Options/nosniff/Referrer-Policy from a
       middleware, independent of the proxy (the *deployed* nginx had drifted
       from the repo conf and was missing these); `REFRESH_COOKIE_SECURE` is
@@ -211,10 +220,10 @@ final gate.
 - [x] PPPoE password reveal — confirmed staff-only (admin router is
       `system_user`-gated; customers/resellers cannot reach `customer:read`).
       Now audited (`customer.pppoe_password_reveal`) + per-actor rate-limited
-      (30/hr) in the security-hardening PR. **Decision pending**: whether to
+      (30/hr) in #203 (merged 2026-06-12). **Decision pending**: whether to
       narrow from `customer:read` to a dedicated `customer:credential:reveal`
       permission (needs RBAC seeding) — kept `customer:read` for now.
-- [x] Login rate limit added (security-hardening PR): per-IP middleware on
+- [x] Login rate limit added (#203, merged 2026-06-12): per-IP middleware on
       all login endpoints (admin/portal/reseller/`/api/v1/auth/login`), default
       20/5min, tunable via `LOGIN_RATE_LIMIT_MAX`/`_WINDOW_SECONDS` — closes the
       credential-stuffing-spray gap the per-account lockout misses. Note:
@@ -244,7 +253,7 @@ final gate.
 - [ ] Uptime/error alerting for the portal itself (Zabbix watches network
       devices; who watches the app?)
 - [ ] Bulk onboarding path: import/create N subscribers + PPPoE creds, batch
-      portal invites, RADIUS sync (`scripts/migration/populate_radius_from_subs.py`)
+      portal invites, RADIUS sync (`app.services.radius_population`)
 - [ ] Full "new customer" dry run as the final gate: create → invite →
       login (web + mobile) → pay first invoice → consume data → raise
       ticket → receive notifications

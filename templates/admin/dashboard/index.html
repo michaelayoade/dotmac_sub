@@ -11,43 +11,6 @@
 {% block content %}
 {{ ambient_background("amber", "slate") }}
 
-{% set dev_online = monitoring_summary.devices_online if monitoring_summary else 0 %}
-{% set dev_total = monitoring_summary.devices_total if monitoring_summary else 0 %}
-{% set dev_offline = monitoring_summary.devices_offline if monitoring_summary else 0 %}
-{% set ont_on = ont_service_summary.online if ont_service_summary else 0 %}
-{% set ont_total = ont_service_summary.total if ont_service_summary else 0 %}
-{% set ont_low_signal = ont_service_summary.low_signal if ont_service_summary else 0 %}
-{% set ont_olt_on = ont_olt_link_summary.online if ont_olt_link_summary else 0 %}
-{% set ont_olt_off = ont_olt_link_summary.offline if ont_olt_link_summary else 0 %}
-{% set pon_up = pon_interface_summary.up if pon_interface_summary else 0 %}
-{% set pon_down = pon_interface_summary.down if pon_interface_summary else 0 %}
-{% set pon_unknown = pon_interface_summary.unknown if pon_interface_summary else 0 %}
-{% set pon_total = pon_interface_summary.total if pon_interface_summary else 0 %}
-{% set total_alarms_count = stats.alarms_critical + stats.alarms_major + stats.alarms_minor + stats.alarms_warning %}
-{% set overdue_receivables = (stats.ar_30|default(0)) + (stats.ar_60|default(0)) + (stats.ar_90|default(0)) %}
-
-{# ─── KPI Tile ─── #}
-{% macro kpi_tile(label, value, href, color, helper, progress=none) %}
-<a href="{{ href }}" class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-{{ color }}-300 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 dark:hover:border-{{ color }}-600/50">
-    <div class="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-gradient-to-br from-{{ color }}-500/10 to-{{ color }}-500/5 blur-2xl transition-all group-hover:scale-150"></div>
-    <div class="absolute right-4 top-4 text-slate-400 transition-colors group-hover:text-{{ color }}-600 dark:text-slate-500 dark:group-hover:text-{{ color }}-400" aria-hidden="true">
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17L17 7M9 7h8v8"/>
-        </svg>
-    </div>
-    <div class="relative">
-        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
-        <p class="mt-3 text-[clamp(1.5rem,2.5vw,2rem)] font-bold leading-none tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
-        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ helper }}</p>
-        {% if progress is not none %}
-        <div class="mt-3 h-1 w-full overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-700/60">
-            <div class="h-full rounded-full bg-{{ color }}-500 transition-all" style="width: {{ [progress, 100] | min }}%"></div>
-        </div>
-        {% endif %}
-    </div>
-</a>
-{% endmacro %}
-
 <div class="space-y-8">
     {# ═══════════ Section 1: Header ═══════════ #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -83,77 +46,7 @@
     {% endif %}
 
     {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
-    {% set active_pct = ((stats.active_subscribers / stats.total_subscribers * 100) if stats.total_subscribers > 0 else 0) | round(1) %}
-    {% set dev_pct = ((dev_online / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
-    {% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
-
-    <section data-tour-id="dashboard-kpis" class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 180s" hx-swap="none">
-        {{ kpi_tile(
-            "Subscribers",
-            stats.total_subscribers,
-            "/admin/customers",
-            "amber",
-            "%d active, %+d this month" % (stats.active_subscribers, stats.subscribers_change|default(0)),
-            progress=active_pct
-        ) }}
-        {{ kpi_tile(
-            "Online Sessions",
-            online_count,
-            "/admin/network/sessions",
-            "emerald",
-            "Authenticated RADIUS sessions"
-        ) }}
-        {{ kpi_tile(
-            "Network Devices",
-            "%d / %d" | format(dev_online, dev_total),
-            "/admin/network/monitoring",
-            "blue",
-            "%d offline" % dev_offline if dev_offline else "All reachable",
-            progress=dev_pct
-        ) }}
-        {{ kpi_tile(
-            "ONT Service",
-            "%d / %d" | format(ont_on, ont_total),
-            "/admin/network/onts",
-            "violet",
-            "%d low signal · PON %d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off)
-                if ont_total else
-            "Service status with raw PON overlay",
-            progress=ont_pct
-        ) }}
-        {% if show_financials %}
-        {{ kpi_tile(
-            "Revenue This Month",
-            "₦%s" | format("{:,.0f}".format(stats.monthly_revenue)),
-            "/admin/billing",
-            "emerald",
-            "Paid invoices in current billing period"
-        ) }}
-        {{ kpi_tile(
-            "Overdue",
-            "₦%s" | format("{:,.0f}".format(overdue_receivables)),
-            "/admin/billing",
-            "rose",
-            "Outstanding receivables"
-        ) }}
-        {% endif %}
-        {% if show_network and total_alarms_count > 0 %}
-        {{ kpi_tile(
-            "Alarms",
-            total_alarms_count,
-            "/admin/network/alarms",
-            "rose",
-            "%d critical" % stats.alarms_critical
-        ) }}
-        {% endif %}
-        {{ kpi_tile(
-            "PON Interfaces",
-            "%d / %d" | format(pon_up, pon_total),
-            "/admin/network/pon-interfaces",
-            "cyan",
-            "%d down, %d unknown" % (pon_down, pon_unknown) if pon_total else "No monitored PON interfaces"
-        ) }}
-    </section>
+    {% include "admin/dashboard/_stats.html" %}
 
     {# ═══════════ Section 4: What's New + Quick Actions ═══════════ #}
     <section class="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-stretch">
@@ -518,11 +411,6 @@
             window.history.replaceState({}, '', nextUrl);
         }
 
-        if (!forceTourFromQuery && !dashboardTour.isCompleted()) {
-            window.setTimeout(function() {
-                startDashboardTips(false);
-            }, 1200);
-        }
     });
 </script>
 {% endblock %}

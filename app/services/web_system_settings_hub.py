@@ -100,6 +100,11 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Billing day, periods, invoice numbering",
             },
             {
+                "name": "Direct Bank Transfer",
+                "url": "/admin/system/config/direct-bank-transfer",
+                "description": "Customer transfer account details and instructions",
+            },
+            {
                 "name": "Finance Automation",
                 "url": "/admin/system/config/finance-automation",
                 "description": "Auto-invoicing, blocking rules",
@@ -260,11 +265,6 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "amber",
         "description": "Audit trails, delivery logs, and system events",
         "links": [
-            {
-                "name": "Log Center",
-                "url": "/admin/system/logs",
-                "description": "All log viewers in one place",
-            },
             {
                 "name": "Audit Log",
                 "url": "/admin/system/audit",

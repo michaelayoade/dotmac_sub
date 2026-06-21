@@ -21,10 +21,42 @@ from app.services.scheduler_config import (
 
 logger = logging.getLogger(__name__)
 
+
+def _running_under_pytest() -> bool:
+    return bool(os.getenv("PYTEST_VERSION") or os.getenv("PYTEST_CURRENT_TEST"))
+
+
+def _test_celery_config() -> dict:
+    broker = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL") or "memory://"
+    backend = (
+        os.getenv("CELERY_RESULT_BACKEND")
+        or os.getenv("REDIS_URL")
+        or "cache+memory://"
+    )
+    return {
+        "broker_url": broker,
+        "result_backend": backend,
+        "timezone": os.getenv("CELERY_TIMEZONE", "UTC"),
+        "task_always_eager": os.getenv("CELERY_TASK_ALWAYS_EAGER", "false").lower()
+        in {"1", "true", "yes"},
+    }
+
+
 celery_app = Celery("dotmac_sm")
-celery_app.conf.update(get_celery_config())
-celery_app.conf.beat_schedule = build_beat_schedule()
+if _running_under_pytest():
+    celery_app.conf.update(_test_celery_config())
+    celery_app.conf.beat_schedule = {}
+else:
+    celery_app.conf.update(get_celery_config())
+    celery_app.conf.beat_schedule = build_beat_schedule()
 celery_app.conf.beat_scheduler = "app.celery_scheduler.DbScheduler"
+# How often DbScheduler rebuilds the schedule from the DB. The default 30s
+# meant ~2,880 full build_beat_schedule() passes/day (dozens of settings
+# queries each) against the cross-host Postgres. Schedule changes are rare;
+# 5 min is plenty responsive.
+celery_app.conf.beat_refresh_seconds = int(
+    os.getenv("CELERY_BEAT_REFRESH_SECONDS", "300")
+)
 celery_app.autodiscover_tasks(["app.tasks"])
 
 # Route critical OLT authorization and ACS/TR-069 tasks to dedicated queues.
@@ -44,9 +76,6 @@ celery_app.conf.task_routes = {
     "app.tasks.ont_provisioning.authorize_ont": {"queue": "tr069"},
     "app.tasks.ont_provisioning.provision_ont": {"queue": "tr069"},
     "app.tasks.ont_provisioning.queue_bulk_provisioning": {"queue": "tr069"},
-    # OLT queue processing (circuit breaker recovery) - route to tr069 queue
-    "app.tasks.olt_queue.process_deferred_olt_operations": {"queue": "tr069"},
-    "app.tasks.olt_queue.retry_failed_operations": {"queue": "tr069"},
     "app.tasks.profile_sync.execute_due_profile_sync_tasks": {"queue": "tr069"},
     # High-volume bandwidth tasks - dedicated queue to prevent starvation
     "app.tasks.bandwidth.process_bandwidth_stream": {"queue": "bandwidth"},
@@ -55,6 +84,9 @@ celery_app.conf.task_routes = {
     # High-volume ingestion tasks - dedicated queue
     "app.tasks.zabbix_ingestion.ingest_portal_usage_chunk": {"queue": "ingestion"},
     "app.tasks.zabbix_ingestion.ingest_portal_usage_batch": {"queue": "ingestion"},
+    "app.tasks.topology_sync.run_topology_reconcile": {"queue": "ingestion"},
+    "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
+    "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.usage.meter_usage_into_quota": {"queue": "ingestion"},
@@ -79,6 +111,8 @@ celery_app.conf.task_routes = {
     "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
     "app.tasks.collections.run_dunning": {"queue": "billing"},
+    "app.tasks.prepaid_billing.run_prepaid_charges": {"queue": "billing"},
+    "app.tasks.prepaid_billing.check_billing_switch": {"queue": "billing"},
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
     "app.tasks.usage.run_usage_rating": {"queue": "billing"},
     "app.tasks.usage.evaluate_fup_rules": {"queue": "billing"},
@@ -87,6 +121,8 @@ celery_app.conf.task_routes = {
     "app.tasks.usage.notify_expiring_data_bundles": {"queue": "billing"},
     # Read-only enforcement audit; keep with the business runners.
     "app.tasks.radius.audit_suspension_enforcement": {"queue": "billing"},
+    # Read-only IPv4 consistency audit; same home as the enforcement audit.
+    "app.tasks.radius.audit_ip_consistency": {"queue": "billing"},
 }
 
 celery_app.conf.task_queues = (

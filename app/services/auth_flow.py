@@ -18,6 +18,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
@@ -37,7 +38,7 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import auth_cache
@@ -241,6 +242,35 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def principal_from_session(session: AuthSession) -> tuple[str, str]:
+    """(principal_type, principal_id) for an AuthSession — subscriber, system_user,
+    or reseller_user (Layer 3). Used by token issuance/refresh."""
+    if session.system_user_id:
+        return "system_user", str(session.system_user_id)
+    if getattr(session, "reseller_user_id", None):
+        return "reseller_user", str(session.reseller_user_id)
+    return "subscriber", str(session.subscriber_id)
+
+
+def auth_session_principal_filter(principal_type: str, principal_id):
+    """AuthSession column filter for a principal — keeps session lookup/revocation
+    correct for reseller_user principals (not just subscriber/system_user)."""
+    if principal_type == "system_user":
+        return AuthSession.system_user_id == principal_id
+    if principal_type == "reseller_user":
+        return AuthSession.reseller_user_id == principal_id
+    return AuthSession.subscriber_id == principal_id
+
+
+def credential_principal_filter(principal_type: str, principal_id):
+    """UserCredential column filter for a principal (reseller_user-aware)."""
+    if principal_type == "system_user":
+        return UserCredential.system_user_id == principal_id
+    if principal_type == "reseller_user":
+        return UserCredential.reseller_user_id == principal_id
+    return UserCredential.subscriber_id == principal_id
+
+
 def _jwt_encode_token(payload: dict[str, Any], secret: str, algorithm: str) -> str:
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -436,6 +466,50 @@ def _decode_password_reset_token(db: Session | None, token: str) -> dict:
     return _decode_jwt(db, token, "password_reset")
 
 
+def _email_verification_ttl_minutes(db: Session | None) -> int:
+    env_value = _env_int("EMAIL_VERIFICATION_EXPIRY_MINUTES")
+    if env_value is None:
+        env_value = _env_int("EMAIL_VERIFICATION_TTL_MINUTES")
+    if env_value is not None:
+        return env_value
+    value = _setting_value(db, "email_verification_expiry_minutes")
+    if value is None:
+        value = _setting_value(db, "email_verification_ttl_minutes")
+    if value is not None:
+        try:
+            return int(value)
+        except ValueError:
+            return 1440
+    return 1440
+
+
+def _issue_email_verification_token(
+    db: Session | None,
+    subscriber_id: str,
+    email: str,
+    *,
+    ttl_minutes: int | None = None,
+) -> str:
+    now = _now()
+    token_ttl_minutes = ttl_minutes if ttl_minutes and ttl_minutes > 0 else None
+    if token_ttl_minutes is None:
+        token_ttl_minutes = _email_verification_ttl_minutes(db)
+    payload = {
+        "sub": subscriber_id,
+        "principal_id": subscriber_id,
+        "principal_type": "subscriber",
+        "email": email,
+        "typ": "email_verification",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=token_ttl_minutes)).timestamp()),
+    }
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+
+
+def _decode_email_verification_token(db: Session | None, token: str) -> dict:
+    return _decode_jwt(db, token, "email_verification")
+
+
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
     try:
         payload = _jwt_decode_token(token, _jwt_secret(db), _jwt_algorithm(db))
@@ -478,6 +552,12 @@ def _load_rbac_claims(
     cached = auth_cache.get_claims(principal_type, str(resolved_principal_id))
     if cached is not None:
         return cached
+    if principal_type == "reseller_user":
+        # Reseller portal authorization is enforced via reseller_users
+        # membership (reseller_portal._get_reseller_user), not RBAC roles. A
+        # reseller_user principal carries no system/subscriber roles.
+        auth_cache.set_claims(principal_type, str(resolved_principal_id), [], [])
+        return [], []
     principal_uuid = coerce_uuid(resolved_principal_id)
     if principal_type == "system_user":
         roles = (
@@ -543,7 +623,13 @@ def _resolve_login_credential(
     provider: AuthProvider,
     identifier: str,
 ) -> UserCredential | None:
-    """Resolve active credential using either username or subscriber email."""
+    """Resolve active credential by login identity.
+
+    Login identity is the credential ``username`` (customers and resellers) or,
+    for admins, the ``system_users.email``. Subscriber email is deliberately NOT
+    a login key: it is non-unique contact information (many customers share an
+    address), so matching on it would be ambiguous.
+    """
     normalized_identifier = identifier.strip()
     if not normalized_identifier:
         return None
@@ -551,13 +637,11 @@ def _resolve_login_credential(
     return cast(
         UserCredential | None,
         db.query(UserCredential)
-        .outerjoin(Subscriber, Subscriber.id == UserCredential.subscriber_id)
         .outerjoin(SystemUser, SystemUser.id == UserCredential.system_user_id)
         .filter(UserCredential.provider == provider)
         .filter(UserCredential.is_active.is_(True))
         .filter(
             (UserCredential.username == normalized_identifier)
-            | (func.lower(Subscriber.email) == normalized_identifier.lower())
             | (func.lower(SystemUser.email) == normalized_identifier.lower())
         )
         .order_by(UserCredential.created_at.desc())
@@ -574,6 +658,15 @@ def _principal_for_credential(
             str(credential.system_user_id),
             db.get(SystemUser, credential.system_user_id),
         )
+    if (
+        getattr(credential, "reseller_user_id", None)
+        and settings.reseller_user_principal_enabled
+    ):
+        return (
+            "reseller_user",
+            str(credential.reseller_user_id),
+            db.get(ResellerUser, credential.reseller_user_id),
+        )
     if credential.subscriber_id:
         return (
             "subscriber",
@@ -589,6 +682,8 @@ def _primary_totp_method(
     query = db.query(MFAMethod).filter(MFAMethod.method_type == MFAMethodType.totp)
     if principal_type == "system_user":
         query = query.filter(MFAMethod.system_user_id == coerce_uuid(principal_id))
+    elif principal_type == "reseller_user":
+        query = query.filter(MFAMethod.reseller_user_id == coerce_uuid(principal_id))
     else:
         query = query.filter(MFAMethod.subscriber_id == coerce_uuid(principal_id))
     return cast(
@@ -921,6 +1016,95 @@ class AuthFlow(ListResponseMixin):
         return method
 
     @staticmethod
+    def reseller_mfa_setup(db: Session, reseller_user_id: str, label: str | None):
+        """TOTP enrolment for a first-class reseller_user principal (Layer 3)."""
+        reseller_user = db.get(ResellerUser, coerce_uuid(reseller_user_id))
+        if not reseller_user:
+            raise HTTPException(status_code=404, detail="Reseller user not found")
+
+        username = reseller_user.email or str(reseller_user.id)
+        credential = (
+            db.query(UserCredential)
+            .filter(UserCredential.reseller_user_id == reseller_user.id)
+            .filter(UserCredential.provider == AuthProvider.local)
+            .first()
+        )
+        if credential and credential.username:
+            username = credential.username
+
+        secret = pyotp.random_base32()
+        encrypted = _encrypt_secret(db, secret)
+        method = (
+            db.query(MFAMethod)
+            .filter(MFAMethod.reseller_user_id == reseller_user.id)
+            .filter(MFAMethod.method_type == MFAMethodType.totp)
+            .filter(MFAMethod.enabled.is_(False))
+            .filter(MFAMethod.verified_at.is_(None))
+            .order_by(MFAMethod.created_at.desc())
+            .first()
+        )
+        if method:
+            method.label = label
+            method.secret = encrypted
+        else:
+            method = MFAMethod(
+                reseller_user_id=reseller_user.id,
+                method_type=MFAMethodType.totp,
+                label=label,
+                secret=encrypted,
+                enabled=False,
+                is_primary=False,
+            )
+            db.add(method)
+        db.commit()
+        db.refresh(method)
+
+        totp = pyotp.TOTP(secret)
+        otpauth_uri = totp.provisioning_uri(name=username, issuer_name=_totp_issuer(db))
+        return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
+
+    @staticmethod
+    def reseller_mfa_confirm(
+        db: Session, method_id: str, code: str, reseller_user_id: str
+    ):
+        method = db.get(MFAMethod, coerce_uuid(method_id))
+        if not method:
+            raise HTTPException(status_code=404, detail="MFA method not found")
+        if str(method.reseller_user_id) != str(reseller_user_id):
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if method.method_type != MFAMethodType.totp:
+            raise HTTPException(status_code=400, detail="Unsupported MFA method")
+
+        ensure_mfa_not_locked(method)
+        secret = _decrypt_secret(db, method.secret or "")
+        totp = pyotp.TOTP(secret)
+        if not totp.verify(code, valid_window=0):
+            record_mfa_failure(db, method)
+            raise HTTPException(status_code=401, detail="Invalid MFA code")
+        record_mfa_success(method)
+
+        db.query(MFAMethod).filter(
+            MFAMethod.reseller_user_id == method.reseller_user_id,
+            MFAMethod.id != method.id,
+            MFAMethod.is_primary.is_(True),
+        ).update({"is_primary": False})
+
+        method.enabled = True
+        method.is_primary = True
+        method.is_active = True
+        method.verified_at = _now()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Primary MFA method already exists for this user",
+            ) from exc
+        db.refresh(method)
+        return method
+
+    @staticmethod
     def mfa_setup(db: Session, subscriber_id: str, label: str | None):
         subscriber = _subscriber_or_404(db, subscriber_id)
         username = subscriber.email
@@ -1081,8 +1265,7 @@ class AuthFlow(ListResponseMixin):
         session.user_agent = _truncate_user_agent(request.headers.get("user-agent"))
         db.commit()
 
-        principal_type = "system_user" if session.system_user_id else "subscriber"
-        principal_id = str(session.system_user_id or session.subscriber_id)
+        principal_type, principal_id = principal_from_session(session)
         access_token = _issue_access_token(
             db, principal_id, principal_type, str(session.id)
         )
@@ -1174,36 +1357,21 @@ class AuthFlow(ListResponseMixin):
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
+        session_kwargs = dict(
+            status=SessionStatus.active,
+            token_hash=_hash_token(refresh_token),
+            ip_address=active_request.client.host if active_request.client else None,
+            user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+            created_at=now,
+            last_seen_at=now,
+            expires_at=expires_at,
+        )
         if principal_type == "system_user":
-            session = AuthSession(
-                system_user_id=principal_uuid,
-                status=SessionStatus.active,
-                token_hash=_hash_token(refresh_token),
-                ip_address=active_request.client.host
-                if active_request.client
-                else None,
-                user_agent=_truncate_user_agent(
-                    active_request.headers.get("user-agent")
-                ),
-                created_at=now,
-                last_seen_at=now,
-                expires_at=expires_at,
-            )
+            session = AuthSession(system_user_id=principal_uuid, **session_kwargs)
+        elif principal_type == "reseller_user":
+            session = AuthSession(reseller_user_id=principal_uuid, **session_kwargs)
         else:
-            session = AuthSession(
-                subscriber_id=principal_uuid,
-                status=SessionStatus.active,
-                token_hash=_hash_token(refresh_token),
-                ip_address=active_request.client.host
-                if active_request.client
-                else None,
-                user_agent=_truncate_user_agent(
-                    active_request.headers.get("user-agent")
-                ),
-                created_at=now,
-                last_seen_at=now,
-                expires_at=expires_at,
-            )
+            session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
         db.add(session)
         db.commit()
         db.refresh(session)
@@ -1235,6 +1403,7 @@ def change_password(
         .where(
             (UserCredential.subscriber_id == principal_uuid)
             | (UserCredential.system_user_id == principal_uuid)
+            | (UserCredential.reseller_user_id == principal_uuid)
         )
         .where(UserCredential.provider == AuthProvider.local)
         .where(UserCredential.is_active.is_(True))
@@ -1255,12 +1424,19 @@ def change_password(
     credential.password_updated_at = now
     credential.must_change_password = False
 
-    is_system_user = credential.system_user_id is not None
-    session_principal_filter = (
-        AuthSession.system_user_id == credential.system_user_id
-        if is_system_user
-        else AuthSession.subscriber_id == credential.subscriber_id
-    )
+    if credential.system_user_id is not None:
+        principal_type = "system_user"
+        session_principal_filter = (
+            AuthSession.system_user_id == credential.system_user_id
+        )
+    elif getattr(credential, "reseller_user_id", None) is not None:
+        principal_type = "reseller_user"
+        session_principal_filter = (
+            AuthSession.reseller_user_id == credential.reseller_user_id
+        )
+    else:
+        principal_type = "subscriber"
+        session_principal_filter = AuthSession.subscriber_id == credential.subscriber_id
     revoke_query = (
         db.query(AuthSession)
         .filter(session_principal_filter)
@@ -1270,7 +1446,6 @@ def change_password(
     if current_session_id:
         revoke_query = revoke_query.filter(AuthSession.id != current_session_id)
     revoked = revoke_query.all()
-    principal_type = "system_user" if is_system_user else "subscriber"
     for session in revoked:
         session.status = SessionStatus.revoked
         session.revoked_at = now
@@ -1281,7 +1456,7 @@ def change_password(
             principal_type=principal_type,
             principal_id=str(principal_uuid),
         )
-    if not is_system_user:
+    if principal_type == "subscriber":
         _revoke_portal_sessions_for_subscriber(db, str(credential.subscriber_id))
 
     return now
@@ -1366,19 +1541,27 @@ def request_password_reset(
     Does not raise an error if email doesn't exist (security best practice).
     """
     normalized_email = email.strip().lower()
-    subscriber = (
-        db.query(Subscriber)
+    # Email is non-unique contact info, so a reset-by-email request can match
+    # several customers. Only accounts that actually have a local login
+    # credential can be reset; join to it directly and, if the address is shared
+    # by more than one credentialed account, pick the most recent deterministically.
+    subscriber_rows = (
+        db.query(Subscriber, UserCredential)
+        .join(UserCredential, UserCredential.subscriber_id == Subscriber.id)
         .filter(func.lower(Subscriber.email) == normalized_email)
-        .first()
+        .filter(UserCredential.provider == AuthProvider.local)
+        .filter(UserCredential.is_active.is_(True))
+        .order_by(UserCredential.created_at.desc())
+        .all()
     )
-    if subscriber:
-        credential = (
-            db.query(UserCredential)
-            .filter(UserCredential.subscriber_id == subscriber.id)
-            .filter(UserCredential.provider == AuthProvider.local)
-            .filter(UserCredential.is_active.is_(True))
-            .first()
-        )
+    if subscriber_rows:
+        if len(subscriber_rows) > 1:
+            logger.warning(
+                "Password reset for shared email matched %d credentialed accounts; "
+                "using most recent credential",
+                len(subscriber_rows),
+            )
+        subscriber, credential = subscriber_rows[0]
         if credential:
             effective_ttl = (
                 ttl_minutes
@@ -1540,6 +1723,133 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
         _revoke_portal_sessions_for_subscriber(db, str(principal_uuid))
 
     return now
+
+
+def send_email_verification(db: Session, subscriber_id: str) -> bool:
+    """
+    Mint an email-verification token and send the verification email to the
+    subscriber's address. No-op (returns False) when the subscriber is missing,
+    has no email, or is already verified.
+
+    Returns True if a verification email was dispatched.
+    """
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import record_audit_event
+    from app.services.email import send_email_verification_email
+
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
+    if not subscriber or not subscriber.email:
+        return False
+    if subscriber.email_verified:
+        # Already verified: nothing to send.
+        return False
+
+    ttl_minutes = _email_verification_ttl_minutes(db)
+    token = _issue_email_verification_token(
+        db,
+        str(subscriber.id),
+        subscriber.email,
+        ttl_minutes=ttl_minutes,
+    )
+    record_audit_event(
+        db,
+        action="auth.email_verification_requested",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        actor_type=AuditActorType.user,
+        actor_id=str(subscriber.id),
+        metadata={"email": subscriber.email},
+    )
+    return send_email_verification_email(
+        db=db,
+        to_email=subscriber.email,
+        verification_token=token,
+        person_name=subscriber.display_name or subscriber.first_name,
+        expires_minutes=ttl_minutes,
+    )
+
+
+def verify_email(db: Session, token: str) -> Subscriber:
+    """
+    Verify a subscriber's email using a valid verification token.
+
+    Idempotent: an already-verified subscriber is a success no-op. Raises
+    HTTPException on an invalid/expired token or mismatched subscriber.
+    Returns the (verified) Subscriber.
+    """
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import record_audit_event
+
+    payload = _decode_email_verification_token(db, token)
+    principal_id = payload.get("principal_id") or payload.get("sub")
+    email = payload.get("email")
+    if not principal_id or not email:
+        raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(principal_id)))
+    if not subscriber or subscriber.email != email:
+        raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    if subscriber.email_verified:
+        return subscriber
+
+    subscriber.email_verified = True
+    record_audit_event(
+        db,
+        action="auth.email_verified",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        actor_type=AuditActorType.user,
+        actor_id=str(subscriber.id),
+        metadata={"email": subscriber.email},
+        defer_until_commit=True,
+    )
+    db.commit()
+    db.refresh(subscriber)
+    return subscriber
+
+
+def set_subscriber_email(
+    db: Session, subscriber_id: str, new_email: str | None
+) -> bool:
+    """Add or change a subscriber's email, re-arming verification.
+
+    Single source of truth shared by the web profile form and the mobile ``/me``
+    update so the rule "a changed/added email must be re-verified, with a fresh
+    link dispatched" lives in exactly one place. No-op (returns ``False``) when
+    the email is blank or unchanged. Returns ``True`` when the email changed (and
+    a verification email was dispatched). Email is non-unique contact info, so
+    sharing an address with another subscriber is allowed and not blocked.
+    """
+    new_email = (new_email or "").strip()
+    if not new_email:
+        return False
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
+    if subscriber is None:
+        return False
+    if new_email.lower() == (subscriber.email or "").strip().lower():
+        return False
+
+    from app.schemas.subscriber import SubscriberUpdate
+    from app.services import subscriber as subscriber_service
+
+    # Route through the subscriber service so the unique constraint and the
+    # customer identity-resolution index are maintained the same way the web
+    # and admin edit paths do.
+    subscriber_service.subscribers.update(
+        db,
+        str(subscriber.id),
+        SubscriberUpdate(email=new_email, email_verified=False),
+    )
+    try:
+        send_email_verification(db, str(subscriber.id))
+    except Exception:
+        logger.warning(
+            "verification email after email change failed for %s",
+            subscriber_id,
+            exc_info=True,
+        )
+    return True
 
 
 def validate_active_session(

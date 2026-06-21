@@ -21,6 +21,7 @@ from app.services import (
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
 from app.services.auth_dependencies import require_permission
+from app.services.topology.customer_path import resolve_customer_path
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -430,6 +431,27 @@ def catalog_subscription_new(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
+@router.get("/subscription-ipv4-addresses", response_class=JSONResponse)
+def catalog_subscription_ipv4_addresses(
+    selector: str = Query(...),
+    q: str = "",
+    limit: int = Query(1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        payload = (
+            web_catalog_subscriptions_service.available_ipv4_addresses_for_selector(
+                db,
+                selector=selector,
+                query=q,
+                limit=limit,
+            )
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc), "addresses": []}, status_code=400)
+    return JSONResponse(payload)
+
+
 @router.post("/subscriptions", response_class=HTMLResponse)
 def catalog_subscription_create(
     request: Request,
@@ -447,6 +469,44 @@ def catalog_subscription_create(
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+
+
+@router.get("/subscriptions/ipam/ipv4-available")
+def catalog_subscription_ipv4_available(
+    selector: str = Query(...),
+    current_ip: str | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        available_ips = (
+            web_catalog_subscriptions_service.available_ipv4_options_for_selector(
+                db,
+                selector=selector,
+                current_ip=current_ip,
+            )
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"available_ips": available_ips})
+
+
+@router.get("/subscriptions/ipam/route-children")
+def catalog_subscription_route_children(
+    parent_cidr: str = Query(...),
+    prefix: int = Query(...),
+    subscriber_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        children = web_catalog_subscriptions_service.route_child_options_for_parent(
+            db,
+            parent_cidr=parent_cidr,
+            prefix=prefix,
+            current_subscriber_id=subscriber_id,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"children": children})
 
 
 @router.get("/subscriptions/{subscription_id}/edit", response_class=HTMLResponse)
@@ -499,6 +559,17 @@ def catalog_subscription_detail(
     context.update(detail_context)
     context["notice"] = notice
     context["error"] = error
+    subscription_obj = context.get("subscription")
+    network_path = (
+        resolve_customer_path(db, subscription_obj)
+        if subscription_obj is not None
+        else None
+    )
+    context["network_path"] = network_path
+    if network_path is not None:
+        from app.services.topology.outage import open_incident_for_path
+
+        context["known_outage"] = open_incident_for_path(db, network_path)
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 

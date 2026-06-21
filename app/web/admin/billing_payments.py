@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.billing import Payment
 from app.models.subscriber import Subscriber
+from app.services import billing as billing_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_payment_forms as web_billing_payment_forms_service
 from app.services import web_billing_payments as web_billing_payments_service
@@ -169,6 +170,17 @@ def payment_new(
     )
     selected_account = cast(Subscriber | None, state["selected_account"])
     prefill = cast(dict[str, Any], state["prefill"])
+    payment_methods = []
+    if selected_account:
+        payment_methods = billing_service.payment_methods.list(
+            db=db,
+            account_id=str(selected_account.id),
+            is_active=None,
+            order_by="created_at",
+            order_dir="desc",
+            limit=500,
+            offset=0,
+        )
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
@@ -176,8 +188,8 @@ def payment_new(
         {
             "request": request,
             "accounts": None,
-            "payment_methods": [],
-            "payment_method_types": [],
+            "payment_methods": payment_methods,
+            "payment_method_types": web_billing_payment_forms_service.payment_method_type_options(),
             "collection_accounts": state["collection_accounts"],
             "invoices": state["invoices"],
             "prefill": prefill,
@@ -354,6 +366,7 @@ def payment_create(
     status: str | None = Form(None),
     invoice_id: str | None = Form(None),
     collection_account_id: str | None = Form(None),
+    payment_method_id: str | None = Form(None),
     memo: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -370,6 +383,7 @@ def payment_create(
             status=status,
             invoice_id=invoice_id,
             collection_account_id=collection_account_id,
+            payment_method_id=payment_method_id,
             memo=memo,
         )
         payment = cast(Payment, result["payment"])
@@ -377,6 +391,43 @@ def payment_create(
         balance_value = result["balance_value"]
         balance_display = result["balance_display"]
     except Exception as exc:
+        db.rollback()
+        if not resolved_invoice and invoice_id:
+            try:
+                resolved_invoice = web_billing_payment_forms_service.resolve_invoice(
+                    db, invoice_id
+                )
+                if resolved_invoice:
+                    (
+                        balance_value,
+                        balance_display,
+                    ) = web_billing_payment_forms_service.invoice_balance_info(
+                        resolved_invoice
+                    )
+            except Exception:
+                resolved_invoice = None
+        # Surface a clean message instead of the raw Pydantic ValidationError
+        # dump (which leaks internal type names and a pydantic.dev URL to staff).
+        from fastapi import HTTPException as _HTTPException
+        from pydantic import ValidationError as _ValidationError
+
+        if isinstance(exc, _ValidationError):
+            errs = exc.errors()
+            if errs:
+                first = errs[0]
+                field = (
+                    str((first.get("loc") or ("value",))[-1]).replace("_", " ").strip()
+                )
+                msg = first.get("msg", "is invalid")
+                error_message = (
+                    f"{field[:1].upper()}{field[1:]}: {msg}" if field else msg
+                )
+            else:
+                error_message = "Invalid input"
+        elif isinstance(exc, _HTTPException):
+            error_message = str(exc.detail)
+        else:
+            error_message = str(exc)
         deps = cast(
             dict[str, object],
             web_billing_payment_forms_service.load_create_error_dependencies(
@@ -386,10 +437,11 @@ def payment_create(
             ),
         )
         error_state = web_billing_payment_forms_service.build_create_error_context(
-            error=str(exc),
+            error=error_message,
             deps=deps,
             resolved_invoice=resolved_invoice,
             invoice_id=invoice_id,
+            payment_method_id=payment_method_id,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -530,6 +582,7 @@ def payment_update(
             memo=memo,
         )
     except Exception as exc:
+        db.rollback()
         edit_state = web_billing_payments_service.build_payment_edit_data(
             db, payment_id=str(payment_id)
         )

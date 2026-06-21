@@ -1,4 +1,4 @@
-"""Billing snapshot push: webhook routing, change-skip, failure isolation."""
+"""Billing snapshot push: enqueue routing, change-skip, dead-letter, re-drive."""
 
 from __future__ import annotations
 
@@ -35,78 +35,66 @@ def test_build_snapshot_shape(monkeypatch, db_session, subscriber):
     assert "next_bill_date" in snapshot
 
 
-def test_splynx_subscriber_pushes_splynx_webhook(monkeypatch, db_session, subscriber):
+def test_splynx_subscriber_enqueues_splynx_webhook(monkeypatch, db_session, subscriber):
     _link(db_session, subscriber, splynx_id=777)
     _balance(monkeypatch, "200")
 
-    with patch(
-        "app.services.crm_webhook.push_subscriber_change", return_value="ok"
-    ) as push:
+    with patch("app.tasks.crm_sync.push_subscriber_change") as task:
         stats = push_billing_snapshots(db_session)
-    db_session.refresh(subscriber)
 
-    assert stats["pushed"] == 1
-    external_id, payload, system = push.call_args[0]
+    assert stats["enqueued"] == 1
+    args, kwargs = task.delay.call_args
+    external_id, payload, system = args
     assert external_id == 777
     assert system == "splynx"
     assert payload["balance"] == "200.00"
-    # the splynx mapper has no billing_cycle output
+    # The splynx mapper has no billing_cycle output — and the dedupe key is
+    # exactly what we transmit, so the stamp/compare stay consistent.
     assert "billing_cycle" not in payload
-    # the recorded snapshot still includes it, for change detection
-    assert subscriber.metadata_[crm_billing_push._SNAPSHOT_KEY]["billing_cycle"]
+    assert kwargs["billing_snapshot_subscriber_id"] == str(subscriber.id)
 
 
-def test_native_subscriber_pushes_generic_webhook(monkeypatch, db_session, subscriber):
+def test_native_subscriber_enqueues_generic_webhook(
+    monkeypatch, db_session, subscriber
+):
     _link(db_session, subscriber, splynx_id=None)
     _balance(monkeypatch, "200")
 
-    with patch(
-        "app.services.crm_webhook.push_subscriber_change", return_value="ok"
-    ) as push:
+    with patch("app.tasks.crm_sync.push_subscriber_change") as task:
         stats = push_billing_snapshots(db_session)
 
-    assert stats["pushed"] == 1
-    external_id, payload, system = push.call_args[0]
+    assert stats["enqueued"] == 1
+    args, _ = task.delay.call_args
+    external_id, payload, system = args
     assert external_id == str(subscriber.id)
     assert system == "dotmac"
     assert payload["billing_cycle"]
 
 
 def test_push_skips_unchanged_snapshot(monkeypatch, db_session, subscriber):
+    """Second run skips once the task has stamped the transmitted payload."""
     _link(db_session, subscriber, splynx_id=777)
     _balance(monkeypatch, "200")
 
-    with patch(
-        "app.services.crm_webhook.push_subscriber_change", return_value="ok"
-    ) as push:
+    with patch("app.tasks.crm_sync.push_subscriber_change") as task:
         first = push_billing_snapshots(db_session)
+        # Simulate the task stamping on delivery success.
+        sent_payload = task.delay.call_args[0][1]
+        subscriber.metadata_ = {crm_billing_push._SNAPSHOT_KEY: sent_payload}
+        db_session.commit()
         second = push_billing_snapshots(db_session)
 
-    assert first["pushed"] == 1
-    assert second["pushed"] == 0
+    assert first["enqueued"] == 1
+    assert second["enqueued"] == 0
     assert second["unchanged"] == 1
-    assert push.call_count == 1
-
-
-def test_push_isolates_failures(monkeypatch, db_session, subscriber):
-    _link(db_session, subscriber, splynx_id=777)
-    _balance(monkeypatch, "200")
-
-    with patch("app.services.crm_webhook.push_subscriber_change", return_value=None):
-        stats = push_billing_snapshots(db_session)
-    db_session.refresh(subscriber)
-
-    assert stats["failed"] == 1
-    assert not (subscriber.metadata_ or {}).get(crm_billing_push._SNAPSHOT_KEY)
+    assert task.delay.call_count == 1
 
 
 def test_push_ignores_unlinked_subscribers(monkeypatch, db_session, subscriber):
     _balance(monkeypatch, "200")
 
-    with patch(
-        "app.services.crm_webhook.push_subscriber_change", return_value="ok"
-    ) as push:
+    with patch("app.tasks.crm_sync.push_subscriber_change") as task:
         stats = push_billing_snapshots(db_session)
 
     assert stats["considered"] == 0
-    push.assert_not_called()
+    task.delay.assert_not_called()

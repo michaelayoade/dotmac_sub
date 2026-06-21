@@ -6,6 +6,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
@@ -204,6 +205,170 @@ def _find_available_address(
     )
 
 
+def _any_ipv4_assignment_exists(db: Session, address: IPv4Address) -> bool:
+    """True if any IPAssignment (active OR inactive) references this address.
+
+    Reusing an address that still carries an inactive assignment would steal a
+    suspended customer's held IP, so on-demand allocation skips it.
+    """
+    return (
+        db.query(IPAssignment.id)
+        .filter(IPAssignment.ipv4_address_id == address.id)
+        .first()
+        is not None
+    )
+
+
+def _active_additional_route_networks(db: Session) -> list[ipaddress.IPv4Network]:
+    """Active routed IP blocks (``SubscriberAdditionalRoute``).
+
+    A routed block's hosts belong to a customer via ``Framed-Route``, NOT an
+    ``IPAssignment`` — so without this guard on-demand allocation could hand a
+    routed customer's IP (e.g. a routed /30's hosts) to someone else.
+    """
+    from app.models.network import SubscriberAdditionalRoute
+
+    nets: list[ipaddress.IPv4Network] = []
+    for (cidr,) in (
+        db.query(SubscriberAdditionalRoute.cidr)
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .all()
+    ):
+        try:
+            net = ipaddress.ip_network(str(cidr), strict=False)
+        except ValueError:
+            continue
+        if isinstance(net, ipaddress.IPv4Network):
+            nets.append(net)
+    return nets
+
+
+def _pool_candidate_ipv4_cidrs(pool: IpPool) -> list[str]:
+    """Ranges to draw on-demand IPv4 hosts from: active blocks first, then the
+    pool CIDR as a fallback.
+
+    UI availability rows are block-CIDR based (``web_network_ip._build_ipv4_range_rows``),
+    so blocks are the authoritative ranges when a pool defines them; ``pool.cidr``
+    is only used when there are none.
+    """
+    cidrs = [
+        str(block.cidr)
+        for block in (getattr(pool, "blocks", None) or [])
+        if getattr(block, "is_active", True) and getattr(block, "cidr", None)
+    ]
+    if not cidrs and getattr(pool, "cidr", None):
+        cidrs = [str(pool.cidr)]
+    return cidrs
+
+
+# Cap how many hosts we materialize per CIDR so a wide fallback CIDR (e.g. a /16
+# pool with no blocks) can't pull a huge candidate set into memory.
+_ON_DEMAND_HOST_SCAN_CAP = 4096
+
+
+def _allocate_ipv4_on_demand(db: Session, pool: IpPool) -> IPv4Address | None:
+    """Create-on-demand fallback: the lowest-numbered safe, free IPv4 host in the
+    pool, materialized as an ``IPv4Address`` row.
+
+    Runs only when ``_find_available_address`` finds no existing free row. It
+    closes the display/allocate asymmetry — the availability view computes hosts
+    straight from the CIDR, but allocation can only hand out *materialized* rows,
+    so a pool whose rows were never expanded shows IPs "free" yet fails to assign
+    them ("No available addresses" → no Framed-IP → customer never comes online).
+
+    Safety rules:
+      * skip network/broadcast unless the pool opts in (``allow_network_broadcast``);
+      * never touch reserved, management (``allocation_type='management'``), or
+        ONT-management (``ont_unit_id`` set) rows — ``wan`` and other unassigned
+        rows are reusable;
+      * never reuse an address that already has ANY assignment (active or
+        inactive);
+      * never hand out a host inside an active routed block
+        (``SubscriberAdditionalRoute``) — those belong to a customer via
+        ``Framed-Route``, not an ``IPAssignment``;
+      * reuse a safe, unassigned row when one already exists for the chosen IP —
+        including a loose ``pool_id IS NULL`` row, which it attaches to the pool —
+        rather than creating a duplicate;
+      * guard the ``ipv4_addresses.address`` unique constraint with a SAVEPOINT
+        and skip to the next host on a concurrent-create race.
+    """
+    from app.services.web_network_ip import _pool_allows_network_broadcast
+
+    allow_network_broadcast = _pool_allows_network_broadcast(pool)
+    route_nets = _active_additional_route_networks(db)
+
+    for cidr in _pool_candidate_ipv4_cidrs(pool):
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+
+        host_strs: list[str] = []
+        scanned = 0
+        for host in network if allow_network_broadcast else network.hosts():
+            # Bound iterations even when every host is route-excluded.
+            scanned += 1
+            if scanned > _ON_DEMAND_HOST_SCAN_CAP * 2:
+                break
+            if any(host in net for net in route_nets):
+                continue  # routed block — owned via Framed-Route, not assignable
+            host_strs.append(str(host))
+            if len(host_strs) >= _ON_DEMAND_HOST_SCAN_CAP:
+                break
+        if not host_strs:
+            continue
+
+        # One round-trip for any existing rows at these IPs (in this pool OR
+        # loose), and one for which of them already carry an assignment.
+        existing_by_ip = {
+            row.address: row
+            for row in db.query(IPv4Address)
+            .filter(IPv4Address.address.in_(host_strs))
+            .all()
+        }
+        assigned_ids: set = set()
+        if existing_by_ip:
+            assigned_ids = {
+                r[0]
+                for r in db.query(IPAssignment.ipv4_address_id)
+                .filter(
+                    IPAssignment.ipv4_address_id.in_(
+                        [row.id for row in existing_by_ip.values()]
+                    )
+                )
+                .all()
+            }
+
+        for ip in host_strs:  # ipaddress yields ascending numeric order
+            existing = existing_by_ip.get(ip)
+            if existing is not None:
+                if (
+                    existing.is_reserved
+                    or existing.ont_unit_id is not None
+                    or (existing.allocation_type or "") == "management"
+                    or existing.pool_id not in (None, pool.id)
+                    or existing.id in assigned_ids
+                ):
+                    continue
+                if existing.pool_id is None:
+                    existing.pool_id = pool.id
+                    db.flush()
+                return existing
+            # No row yet — materialize it, guarding the unique(address) race.
+            candidate = IPv4Address(address=ip, pool_id=pool.id, is_reserved=False)
+            try:
+                with db.begin_nested():
+                    db.add(candidate)
+                    db.flush()
+            except IntegrityError:
+                # Concurrent create/claim of this IP — try the next host.
+                continue
+            return candidate
+    return None
+
+
 def _ensure_ip_assignment_for_version(
     db: Session,
     subscription: Subscription,
@@ -309,6 +474,11 @@ def _ensure_ip_assignment_for_version(
                 detail=f"No active {version_key} pool available for assignment.",
             )
         address = _find_available_address(db, ip_version, str(pool.id))
+        if not address and ip_version == IPVersion.ipv4:
+            # No materialized free row — create-on-demand the lowest free host
+            # from the pool's blocks/CIDR (closes the display/allocate gap that
+            # leaves "free" pools unable to assign).
+            address = _allocate_ipv4_on_demand(db, pool)
         if not address:
             raise HTTPException(
                 status_code=400,
@@ -329,6 +499,7 @@ def _ensure_ip_assignment_for_version(
     else:
         assignment_payload = IPAssignmentCreate(
             subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
             service_address_id=subscription.service_address_id,
             ip_version=ip_version,
             ipv4_address_id=address.id if ip_version == IPVersion.ipv4 else None,

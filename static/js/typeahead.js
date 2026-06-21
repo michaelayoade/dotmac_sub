@@ -35,7 +35,7 @@
 
         function createMenu() {
             var menu = document.createElement("div");
-            menu.className = "absolute z-50 mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800";
+            menu.className = "absolute z-[2200] mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800";
             return menu;
         }
 

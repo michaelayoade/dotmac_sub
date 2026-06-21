@@ -1,0 +1,252 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles, icon_credit_card %}
+
+{% block title %}Direct Bank Transfer - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+<div class="relative space-y-8">
+    {% call page_header(title="Direct Bank Transfer", subtitle="Configure the bank account shown to customers during web top-up", icon=icon_credit_card(), color="emerald", color2="teal") %}{% endcall %}
+
+    {% if saved %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
+        Direct bank transfer settings saved.
+    </div>
+    {% endif %}
+
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("Direct Transfer Setup", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Enable Direct Bank Transfer</label>
+                <div class="relative mt-1">
+                    <select name="direct_bank_transfer_enabled" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if direct_bank_transfer.direct_bank_transfer_enabled == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if direct_bank_transfer.direct_bank_transfer_enabled != 'true' %}selected{% endif %}>Disabled</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Customer Instructions</label>
+                <textarea name="direct_bank_transfer_instructions" rows="4" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">{{ direct_bank_transfer.direct_bank_transfer_instructions or '' }}</textarea>
+                <p class="mt-1 text-xs text-slate-500">Shown on the customer transfer instruction page. The customer amount and reference are generated separately for each top-up.</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Add Account", color="teal") %}
+        <div class="grid gap-4 lg:grid-cols-[1fr,1fr,1fr,auto]">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Bank Name</label>
+                <input type="text" id="new-account-bank-name" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Account Name</label>
+                <input type="text" id="new-account-account-name" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Account Number</label>
+                <input type="text" id="new-account-account-number" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div class="flex items-end">
+                <button type="button" id="add-direct-transfer-account" class="w-full rounded-lg bg-teal-600 px-5 py-3 text-sm font-medium text-white shadow-sm transition hover:bg-teal-700 lg:w-auto">Add Account</button>
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Saved Accounts", color="emerald") %}
+        <div class="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
+                    <tr>
+                        <th class="px-4 py-3">Enabled</th>
+                        <th class="px-4 py-3">Bank</th>
+                        <th class="px-4 py-3">Account Name</th>
+                        <th class="px-4 py-3">Account Number</th>
+                        <th class="px-4 py-3 text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="direct-transfer-accounts-table" class="divide-y divide-slate-100 bg-white dark:divide-slate-800 dark:bg-slate-900">
+                    {% for account in direct_bank_transfer_accounts %}
+                    <tr>
+                        <td class="px-4 py-3 align-top">
+                            <input type="hidden" name="account_id" value="{{ account.id }}">
+                            <input type="checkbox" name="account_enabled" value="{{ account.id }}" {% if account.enabled == 'true' %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                        </td>
+                        <td class="px-4 py-3 align-top">
+                            <input type="text" name="account_bank_name" value="{{ account.bank_name }}" class="block w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-800 dark:text-white dark:ring-slate-700">
+                        </td>
+                        <td class="px-4 py-3 align-top">
+                            <input type="text" name="account_account_name" value="{{ account.account_name }}" class="block w-full rounded-lg border-0 bg-slate-100 px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-800 dark:text-white dark:ring-slate-700">
+                        </td>
+                        <td class="px-4 py-3 align-top">
+                            <input type="text" name="account_account_number" value="{{ account.account_number }}" class="block w-full rounded-lg border-0 bg-slate-100 px-3 py-2 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-800 dark:text-white dark:ring-slate-700">
+                        </td>
+                        <td class="px-4 py-3 text-right align-top">
+                            <button type="button" data-remove-direct-transfer-account class="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-900/20">Remove</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    <tr id="direct-transfer-accounts-empty" {% if direct_bank_transfer_accounts %}hidden{% endif %}>
+                        <td colspan="5" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No bank accounts saved.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        {% endcall %}
+
+	        <div class="flex flex-col gap-3 sm:flex-row sm:justify-end">
+	            <a href="/admin/system/settings-hub?category=billing" class="rounded-lg border border-slate-300 bg-white px-6 py-2.5 text-center text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Back to Billing Setup</a>
+	            <button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700">Save Direct Transfer Settings</button>
+	        </div>
+	    </form>
+	    <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+	        <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+	            <div class="flex items-center gap-3">
+	                <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+	                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+	                </div>
+	                <div>
+	                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Recent changes</h2>
+	                    <p class="text-xs text-slate-500 dark:text-slate-400">Audit trail for direct transfer bank details</p>
+	                </div>
+	            </div>
+	            <a href="/admin/system/audit?entity_type=direct_bank_transfer_config" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full audit</a>
+	        </div>
+	        <div class="px-5 py-4">
+	            {% if audit_items %}
+	            <div class="grid gap-3 lg:grid-cols-2">
+	                {% for activity in audit_items[:4] %}
+	                <div class="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+	                    <div class="flex items-start justify-between gap-3">
+	                        <div class="min-w-0">
+	                            <p class="truncate text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
+	                            <p class="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
+	                        </div>
+	                        <span class="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">
+	                            {{ activity.occurred_at.strftime('%b %d') if activity.occurred_at else 'Recent' }}
+	                        </span>
+	                    </div>
+	                </div>
+	                {% endfor %}
+	            </div>
+	            {% else %}
+	            <p class="text-sm text-slate-500 dark:text-slate-400">No structured direct transfer audit entries yet.</p>
+	            {% endif %}
+	        </div>
+	    </section>
+	</div>
+	{{ animation_styles() }}
+	{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const addButton = document.getElementById('add-direct-transfer-account');
+    const table = document.getElementById('direct-transfer-accounts-table');
+    const emptyRow = document.getElementById('direct-transfer-accounts-empty');
+    const bankNameInput = document.getElementById('new-account-bank-name');
+    const accountNameInput = document.getElementById('new-account-account-name');
+    const accountNumberInput = document.getElementById('new-account-account-number');
+
+    function newAccountId() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+        }
+        return String(Date.now()) + String(Math.floor(Math.random() * 100000));
+    }
+
+    function inputClass(extra) {
+        return `block w-full rounded-lg border-0 bg-slate-100 px-3 py-2 ${extra || 'text-sm'} text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-800 dark:text-white dark:ring-slate-700`;
+    }
+
+    function createTextInput(name, value, className) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.name = name;
+        input.value = value;
+        input.className = className;
+        return input;
+    }
+
+    function appendAccountRow(account) {
+        const row = document.createElement('tr');
+        const enabledCell = document.createElement('td');
+        const bankCell = document.createElement('td');
+        const nameCell = document.createElement('td');
+        const numberCell = document.createElement('td');
+        const actionCell = document.createElement('td');
+
+        enabledCell.className = 'px-4 py-3 align-top';
+        bankCell.className = 'px-4 py-3 align-top';
+        nameCell.className = 'px-4 py-3 align-top';
+        numberCell.className = 'px-4 py-3 align-top';
+        actionCell.className = 'px-4 py-3 text-right align-top';
+
+        const idInput = document.createElement('input');
+        idInput.type = 'hidden';
+        idInput.name = 'account_id';
+        idInput.value = account.id;
+        const enabledInput = document.createElement('input');
+        enabledInput.type = 'checkbox';
+        enabledInput.name = 'account_enabled';
+        enabledInput.value = account.id;
+        enabledInput.checked = true;
+        enabledInput.className = 'h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500';
+        enabledCell.append(idInput, enabledInput);
+
+        bankCell.appendChild(createTextInput('account_bank_name', account.bankName, inputClass('text-sm')));
+        nameCell.appendChild(createTextInput('account_account_name', account.accountName, inputClass('text-sm')));
+        numberCell.appendChild(createTextInput('account_account_number', account.accountNumber, inputClass('font-mono text-sm')));
+
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.dataset.removeDirectTransferAccount = 'true';
+        removeButton.className = 'rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-900/20';
+        removeButton.textContent = 'Remove';
+        actionCell.appendChild(removeButton);
+
+        row.append(enabledCell, bankCell, nameCell, numberCell, actionCell);
+        table.insertBefore(row, emptyRow);
+        emptyRow.hidden = true;
+    }
+
+    if (addButton && table && emptyRow) {
+        addButton.addEventListener('click', function () {
+            const bankName = bankNameInput.value.trim();
+            const accountName = accountNameInput.value.trim();
+            const accountNumber = accountNumberInput.value.trim();
+            if (!bankName || !accountName || !accountNumber) {
+                [bankNameInput, accountNameInput, accountNumberInput].find((input) => !input.value.trim())?.focus();
+                return;
+            }
+            appendAccountRow({
+                id: newAccountId(),
+                bankName,
+                accountName,
+                accountNumber,
+            });
+            bankNameInput.value = '';
+            accountNameInput.value = '';
+            accountNumberInput.value = '';
+            bankNameInput.focus();
+        });
+
+        table.addEventListener('click', function (event) {
+            const removeButton = event.target.closest('[data-remove-direct-transfer-account]');
+            if (!removeButton) {
+                return;
+            }
+            removeButton.closest('tr')?.remove();
+            const rows = table.querySelectorAll('tr:not(#direct-transfer-accounts-empty)');
+            emptyRow.hidden = rows.length > 0;
+        });
+    }
+});
+</script>
+{% endblock %}

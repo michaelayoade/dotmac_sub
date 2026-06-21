@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="/static/js/charts.js?v=20260603a"></script>
-<script src="/static/js/bandwidth-chart.js?v=20260607b"></script>
+<script src="/static/js/bandwidth-chart.js?v=20260616a"></script>
 {% endblock %}
 
 {% block content %}
@@ -92,14 +92,6 @@
                         {% set cs = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
                         {% set status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
                         {{ status_badge(status_labels.get(cs, cs|title), cs, size="sm") }}
-                        {% if nin_verification %}
-                            {% set nin_status = nin_verification.status.value if nin_verification.status else 'pending' %}
-                            {% set nin_label = 'NIN ' ~ {'pending': 'Pending', 'success': 'Verified', 'failed': 'Failed'}.get(nin_status, nin_status|title) %}
-                            {% set nin_variant = 'error' if nin_status == 'failed' else nin_status %}
-                            {{ status_badge(nin_label, nin_variant, size="sm") }}
-                        {% elif nin_verified %}
-                            {{ status_badge('NIN Verified', 'success', size="sm") }}
-                        {% endif %}
                         {% if customer.captive_redirect_enabled %}
                         <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Captive portal redirect enabled">
                             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
@@ -138,67 +130,52 @@
                 {% else %}
                     {% set invoice_link = "/admin/billing/invoices/new?customer_id=" ~ customer.id ~ "&customer_type=" ~ customer_type %}
                 {% endif %}
-                <a href="{{ subscription_link }}"
-                   class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                    New Subscription
-                </a>
+                <div class="flex flex-col items-stretch gap-2" x-data="{ openQuickActions: false }" @keydown.escape.window="openQuickActions = false">
+                    <a href="{{ subscription_link }}"
+                       class="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        New Subscription
+                    </a>
+                    <div class="relative">
+                        <button type="button" @click="openQuickActions = !openQuickActions"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                            Quick Actions
+                            <svg class="h-4 w-4 transition" :class="openQuickActions ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div x-show="openQuickActions" x-cloak @click.outside="openQuickActions = false"
+                             class="absolute left-0 z-20 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                            <a href="{{ invoice_link }}"
+                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                Create Invoice
+                            </a>
+                            <a href="/admin/billing/payments/new?account={{ customer.id }}"
+                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                                Record Payment
+                            </a>
+                            <a href="/admin/provisioning/orders/new?subscriber={{ customer.id }}"
+                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                                Create Service Order
+                            </a>
+                            {% if customer.is_active %}
+                            <button hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/deactivate"
+                                    hx-confirm="Deactivate this customer?"
+                                    @click="openQuickActions = false"
+                                    class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                                Deactivate customer
+                            </button>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
                 <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit"
                    class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                     Edit
                 </a>
-                <form method="post"
-                      action="/api/v1/subscribers/{{ customer.id }}/verify-nin"
-                      data-nin-verification-form
-                      class="flex items-center gap-2">
-                    <input type="text"
-                           name="nin"
-                           inputmode="numeric"
-                           pattern="[0-9]{11}"
-                           maxlength="11"
-                           placeholder="NIN"
-                           aria-label="National Identity Number"
-                           class="w-32 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
-                    <button type="submit"
-                            data-nin-submit
-                            class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                        Verify NIN
-                    </button>
-                </form>
-
-                <!-- More Actions Dropdown -->
-                <div x-data="{ open: false }" class="relative">
-                    <button @click="open = !open"
-                            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
-                    </button>
-                    <div x-show="open" @click.away="open = false" x-transition x-cloak
-                         class="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white py-2 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-                        <a href="{{ invoice_link }}" class="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
-                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                            Create Invoice
-                        </a>
-                        <div class="my-2 border-t border-slate-100 dark:border-slate-700"></div>
-                        {% if customer.is_active %}
-                        <button hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/deactivate"
-                                hx-confirm="Deactivate this customer?"
-                                @click="open = false"
-                                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                            Deactivate Customer
-                        </button>
-                        {% elif not has_any_subscribers %}
-                        <button hx-delete="/admin/customers/{{ customer_type }}/{{ customer.id }}"
-                                hx-confirm="Delete this customer permanently? This action cannot be undone."
-                                @click="open = false"
-                                class="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                            Delete Customer
-                        </button>
-                        {% endif %}
-                    </div>
-                </div>
             </div>
         </div>
     </header>
@@ -233,8 +210,8 @@
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-4 4v-4z"/></svg>
                 Support
-                {% if relationship_summary.open_tickets or relationship_summary.recent_communications %}
-                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ relationship_summary.open_tickets | default(0) }}/{{ relationship_summary.recent_communications | default(0) }}</span>
+                {% if relationship_summary.open_tickets %}
+                <span class="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" title="Open tickets">{{ relationship_summary.open_tickets }}</span>
                 {% endif %}
             </button>
             <button @click="activeTab = 'network'"
@@ -382,6 +359,10 @@
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Contact Information</h3>
                         <div class="flex items-center gap-3">
+                            {% if map_data %}
+                            <a href="/admin/network/map" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full Map</a>
+                            {% endif %}
+                            <button type="button" @click="showAddressModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Address</button>
                             <button type="button" @click="showContactModal = true" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add Contact</button>
                             <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Edit</a>
                         </div>
@@ -424,15 +405,99 @@
                                 {% endif %}
                             </div>
                         </div>
-                        {% if customer.address %}
                         <div class="flex items-start gap-3">
                             <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-50 text-slate-600 dark:bg-slate-700 dark:text-slate-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                             </div>
                             <div>
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Address</p>
+                                {% if customer.address %}
                                 <p class="text-sm text-slate-900 dark:text-white">{{ customer.address }}</p>
+                                {% elif geocode_target %}
+                                <p class="text-sm text-slate-900 dark:text-white">{{ geocode_target.address_line1 }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">
+                                    {{ geocode_target.city | default('') }}{% if geocode_target.region %}, {{ geocode_target.region }}{% endif %} {{ geocode_target.postal_code or '' }}
+                                </p>
+                                {% else %}
+                                <p class="text-sm text-slate-400 dark:text-slate-500">No address on file</p>
+                                {% endif %}
                             </div>
+                        </div>
+
+                        {% if map_data %}
+                        <div class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-900/30">
+                            <div id="customer-mini-map" class="overflow-hidden rounded-xl"></div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <button type="button"
+                                        id="customer-map-click-toggle"
+                                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                                    Set by map click
+                                </button>
+                                <span id="customer-map-edit-status" class="text-xs text-slate-500 dark:text-slate-400"></span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label for="customer-map-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                                    <input id="customer-map-latitude"
+                                           type="number"
+                                           step="0.000001"
+                                           value="{{ map_data.center[0] if map_data and map_data.center else '' }}"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="customer-map-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                                    <input id="customer-map-longitude"
+                                           type="number"
+                                           step="0.000001"
+                                           value="{{ map_data.center[1] if map_data and map_data.center else '' }}"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                            </div>
+                            <button type="button"
+                                    id="customer-map-save-btn"
+                                    data-address-id="{{ primary_address.id if primary_address and primary_address.id else '' }}"
+                                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                                Save coordinates
+                            </button>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">
+                                <div id="customer-map-nearby-assets"></div>
+                            </div>
+                        </div>
+                        {% elif geocode_target %}
+                        <div class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-900/30">
+                            <button type="button"
+                                    id="customer-geocode-btn"
+                                    data-address-id="{{ geocode_target.id or '' }}"
+                                    data-address='{{ geocode_target.payload_json }}'
+                                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                Geocode address
+                            </button>
+                            <p id="customer-geocode-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
+                            <div id="customer-geocode-results" class="space-y-2"></div>
+                            <div class="grid grid-cols-2 gap-2 pt-2">
+                                <div>
+                                    <label for="customer-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                                    <input id="customer-latitude"
+                                           type="number"
+                                           step="0.000001"
+                                           placeholder="0.000000"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="customer-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                                    <input id="customer-longitude"
+                                           type="number"
+                                           step="0.000001"
+                                           placeholder="0.000000"
+                                           class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                            </div>
+                            <button type="button"
+                                    id="customer-coords-save-btn"
+                                    class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                                Save coordinates
+                            </button>
                         </div>
                         {% endif %}
                     </div>
@@ -491,14 +556,42 @@
                 </div>
                 {% endif %}
 
-                <!-- User Access -->
+                <!-- Portal Access -->
                 {% set pppoe_access = pppoe_access|default({'has_credential': false, 'credential_id': none, 'login': none, 'has_password': false}) %}
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                        <h3 class="font-semibold text-slate-900 dark:text-white">User Access</h3>
-                        <span class="text-xs text-slate-500 dark:text-slate-400">Customer Portal & PPPoE</span>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Portal Access</h3>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">Login, impersonation & PPPoE</span>
                     </div>
                     <div class="p-5 space-y-4">
+                        {% if accounts %}
+                        <form method="post" action="/admin/customers/{{ customer_type }}/{{ customer.id }}/impersonate" class="rounded-xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900/50 dark:bg-amber-900/20">
+                            {% include "components/forms/csrf_input.html" %}
+                            <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                                <div class="min-w-0 flex-1">
+                                    <label class="mb-1 block text-xs font-medium text-amber-800 dark:text-amber-300">Impersonate account</label>
+                                    {% if accounts|length > 1 %}
+                                    <select name="account_id" class="block w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-amber-800/60 dark:bg-slate-900 dark:text-white">
+                                        {% for account in accounts %}
+                                        <option value="{{ account.id }}">
+                                            {% if account.account_number %}{{ account.account_number }}{% elif account.subscriber %}{{ account.subscriber.name }}{% else %}Account{% endif %}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                    {% else %}
+                                    <input type="hidden" name="account_id" value="{{ accounts[0].id }}">
+                                    <p class="truncate rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white">
+                                        {% if accounts[0].account_number %}{{ accounts[0].account_number }}{% elif accounts[0].subscriber %}{{ accounts[0].subscriber.name }}{% else %}Account{% endif %}
+                                    </p>
+                                    {% endif %}
+                                </div>
+                                <button type="submit" class="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+                                    Open Portal
+                                </button>
+                            </div>
+                        </form>
+                        {% endif %}
                         {% if customer_user_access.error %}
                         <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
                             {{ customer_user_access.error }}
@@ -546,44 +639,25 @@
                                 {% endif %}
                             </div>
                             <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
-                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Password Reset Required</p>
-                                <p class="mt-1 text-sm font-semibold {% if customer_user_access.must_change_password %}text-amber-600 dark:text-amber-400{% else %}text-slate-700 dark:text-slate-300{% endif %}">
-                                    {{ "Yes" if customer_user_access.must_change_password else "No" }}
-                                </p>
-                            </div>
-                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Login</p>
                                 <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
                                     {{ customer_user_access.last_login_at.strftime('%b %d, %Y %H:%M') if customer_user_access.last_login_at else 'Never' }}
                                 </p>
                             </div>
-                            <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30 sm:col-span-2">
-                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Invite Status</p>
-                                {% if customer_user_access.invite_sent_at %}
-                                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">
-                                    Invite sent {{ customer_user_access.invite_sent_at.strftime('%b %d, %Y %H:%M') }}.
-                                    {% if not customer_user_access.can_send_invite and customer_user_access.invite_available_at %}
-                                    Resend available {{ customer_user_access.invite_available_at.strftime('%b %d, %Y %H:%M') }}.
-                                    {% endif %}
-                                </p>
-                                {% else %}
-                                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">No invite sent yet.</p>
-                                {% endif %}
-                            </div>
                         </div>
 
-                        <div class="grid gap-2 sm:grid-cols-2">
+                        <div class="flex flex-wrap items-center gap-2">
                             <button
                                 hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/invite"
                                 {% if not customer_user_access.can_send_invite %}disabled{% endif %}
-                                class="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                class="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                                 Send Invite
                             </button>
                             <button
                                 hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/reset-link"
                                 {% if not customer_user_access.can_send_reset %}disabled{% endif %}
-                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7v2h16v-2c-4.418 0-8-3.134-8-7zM8 8a4 4 0 118 0 4 4 0 01-8 0z"/></svg>
                                 Send Reset Link
                             </button>
@@ -591,13 +665,13 @@
                             <button
                                 hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/deactivate-login"
                                 hx-confirm="Deactivate portal login for this customer?"
-                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm transition hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30">
+                                class="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm transition hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30">
                                 Deactivate Login
                             </button>
                             {% else %}
                             <button
                                 hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/activate-login"
-                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
+                                class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
                                 Activate Login
                             </button>
                             {% endif %}
@@ -605,48 +679,23 @@
                             <button
                                 hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/reset-mfa"
                                 hx-confirm="Disable two-factor authentication for this customer? They will be able to log in with just their password until they re-enroll."
-                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 dark:border-rose-800/60 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30">
+                                class="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 dark:border-rose-800/60 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30">
                                 Reset MFA
                             </button>
                             {% endif %}
-                            <div class="flex items-center px-1 text-xs text-slate-500 dark:text-slate-400">
-                                Reset links remaining this hour: {{ customer_user_access.reset_remaining }}
-                            </div>
                         </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            {% if customer_user_access.invite_sent_at %}
+                            Invite sent {{ customer_user_access.invite_sent_at.strftime('%b %d, %Y %H:%M') }}.
+                            {% else %}
+                            No invite sent yet.
+                            {% endif %}
+                            Reset links remaining this hour: {{ customer_user_access.reset_remaining }}.
+                            {% if customer_user_access.must_change_password %}Password reset is required.{% endif %}
+                        </p>
                         {% endif %}
                     </div>
                 </div>
-
-                <!-- Login as Customer -->
-                {% if accounts %}
-                <div class="rounded-2xl border border-slate-200/60 bg-gradient-to-br from-slate-50 to-white shadow-sm dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800">
-                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                        <div class="flex items-center gap-2">
-                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-7-7l7 7-7 7"/></svg>
-                            </div>
-                            <h3 class="font-semibold text-slate-900 dark:text-white">Customer Portal</h3>
-                        </div>
-                    </div>
-                    <form method="post" action="/admin/customers/{{ customer_type }}/{{ customer.id }}/impersonate" class="p-5 space-y-4">
-                        {% include "components/forms/csrf_input.html" %}
-                        <div>
-                            <label class="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-400">Account</label>
-                            <select name="account_id" class="block w-full rounded-xl border-0 bg-slate-100 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
-                                {% for account in accounts %}
-                                <option value="{{ account.id }}">
-                                    {% if account.account_number %}{{ account.account_number }}{% elif account.subscriber %}{{ account.subscriber.name }}{% else %}Account{% endif %}
-                                </option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:from-amber-600 hover:to-amber-700">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
-                            Login as Customer
-                        </button>
-                    </form>
-                </div>
-                {% endif %}
             </div>
 
             <!-- Center Column: Subscriber Accounts + Addresses -->
@@ -745,6 +794,7 @@
                     <div class="divide-y divide-slate-100 dark:divide-slate-700">
                         {% for subscription in subscriptions[:3] %}
                         {% set sub_status = subscription.status.value if subscription.status is not string and subscription.status else (subscription.status | default('pending')) %}
+                        {% set show_service_assignments = sub_status != 'disabled' %}
                         <div class="px-5 py-4">
                             <div class="flex items-start justify-between">
                                 <div class="flex items-start gap-3">
@@ -761,6 +811,9 @@
                                     </div>
                                     <div>
                                         <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
+                                        {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
+                                        {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
+                                        {% if show_service_assignments %}
                                         <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                                             {% if subscription.login %}
                                             <span class="flex items-center gap-1">
@@ -781,6 +834,7 @@
                                             </span>
                                             {% endif %}
                                         </div>
+                                        {% endif %}
                                     </div>
                                 </div>
                                 <div class="text-right">
@@ -812,11 +866,34 @@
                         <div class="px-5 py-4">
                             <div class="mb-3 flex items-center justify-between">
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
-                                {% set na_status = card.status %}
-                                {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
-                                {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                                <div class="flex flex-wrap items-center justify-end gap-2">
+                                    {% set card_conn = card.connection_status or {} %}
+                                    {% set card_conn_state = card_conn.state | default('offline') %}
+                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium
+                                        {% if card_conn_state == 'connected' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
+                                        {% elif card_conn_state == 'stale' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
+                                        {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                        <span class="h-1.5 w-1.5 rounded-full
+                                            {% if card_conn_state == 'connected' %}bg-emerald-500
+                                            {% elif card_conn_state == 'stale' %}bg-amber-500
+                                            {% else %}bg-slate-400{% endif %}"></span>
+                                        {{ card_conn.label | default('Not connected') }}
+                                    </span>
+                                    {% set na_status = card.status %}
+                                    {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
+                                    {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                                </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3 text-sm">
+                                {% set card_conn = card.connection_status or {} %}
+                                {% if card_conn.identifier or card_conn.last_seen_at %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Connection</p>
+                                    <p class="font-mono font-medium text-slate-900 dark:text-white">
+                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at.strftime('%b %d, %H:%M')) }}
+                                    </p>
+                                </div>
+                                {% endif %}
                                 {% if card.login %}
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">PPPoE Username</p>
@@ -827,6 +904,16 @@
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">IPv4 Address</p>
                                     <p class="font-mono font-medium text-slate-900 dark:text-white">{{ card.ipv4_address }}</p>
+                                </div>
+                                {% endif %}
+                                {% if card.additional_routes %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Routed IP Blocks</p>
+                                    <div class="space-y-0.5">
+                                        {% for route in card.additional_routes %}
+                                        <p class="font-mono font-medium text-slate-900 dark:text-white">{{ route.cidr }}{% if route.metric %} <span class="text-xs font-normal text-slate-500 dark:text-slate-400">metric {{ route.metric }}</span>{% endif %}</p>
+                                        {% endfor %}
+                                    </div>
                                 </div>
                                 {% endif %}
                                 {% if card.nas_name %}
@@ -850,6 +937,61 @@
                             </div>
                         </div>
                         {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Pending pin correction -->
+                {% if pending_location_request %}
+                {% set plr = pending_location_request %}
+                <div class="rounded-2xl border border-amber-300 bg-amber-50 shadow-sm dark:border-amber-700/60 dark:bg-amber-900/20">
+                    <div class="flex items-center gap-2 border-b border-amber-200 px-5 py-4 dark:border-amber-700/60">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-semibold text-amber-900 dark:text-amber-200">Pending pin correction</h3>
+                            <p class="text-xs text-amber-700 dark:text-amber-300/80">Submitted {{ plr.created_at.strftime('%Y-%m-%d %H:%M') }} · awaiting review</p>
+                        </div>
+                    </div>
+                    <div class="space-y-3 p-5">
+                        <div class="grid gap-3 text-sm sm:grid-cols-2">
+                            <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-800/60">
+                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Current</p>
+                                <p class="mt-1 font-mono text-slate-900 dark:text-white">
+                                    {% if plr.current_latitude is not none and plr.current_longitude is not none %}{{ '%.6f'|format(plr.current_latitude) }}, {{ '%.6f'|format(plr.current_longitude) }}{% else %}None on file{% endif %}
+                                </p>
+                            </div>
+                            <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-800/60">
+                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Requested</p>
+                                <p class="mt-1 font-mono text-slate-900 dark:text-white">
+                                    {{ '%.6f'|format(plr.requested_latitude) }}, {{ '%.6f'|format(plr.requested_longitude) }}
+                                    <a class="ml-2 text-xs font-medium text-primary-600 hover:text-primary-700" target="_blank" rel="noopener"
+                                       href="https://www.openstreetmap.org/?mlat={{ plr.requested_latitude }}&mlon={{ plr.requested_longitude }}#map=18/{{ plr.requested_latitude }}/{{ plr.requested_longitude }}">view map</a>
+                                </p>
+                            </div>
+                        </div>
+                        {% if plr.customer_note %}
+                        <p class="text-sm text-slate-700 dark:text-slate-200">“{{ plr.customer_note }}”</p>
+                        {% endif %}
+                        <div class="flex flex-wrap items-end gap-3 pt-1">
+                            <form method="POST" action="/admin/gis/location-requests/{{ plr.id }}/approve" class="flex flex-wrap items-end gap-2">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="next" value="/admin/customers/person/{{ customer.id }}">
+                                <input type="text" name="review_note" placeholder="Review note (optional)"
+                                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Approve</button>
+                            </form>
+                            <form method="POST" action="/admin/gis/location-requests/{{ plr.id }}/reject" class="flex flex-wrap items-end gap-2"
+                                  onsubmit="return confirm('Reject this location correction?');">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="next" value="/admin/customers/person/{{ customer.id }}">
+                                <input type="text" name="review_note" placeholder="Reason (optional)"
+                                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <button type="submit" class="rounded-lg bg-rose-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-rose-700">Reject</button>
+                            </form>
+                        </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Manage all requests in the <a href="/admin/gis?tab=customer-requests&status=pending" class="font-medium text-primary-600 hover:text-primary-700">GIS customer requests</a> tab.</p>
                     </div>
                 </div>
                 {% endif %}
@@ -963,77 +1105,6 @@
             </div>
         </div>
 
-        <div class="grid gap-6 xl:grid-cols-4">
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Support Load</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.open_tickets | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Open tickets tied to this customer</p>
-                {% if support_tickets %}
-                <div class="mt-4 space-y-2">
-                    {% for ticket in support_tickets[:2] %}
-                    <a href="/admin/support/tickets/{{ ticket.id }}" class="block rounded-xl border border-slate-200/70 px-3 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40">
-                        <p class="font-medium text-slate-900 dark:text-white">{{ ticket.title }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ticket.status.value | replace('_', ' ') | title }} · {{ ticket.priority.value | title }}</p>
-                    </a>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Communications</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.recent_communications | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Recent logged messages and notifications</p>
-                {% if communication_logs %}
-                <div class="mt-4 space-y-2">
-                    {% for log in communication_logs[:2] %}
-                    <div class="rounded-xl border border-slate-200/70 px-3 py-2 dark:border-slate-700">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ (log.subject or log.body or log.recipient or log.channel.value)[:52] }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }}</p>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Network & Access</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.active_network_assets | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active ONTs, CPEs, and IP assignments</p>
-                <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">Credentials</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_credentials | default(0) }}</p>
-                    </div>
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">ONTs</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_onts | default(0) }}</p>
-                    </div>
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">CPEs</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_cpes | default(0) }}</p>
-                    </div>
-                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <p class="text-slate-500 dark:text-slate-400">IPs</p>
-                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_ip_assignments | default(0) }}</p>
-                    </div>
-                </div>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Collections & Delivery</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_service_orders | default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active service orders and dunning follow-up</p>
-                <div class="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
-                    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <span>Open dunning cases</span>
-                        <span class="font-semibold text-slate-900 dark:text-white">{{ relationship_summary.open_dunning_cases | default(0) }}</span>
-                    </div>
-                    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                        <span>Linked resellers</span>
-                        <span class="font-semibold text-slate-900 dark:text-white">{{ relationship_summary.linked_resellers | default(0) }}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Activity Timeline -->
         <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
@@ -1094,6 +1165,11 @@
                                 <span class="font-medium text-slate-900 dark:text-white">{{ activity.title }}</span>
                                 {% if activity.description %}<span class="text-slate-500 dark:text-slate-400"> - {{ activity.description }}</span>{% endif %}
                             </p>
+                            {% if activity.actor_name %}
+                            <p class="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                                By {{ activity.actor_name }}
+                            </p>
+                            {% endif %}
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
                                 {{ activity.timestamp.strftime('%b %d, %Y at %I:%M %p') if activity.timestamp else 'Unknown time' }}
                                 {% if activity.amount %}<span class="ml-2 font-medium text-slate-600 dark:text-slate-400">₦{{ '{:,.0f}'.format(activity.amount) }}</span>{% endif %}
@@ -1123,7 +1199,8 @@
                                 <span class="text-slate-500 dark:text-slate-400"> - {{ inv_status | title }}</span>
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                                {{ invoice.created_at.strftime('%b %d, %Y at %I:%M %p') if invoice.created_at else 'Unknown' }}
+                                {% set inv_date = invoice.issued_at or invoice.created_at %}
+                                {{ inv_date.strftime('%b %d, %Y') if inv_date else 'Unknown' }}
                                 {% set amount = invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else (invoice.total if invoice.total is not none else 0) %}
                                 <span class="ml-2 font-medium text-slate-600 dark:text-slate-400">₦{{ '{:,.0f}'.format(amount) }}</span>
                             </p>
@@ -1207,63 +1284,6 @@
             </div>
         </div>
 
-        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                <div>
-                    <h3 class="font-semibold text-slate-900 dark:text-white">Billing Policy</h3>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective customer terms, override source, and global defaults.</p>
-                </div>
-                <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit"
-                   class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Edit customer</a>
-            </div>
-            <div class="px-5 py-4">
-                {% if billing_policy.has_mixed %}
-                <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-300">
-                    This customer has mixed billing overrides across {{ billing_policy.account_count }} linked account{{ '' if billing_policy.account_count == 1 else 's' }}.
-                </div>
-                {% elif billing_policy.has_overrides %}
-                <div class="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-300">
-                    Customer-specific billing overrides are active.
-                </div>
-                {% endif %}
-
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                        <thead>
-                            <tr class="text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                                <th class="py-2 pr-4">Setting</th>
-                                <th class="px-4 py-2">Effective</th>
-                                <th class="px-4 py-2">Source</th>
-                                <th class="px-4 py-2">Global Default</th>
-                                <th class="px-4 py-2">Customer Override</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
-                            {% for row in billing_policy.rows %}
-                            <tr>
-                                <td class="py-3 pr-4 font-medium text-slate-900 dark:text-white">{{ row.label }}</td>
-                                <td class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ row.effective }}</td>
-                                <td class="px-4 py-3">
-                                    {% if row.source == 'Customer override' %}
-                                    <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ row.source }}</span>
-                                    {% elif row.source == 'Global default' %}
-                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ row.source }}</span>
-                                    {% elif row.source == 'Mixed' %}
-                                    <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ row.source }}</span>
-                                    {% else %}
-                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ row.source }}</span>
-                                    {% endif %}
-                                </td>
-                                <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
-                                <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
         <div class="grid gap-6 lg:grid-cols-2">
             <!-- Recent Invoices -->
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
@@ -1283,7 +1303,7 @@
                             </div>
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ invoice.invoice_number | default('Invoice') }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ invoice.created_at.strftime('%b %d, %Y') if invoice.created_at else 'N/A' }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at).strftime('%b %d, %Y') if (invoice.issued_at or invoice.created_at) else 'N/A' }}</p>
                             </div>
                         </div>
                         <div class="text-right">
@@ -1354,13 +1374,14 @@
                 {% endif %}
                 <a href="{{ subscription_link }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                    Add Subscription
+                    New Subscription
                 </a>
             </div>
             {% if subscriptions %}
             <div class="divide-y divide-slate-100 dark:divide-slate-700">
                 {% for subscription in subscriptions %}
                 {% set sub_status = subscription.status.value if subscription.status is not string and subscription.status else (subscription.status | default('pending')) %}
+                {% set show_service_assignments = sub_status != 'disabled' %}
                 {% set account = account_lookup.get(subscription.subscriber_id|string) %}
                 <div class="px-5 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
                     <div class="flex items-start justify-between">
@@ -1387,31 +1408,31 @@
                                         Account: {{ account.account_number }}
                                     </span>
                                     {% endif %}
-                                    {% if subscription.login %}
+                                    {% if show_service_assignments and subscription.login %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                                         {{ subscription.login }}
                                     </span>
                                     {% endif %}
-                                    {% if subscription.ipv4_address %}
+                                    {% if show_service_assignments and subscription.ipv4_address %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
                                         {{ subscription.ipv4_address }}
                                     </span>
                                     {% endif %}
-                                    {% if subscription.ipv6_address %}
+                                    {% if show_service_assignments and subscription.ipv6_address %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
                                         {{ subscription.ipv6_address }}
                                     </span>
                                     {% endif %}
-                                    {% if subscription.mac_address %}
+                                    {% if show_service_assignments and subscription.mac_address %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                                         {{ subscription.mac_address }}
                                     </span>
                                     {% endif %}
-                                    {% if subscription.next_billing_at %}
+                                    {% if show_service_assignments and subscription.next_billing_at %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                                         Next bill: {{ subscription.next_billing_at.strftime('%b %d, %Y') }}
@@ -1430,17 +1451,33 @@
                                 {% endif %}
                                 <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="mt-2 inline-flex text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">View details</a>
                             </div>
-                            {% if sub_status == 'active' %}
-                            <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
-                                {% include "components/forms/csrf_input.html" %}
-                                <input type="hidden" name="subscriber_id" value="{{ customer.id }}">
-                                <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-                                <button type="submit" title="Generate Invoice" class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-                                    <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                    Invoice
-                                </button>
-                            </form>
-                            {% endif %}
+                            <div class="flex flex-col items-end gap-2">
+                                {% if sub_status == 'active' %}
+                                <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="subscriber_id" value="{{ customer.id }}">
+                                    <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
+                                    <button type="submit" title="Generate Invoice" class="w-24 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                                        <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                        Invoice
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% if show_service_assignments %}
+                                {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
+                                {% set sub_conn_state = sub_conn.state | default('offline') %}
+                                <p class="flex w-24 items-center justify-center gap-1 whitespace-nowrap text-[10px] font-medium
+                                    {% if sub_conn_state == 'connected' %}text-emerald-600 dark:text-emerald-400
+                                    {% elif sub_conn_state == 'stale' %}text-amber-600 dark:text-amber-400
+                                    {% else %}text-slate-500 dark:text-slate-400{% endif %}">
+                                    <span class="h-1.5 w-1.5 rounded-full
+                                        {% if sub_conn_state == 'connected' %}bg-emerald-500
+                                        {% elif sub_conn_state == 'stale' %}bg-amber-500
+                                        {% else %}bg-slate-400{% endif %}"></span>
+                                    {{ sub_conn.label | default('Not connected') }}
+                                </p>
+                                {% endif %}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1464,25 +1501,6 @@
 
     <!-- Tab Content: Support -->
     <div x-show="activeTab === 'support'" x-cloak class="space-y-6">
-        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Open Tickets</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.open_tickets | default(0) }}</p>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Communications</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.recent_communications | default(0) }}</p>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Active Credentials</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_credentials | default(0) }}</p>
-            </div>
-            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Service Orders</p>
-                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_service_orders | default(0) }}</p>
-            </div>
-        </div>
-
         <div class="grid gap-6 xl:grid-cols-2">
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
@@ -1614,6 +1632,20 @@
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ assignment.ipv4_address.address if assignment.ipv4_address else assignment.ipv6_address.address if assignment.ipv6_address else 'IP Assignment' }}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ assignment.ip_version.value | upper }} · {{ 'Active' if assignment.is_active else 'Inactive' }}</p>
                             </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if active_additional_route_rows %}
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Additional IPs</p>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            {% for route in active_additional_route_rows[:4] %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-xs font-medium ring-1 ring-inset {% if route.billing_ok %}bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:ring-indigo-800{% else %}bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800{% endif %}">
+                                {{ route.cidr }}
+                                <span class="font-sans text-[10px] uppercase tracking-wide">{{ route.type_label }}</span>
+                                <span class="font-sans text-[10px] uppercase tracking-wide">{{ route.billing_label }}</span>
+                            </span>
                             {% endfor %}
                         </div>
                     </div>
@@ -1815,6 +1847,29 @@
                 <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No IP addresses assigned.</div>
                 {% endif %}
             </div>
+            {% if active_additional_route_rows %}
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Additional IPs</h3>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ active_additional_route_rows | length }}</span>
+                </div>
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for route in active_additional_route_rows %}
+                    <div class="px-5 py-4">
+                        <div class="flex items-center justify-between gap-4">
+                            <div class="min-w-0">
+                                <p class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ route.cidr }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ route.type_label }}</p>
+                            </div>
+                            <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset {% if route.billing_ok %}bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-300 dark:ring-indigo-800{% else %}bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-800{% endif %}">
+                                {{ route.billing_label }}
+                            </span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Access Credentials -->
@@ -2090,121 +2145,6 @@
 </div>
 
 <script>
-function notifyNinVerification(detail) {
-    window.dispatchEvent(new CustomEvent('show-toast', { detail }));
-}
-
-function ninStatusUrl(form) {
-    return form.action.replace(/\/verify-nin$/, '/nin-verification');
-}
-
-function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function pollNinVerification(form) {
-    const url = ninStatusUrl(form);
-    for (let attempt = 0; attempt < 15; attempt += 1) {
-        await delay(2000);
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { Accept: 'application/json' },
-            credentials: 'same-origin',
-        });
-        if (!response.ok) {
-            continue;
-        }
-        const payload = await response.json();
-        if (payload.status === 'success') {
-            notifyNinVerification({
-                type: 'success',
-                title: 'NIN verified',
-                message: `Match score: ${payload.match_score ?? 'N/A'}.`,
-            });
-            window.setTimeout(() => window.location.reload(), 1200);
-            return;
-        }
-        if (payload.status === 'failed') {
-            notifyNinVerification({
-                type: 'error',
-                title: 'NIN verification failed',
-                message: payload.failure_reason || 'Subscriber identity mismatch.',
-            });
-            window.setTimeout(() => window.location.reload(), 1200);
-            return;
-        }
-    }
-    notifyNinVerification({
-        type: 'info',
-        title: 'NIN verification still pending',
-        message: 'The lookup has been queued, but the worker has not returned a result yet.',
-    });
-    window.setTimeout(() => window.location.reload(), 1200);
-}
-
-document.addEventListener('submit', async (event) => {
-    const form = event.target.closest('[data-nin-verification-form]');
-    if (!form) {
-        return;
-    }
-    event.preventDefault();
-
-    if (!form.reportValidity()) {
-        return;
-    }
-
-    const submitButton = form.querySelector('[data-nin-submit]');
-    const originalText = submitButton ? submitButton.textContent : '';
-    if (submitButton) {
-        submitButton.disabled = true;
-        submitButton.textContent = 'Verifying...';
-    }
-
-    try {
-        const headers = { Accept: 'application/json' };
-        if (typeof getCsrfToken === 'function') {
-            const token = getCsrfToken();
-            if (token) {
-                headers['X-CSRF-Token'] = token;
-            }
-        }
-
-        const response = await fetch(form.action, {
-            method: 'POST',
-            body: new FormData(form),
-            headers,
-            credentials: 'same-origin',
-        });
-
-        if (!response.ok) {
-            let message = 'NIN verification could not be queued.';
-            try {
-                const payload = await response.json();
-                message = payload.detail || message;
-            } catch (_) {}
-            throw new Error(message);
-        }
-
-        notifyNinVerification({
-            type: 'success',
-            title: 'NIN verification queued',
-            message: 'Waiting for the result...',
-        });
-        await pollNinVerification(form);
-    } catch (error) {
-        notifyNinVerification({
-            type: 'error',
-            title: 'NIN verification failed',
-            message: error.message || 'Please try again.',
-        });
-    } finally {
-        if (submitButton) {
-            submitButton.disabled = false;
-            submitButton.textContent = originalText || 'Verify NIN';
-        }
-    }
-});
-
 function customerDetail(config = {}) {
     return {
         statsUrl: config.statsUrl || '',
@@ -2245,9 +2185,6 @@ function customerDetail(config = {}) {
                     return;
                 }
                 if (event.type === 'htmx:afterSwap') {
-                    if (window.Alpine && typeof window.Alpine.initTree === 'function') {
-                        window.Alpine.initTree(target);
-                    }
                     this.statsLoaded = true;
                     this.statsLoading = false;
                     return;

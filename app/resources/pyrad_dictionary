@@ -1,0 +1,16 @@
+# Minimal pyrad dictionary for CoA/Disconnect from app containers.
+# The full FreeRADIUS dictionary set lives only in the freeradius
+# container; pyrad only needs the attributes we actually send.
+ATTRIBUTE	User-Name		1	string
+ATTRIBUTE	NAS-IP-Address		4	ipaddr
+ATTRIBUTE	Framed-IP-Address	8	ipaddr
+ATTRIBUTE	Calling-Station-Id	31	string
+ATTRIBUTE	NAS-Identifier		32	string
+ATTRIBUTE	Acct-Session-Id		44	string
+ATTRIBUTE	Event-Timestamp		55	date
+ATTRIBUTE	Filter-Id		11	string
+VENDOR		Mikrotik	14988
+BEGIN-VENDOR	Mikrotik
+ATTRIBUTE	Mikrotik-Rate-Limit	8	string
+ATTRIBUTE	Mikrotik-Address-List	19	string
+END-VENDOR	Mikrotik

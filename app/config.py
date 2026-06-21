@@ -13,8 +13,20 @@ class Settings:
         "DATABASE_URL",
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",
     )
-    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "30"))
-    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "30"))
+    # Pool is per-process; the engine is recreated in every uvicorn worker and
+    # every Celery prefork process. With ~8 such processes (4 uvicorn + Celery
+    # workers + beat), 30+30 per process could demand ~480 connections and
+    # exhaust Postgres' max_connections (default 100) before pool_timeout ever
+    # engages. 20+10 keeps the fleet's ceiling well under a 300-conn server and
+    # makes the app queue on pool_timeout (graceful) rather than getting hard
+    # "too many clients" rejections. Override per-process via env if needed.
+    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "20"))
+    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    # Cap the AnyIO threadpool that runs sync request handlers so a uvicorn
+    # worker never schedules more concurrent DB-touching threads than its pool
+    # can serve (default AnyIO limit is 40 > pool of 30). Applied in the API
+    # lifespan only; Celery sets its own concurrency.
+    web_threadpool_limit: int = int(os.getenv("WEB_THREADPOOL_LIMIT", "30"))
     db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))
@@ -105,6 +117,14 @@ class Settings:
     enforce_credential_encryption: bool = os.getenv(
         "ENFORCE_CREDENTIAL_ENCRYPTION",
         "true" if app_env in {"prod", "production"} else "false",
+    ).lower() in ("true", "1", "yes")
+
+    # Layer 3 (identity/email decoupling): allow reseller portal logins to
+    # authenticate as a first-class ResellerUser principal instead of a fake
+    # Subscriber. Default OFF — the dual-read auth code is inert until flipped,
+    # and a backfill must repoint reseller credentials before cutover.
+    reseller_user_principal_enabled: bool = os.getenv(
+        "RESELLER_USER_PRINCIPAL_ENABLED", "false"
     ).lower() in ("true", "1", "yes")
 
 

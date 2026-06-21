@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -47,6 +48,13 @@ class UsageRatingRunStatus(enum.Enum):
 
 class QuotaBucket(Base):
     __tablename__ = "quota_buckets"
+    __table_args__ = (
+        Index(
+            "ix_quota_buckets_subscription_id_period_start",
+            "subscription_id",
+            "period_start",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -79,6 +87,12 @@ class QuotaBucket(Base):
 
 class RadiusAccountingSession(Base):
     __tablename__ = "radius_accounting_sessions"
+    __table_args__ = (
+        Index(
+            "ix_radius_accounting_sessions_subscription_id",
+            "subscription_id",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -138,6 +152,13 @@ class RadiusAccountingSession(Base):
 
 class UsageRecord(Base):
     __tablename__ = "usage_records"
+    __table_args__ = (
+        Index(
+            "ix_usage_records_subscription_id_recorded_at",
+            "subscription_id",
+            "recorded_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

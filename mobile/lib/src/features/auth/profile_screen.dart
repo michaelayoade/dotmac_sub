@@ -83,6 +83,27 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 Card(
                   child: ListTile(
+                    leading: const Icon(Icons.place_outlined),
+                    title: const Text('Service location'),
+                    subtitle: const Text('Check & correct your map pin'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/service-location'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.contacts_outlined),
+                    title: const Text('Additional contacts'),
+                    subtitle:
+                        const Text('People we can reach about your account'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/contacts'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
                     leading: const Icon(Icons.devices_outlined),
                     title: const Text('Active sessions'),
                     trailing: const Icon(Icons.chevron_right),
@@ -358,17 +379,52 @@ List<Widget> _withDividers(List<Widget> rows) {
 }
 
 /// Email-verification status, drawn prominently when unverified so the customer
-/// notices and knows to act. (A self-service re-send needs a backend endpoint
-/// that doesn't exist yet — see POST /auth/* — so this surfaces the state
-/// rather than triggering a resend.)
-class _EmailVerifiedTile extends StatelessWidget {
+/// notices and knows to act. When unverified it offers a self-service re-send
+/// (POST /auth/resend-verification-email).
+class _EmailVerifiedTile extends ConsumerStatefulWidget {
   const _EmailVerifiedTile({required this.verified});
   final bool verified;
 
   @override
+  ConsumerState<_EmailVerifiedTile> createState() => _EmailVerifiedTileState();
+}
+
+class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
+  bool _busy = false;
+
+  Future<void> _resend() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      final sent =
+          await ref.read(authRepositoryProvider).resendVerificationEmail();
+      if (sent) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Verification email sent — check your inbox.')));
+        // The verified flag lives on /me; refresh in case it just flipped.
+        await ref.read(authControllerProvider.notifier).reloadProfile();
+      } else {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Already verified or no email on file.')));
+      }
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 429
+            ? 'Please wait a bit before trying again.'
+            : e.message),
+      ));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Could not send verification email. Try again.')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (verified) {
+    if (widget.verified) {
       return ListTile(
         title: const Text('Email verified'),
         trailing: Row(
@@ -389,9 +445,15 @@ class _EmailVerifiedTile extends StatelessWidget {
         children: [
           Icon(Icons.error_outline, size: 18, color: scheme.error),
           const SizedBox(width: 6),
-          Text('Not verified',
-              style:
-                  TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+          _busy
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : TextButton(
+                  onPressed: _resend,
+                  child: const Text('Resend'),
+                ),
         ],
       ),
     );
@@ -406,18 +468,24 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      title: Text(label),
-      trailing: Flexible(
-        child: Text(value,
-            textAlign: TextAlign.end,
-            style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+      title: Row(
+        children: [
+          Text(label),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(value,
+                textAlign: TextAlign.end,
+                style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Edit the customer's contact details (PATCH /auth/me). Email is read-only —
-/// it identifies the account and changing it needs verification elsewhere.
+/// Edit the customer's contact details (PATCH /auth/me). Email is editable:
+/// changing it server-side resets verified state and sends a fresh
+/// verification link; a duplicate address comes back as HTTP 409.
 class _EditProfileSheet extends ConsumerStatefulWidget {
   const _EditProfileSheet({required this.me});
   final Me me;
@@ -429,21 +497,92 @@ class _EditProfileSheet extends ConsumerStatefulWidget {
 class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   late final _firstName = TextEditingController(text: widget.me.firstName);
   late final _lastName = TextEditingController(text: widget.me.lastName);
+  late final _displayName =
+      TextEditingController(text: widget.me.displayName ?? '');
   late final _phone = TextEditingController(text: widget.me.phone ?? '');
+  late final _email = TextEditingController(text: widget.me.email);
+  late final _addr1 = TextEditingController(text: widget.me.addressLine1 ?? '');
+  late final _addr2 = TextEditingController(text: widget.me.addressLine2 ?? '');
+  late final _city = TextEditingController(text: widget.me.city ?? '');
+  late final _region = TextEditingController(text: widget.me.region ?? '');
+  late final _postal = TextEditingController(text: widget.me.postalCode ?? '');
+  late final _country =
+      TextEditingController(text: widget.me.countryCode ?? '');
+  late String _gender = widget.me.gender ?? 'unknown';
+  late String? _contactMethod = widget.me.preferredContactMethod;
+  late String? _dob = widget.me.dateOfBirth; // ISO yyyy-MM-dd
   bool _busy = false;
   String? _error;
+
+  static const _genders = <String, String>{
+    'unknown': 'Prefer not to say',
+    'female': 'Female',
+    'male': 'Male',
+    'non_binary': 'Non-binary',
+    'other': 'Other',
+  };
+  static const _contactMethods = <String, String>{
+    'email': 'Email',
+    'phone': 'Phone',
+    'sms': 'SMS',
+    'push': 'Push notification',
+  };
 
   @override
   void dispose() {
     _firstName.dispose();
     _lastName.dispose();
+    _displayName.dispose();
     _phone.dispose();
+    _email.dispose();
+    _addr1.dispose();
+    _addr2.dispose();
+    _city.dispose();
+    _region.dispose();
+    _postal.dispose();
+    _country.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDob() async {
+    final now = DateTime.now();
+    DateTime initial = DateTime(now.year - 25);
+    if (_dob != null) {
+      final parsed = DateTime.tryParse(_dob!);
+      if (parsed != null) initial = parsed;
+    }
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(1900),
+      lastDate: now,
+    );
+    if (picked != null) {
+      setState(() => _dob = '${picked.year.toString().padLeft(4, '0')}-'
+          '${picked.month.toString().padLeft(2, '0')}-'
+          '${picked.day.toString().padLeft(2, '0')}');
+    }
+  }
+
+  // Loose RFC-ish check: a single @ with non-empty local part and a dotted
+  // domain. Server does the authoritative validation.
+  static final _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  String? _validateEmail(String value) {
+    if (value.isEmpty) return 'Enter an email address';
+    if (!_emailRe.hasMatch(value)) return 'Enter a valid email address';
+    return null;
   }
 
   Future<void> _save() async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
+    final email = _email.text.trim();
+    final emailError = _validateEmail(email);
+    if (emailError != null) {
+      setState(() => _error = emailError);
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -452,13 +591,30 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       await ref.read(authRepositoryProvider).updateProfile({
         'first_name': _firstName.text.trim(),
         'last_name': _lastName.text.trim(),
+        'display_name': _displayName.text.trim(),
         'phone': _phone.text.trim(),
+        'email': email,
+        'date_of_birth': _dob,
+        'gender': _gender,
+        'preferred_contact_method': _contactMethod ?? '',
+        'address_line1': _addr1.text.trim(),
+        'address_line2': _addr2.text.trim(),
+        'city': _city.text.trim(),
+        'region': _region.text.trim(),
+        'postal_code': _postal.text.trim(),
+        'country_code': _country.text.trim(),
       });
+      final emailChanged = email != widget.me.email.trim();
       await ref.read(authControllerProvider.notifier).reloadProfile();
       navigator.pop();
-      messenger.showSnackBar(const SnackBar(content: Text('Profile updated')));
+      messenger.showSnackBar(SnackBar(
+        content: Text(emailChanged
+            ? 'Email updated — check your inbox to verify it.'
+            : 'Profile updated'),
+      ));
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      setState(() => _error =
+          e.statusCode == 409 ? 'That email is already in use.' : e.message);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -471,48 +627,143 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     final insets = MediaQuery.of(context).viewInsets.bottom;
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, insets + 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 16),
-          if (_error != null) ...[
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-            const SizedBox(height: 8),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            if (_error != null) ...[
+              Text(_error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: _firstName,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'First name'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _lastName,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Last name'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _displayName,
+              textCapitalization: TextCapitalization.words,
+              decoration:
+                  const InputDecoration(labelText: 'Display name (optional)'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phone,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _email,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                helperText: 'Changing this sends a new verification link.',
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: _busy ? null : _pickDob,
+              child: InputDecorator(
+                decoration: const InputDecoration(labelText: 'Date of birth'),
+                child: Text(_dob ?? 'Not set'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _gender,
+              decoration: const InputDecoration(labelText: 'Gender'),
+              items: [
+                for (final e in _genders.entries)
+                  DropdownMenuItem(value: e.key, child: Text(e.value)),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (v) => setState(() => _gender = v ?? 'unknown'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              initialValue: _contactMethod,
+              decoration:
+                  const InputDecoration(labelText: 'Preferred contact method'),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('No preference'),
+                ),
+                for (final e in _contactMethods.entries)
+                  DropdownMenuItem<String?>(value: e.key, child: Text(e.value)),
+              ],
+              onChanged:
+                  _busy ? null : (v) => setState(() => _contactMethod = v),
+            ),
+            const SizedBox(height: 20),
+            Text('Contact address',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addr1,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Address line 1'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addr2,
+              textCapitalization: TextCapitalization.words,
+              decoration:
+                  const InputDecoration(labelText: 'Address line 2 (optional)'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _city,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'City'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _region,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'State / Region'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _postal,
+              decoration: const InputDecoration(labelText: 'Postal code'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _country,
+              textCapitalization: TextCapitalization.characters,
+              maxLength: 2,
+              decoration: const InputDecoration(
+                labelText: 'Country',
+                helperText: '2-letter code, e.g. NG',
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: _busy ? null : _save,
+              child: _busy
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Save'),
+            ),
           ],
-          TextField(
-            controller: _firstName,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(labelText: 'First name'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _lastName,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(labelText: 'Last name'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _phone,
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(labelText: 'Phone'),
-          ),
-          const SizedBox(height: 8),
-          Text('Email: ${widget.me.email}',
-              style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: _busy ? null : _save,
-            child: _busy
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('Save'),
-          ),
-        ],
+        ),
       ),
     );
   }

@@ -22,6 +22,7 @@ from app.tasks.catalog import expire_subscriptions
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
+from app.tasks.crm_sync import redrive_crm_dead_letters
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
@@ -40,6 +41,10 @@ from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
+from app.tasks.ip_utilization import (
+    prune_ip_pool_utilization_snapshots,
+    snapshot_ip_pool_utilization,
+)
 from app.tasks.monitoring_cleanup import (
     cleanup_old_device_metrics as cleanup_device_metrics,
 )
@@ -63,10 +68,6 @@ from app.tasks.olt_health_retry import (
     retry_single_olt,
     trigger_immediate_retry,
 )
-from app.tasks.olt_queue import (
-    process_deferred_olt_operations,
-    retry_failed_operations,
-)
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_provisioning import (
     authorize_ont as authorize_ont_task,
@@ -76,23 +77,23 @@ from app.tasks.ont_provisioning import (
     queue_bulk_provisioning,
 )
 from app.tasks.payment_reconciliation import reconcile_topups
+from app.tasks.prepaid_billing import (
+    check_billing_switch_task,
+    run_prepaid_charges_task,
+)
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
 from app.tasks.provisioning import (
+    reap_stale_provisioning_runs,
     retry_pending_compensation_failures,
     run_bulk_activation_job,
     run_service_migration_job,
 )
 from app.tasks.radius import run_radius_sync_job
-from app.tasks.splynx_sync import (
-    run_customer_accounts_details_sync,
-    run_incremental_sync,
-    run_new_subscriptions_sync,
-    run_refresh_radius_from_subs,
-    run_subscriber_status_sync,
-    run_subscription_status_sync,
-)
+from app.tasks.radius_population import refresh_radius_from_subs
+from app.tasks.topology_lldp import run_lldp_topology_poll
+from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
 from app.tasks.tr069 import (
     apply_acs_config as tr069_apply_acs_config,
 )
@@ -124,6 +125,12 @@ from app.tasks.usage import (
     run_usage_rating,
 )
 from app.tasks.vacation_holds import resume_expired_holds
+from app.tasks.vas import (
+    run_vas_requery,
+    run_vas_review_requery,
+    run_wallet_auto_deduct,
+    sync_vas_catalog,
+)
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -157,6 +164,10 @@ __all__ = [
     "cleanup_old_operations",
     "sync_gis_sources",
     "run_batch_geocode_job",
+    "run_vas_requery",
+    "run_vas_review_requery",
+    "run_wallet_auto_deduct",
+    "sync_vas_catalog",
     "run_import_job",
     "run_integration_job",
     "generate_invoice_pdf_export",
@@ -170,7 +181,10 @@ __all__ = [
     "expire_subscriptions",
     "run_dunning",
     "run_prepaid_enforcement",
+    "run_prepaid_charges_task",
+    "check_billing_switch_task",
     "push_crm_subscriber_change",
+    "redrive_crm_dead_letters",
     "pull_crm_tickets",
     "sync_crm_ticket",
     "push_ticket_to_crm",
@@ -184,6 +198,7 @@ __all__ = [
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",
+    "reap_stale_provisioning_runs",
     "notify_expiring_data_bundles",
     "cleanup_nas_backups",
     "refresh_expiring_tokens",
@@ -202,18 +217,18 @@ __all__ = [
     "run_bulk_activation_job",
     "run_service_migration_job",
     "retry_pending_compensation_failures",
-    "run_incremental_sync",
-    "run_customer_accounts_details_sync",
-    "run_subscriber_status_sync",
-    "run_subscription_status_sync",
-    "run_refresh_radius_from_subs",
-    "run_new_subscriptions_sync",
+    "refresh_radius_from_subs",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",
     "retry_failed_deliveries",
     "deliver_notification_queue",
     "snapshot_mrr",
+    "snapshot_ip_pool_utilization",
+    "prune_ip_pool_utilization_snapshots",
+    "run_topology_reconcile",
+    "warm_topology_status",
+    "run_lldp_topology_poll",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
     "tr069_execute_bulk_action",
@@ -244,8 +259,6 @@ __all__ = [
     "sync_single_nas_to_zabbix",
     "remove_device_from_zabbix_task",
     # OLT queue processing (Phase 4)
-    "process_deferred_olt_operations",
-    "retry_failed_operations",
     "execute_due_profile_sync_tasks",
     "warm_monitoring_caches",
 ]

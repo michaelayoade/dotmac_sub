@@ -268,7 +268,7 @@
         </div>
 
         <!-- Navigation -->
-        <nav class="flex-1 overflow-y-auto overflow-x-visible px-2.5 py-3">
+        <nav class="flex-1 overflow-y-auto overflow-x-visible px-2.5 pt-3 pb-8">
             {% include "components/navigation/admin_sidebar.html" %}
         </nav>
 
@@ -465,9 +465,9 @@
                      x-on:keydown.escape.window="close(); mobileOpen = false">
                     <!-- Mobile search toggle -->
                     <button x-on:click="mobileOpen = !mobileOpen; $nextTick(() => $refs.searchInput.focus())"
-                            @mouseenter="openTopbarTooltip($el, 'Search')"
+                            @mouseenter="openTopbarTooltip($el, 'Search customers and invoices')"
                             @mouseleave="closeTopbarTooltip()"
-                            @focus="openTopbarTooltip($el, 'Search')"
+                            @focus="openTopbarTooltip($el, 'Search customers and invoices')"
                             @blur="closeTopbarTooltip()"
                             aria-label="Open search"
                             class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 sm:hidden">
@@ -479,14 +479,14 @@
                     <div class="relative"
                          data-tour-id="global-search"
                          x-ref="searchShell"
-                         @mouseenter="openTopbarTooltip($refs.searchShell, 'Search')"
+                         @mouseenter="openTopbarTooltip($refs.searchShell, 'Search customers and invoices')"
                          @mouseleave="closeTopbarTooltip()">
                         <input type="search"
                                x-ref="searchInput"
                                x-model="query"
                                x-on:input.debounce.300ms="search()"
                                x-on:focus="open = query.length >= 2"
-                               @focus="openTopbarTooltip($refs.searchShell, 'Search')"
+                               @focus="openTopbarTooltip($refs.searchShell, 'Search customers and invoices')"
                                @blur="closeTopbarTooltip()"
                                x-on:keydown.down.prevent="navigateDown()"
                                x-on:keydown.up.prevent="navigateUp()"

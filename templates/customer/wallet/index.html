@@ -1,0 +1,178 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Wallet - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-8" x-data="walletPage()">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+            <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Wallet</h1>
+            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Fund once — pay your DotMac bill, airtime, data and more. <a href="/portal/bills" class="font-semibold text-[var(--color-brand-600)] hover:underline">Pay bills →</a></p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white px-6 py-4 text-right shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Balance</p>
+            <p class="mt-1 text-3xl font-display font-bold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(balance) }}</p>
+        </div>
+    </div>
+
+    {% if funded %}
+    {% set success = "Wallet funded with ₦" ~ funded ~ "." %}
+    {% include "components/feedback/form_success.html" %}
+    {% endif %}
+    {% if submitted %}
+    {% set success = "Bill payment recorded — thank you." %}
+    {% include "components/feedback/form_success.html" %}
+    {% endif %}
+    {% if form_error %}
+    {% set error = form_error %}
+    {% include "components/feedback/form_error.html" %}
+    {% endif %}
+
+    <div class="grid gap-6 xl:grid-cols-3">
+        <!-- Fund wallet -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Fund wallet</h2>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">₦{{ min_topup }} – ₦{{ '%,d'|format(max_topup) }} per top-up.</p>
+            <div class="mt-4">
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="wallet-amount">Amount (₦)</label>
+                <input type="number" id="wallet-amount" x-model="amount" min="{{ min_topup }}" max="{{ max_topup }}" step="0.01"
+                       oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
+                       class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                <p class="mt-2 text-sm text-rose-600" x-text="fundError" x-show="fundError"></p>
+                <button type="button" x-on:click="fund()" :disabled="processing"
+                        class="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60">
+                    <span x-show="!processing">Fund wallet</span>
+                    <span x-show="processing">Processing…</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Pay DotMac bill -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Pay DotMac bill</h2>
+            {% if open_bill_due > 0 %}
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Outstanding: <span class="font-semibold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(open_bill_due) }}</span></p>
+            {% else %}
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">No outstanding balance — payments become account credit.</p>
+            {% endif %}
+            <form method="post" action="/portal/wallet/pay-bill" class="mt-4 space-y-4"
+                  x-data="{ billKey: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) }"
+                  @submit="$el.querySelector('button[type=submit]').disabled = true">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="idempotency_key" :value="billKey">
+                <div>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="bill-amount">Amount (₦)</label>
+                    <input type="number" id="bill-amount" name="amount" min="0.01" step="0.01" required
+                           oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
+                           value="{{ '%.2f'|format(open_bill_due) if open_bill_due > 0 else '' }}"
+                           class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                </div>
+                <button type="submit"
+                        class="inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    Pay from wallet
+                </button>
+            </form>
+        </div>
+
+        <!-- Auto-deduct -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Auto-pay my bill</h2>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">When on, due invoices are paid from your wallet automatically on their due date. You stay in control — turn it off any time.</p>
+            <form method="post" action="/portal/wallet/auto-deduct" class="mt-4">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="enabled" value="{{ 'false' if auto_pay_bill_enabled else 'true' }}">
+                <button type="submit"
+                        class="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold {{ 'bg-stone-200 text-stone-800 hover:bg-stone-300 dark:bg-stone-700 dark:text-stone-200' if auto_pay_bill_enabled else 'bg-[var(--color-brand-600)] text-white hover:bg-[var(--color-brand-700)]' }}">
+                    {{ 'Turn off auto-pay' if auto_pay_bill_enabled else 'Turn on auto-pay' }}
+                </button>
+                <span class="ml-3 align-middle text-xs font-semibold uppercase tracking-wide {{ 'text-emerald-600' if auto_pay_bill_enabled else 'text-stone-400' }}">
+                    {{ 'On' if auto_pay_bill_enabled else 'Off' }}
+                </span>
+            </form>
+        </div>
+    </div>
+
+    <!-- Activity -->
+    <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Recent activity</h2>
+        </div>
+        <div class="divide-y divide-stone-200 dark:divide-stone-700">
+            {% for entry in entries %}
+            <div class="flex items-center justify-between px-6 py-3 text-sm">
+                <div>
+                    <p class="font-medium text-stone-900 dark:text-white">{{ entry.memo or entry.category.value | replace('_', ' ') | title }}</p>
+                    <p class="text-xs text-stone-500 dark:text-stone-400">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                </div>
+                <p class="font-mono font-semibold {{ 'text-emerald-600' if entry.entry_type.value == 'credit' else 'text-stone-900 dark:text-white' }}">
+                    {{ '+' if entry.entry_type.value == 'credit' else '−' }}₦{{ '%,.2f'|format(entry.amount) }}
+                </p>
+            </div>
+            {% else %}
+            <p class="px-6 py-8 text-sm text-stone-500 dark:text-stone-400">No wallet activity yet — fund your wallet to get started.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<script>
+function walletPage() {
+    return {
+        amount: '',
+        processing: false,
+        fundError: '',
+        async fund() {
+            const self = this;
+            const value = parseFloat(this.amount);
+            if (!value || value <= 0) {
+                this.fundError = 'Enter an amount greater than ₦0 to fund.';
+                return;
+            }
+            if (Math.round(value * 100) !== value * 100) {
+                this.fundError = 'Amount can have at most 2 decimal places.';
+                return;
+            }
+            this.fundError = '';
+            this.processing = true;
+            let intent;
+            try {
+                const response = await fetch('/portal/wallet/topup/intent', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({amount: value})
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || 'Unable to start payment.');
+                }
+                intent = payload;
+            } catch (error) {
+                this.processing = false;
+                this.fundError = error.message || 'Unable to start payment.';
+                return;
+            }
+            if (intent.provider_type !== 'paystack' || typeof PaystackPop === 'undefined') {
+                this.processing = false;
+                this.fundError = 'Checkout is unavailable right now.';
+                return;
+            }
+            const handler = PaystackPop.setup({
+                key: intent.provider_public_key,
+                email: '{{ customer_email }}',
+                amount: Math.round(value * 100),
+                currency: intent.currency || 'NGN',
+                ref: intent.reference,
+                callback: function(response) {
+                    window.location.href = '/portal/wallet/topup/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack';
+                },
+                onClose: function() {
+                    self.processing = false;
+                }
+            });
+            handler.openIframe();
+        }
+    };
+}
+</script>
+<script src="https://js.paystack.co/v1/inline.js"></script>
+{% endblock %}

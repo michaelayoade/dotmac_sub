@@ -1,33 +1,38 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, action_button, search_input, filter_select, filter_bar, icon_ticket, icon_plus, icon_filter %}
-{% from "admin/support/tickets/_components.html" import summary_card, support_card %}
+{% from "components/ui/macros.html" import action_button, icon_plus, icon_filter %}
 {% block title %}Support Tickets{% endblock %}
 
 {% block content %}
-{{ ambient_background('amber', 'orange') }}
-<div class="relative z-10 space-y-6">
-    {% call page_header(
-        title='Support Tickets',
-        subtitle='Operational queue for issue response, assignment, and lifecycle tracking.',
-        icon=icon_ticket('h-7 w-7 text-white'),
-        color='amber',
-        color2='orange'
-    ) %}
-        <a href="/admin/support/automation"
-           class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+<div class="space-y-4">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+            <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Support Tickets</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track, filter, and route customer support work.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/admin/support/automation"
+               class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             Automation Rules
-        </a>
-        {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'amber', 'orange') }}
-    {% endcall %}
-
-    <div class="grid gap-4 md:grid-cols-3">
-        {% for card in status_summary_cards %}
-        {{ summary_card(card.label, card.count, '', card.color) }}
-        {% endfor %}
+            </a>
+            {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'amber', 'orange', 'sm') }}
+        </div>
     </div>
 
-    {% call filter_bar() %}
+    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex min-w-max items-center gap-1 md:min-w-0">
+            {% for card in status_summary_cards %}
+            {% set is_current_status = status == card.value %}
+            <a href="{{ card.href }}"
+               class="flex min-w-36 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition {% if is_current_status %}bg-amber-500 text-white shadow-sm{% else %}text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60{% endif %}">
+                <span>{{ card.label }}</span>
+                <span class="rounded-full px-2 py-0.5 text-xs tabular-nums {% if is_current_status %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300{% endif %}">{{ card.count }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
     <form method="get"
           action="/admin/support/tickets"
           id="ticket-filter-form"
@@ -35,15 +40,29 @@
           hx-target="#tickets-table"
           hx-swap="innerHTML"
           hx-push-url="true"
-          class="space-y-4">
-        <div class="grid gap-3 lg:grid-cols-12">
+          class="space-y-3"
+          x-data="ticketColumnPicker()">
+        <div class="grid gap-2 lg:grid-cols-12">
             <div class="lg:col-span-4">
-                <label class="mb-1 block invisible text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search</label>
-                {{ search_input('search', search, 'Search by ticket ID, title, or description...', 'amber', {'hx-trigger': 'keyup changed delay:250ms'}) }}
+                <label class="sr-only" for="ticket-search">Search</label>
+                <div class="relative">
+                    <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                    </div>
+                    <input id="ticket-search"
+                           type="text"
+                           name="search"
+                           value="{{ search }}"
+                           placeholder="Search tickets..."
+                           class="block w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+                           hx-trigger="keyup changed delay:250ms" />
+                </div>
             </div>
             <div class="lg:col-span-2">
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
-                <select name="status" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                <label class="sr-only">Status</label>
+                <select name="status" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                     <option value="">All Statuses</option>
                     {% for s in all_statuses %}
                     <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
@@ -51,8 +70,8 @@
                 </select>
             </div>
             <div class="lg:col-span-2">
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Ticket Type</label>
-                <select name="ticket_type" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                <label class="sr-only">Ticket Type</label>
+                <select name="ticket_type" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                     <option value="">All Types</option>
                     {% for t in ticket_type_options %}
                     <option value="{{ t }}" {% if ticket_type == t %}selected{% endif %}>{{ t }}</option>
@@ -60,71 +79,67 @@
                 </select>
             </div>
             <div class="lg:col-span-2">
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Assignee Scope</label>
-                <select name="assigned_to_me" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                <label class="sr-only">Assignee Scope</label>
+                <select name="assigned_to_me" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                     <option value="0" {% if not assigned_to_me %}selected{% endif %}>All Assignees</option>
                     <option value="1" {% if assigned_to_me %}selected{% endif %}>Assigned To Me</option>
                 </select>
             </div>
-            <div class="lg:col-span-2 flex items-end">
-                <button type="submit" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-amber-500/20 transition hover:shadow-md">
+            <div class="flex gap-2 lg:col-span-1">
+                <button type="submit" class="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm shadow-amber-500/20 transition hover:shadow-md">
                     {{ icon_filter('h-4 w-4') }}
-                    Apply Filters
+                    <span class="hidden xl:inline">Apply</span>
                 </button>
+            </div>
+            <div class="lg:col-span-1">
+                <div class="relative">
+                    <button type="button" @click="open = !open" class="inline-flex h-full w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                        Columns
+                    </button>
+                    <div x-show="open" @click.outside="open = false" x-cloak class="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-600 dark:bg-slate-800">
+                        {% for col in ticket_columns %}
+                        <label class="flex items-center gap-2 py-1 text-xs text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" class="ticket-col-toggle rounded border-slate-300 text-amber-600" data-column-key="{{ col.key }}" {% if col.key in visible_columns %}checked{% endif %}>
+                            <span>{{ col.label }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
         </div>
 
-        <details class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 dark:border-slate-600/70 dark:bg-slate-700/30">
+        <details class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-600/70 dark:bg-slate-700/30">
             <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">Advanced Filters</summary>
-            <div class="mt-4 grid gap-3 md:grid-cols-3">
+            <div class="mt-3 grid gap-2 md:grid-cols-3">
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Manager</label>
-                    <select name="project_manager_person_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                    <select name="project_manager_person_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
                         {% for p in staff_options %}<option value="{{ p.id }}" {% if project_manager_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Site Coordinator</label>
-                    <select name="site_coordinator_person_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                    <select name="site_coordinator_person_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
                         {% for p in staff_options %}<option value="{{ p.id }}" {% if site_coordinator_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber / Customer</label>
-                    <select name="subscriber_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                    <select name="subscriber_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
                         {% for p in subscriber_options %}<option value="{{ p.id }}" {% if subscriber_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
             </div>
         </details>
-
-        <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-600 dark:bg-slate-700/40" x-data="ticketColumnPicker()">
-            <p class="text-xs text-slate-500 dark:text-slate-400">Columns and filters update without full page reload.</p>
-            <div class="relative">
-                <button type="button" @click="open = !open" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                    Table Fields
-                </button>
-                <div x-show="open" @click.outside="open = false" x-cloak class="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-600 dark:bg-slate-800">
-                    {% for col in ticket_columns %}
-                    <label class="flex items-center gap-2 py-1 text-xs text-slate-700 dark:text-slate-300">
-                        <input type="checkbox" class="ticket-col-toggle rounded border-slate-300 text-amber-600" data-column-key="{{ col.key }}" {% if col.key in visible_columns %}checked{% endif %}>
-                        <span>{{ col.label }}</span>
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
     </form>
-    {% endcall %}
+    </div>
 
-    {% call support_card(title='Ticket Queue', subtitle='Search, sort, and open tickets without leaving this view.') %}
-    <div id="tickets-table">
+    <div id="tickets-table" class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         {% include "admin/support/tickets/_table.html" %}
     </div>
-    {% endcall %}
 </div>
 
 <script>

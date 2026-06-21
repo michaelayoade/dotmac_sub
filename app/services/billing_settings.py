@@ -5,7 +5,70 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.services import settings_spec
+
+# A subscription in one of these states still represents a *live* service the
+# account can be billed for. Everything else — disabled (admin-terminated),
+# canceled, stopped, expired, blocked, archived, hidden — is terminal: a
+# terminated service must not keep generating reminders, dunning escalations,
+# or autopay charges. ``suspended``/``blocked`` differ here on purpose:
+# ``suspended`` is a recoverable non-payment hold we keep chasing, while
+# ``blocked`` is an enforcement endpoint that is not a live billable service.
+LIVE_SERVICE_STATUSES = (
+    SubscriptionStatus.active,
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.pending,
+)
+
+
+def billing_enabled(db: Session, *, default: bool = True) -> bool:
+    """Master switch for local billing automation.
+
+    While the upstream biller (Splynx) remains authoritative, this is set to
+    ``false`` in prod so the local runners stay inert. It gates every task that
+    *acts on customers* off local billing state — invoicing, autopay charges,
+    dunning, prepaid enforcement, payment-arrangement checks, and subscription
+    expiry — so they all activate together at cutover and none can charge,
+    suspend, or expire an account before then. Resolved via ``settings_spec``
+    (env fallback included) to match the invoice-cycle kill-switch.
+    """
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "billing_enabled")
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def check_billing_switch(db: Session) -> dict:
+    """Invariant check on the ``billing_enabled`` master switch.
+
+    ``billing_enabled`` flipping to true unexpectedly is what let the local
+    runner generate phantom invoices — a config-integrity failure, not a code
+    bug, so the void cleaned the symptom, not the mechanism. This compares the
+    live switch against a pinned *expected* value (``billing_enabled_expected``
+    / env ``BILLING_ENABLED_EXPECTED``, default false pre-cutover). At cutover,
+    set the expected value to true in the same change that enables billing.
+
+    Returns a dict; callers should alert when ``ok`` is false.
+    """
+    import os
+
+    actual = billing_enabled(db, default=False)
+    # Read the pinned expected value directly (it is not a registered spec key):
+    # a DomainSetting row wins, else the BILLING_ENABLED_EXPECTED env, else false.
+    expected_raw = _setting_value(db, "billing_enabled_expected")
+    if expected_raw is None:
+        expected_raw = os.getenv("BILLING_ENABLED_EXPECTED")
+    if expected_raw is None:
+        expected = False
+    elif isinstance(expected_raw, bool):
+        expected = expected_raw
+    else:
+        expected = str(expected_raw).strip().lower() in {"1", "true", "yes", "on"}
+    return {"ok": actual == expected, "expected": expected, "actual": actual}
 
 
 def _coerce_int(value: object, default: int) -> int:
@@ -67,3 +130,41 @@ def resolve_payment_due_days(
         return max(_coerce_int(legacy_terms, default), 0)
 
     return default
+
+
+def accounts_with_live_service(db: Session) -> set:
+    """Subscriber IDs that have at least one subscription in a live service
+    state (see :data:`LIVE_SERVICE_STATUSES`).
+
+    Billing automation that *chases an existing balance* — invoice reminders,
+    dunning escalations, autopay charges — must skip accounts whose services
+    are all terminal: a disabled/canceled/expired service should not keep
+    pinging or charging the customer. This mirrors the eligibility gate in
+    ``collections.DunningWorkflow`` but spans every billing mode, since
+    reminders and autopay are not postpaid-specific.
+    """
+    return set(
+        db.scalars(
+            select(Subscription.subscriber_id)
+            .where(Subscription.status.in_(LIVE_SERVICE_STATUSES))
+            .distinct()
+        ).all()
+    )
+
+
+def account_has_live_service(db: Session, account_id) -> bool:
+    """Whether a single account still has a live (billable) service.
+
+    Single-account counterpart to :func:`accounts_with_live_service`, for hot
+    paths that already operate on one account (e.g. autopay) and only need a
+    cheap existence check rather than the full set.
+    """
+    return (
+        db.scalars(
+            select(Subscription.id)
+            .where(Subscription.subscriber_id == account_id)
+            .where(Subscription.status.in_(LIVE_SERVICE_STATUSES))
+            .limit(1)
+        ).first()
+        is not None
+    )

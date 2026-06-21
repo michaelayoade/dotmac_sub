@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="htmx-config" content='{"defaultSwapStyle":"innerHTML","globalViewTransitions":true}' />
     {% set brand_product_name = (brand.product_name if brand is defined and brand else "DotMac Subs") %}
-    {% set brand_primary_color = (brand.primary_color if brand is defined and brand else "#3b82f6") %}
+    {% set brand_primary_color = (brand.primary_color if brand is defined and brand else "#206a07") %}
     <title>{% block title %}{{ title | default(brand_product_name) }}{% endblock %}</title>
     {% set resolved_favicon = (
         sidebar_stats.favicon_url
@@ -44,6 +44,9 @@
     <!-- Compiled CSS (includes Tailwind + fonts + custom styles) -->
     <link rel="stylesheet" href="/static/css/main.css?v=20260530a" />
     <link rel="stylesheet" href="/static/css/design-system.css?v=20260530a" />
+
+    <!-- Runtime admin-configurable brand theme (overrides above) -->
+    <link rel="stylesheet" href="/branding/theme.css" />
 
     <!-- CSRF Token Meta Tag -->
     <meta name="csrf-token" content="{{ csrf_token|default(request.state.csrf_token if request is defined and request and request.state and request.state.csrf_token is defined else '') }}">
@@ -86,6 +89,14 @@
         {% block content %}{% endblock %}
     </main>
     {% endblock %}
+
+    {% set resolved_app_version = app_version() if app_version is defined else "unknown" %}
+    {% if resolved_app_version and resolved_app_version != "unknown" %}
+    <div class="pointer-events-none fixed bottom-2 right-2 z-40 rounded-md border border-slate-200/80 bg-white/85 px-2 py-1 font-mono text-[11px] font-semibold leading-none text-slate-500 shadow-sm backdrop-blur dark:border-slate-700/80 dark:bg-slate-900/85 dark:text-slate-400"
+         aria-label="Application version">
+        v{{ resolved_app_version }}
+    </div>
+    {% endif %}
 
     <!-- Toast Notification Container -->
     <div id="toast-container"
@@ -401,7 +412,7 @@
     <script src="/static/js/vendor/alpine-focus.min.js"></script>
     <script src="/static/js/vendor/alpine-collapse.min.js"></script>
     <script src="/static/js/vendor/alpine.min.js"></script>
-    <script src="/static/js/typeahead.js?v=20260503b"></script>
+    <script src="/static/js/typeahead.js?v=20260616a"></script>
 
     <!-- Initialize Operation Tracker for real-time notifications -->
     <script>

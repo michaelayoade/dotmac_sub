@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../core/api_exception.dart';
 import '../../models/reseller.dart';
+import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 
@@ -157,9 +160,113 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
                         ),
                 ),
               ),
+              const SizedBox(height: 8),
+              // Email-verification state comes from /me (same as customers).
+              Card(
+                child: _ResellerEmailVerifiedTile(
+                  verified:
+                      ref.watch(currentUserProvider)?.emailVerified ?? false,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text('Account', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.contacts_outlined),
+                  title: const Text('Additional contacts'),
+                  subtitle:
+                      const Text('People we can reach about your account'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => context.push('/reseller/contacts'),
+                ),
+              ),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// Email-verification status for the reseller, with a self-service re-send
+/// (POST /auth/resend-verification-email) — mirrors the customer profile tile.
+class _ResellerEmailVerifiedTile extends ConsumerStatefulWidget {
+  const _ResellerEmailVerifiedTile({required this.verified});
+  final bool verified;
+
+  @override
+  ConsumerState<_ResellerEmailVerifiedTile> createState() =>
+      _ResellerEmailVerifiedTileState();
+}
+
+class _ResellerEmailVerifiedTileState
+    extends ConsumerState<_ResellerEmailVerifiedTile> {
+  bool _busy = false;
+
+  Future<void> _resend() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      final sent =
+          await ref.read(authRepositoryProvider).resendVerificationEmail();
+      if (sent) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Verification email sent — check your inbox.')));
+        // The verified flag lives on /me; refresh in case it just flipped.
+        await ref.read(authControllerProvider.notifier).reloadProfile();
+      } else {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Already verified or no email on file.')));
+      }
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 429
+            ? 'Please wait a bit before trying again.'
+            : e.message),
+      ));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Could not send verification email. Try again.')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (widget.verified) {
+      return ListTile(
+        title: const Text('Email verified'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.verified, size: 18, color: Colors.green.shade600),
+            const SizedBox(width: 6),
+            const Text('Verified'),
+          ],
+        ),
+      );
+    }
+    return ListTile(
+      title: const Text('Email verified'),
+      subtitle: const Text('Check your inbox for the verification link.'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 18, color: scheme.error),
+          const SizedBox(width: 6),
+          _busy
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : TextButton(
+                  onPressed: _resend,
+                  child: const Text('Resend'),
+                ),
+        ],
       ),
     );
   }

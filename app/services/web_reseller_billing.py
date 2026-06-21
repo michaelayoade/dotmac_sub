@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
+from urllib.parse import quote_plus
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -30,12 +31,30 @@ def _require_reseller_context(request: Request, db: Session):
     return context
 
 
-def billing_overview(request: Request, db: Session):
+def _login_subscriber_id(context) -> str | None:
+    """The login subscriber's id for subscriber-keyed features (saved cards).
+
+    None for a first-class reseller_user principal (Layer 3) — those have no
+    backing subscriber, so saved-card flows degrade to empty rather than error.
+    """
+    subscriber = context.get("subscriber")
+    return str(subscriber.id) if subscriber is not None else None
+
+
+def billing_overview(
+    request: Request,
+    db: Session,
+    allocated: str | None = None,
+    error: str | None = None,
+    subscriber_search: str | None = None,
+):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     reseller_id = str(context["reseller"].id)
-    summary = reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+    summary = reseller_portal_billing.get_billing_account_summary(
+        db, reseller_id, subscriber_search=subscriber_search
+    )
     return templates.TemplateResponse(
         "reseller/billing/index.html",
         {
@@ -43,8 +62,101 @@ def billing_overview(request: Request, db: Session):
             "active_page": "billing",
             "reseller": context["reseller"],
             "current_user": context["current_user"],
+            "saved_cards": reseller_portal_billing.list_payment_methods(
+                db, _login_subscriber_id(context), reseller_id
+            ),
+            "billing_activity": reseller_portal_billing.account_activity(
+                db, reseller_id, summary
+            ),
+            "allocation_success": allocated,
+            "allocation_error": error,
             **summary,
         },
+    )
+
+
+def payment_methods(request: Request, db: Session, saved=None, error=None):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    reseller_id = str(context["reseller"].id)
+    page_data = reseller_portal_billing.get_payment_methods_page(
+        db, reseller_id, _login_subscriber_id(context)
+    )
+    return templates.TemplateResponse(
+        "reseller/billing/payment_methods.html",
+        {
+            "request": request,
+            "active_page": "billing",
+            "reseller": context["reseller"],
+            "current_user": context["current_user"],
+            "success": saved,
+            "form_error": error,
+            **page_data,
+        },
+    )
+
+
+def payment_method_set_default(request: Request, db: Session, method_id: str):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    ok = reseller_portal_billing.set_default_payment_method(
+        db, _login_subscriber_id(context), method_id, str(context["reseller"].id)
+    )
+    if not ok:
+        return RedirectResponse(
+            url="/reseller/billing/payment-methods?error="
+            + quote_plus("Card not found."),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/reseller/billing/payment-methods?saved="
+        + quote_plus("Default card updated."),
+        status_code=303,
+    )
+
+
+def payment_method_remove(request: Request, db: Session, method_id: str):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    removed = reseller_portal_billing.remove_payment_method(
+        db, _login_subscriber_id(context), method_id, str(context["reseller"].id)
+    )
+    if not removed:
+        return RedirectResponse(
+            url="/reseller/billing/payment-methods?error="
+            + quote_plus("Card not found."),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/reseller/billing/payment-methods?saved=" + quote_plus("Card removed."),
+        status_code=303,
+    )
+
+
+def allocate_subscriber_funds(request: Request, db: Session, subscriber_id: str):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    reseller_id = str(context["reseller"].id)
+    try:
+        result = reseller_portal_billing.allocate_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            url="/reseller/billing?error=" + quote_plus(str(exc)),
+            status_code=303,
+        )
+    message = (
+        f"Allocated {result['currency']} {result['allocated_total']:,.2f} "
+        f"to {result['invoice_count']} invoice(s)."
+    )
+    return RedirectResponse(
+        url="/reseller/billing?allocated=" + quote_plus(message),
+        status_code=303,
     )
 
 
@@ -52,6 +164,9 @@ def billing_pay_intent(
     request: Request,
     db: Session,
     amount: str,
+    *,
+    payment_method_id: str | None = None,
+    save_card: bool = False,
 ):
     context = _require_reseller_context(request, db)
     if not context:
@@ -59,7 +174,12 @@ def billing_pay_intent(
     reseller_id = str(context["reseller"].id)
     try:
         intent = reseller_portal_billing.start_consolidated_payment(
-            db, reseller_id, Decimal(amount)
+            db,
+            reseller_id,
+            Decimal(amount),
+            payment_method_id=payment_method_id or None,
+            save_card=save_card,
+            login_subscriber_id=_login_subscriber_id(context),
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -72,6 +192,16 @@ def billing_pay_intent(
                 "error": str(exc),
             },
             status_code=400,
+        )
+    # A saved card was charged server-to-server: skip the gateway popup and go
+    # straight to verification, which records the payment.
+    if intent.get("charged"):
+        return RedirectResponse(
+            url="/reseller/billing/pay/verify?reference="
+            + quote_plus(intent["reference"])
+            + "&provider="
+            + quote_plus(intent["provider_type"]),
+            status_code=303,
         )
     return templates.TemplateResponse(
         "reseller/billing/pay_checkout.html",

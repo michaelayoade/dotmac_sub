@@ -66,6 +66,40 @@ def get_db():
 
 
 @contextmanager
+def form_write(db: Session) -> Generator[None, None, None]:
+    """Guard a form handler's DB write so a failure can't poison the error path.
+
+    Admin form handlers follow the shape::
+
+        try:
+            with form_write(db):
+                service.create(...)        # may commit -> may raise
+            return RedirectResponse(...)   # success
+        except (IntegrityError, ValidationError, ValueError) as exc:
+            # session is guaranteed clean here
+            return render_form(db, error=...)   # re-queries the DB
+
+    If the write aborts the transaction (an ``IntegrityError`` from a unique/FK
+    constraint, a ``DataError`` from a numeric overflow / over-length value),
+    the session is left in an aborted state. Any DB query the ``except`` block
+    then runs to re-render the form (``get_sidebar_stats``, ``_base_context``,
+    ``build_*_context`` …) would itself fail on the poisoned session, turning a
+    recoverable 4xx into a 500.
+
+    Wrapping the write in ``with form_write(db):`` rolls the session back before
+    the exception reaches the handler's ``except``, so the re-render always runs
+    on a clean session. Prefer this over a bare ``db.rollback()`` in each
+    ``except`` — it can't be forgotten and documents intent. See findings
+    #19/#24/#26/#27.
+    """
+    try:
+        yield
+    except Exception:
+        db.rollback()
+        raise
+
+
+@contextmanager
 def task_session() -> Generator[Session, None, None]:
     """Context manager for database sessions in Celery tasks.
 

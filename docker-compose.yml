@@ -60,6 +60,7 @@ services:
     volumes:
     - /etc/wireguard:/etc/wireguard
     - ./app:/app/app
+    - ./VERSION:/app/VERSION:ro
     - ./templates:/app/templates
     - ./static:/app/static
     - ./alembic:/app/alembic
@@ -74,6 +75,64 @@ services:
     - -c
     - uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
       --workers ${WEB_CONCURRENCY:-1}
+  redis-local:
+    image: redis:7-alpine
+    container_name: dotmac_redis_local
+    restart: unless-stopped
+    mem_limit: 1g
+    command: ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass $$REDIS_LOCAL_PASSWORD"]
+    environment:
+      REDIS_LOCAL_PASSWORD: ${REDIS_LOCAL_PASSWORD}
+    volumes:
+    - /var/lib/dotmac-redis-local:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-local:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: dotmac_pg_local
+    restart: unless-stopped
+    mem_limit: 6g
+    shm_size: 1g
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_LOCAL_BOOTSTRAP_PASSWORD}
+      POSTGRES_DB: postgres
+    command:
+    - postgres
+    - -c
+    - shared_buffers=2GB
+    - -c
+    - effective_cache_size=6GB
+    - -c
+    - work_mem=32MB
+    - -c
+    - maintenance_work_mem=512MB
+    - -c
+    - wal_level=replica
+    - -c
+    - max_wal_senders=5
+    - -c
+    - max_replication_slots=5
+    - -c
+    - archive_mode=on
+    - -c
+    - "archive_command=test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
+    - -c
+    - archive_timeout=300
+    volumes:
+    - /var/lib/dotmac-pg-local:/var/lib/postgresql/data
+    ports:
+    - 9001:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   celery-worker:
     build: .
     container_name: dotmac_sub_celery_worker
@@ -127,84 +186,7 @@ services:
     - --concurrency=3
     - --max-tasks-per-child=50
     - -Q
-    - celery
-  celery-worker-nin:
-    build: .
-    container_name: dotmac_sub_celery_worker_nin
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
-      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      REDIS_URL: ${REDIS_URL}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=1
-    - --max-tasks-per-child=50
-    - -Q
-    # nin is near-idle, so this worker also serves the daily business runners
-    # (billing/dunning/expiry/rating/FUP) — they must never queue behind the
-    # default queue's backlog.
-    - nin,billing
-  celery-worker-crm:
-    build: .
-    container_name: dotmac_sub_celery_worker_crm
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
-      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      REDIS_URL: ${REDIS_URL}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=1
-    - --max-tasks-per-child=50
-    - -Q
-    - crm
+    - celery,nin,crm
   celery-worker-tr069:
     build: .
     container_name: dotmac_sub_celery_worker_tr069
@@ -249,105 +231,13 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=1
+    - --concurrency=2
     - --max-tasks-per-child=50
     - -Q
-    - tr069
-  celery-worker-acs:
-    build: .
-    container_name: dotmac_sub_celery_worker_acs
-    restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.0
-    pids_limit: 96
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
-      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      CELERY_ACS_TASK_SOFT_TIME_LIMIT: ${CELERY_ACS_TASK_SOFT_TIME_LIMIT:-240}
-      CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
-      CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
-      CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: ${REDIS_URL}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=1
-    - --max-tasks-per-child=50
-    - -Q
-    - acs
+    - tr069,acs
   celery-worker-bandwidth:
     build: .
     container_name: dotmac_sub_celery_worker_bandwidth
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *id001
-    extra_hosts: *observability_extra_hosts
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
-      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      REDIS_URL: ${REDIS_URL}
-      VICTORIAMETRICS_URL: http://victoriametrics:8428
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      OPENBAO_ADDR: ${OPENBAO_ADDR}
-      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
-      APP_RELEASE: ${APP_RELEASE:-}
-      GIT_SHA: ${GIT_SHA:-}
-    env_file:
-    - .env
-    depends_on:
-      victoriametrics:
-        condition: service_started
-    volumes:
-    - ./app:/app/app
-    - ./uploads:/app/uploads
-    command:
-    - celery
-    - -A
-    - app.celery_app.celery_app
-    - worker
-    - --loglevel=info
-    - --concurrency=2
-    - --max-tasks-per-child=100
-    - -Q
-    - bandwidth
-  celery-worker-ingestion:
-    build: .
-    container_name: dotmac_sub_celery_worker_ingestion
     restart: unless-stopped
     mem_limit: 768m
     mem_reservation: 256m
@@ -385,10 +275,54 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=2
+    - --concurrency=3
     - --max-tasks-per-child=100
     - -Q
-    - ingestion
+    - bandwidth,ingestion
+
+  # Consumer for the `billing` queue (daily invoice cycle, prepaid drawdown,
+  # dunning, autopay, payment-topup reconciliation, usage/FUP, expiry,
+  # suspension audit, billing-switch guard). Isolated from the default worker
+  # so a long billing run never starves periodic tasks. Money-moving tasks are
+  # gated by `billing_enabled` and no-op until cutover; this worker simply
+  # ensures the queue is consumed (previously it had no consumer → all dropped).
+  celery-worker-billing:
+    build: .
+    container_name: dotmac_sub_celery_worker_billing
+    restart: unless-stopped
+    mem_limit: 768m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      REDIS_URL: ${REDIS_URL}
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+    env_file:
+    - .env
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    - ./scripts:/app/scripts
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=2
+    - --max-tasks-per-child=50
+    - -Q
+    - billing
   celery-beat:
     build: .
     container_name: dotmac_sub_celery_beat
@@ -558,7 +492,7 @@ services:
       REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       BANDWIDTH_POLLING_ENABLED: 'true'
-      BANDWIDTH_POLL_INTERVAL_MS: '5000'
+      BANDWIDTH_POLL_INTERVAL_MS: '30000'
       BANDWIDTH_HOT_RETENTION_HOURS: '24'
       BANDWIDTH_REDIS_STREAM: bandwidth:samples
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
@@ -695,7 +629,7 @@ services:
     secrets:
     - zabbix_db_password
     ports:
-    - 127.0.0.1:8085:8080
+    - 8085:8080
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     container_name: dotmac_zabbix_agent

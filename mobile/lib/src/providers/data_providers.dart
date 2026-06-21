@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/addon.dart';
+import '../models/contact.dart';
 import '../models/invoice.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
@@ -15,8 +16,14 @@ import '../models/ticket.dart';
 import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
 import '../repositories/catalog_repository.dart';
+import '../repositories/contact_repository.dart';
 import '../models/reseller.dart';
+import '../models/service_location.dart';
+import '../repositories/location_repository.dart';
+import '../models/vas.dart';
+import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
+import '../repositories/wallet_repository.dart';
 import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
@@ -36,8 +43,16 @@ final catalogRepositoryProvider = Provider<CatalogRepository>(
 final supportRepositoryProvider = Provider<SupportRepository>(
     (ref) => SupportRepository(ref.watch(apiClientProvider).dio));
 
+final locationRepositoryProvider = Provider<LocationRepository>(
+    (ref) => LocationRepository(ref.watch(apiClientProvider).dio));
+final walletRepositoryProvider = Provider<WalletRepository>(
+    (ref) => WalletRepository(ref.watch(apiClientProvider).dio));
+
 final notificationRepositoryProvider = Provider<NotificationRepository>(
     (ref) => NotificationRepository(ref.watch(apiClientProvider).dio));
+
+final contactRepositoryProvider = Provider<ContactRepository>(
+    (ref) => ContactRepository(ref.watch(apiClientProvider).dio));
 
 final resellerRepositoryProvider = Provider<ResellerRepository>(
     (ref) => ResellerRepository(ref.watch(apiClientProvider).dio));
@@ -83,6 +98,14 @@ final resellerBillingProvider =
     FutureProvider.autoDispose<ResellerBillingSummary>((ref) async {
   cacheFor(ref);
   return ref.watch(resellerRepositoryProvider).billing();
+});
+
+/// The reseller's saved cards (GET /reseller/payment-methods). Invalidate after
+/// set-default / remove / a save-card payment.
+final resellerPaymentMethodsProvider =
+    FutureProvider.autoDispose<List<SavedCard>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).paymentMethods();
 });
 
 /// Fiber-plant map for the reseller coverage screen.
@@ -321,6 +344,36 @@ final notificationsProvider =
     FutureProvider.autoDispose<Page<AppNotification>>((ref) async {
   cacheFor(ref);
   return ref.watch(notificationRepositoryProvider).list();
+});
+
+final serviceLocationProvider =
+    FutureProvider.autoDispose<ServiceLocation>((ref) async {
+  cacheFor(ref);
+  return ref.watch(locationRepositoryProvider).location();
+});
+
+final vasCatalogProvider =
+    FutureProvider.autoDispose<List<VasCategory>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(walletRepositoryProvider).catalog();
+});
+
+final vasPurchasesProvider =
+    FutureProvider.autoDispose<List<VasTransaction>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(walletRepositoryProvider).purchases();
+});
+
+/// Null when the wallet feature is disabled server-side (404) — UI hides.
+final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
+  cacheFor(ref);
+  return ref.watch(walletRepositoryProvider).overviewOrNull();
+});
+
+/// The subscriber's additional contacts. Invalidate after create/update/delete.
+final contactsProvider = FutureProvider.autoDispose<List<Contact>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(contactRepositoryProvider).list();
 });
 
 final ticketsProvider = FutureProvider.autoDispose<Page<Ticket>>((ref) async {

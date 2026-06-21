@@ -149,4 +149,33 @@ void main() {
     expect(res.statusCode, 401);
     expect(sessionExpired, isTrue);
   });
+
+  test(
+    'a 401 while impersonating surfaces grant expiry without refreshing',
+    () async {
+      var impersonationExpired = false;
+      var sessionExpired = false;
+      var refreshHit = false;
+      final api = ApiClient(
+        storage: TokenStorage(),
+        onSessionExpired: () => sessionExpired = true,
+        onImpersonationExpired: () => impersonationExpired = true,
+      )..impersonationToken = 'view-as-token';
+      api.dio.httpClientAdapter = _FakeAdapter((options) async {
+        if (options.path == '/auth/refresh') {
+          refreshHit = true;
+          return _json({'access_token': 'fresh', 'refresh_token': 'r2'}, 200);
+        }
+        return _json({'detail': 'Unauthorized'}, 401);
+      });
+
+      // The 401 is delivered as-is (no replay), the expiry handler fires, and
+      // the reseller's token is never refreshed into a customer request.
+      final res = await api.dio.get('/me/subscriptions');
+      expect(res.statusCode, 401);
+      expect(impersonationExpired, isTrue);
+      expect(sessionExpired, isFalse);
+      expect(refreshHit, isFalse);
+    },
+  );
 }

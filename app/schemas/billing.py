@@ -113,6 +113,11 @@ class InvoiceLineUpdate(BaseModel):
 class InvoiceLineRead(InvoiceLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
+    # Read model reflects what's stored — credit/adjustment lines are
+    # legitimately negative, so don't inherit the create-side ge=0 constraint
+    # (it 500s response serialization for any invoice with a negative line).
+    unit_price: Decimal = Decimal("0.00")
+    amount: Decimal | None = None
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -124,9 +129,9 @@ class CreditNoteBase(BaseModel):
     credit_number: str | None = Field(default=None, max_length=80)
     status: CreditNoteStatus = CreditNoteStatus.draft
     currency: str = Field(default="NGN", min_length=3, max_length=3)
-    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0)
-    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0)
-    total: Decimal = Field(default=Decimal("0.00"), ge=0)
+    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
     memo: str | None = None
     is_active: bool = True
 
@@ -141,9 +146,9 @@ class CreditNoteUpdate(BaseModel):
     credit_number: str | None = Field(default=None, max_length=80)
     status: CreditNoteStatus | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
-    subtotal: Decimal | None = Field(default=None, ge=0)
-    tax_total: Decimal | None = Field(default=None, ge=0)
-    total: Decimal | None = Field(default=None, ge=0)
+    subtotal: Decimal | None = Field(default=None, ge=0, lt=10000000000)
+    tax_total: Decimal | None = Field(default=None, ge=0, lt=10000000000)
+    total: Decimal | None = Field(default=None, ge=0, lt=10000000000)
     memo: str | None = None
     is_active: bool | None = None
 
@@ -213,7 +218,10 @@ class CreditNoteApplyRequest(BaseModel):
 
 
 class PaymentMethodBase(BaseModel):
-    account_id: UUID
+    # Exactly one owner: customer subscriber (account_id) or reseller org
+    # (reseller_id, for subscriber-less reseller_user logins — Layer 3).
+    account_id: UUID | None = None
+    reseller_id: UUID | None = None
     payment_channel_id: UUID | None = None
     method_type: PaymentMethodType = PaymentMethodType.card
     label: str | None = Field(default=None, max_length=120)
@@ -295,7 +303,7 @@ class PaymentBase(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, lt=10000000000)
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     status: PaymentStatus = PaymentStatus.pending
     paid_at: datetime | None = None
@@ -323,7 +331,7 @@ class PaymentUpdate(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, lt=10000000000)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     status: PaymentStatus | None = None
     paid_at: datetime | None = None
@@ -395,6 +403,11 @@ class TopupPageResponse(BaseModel):
 
 class TopupInitiateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
+    # When set, charge this saved card server-side (one-tap repeat pay) instead
+    # of opening the gateway checkout. idempotency_key makes that charge safe
+    # against a double-tap (a replay returns the original intent).
+    payment_method_id: UUID | None = None
+    idempotency_key: str | None = None
 
 
 class TopupInitiateResponse(BaseModel):
@@ -405,6 +418,10 @@ class TopupInitiateResponse(BaseModel):
     amount: Decimal
     currency: str = "NGN"
     customer_email: str | None = None
+    # True when a saved card was charged server-side — the client should skip
+    # the gateway webview and go straight to verify.
+    charged: bool = False
+    checkout_url: str | None = None
 
 
 class TopupVerifyRequest(BaseModel):
@@ -504,6 +521,11 @@ class PaymentProviderEventIngest(BaseModel):
     payment_id: UUID | None = None
     invoice_id: UUID | None = None
     account_id: UUID | None = None
+    # Reseller-consolidated billing account. Carried from the originating
+    # TopupIntent so a consolidated webhook payment posts against the billing
+    # account (crediting its balance / settling member invoices) instead of
+    # landing with billing_account_id NULL and never settling. (cutover fix)
+    billing_account_id: UUID | None = None
     event_type: str = Field(min_length=1, max_length=120)
     external_id: str | None = Field(default=None, max_length=160)
     idempotency_key: str | None = Field(default=None, max_length=160)
@@ -565,6 +587,10 @@ class LedgerEntryRead(LedgerEntryBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    # Real-world date of the entry (invoice issue / payment / Splynx txn date).
+    # NULL for native and unbackfilled rows; clients should prefer it over
+    # created_at (the import instant) and fall back to created_at when NULL.
+    effective_date: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -572,7 +598,7 @@ class LedgerEntryRead(LedgerEntryBase):
 class TaxRateBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     code: str | None = Field(default=None, max_length=40)
-    rate: Decimal = Field(default=Decimal("0.0000"), ge=0)
+    rate: Decimal = Field(default=Decimal("0.0000"), ge=0, lt=100)
     is_active: bool = True
     description: str | None = None
 
@@ -584,7 +610,7 @@ class TaxRateCreate(TaxRateBase):
 class TaxRateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     code: str | None = Field(default=None, max_length=40)
-    rate: Decimal | None = Field(default=None, ge=0)
+    rate: Decimal | None = Field(default=None, ge=0, lt=100)
     is_active: bool | None = None
     description: str | None = None
 
@@ -600,6 +626,12 @@ class TaxRateRead(TaxRateBase):
 class InvoiceRead(InvoiceBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: a credit-heavy invoice can carry a
+    # negative subtotal/total/balance, so don't inherit the create-side ge=0.
+    subtotal: Decimal = Decimal("0.00")
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
+    balance_due: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime

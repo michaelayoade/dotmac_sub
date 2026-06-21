@@ -117,6 +117,7 @@ def account_create(
             )
         )
     except Exception as exc:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
@@ -200,6 +201,7 @@ def account_update(
             url=f"/admin/billing/accounts/{account.id}", status_code=303
         )
     except Exception as exc:
+        db.rollback()
         return templates.TemplateResponse(
             "admin/billing/account_form.html",
             {

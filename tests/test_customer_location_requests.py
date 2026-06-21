@@ -131,7 +131,7 @@ def test_cancel_location_request_marks_request_canceled(db_session):
         actor_id=str(subscriber.id),
     )
 
-    assert canceled.status == CustomerLocationChangeRequestStatus.canceled
+    assert canceled.status == CustomerLocationChangeRequestStatus.cancelled
     audit_rows = (
         db_session.query(AuditEvent)
         .filter(AuditEvent.action == "customer_location_change_canceled")

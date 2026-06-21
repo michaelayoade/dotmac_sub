@@ -110,7 +110,7 @@
                 <div class="border-b border-stone-200/60 px-6 py-4 dark:border-stone-700/60">
                     <h2 class="text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Line Items</h2>
                 </div>
-                {% set line_items = invoice.line_items if invoice.line_items is defined else (invoice.items if invoice.items is defined else []) %}
+                {% set line_items = invoice.lines if invoice.lines is defined else [] %}
                 {% if line_items %}
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-stone-200/60 dark:divide-stone-700/60">

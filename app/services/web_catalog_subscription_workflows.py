@@ -80,13 +80,25 @@ def _selected_ipv4_values_from_form(form: FormData) -> tuple[list[str], list[str
         str(value).strip()
         for value in form.getlist("ipv4_block_ids")
         if str(value).strip()
-    ]
+    ][:1]
     addresses = [
         str(value).strip()
         for value in form.getlist("ipv4_addresses")
         if str(value).strip()
-    ]
+    ][:1]
     return block_ids, addresses
+
+
+def _has_ipv4_assignment_edit(block_ids: list[str], addresses: list[str]) -> bool:
+    return bool(block_ids or addresses)
+
+
+def _selected_additional_route_values_from_form(
+    form: FormData,
+) -> tuple[list[str], list[str]]:
+    cidrs = [str(value).strip() for value in form.getlist("additional_route_cidrs")]
+    metrics = [str(value).strip() for value in form.getlist("additional_route_metrics")]
+    return cidrs, metrics
 
 
 def handle_subscription_create_form(
@@ -104,7 +116,20 @@ def handle_subscription_create_form(
     if not error:
         try:
             block_ids, addresses = _selected_ipv4_values_from_form(form)
-            core.ensure_ipv4_blocks_allocatable(db, block_ids, addresses)
+            if block_ids or addresses:
+                core.ensure_ipv4_blocks_allocatable(db, block_ids, addresses)
+            route_cidrs, route_metrics = _selected_additional_route_values_from_form(
+                form
+            )
+            core.normalize_additional_routes(route_cidrs, route_metrics)
+            core.validate_additional_route_billing(
+                db, cidrs=route_cidrs, metrics=route_metrics
+            )
+            core.validate_public_ip_addon_selection(
+                db,
+                add_on_id=str(form.get("ip_addon_id") or ""),
+                quantity=str(form.get("ip_addon_quantity") or "1"),
+            )
         except Exception as exc:
             error = core.error_message(exc)
     if error:
@@ -158,6 +183,22 @@ def handle_subscription_update_form(
     error = core.resolve_account_id(db, subscription)
     if not error:
         error = core.validate_subscription_form(subscription, for_create=False)
+    if not error:
+        try:
+            route_cidrs, route_metrics = _selected_additional_route_values_from_form(
+                form
+            )
+            core.normalize_additional_routes(route_cidrs, route_metrics)
+            core.validate_additional_route_billing(
+                db, cidrs=route_cidrs, metrics=route_metrics
+            )
+            core.validate_public_ip_addon_selection(
+                db,
+                add_on_id=str(form.get("ip_addon_id") or ""),
+                quantity=str(form.get("ip_addon_quantity") or "1"),
+            )
+        except Exception as exc:
+            error = core.error_message(exc)
     if error:
         context = core.subscription_form_context(db, subscription, error)
         context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
@@ -165,6 +206,7 @@ def handle_subscription_update_form(
 
     try:
         block_ids, addresses = _selected_ipv4_values_from_form(form)
+        ipv4_assignment_submitted = _has_ipv4_assignment_edit(block_ids, addresses)
         updated = core.update_subscription_with_audit(
             db,
             subscription_id,
@@ -174,6 +216,11 @@ def handle_subscription_update_form(
             addresses,
             request,
             actor_id,
+            additional_route_cidrs=route_cidrs,
+            additional_route_metrics=route_metrics,
+            ip_addon_id=str(form.get("ip_addon_id") or ""),
+            ip_addon_quantity=str(form.get("ip_addon_quantity") or "1"),
+            ipv4_assignment_submitted=ipv4_assignment_submitted,
         )
         subscriber_id = getattr(updated, "subscriber_id", None)
         redirect_url = (

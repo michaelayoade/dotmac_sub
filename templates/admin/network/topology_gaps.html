@@ -1,0 +1,71 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Topology Gaps - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Topology Gaps</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            What the Zabbix reconcile could not resolve — fix these instead of losing them.
+        </p>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Match rate</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ '%.1f' | format(gaps.match_rate * 100) }}%</p>
+            <p class="mt-1 text-xs text-slate-400">{{ gaps.resolved_complete }} / {{ gaps.active_subscriptions }} active subscriptions resolve to a basestation</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Unmatched nodes</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ gaps.unmatched_node_count }}</p>
+            <p class="mt-1 text-xs text-slate-400">Zabbix hosts not matched to an OLT/NAS</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriptions with gaps</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ gaps.subscription_gap_count }}</p>
+            <p class="mt-1 text-xs text-slate-400">No complete network path</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Unmatched / ambiguous nodes</h3>
+        <table class="mt-4 w-full text-sm">
+            <thead><tr class="text-left text-xs uppercase text-slate-400">
+                <th class="py-2">Name</th><th>Mgmt IP</th><th>Zabbix host id</th>
+            </tr></thead>
+            <tbody>
+            {% for node in gaps.unmatched_nodes %}
+                <tr class="border-t border-slate-100 dark:border-slate-700">
+                    <td class="py-2 text-slate-700 dark:text-slate-200">{{ node.name }}</td>
+                    <td class="font-mono text-slate-500">{{ node.mgmt_ip or '—' }}</td>
+                    <td class="font-mono text-slate-500">{{ node.zabbix_hostid or '—' }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="3" class="py-4 text-slate-400">No unmatched nodes.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriptions with no complete path</h3>
+        <table class="mt-4 w-full text-sm">
+            <thead><tr class="text-left text-xs uppercase text-slate-400">
+                <th class="py-2">Subscription</th><th>Gap</th>
+            </tr></thead>
+            <tbody>
+            {% for row in gaps.subscription_gaps %}
+                <tr class="border-t border-slate-100 dark:border-slate-700">
+                    <td class="py-2"><a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.id }}">{{ row.id | string | truncate(8, True, '') }}</a></td>
+                    <td class="text-slate-500">{{ row.gap }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="2" class="py-4 text-slate-400">No subscription gaps.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

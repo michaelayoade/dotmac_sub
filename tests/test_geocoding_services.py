@@ -289,6 +289,58 @@ class TestNominatimSearch:
             assert exc_info.value.status_code == 502
             assert "Invalid geocoding response" in exc_info.value.detail
 
+    def test_requests_address_details(self, db_session):
+        """Test addressdetails is always requested."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = []
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "app.services.geocoding.httpx.get", return_value=mock_response
+        ) as mock_get:
+            geocoding._nominatim_search(db_session, "Test", 1)
+
+        call_args = mock_get.call_args
+        assert call_args[1]["params"]["addressdetails"] == 1
+
+    def test_country_codes_setting_applied(self, db_session):
+        """Test countrycodes filter is sent when the setting is configured."""
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.geocoding,
+                key="country_codes",
+                value_text="NG, gh",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = []
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "app.services.geocoding.httpx.get", return_value=mock_response
+        ) as mock_get:
+            geocoding._nominatim_search(db_session, "Test", 1)
+
+        call_args = mock_get.call_args
+        assert call_args[1]["params"]["countrycodes"] == "ng,gh"
+
+    def test_country_codes_omitted_when_unset(self, db_session):
+        """Test countrycodes is not sent when the setting is absent."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = []
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "app.services.geocoding.httpx.get", return_value=mock_response
+        ) as mock_get:
+            geocoding._nominatim_search(db_session, "Test", 1)
+
+        call_args = mock_get.call_args
+        assert "countrycodes" not in call_args[1]["params"]
+
     def test_limit_minimum_is_one(self, db_session):
         """Test limit is at least 1."""
         mock_response = MagicMock()

@@ -111,7 +111,17 @@ class DnsThreatAction(enum.Enum):
 
 class PopSite(Base):
     __tablename__ = "pop_sites"
-    __table_args__ = (Index("ix_pop_sites_owner_subscriber_id", "owner_subscriber_id"),)
+    __table_args__ = (
+        Index("ix_pop_sites_owner_subscriber_id", "owner_subscriber_id"),
+        # A pop_site mapped to a Zabbix "X BTS" host group carries its groupid.
+        # Partial-unique so the (many) non-BTS / region rows stay NULL and unconstrained.
+        Index(
+            "uq_pop_sites_zabbix_group_id",
+            "zabbix_group_id",
+            unique=True,
+            postgresql_where=text("zabbix_group_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -138,6 +148,9 @@ class PopSite(Base):
     )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set by the topology reconcile when this pop_site is matched to a Zabbix
+    # "X BTS" host group (so a BTS rename in Zabbix updates in place).
+    zabbix_group_id: Mapped[str | None] = mapped_column(String(20))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -201,6 +214,14 @@ class NetworkDevice(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_monitoring_id IS NOT NULL"),
         ),
+        # Stable Zabbix host id is the reconcile key; partial-unique so rows not
+        # yet linked to Zabbix (e.g. orphaned Splynx imports) stay NULL.
+        Index(
+            "uq_network_devices_zabbix_hostid",
+            "zabbix_hostid",
+            unique=True,
+            postgresql_where=text("zabbix_hostid IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -245,6 +266,27 @@ class NetworkDevice(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     splynx_monitoring_id: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # --- Topology reconcile (Zabbix linkage) ---
+    # Stable Zabbix host id; the reconcile key. NULL until merged to a Zabbix host.
+    zabbix_hostid: Mapped[str | None] = mapped_column(String(20))
+    # Provenance of this row: 'zabbix_reconcile', 'splynx', manual, etc.
+    source: Mapped[str | None] = mapped_column(String(40))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 'inferred' (role derived from Zabbix group) vs 'manual' (operator-set; the
+    # reconcile must not stomp a manually-set role).
+    role_source: Mapped[str | None] = mapped_column(String(20))
+    # Link to the matched provisioning device: matched_device_type in
+    # {'olt','nas'} + the OLTDevice/NasDevice id. Set by the matcher; powers
+    # resolve_customer_path and the topology-gaps report.
+    matched_device_type: Mapped[str | None] = mapped_column(String(20))
+    matched_device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Topology live status (Phase 3), warmed from Zabbix into this cache and read
+    # by the Network Path panel — never fetched on the request path. Distinct
+    # from the ping/snmp `status` column (different writer). One of
+    # up/down/problem/unknown.
+    live_status: Mapped[str | None] = mapped_column(String(20))
+    live_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Capacity tracking
     max_concurrent_subscribers: Mapped[int | None] = mapped_column(Integer)
@@ -749,6 +791,11 @@ class NetworkTopologyLink(Base):
     # Discovery / reconciliation
     discovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    # Provenance: which reconciler owns this edge (e.g. 'lldp_neighbor'). The
+    # LLDP poller only ever touches its own rows (upsert + soft-prune); never
+    # manual/other-sourced links. last_seen_at bumps each poll the edge is seen.
+    source: Mapped[str | None] = mapped_column(String(40))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Metadata
     notes: Mapped[str | None] = mapped_column(Text)
@@ -775,4 +822,48 @@ class NetworkTopologyLink(Base):
     )
     target_interface = relationship(
         "DeviceInterface", foreign_keys=[target_interface_id], lazy="joined"
+    )
+
+
+class OutageIncident(Base):
+    """An operator-declared outage against a node or basestation (Phase 4b).
+
+    Manual only — no auto-detection. ``affected_count`` is snapshotted from
+    affected_customers at declare time. Kept lean (the Alert model is
+    rule/metric-bound and not reused).
+    """
+
+    __tablename__ = "outage_incidents"
+    __table_args__ = (
+        Index("ix_outage_incidents_status", "status"),
+        Index("ix_outage_incidents_root_node", "root_node_id"),
+        Index("ix_outage_incidents_basestation", "basestation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    root_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id")
+    )
+    basestation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    declared_by: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open / resolved
+    severity: Mapped[str | None] = mapped_column(String(20))
+    affected_count: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -30,6 +31,12 @@ class InvoiceStatus(enum.Enum):
     paid = "paid"
     void = "void"
     overdue = "overdue"
+    # Closed-but-not-collected: the obligation was written off as bad debt.
+    # Materially distinct from ``paid`` (obligation satisfied) and ``void``
+    # (invoice should never have existed). The loss is recorded as a credit
+    # adjustment in the ledger (the financial source of truth); the invoice
+    # stays on record, excluded from outstanding/aging but NOT counted as cash.
+    written_off = "written_off"
 
 
 class InvoicePdfExportStatus(enum.Enum):
@@ -201,6 +208,14 @@ class Invoice(Base):
             "splynx_invoice_id",
             unique=True,
             postgresql_where=text("is_active AND splynx_invoice_id IS NOT NULL"),
+        ),
+        # Backs the per-account billing list (active invoices, newest first)
+        # and FK joins on account_id.
+        Index(
+            "ix_invoices_account_id_is_active_issued_at",
+            "account_id",
+            "is_active",
+            "issued_at",
         ),
     )
 
@@ -410,6 +425,7 @@ class CreditNoteApplication(Base):
 
 class InvoiceLine(Base):
     __tablename__ = "invoice_lines"
+    __table_args__ = (Index("ix_invoice_lines_invoice_id", "invoice_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -448,12 +464,26 @@ class InvoiceLine(Base):
 
 class PaymentMethod(Base):
     __tablename__ = "payment_methods"
+    __table_args__ = (
+        # Exactly one owner: a customer subscriber (account_id) OR — for a
+        # first-class reseller_user login that has no backing subscriber
+        # (Layer 3) — the reseller org (reseller_id). CASE-sum form works on
+        # both Postgres and the SQLite test DB.
+        CheckConstraint(
+            "(CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN reseller_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_payment_methods_exactly_one_owner",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
+    )
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id"), nullable=True
     )
     payment_channel_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_channels.id")
@@ -480,6 +510,7 @@ class PaymentMethod(Base):
     )
 
     account = relationship("Subscriber")
+    reseller = relationship("Reseller")
     payment_channel = relationship("PaymentChannel", back_populates="payment_methods")
     payments = relationship("Payment", back_populates="payment_method")
 
@@ -646,6 +677,9 @@ class PaymentAllocation(Base):
         UniqueConstraint(
             "payment_id", "invoice_id", name="uq_payment_allocations_payment_invoice"
         ),
+        # The unique constraint's index is payment_id-leading; this backs
+        # invoice_id-leading lookups (allocations for an invoice).
+        Index("ix_payment_allocations_invoice_id", "invoice_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -698,6 +732,14 @@ class LedgerEntry(Base):
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # The real-world date the entry represents (invoice issue / payment / txn
+    # date). NULL for native entries and any row the cutover backfill could not
+    # resolve; display/order should COALESCE(effective_date, created_at). The
+    # migrated ledger lost original dates — created_at is the import instant.
+    effective_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

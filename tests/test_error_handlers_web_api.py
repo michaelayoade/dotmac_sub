@@ -164,3 +164,23 @@ def test_redirect_error_unknown_token_keeps_redirect() -> None:
     )
     assert resp.status_code == 303
     assert resp.headers.get("location") == "/somewhere?error=post_failed"
+
+
+def test_web_404_reseller_path_renders_without_500() -> None:
+    # Regression: routing /reseller errors to reseller/errors/404.html crashed
+    # with 500 because that template extended layouts/reseller.html (which uses
+    # current_user, absent from the error context). It must render standalone.
+    resp = _request(
+        _build_app(), "GET", "/reseller/missing-page", headers={"accept": "text/html"}
+    )
+    assert resp.status_code == 404
+    assert "text/html" in resp.headers.get("content-type", "")
+    assert "/reseller/dashboard" in resp.text
+
+
+def test_web_404_portal_path_renders_without_500() -> None:
+    resp = _request(
+        _build_app(), "GET", "/portal/missing-page", headers={"accept": "text/html"}
+    )
+    assert resp.status_code == 404
+    assert "text/html" in resp.headers.get("content-type", "")

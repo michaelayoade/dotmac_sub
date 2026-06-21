@@ -306,6 +306,60 @@ def apply_offer_radius_profile(
     return resolved_target
 
 
+def _enforce_or_record_connectivity_gap(
+    db: Session,
+    subscription: Subscription,
+    to_status: SubscriptionStatus,
+) -> None:
+    """Close (or measure) the stopped/disabled connectivity gap.
+
+    Transitions to ``stopped``/``disabled`` emit no enforcement event, so the
+    subscriber keeps connectivity until the next RADIUS orphan sweep. Enforcing
+    immediately is a LIVE behaviour change (it disconnects subscribers who are
+    online today), so it is gated behind the ``enforce_stopped_disabled``
+    radius setting, default OFF.
+
+    Regardless of the flag we always log the would-be disconnect so the impact
+    can be measured before enabling (the suspension audit,
+    ``radius_reconciliation.audit_suspension_enforcement``, also now reports
+    these as leaks). When the flag is ON we run the same RADIUS cleanup as the
+    equivalent suspend (``stopped`` → walled-garden) / cancel (``disabled`` →
+    removed) path.
+    """
+    enforce_raw = settings_spec.resolve_value(
+        db, SettingDomain.radius, "enforce_stopped_disabled"
+    )
+    enforce_on = enforce_raw is not None and str(enforce_raw).lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    logger.warning(
+        "connectivity gap: subscription=%s status=%s would_disconnect=True enforce=%s",
+        subscription.id,
+        to_status.value,
+        enforce_on,
+    )
+    if not enforce_on:
+        return
+    try:
+        if to_status == SubscriptionStatus.disabled:
+            from app.services.enforcement import cleanup_subscription_on_cancel
+
+            cleanup_subscription_on_cancel(db, str(subscription.id))
+        else:  # stopped → walled-garden, like suspend
+            from app.services.enforcement import cleanup_subscription_on_suspend
+
+            cleanup_subscription_on_suspend(db, str(subscription.id))
+    except Exception as exc:
+        logger.warning(
+            "Gated stopped/disabled enforcement failed for subscription %s: %s",
+            subscription.id,
+            exc,
+        )
+
+
 def _emit_subscription_status_event(
     db: Session,
     subscription: Subscription,
@@ -405,6 +459,10 @@ def _emit_subscription_status_event(
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
         )
+    elif to_status in {SubscriptionStatus.stopped, SubscriptionStatus.disabled}:
+        # Previously emitted nothing → subscriber kept connectivity until the
+        # orphan sweep. Gated enforcement (default off) + always-on audit log.
+        _enforce_or_record_connectivity_gap(db, subscription, to_status)
 
 
 def _handle_status_transition_via_lifecycle(
@@ -470,23 +528,46 @@ def _handle_status_transition_via_lifecycle(
         _emit_subscription_status_event(db, subscription, from_status, to_status)
 
     elif to_status == SubscriptionStatus.canceled:
-        from app.services.account_lifecycle import resolve_all_locks
+        from app.services.account_lifecycle import (
+            _release_service_ips,
+            resolve_all_locks,
+        )
 
         resolve_all_locks(db, subscription, "canceled")
         if not subscription.canceled_at:
             subscription.canceled_at = datetime.now(UTC)
             db.flush()
+        _release_service_ips(db, subscription)
         compute_account_status(db, subscriber_id)
         _emit_subscription_status_event(db, subscription, from_status, to_status)
 
     elif to_status == SubscriptionStatus.expired:
-        from app.services.account_lifecycle import resolve_all_locks
+        from app.services.account_lifecycle import (
+            _release_service_ips,
+            resolve_all_locks,
+        )
 
         resolve_all_locks(db, subscription, "expired")
+        _release_service_ips(db, subscription)
         compute_account_status(db, subscriber_id)
         _emit_subscription_status_event(db, subscription, from_status, to_status)
 
     else:
+        # Catch-all branch. The other terminal statuses (disabled/hidden/
+        # archived) only reach the catalog write path here — there is no
+        # dedicated domain op for them — so they must get the same terminal
+        # side-effects (resolve enforcement locks + release service IPs) as
+        # cancel/expire, otherwise a "disabled" service leaks its IPAM
+        # allocation and keeps a stale active lock.
+        from app.services.account_lifecycle import (
+            TERMINAL_STATUSES,
+            _release_service_ips,
+            resolve_all_locks,
+        )
+
+        if to_status in TERMINAL_STATUSES:
+            resolve_all_locks(db, subscription, to_status.value)
+            _release_service_ips(db, subscription)
         compute_account_status(db, subscriber_id)
         _emit_subscription_status_event(db, subscription, from_status, to_status)
 
@@ -1108,6 +1189,16 @@ class Subscriptions(ListResponseMixin):
             if end_at:
                 data["end_at"] = end_at
 
+        # Snapshot the offer's recurring price when no explicit unit_price is
+        # given, so the subscription carries its effective monthly amount (the
+        # invoice already resolves the offer price, but the customer/admin
+        # billing summaries read subscription.unit_price and otherwise show
+        # "Price not set" / a ₦0 monthly recurring total).
+        if "unit_price" not in fields_set or data.get("unit_price") is None:
+            data["unit_price"] = _offer_recurring_price_amount(
+                db, str(payload.offer_id)
+            )
+
         # Auto-select NAS device from subscriber's POP site if not provided
         if "provisioning_nas_device_id" not in fields_set or not data.get(
             "provisioning_nas_device_id"
@@ -1295,7 +1386,33 @@ class Subscriptions(ListResponseMixin):
                 new_price=_offer_recurring_price_amount(db, str(data["offer_id"])),
             )
 
+        # When the offer changes, refresh the snapshotted recurring price to the
+        # new offer (unless an explicit unit_price was supplied) so the customer
+        # and admin billing summaries reflect the new plan instead of the old
+        # price. Mirrors the create-path default; covers change-plan apply and
+        # admin plan edits for any status.
+        if (
+            "offer_id" in data
+            and str(data["offer_id"]) != str(previous_offer_id)
+            and "unit_price" not in data
+        ):
+            data["unit_price"] = _offer_recurring_price_amount(
+                db, str(data["offer_id"])
+            )
+
         status = data.get("status", subscription.status)
+        # State-machine guard: the raw form/CRUD write path must not resurrect a
+        # terminal service (canceled/expired/disabled/hidden/archived → active).
+        # The account_lifecycle domain ops already reject these edges; this is
+        # the path that historically bypassed them.
+        from app.services.account_lifecycle import (
+            assert_legal_subscription_transition,
+        )
+
+        try:
+            assert_legal_subscription_transition(previous_status, status)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         start_at = _ensure_utc(data.get("start_at", subscription.start_at))
         end_at = _ensure_utc(data.get("end_at", subscription.end_at))
         next_billing_at = _ensure_utc(

@@ -43,6 +43,20 @@ server {
         proxy_read_timeout 86400;
     }
 
+    # Server-Sent Events for live bandwidth widgets
+    location ~ ^/(api/v1/bandwidth/live|portal/bandwidth/my/live) {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+
     # All other requests → app
     location / {
         proxy_pass http://127.0.0.1:8001;

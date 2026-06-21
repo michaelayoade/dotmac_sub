@@ -52,7 +52,11 @@ def resolve_invoice(db, invoice_id: str | None):
 def invoice_balance_info(invoice) -> tuple[str | None, str | None]:
     if not invoice:
         return None, None
-    balance = invoice.balance_due if invoice.balance_due else invoice.total
+    # Use balance_due even when it is 0 (a fully-paid invoice); only fall back to
+    # the total when balance_due was never computed (legacy/None). Otherwise a
+    # paid invoice shows its full total as "balance due" and the staff member
+    # records a duplicate payment, overpaying the account.
+    balance = invoice.balance_due if invoice.balance_due is not None else invoice.total
     if balance is None:
         return None, None
     value = f"{balance:.2f}"
@@ -84,7 +88,7 @@ def build_new_form_state(
             prefill["invoice_number"] = invoice_obj.invoice_number
             invoice_label = invoice_obj.invoice_number or "Invoice"
             balance_value, balance_display = invoice_balance_info(invoice_obj)
-            if invoice_obj.balance_due:
+            if invoice_obj.balance_due is not None:
                 prefill["amount"] = float(invoice_obj.balance_due)
             elif invoice_obj.total:
                 prefill["amount"] = float(invoice_obj.total)
@@ -228,12 +232,13 @@ def build_create_error_context(
     deps: dict[str, object],
     resolved_invoice,
     invoice_id: str | None,
+    payment_method_id: str | None = None,
 ) -> dict[str, object]:
     selected_account = cast(Subscriber | None, deps.get("selected_account"))
     return {
         "accounts": None,
-        "payment_methods": [],
-        "payment_method_types": [],
+        "payment_methods": deps["payment_methods"],
+        "payment_method_types": deps["payment_method_types"],
         "collection_accounts": deps["collection_accounts"],
         "invoices": deps["invoices"],
         "action_url": "/admin/billing/payments/create",
@@ -249,6 +254,7 @@ def build_create_error_context(
         "currency_locked": bool(resolved_invoice),
         "show_invoice_typeahead": not bool(selected_account),
         "selected_invoice_id": invoice_id,
+        "selected_payment_method_id": payment_method_id,
     }
 
 
@@ -314,7 +320,17 @@ def load_create_error_dependencies(
         offset=0,
     )
     invoices = []
+    payment_methods = []
     if selected_account:
+        payment_methods = billing_service.payment_methods.list(
+            db=db,
+            account_id=str(selected_account.id),
+            is_active=None,
+            order_by="created_at",
+            order_dir="desc",
+            limit=500,
+            offset=0,
+        )
         invoices = billing_service.invoices.list(
             db=db,
             account_id=str(selected_account.id),
@@ -328,9 +344,22 @@ def load_create_error_dependencies(
         invoices = filter_open_invoices(invoices)
     return {
         "selected_account": selected_account,
+        "payment_methods": payment_methods,
+        "payment_method_types": payment_method_type_options(),
         "collection_accounts": collection_accounts,
         "invoices": invoices,
     }
+
+
+def payment_method_type_options() -> list[str]:
+    return [
+        "cash",
+        "transfer",
+        "card",
+        "bank_account",
+        "check",
+        "other",
+    ]
 
 
 def load_edit_dependencies(
@@ -349,14 +378,7 @@ def load_edit_dependencies(
         limit=500,
         offset=0,
     )
-    payment_method_types = [
-        "cash",
-        "bank_transfer",
-        "card",
-        "mobile_money",
-        "wallet",
-        "other",
-    ]
+    payment_method_types = payment_method_type_options()
     if payment.payment_method_id and all(
         str(method.id) != str(payment.payment_method_id) for method in payment_methods
     ):

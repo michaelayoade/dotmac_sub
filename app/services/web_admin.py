@@ -10,6 +10,10 @@ from uuid import UUID
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.gis import (
+    CustomerLocationChangeRequest,
+    CustomerLocationChangeRequestStatus,
+)
 from app.models.notification import Notification, NotificationStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import Subscriber
@@ -138,6 +142,19 @@ def _count_unread_notifications(db: Session) -> int:
     )
 
 
+def _count_pending_location_requests(db: Session) -> int:
+    """Count pending customer pin-correction requests for the GIS nav badge."""
+    return (
+        db.query(func.count(CustomerLocationChangeRequest.id))
+        .filter(
+            CustomerLocationChangeRequest.status
+            == CustomerLocationChangeRequestStatus.pending
+        )
+        .scalar()
+        or 0
+    )
+
+
 def get_sidebar_stats(db: Session) -> dict:
     """Get stats for sidebar badges."""
     global _sidebar_stats_cached_at, _sidebar_stats_cache
@@ -162,6 +179,10 @@ def get_sidebar_stats(db: Session) -> dict:
         notifications_unread = _count_unread_notifications(db)
     except Exception:
         notifications_unread = 0
+    try:
+        pending_location_requests = _count_pending_location_requests(db)
+    except Exception:
+        pending_location_requests = 0
 
     try:
         logo_raw = settings_spec.resolve_value(
@@ -205,6 +226,7 @@ def get_sidebar_stats(db: Session) -> dict:
     stats = {
         "service_orders": service_orders_count,
         "notifications_unread": notifications_unread,
+        "pending_location_requests": pending_location_requests,
         "sidebar_logo_url": sidebar_logo_url,
         "sidebar_logo_dark_url": sidebar_logo_dark_url,
         "favicon_url": favicon_url,

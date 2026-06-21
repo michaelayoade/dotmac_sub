@@ -169,6 +169,39 @@ class TestPortalNotificationsPage:
         assert page["total"] == 1
         assert page["notifications"][0].message == "Delivered to owned subscriber"
 
+    def test_notifications_page_converts_legacy_html_body_to_text(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import get_notifications_page
+
+        db_session.add(
+            Notification(
+                subscriber_id=subscriber.id,
+                channel=NotificationChannel.email,
+                recipient=subscriber.email,
+                event_type="invoice_sent",
+                category="billing",
+                body="<p>Your <strong>invoice</strong> is ready.</p>",
+                status=NotificationStatus.delivered,
+            )
+        )
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 1
+        assert page["notifications"][0].message == "Your invoice is ready."
+
     def test_notifications_page_respects_billing_and_sms_preferences(
         self, db_session, subscriber
     ) -> None:
@@ -233,7 +266,8 @@ class TestCustomerProfileNotifications:
             updated = update_customer_profile(
                 db_session,
                 subscriber_id=str(subscriber.id),
-                name="Updated Customer",
+                first_name="Updated",
+                last_name="Customer",
                 email="updated@example.com",
                 phone="+2348000000012",
                 billing_notifications=False,
@@ -266,7 +300,8 @@ class TestCustomerProfileNotifications:
         ):
             response = customer_update_profile(
                 request=request,
-                name="Updated Customer",
+                first_name="Updated",
+                last_name="Customer",
                 email="updated@example.com",
                 phone="+2348000000012",
                 billing_notifications=False,

@@ -338,6 +338,158 @@ def _mikrotik_routeros_query(
         pool.disconnect()
 
 
+def _float_value(value: object) -> float:
+    if value is None:
+        return 0.0
+    text = str(value).strip().lower().replace(" ", "")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        pass
+    match = re.fullmatch(r"([-+]?\d+(?:\.\d+)?)([kmgt]?)(?:bits?/s|bps)", text)
+    if not match:
+        return 0.0
+    multiplier = {
+        "": 1.0,
+        "k": 1_000.0,
+        "m": 1_000_000.0,
+        "g": 1_000_000_000.0,
+        "t": 1_000_000_000_000.0,
+    }[match.group(2)]
+    return float(match.group(1)) * multiplier
+
+
+def _first_rate_value(row: dict[str, object], *keys: str) -> float:
+    for key in keys:
+        if key in row:
+            return _float_value(row.get(key))
+    return 0.0
+
+
+def get_mikrotik_pppoe_live_bandwidth(
+    device: NasDevice,
+    *,
+    login: str,
+) -> dict[str, object]:
+    """Read a subscriber PPPoE interface rate directly from MikroTik RouterOS.
+
+    This is intentionally separate from the sampled history pipeline. It is for
+    operator "what is this customer doing right now?" UI reads.
+    """
+    login = str(login or "").strip()
+    if not login:
+        raise HTTPException(status_code=400, detail="Subscription has no PPPoE login.")
+
+    from routeros_api import RouterOsApiPool
+    from routeros_api.exceptions import RouterOsApiError
+
+    from app.services.bandwidth import to_subscriber_directions
+
+    host, port, username, password = _mikrotik_routeros_auth(device)
+    use_ssl = port == 8729
+    pool = RouterOsApiPool(
+        host,
+        username=username,
+        password=password,
+        port=port,
+        plaintext_login=not use_ssl,
+        use_ssl=use_ssl,
+        ssl_verify=False,
+        ssl_verify_hostname=False,
+    )
+    try:
+        api = pool.get_api()
+        ppp_active = _as_dict_list(cast(Any, api.get_resource("/ppp/active")).get())
+        session = next(
+            (row for row in ppp_active if str(row.get("name") or "").strip() == login),
+            None,
+        )
+        if not session:
+            return {
+                "online": False,
+                "login": login,
+                "source": "mikrotik_routeros_api",
+                "nas_device_id": str(device.id),
+                "nas_device_name": device.name,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "current_rx_bps": 0.0,
+                "current_tx_bps": 0.0,
+                "download_bps": 0.0,
+                "upload_bps": 0.0,
+            }
+
+        interface_name = str(session.get("interface") or "").strip()
+        if not interface_name:
+            interface_name = f"<pppoe-{login}>"
+
+        monitor_rows = _as_dict_list(
+            cast(Any, api.get_resource("/interface")).call(
+                "monitor-traffic",
+                {"interface": interface_name, "once": ""},
+            )
+        )
+        monitor = monitor_rows[0] if monitor_rows else {}
+        rx_bps = _first_rate_value(
+            monitor,
+            "rx-bits-per-second",
+            "rx_bits_per_second",
+            "rx-bps",
+            "rx_bps",
+        )
+        tx_bps = _first_rate_value(
+            monitor,
+            "tx-bits-per-second",
+            "tx_bits_per_second",
+            "tx-bps",
+            "tx_bps",
+        )
+        download_bps, upload_bps = to_subscriber_directions(rx_bps, tx_bps)
+
+        return {
+            "online": True,
+            "login": login,
+            "interface": interface_name,
+            "source": "mikrotik_routeros_api",
+            "nas_device_id": str(device.id),
+            "nas_device_name": device.name,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "current_rx_bps": rx_bps,
+            "current_tx_bps": tx_bps,
+            "download_bps": download_bps,
+            "upload_bps": upload_bps,
+            "framed_ip_address": session.get("address"),
+            "caller_id": session.get("caller-id") or session.get("caller_id"),
+            "uptime": session.get("uptime"),
+        }
+    except (RouterOsApiError, OSError) as exc:
+        # The NAS is unreachable / slow (RouterOS API connect or read timeout).
+        # This is a live operator read of an external device, not a server
+        # fault — return a graceful "unavailable" payload (same shape as the
+        # no-session case) instead of letting the timeout bubble up to a 500.
+        logger.warning(
+            "mikrotik live bandwidth read failed (device=%s login=%s): %s",
+            device.id,
+            login,
+            exc,
+        )
+        return {
+            "online": False,
+            "available": False,
+            "login": login,
+            "source": "mikrotik_routeros_api",
+            "nas_device_id": str(device.id),
+            "nas_device_name": device.name,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "current_rx_bps": 0.0,
+            "current_tx_bps": 0.0,
+            "download_bps": 0.0,
+            "upload_bps": 0.0,
+            "error": "nas_unreachable",
+        }
+    finally:
+        pool.disconnect()
+
+
 def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
     resource_data, interfaces, _ppp_active = _mikrotik_routeros_query(device)
     uptime_raw = resource_data.get("uptime")

@@ -299,6 +299,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
+        # Hard gate: suppress customer notifications to terminal accounts
+        # (canceled/disabled get nothing) and non-actionable mail to walled
+        # accounts (suspended/blocked get only billing/account/service).
+        # Overrides per-subscriber preferences. Kill-switch, default on.
+        domain=SettingDomain.notification,
+        key="status_gate_enabled",
+        env_var="NOTIFICATION_STATUS_GATE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
         domain=SettingDomain.notification,
         key="alert_notifications_default_channel",
         env_var="ALERT_NOTIFICATIONS_DEFAULT_CHANNEL",
@@ -664,6 +675,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.geocoding,
+        key="country_codes",
+        env_var="GEOCODING_COUNTRY_CODES",
+        value_type=SettingValueType.string,
+        default="ng",
+    ),
+    SettingSpec(
+        domain=SettingDomain.geocoding,
         key="user_agent",
         env_var="GEOCODING_USER_AGENT",
         value_type=SettingValueType.string,
@@ -683,6 +701,99 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=5,
         min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="enabled",
+        env_var="VAS_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="topup_min",
+        env_var="VAS_TOPUP_MIN",
+        value_type=SettingValueType.integer,
+        default=100,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="topup_max_per_txn",
+        env_var="VAS_TOPUP_MAX_PER_TXN",
+        value_type=SettingValueType.integer,
+        default=50000,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="topup_daily_limit",
+        env_var="VAS_TOPUP_DAILY_LIMIT",
+        value_type=SettingValueType.integer,
+        default=100000,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="purchase_txn_limit",
+        env_var="VAS_PURCHASE_TXN_LIMIT",
+        value_type=SettingValueType.integer,
+        default=50000,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="enabled_categories",
+        env_var="VAS_ENABLED_CATEGORIES",
+        value_type=SettingValueType.string,
+        default="airtime,data",
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="float_min_threshold",
+        env_var="VAS_FLOAT_MIN_THRESHOLD",
+        value_type=SettingValueType.integer,
+        default=10000,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="vtpass_base_url",
+        env_var="VTPASS_BASE_URL",
+        value_type=SettingValueType.string,
+        default="https://sandbox.vtpass.com/api",
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="vtpass_api_key",
+        env_var="VTPASS_API_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="vtpass_public_key",
+        env_var="VTPASS_PUBLIC_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="vtpass_secret_key",
+        env_var="VTPASS_SECRET_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.vas,
+        key="auth_threshold",
+        env_var="VAS_AUTH_THRESHOLD",
+        value_type=SettingValueType.integer,
+        default=5000,
+        min_value=0,
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
@@ -735,6 +846,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="RADIUS_AUTH_SERVER_ID",
         value_type=SettingValueType.string,
         default=None,
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="enforce_stopped_disabled",
+        env_var="RADIUS_ENFORCE_STOPPED_DISABLED",
+        value_type=SettingValueType.boolean,
+        # Default OFF: enabling it makes a transition to stopped/disabled
+        # actively disconnect the subscriber (walled-garden / removed) instead
+        # of waiting for the orphan sweep. Roll out deliberately after checking
+        # the would-disconnect audit log + suspension audit.
+        default=False,
     ),
     SettingSpec(
         domain=SettingDomain.radius,
@@ -905,6 +1027,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="default_tax_rate_id",
+        env_var="BILLING_DEFAULT_TAX_RATE_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default VAT rate (TaxRate id) when no address/subscriber rate set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="default_payment_method_type",
         env_var="BILLING_DEFAULT_PAYMENT_METHOD_TYPE",
         value_type=SettingValueType.string,
@@ -1004,6 +1134,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
+        # Kill-switch for the billing runner's inline "settle open invoices from
+        # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
+        # per-invoice balance_due/allocations aren't authoritative (Splynx
+        # deposit-paid invoices have no local allocation). Re-enable only after
+        # the account-level redesign.
+        domain=SettingDomain.billing,
+        key="settle_credit_on_invoice_enabled",
+        env_var="BILLING_SETTLE_CREDIT_ON_INVOICE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
         domain=SettingDomain.billing,
         key="billing_interval_seconds",
         env_var="BILLING_INTERVAL_SECONDS",
@@ -1029,6 +1171,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
         label="Autopay Charges Only Due Invoices",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="customer_balance_notifications_enabled",
+        env_var="BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Customer Balance Notifications Enabled",
     ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
@@ -2112,6 +2262,46 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="",
         label="Favicon URL",
     ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_primary_color",
+        env_var="BRAND_PRIMARY_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default="#206a07",
+        label="Brand Primary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_secondary_color",
+        env_var="BRAND_SECONDARY_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default="#06b6d4",
+        label="Brand Secondary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_customer_url",
+        env_var="LOGIN_HERO_CUSTOMER_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Customer Login Image URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_reseller_url",
+        env_var="LOGIN_HERO_RESELLER_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Reseller Login Image URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="login_hero_admin_url",
+        env_var="LOGIN_HERO_ADMIN_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Admin Login Image URL",
+    ),
     # Meta (Facebook/Instagram) Integration Settings
     SettingSpec(
         domain=SettingDomain.comms,
@@ -2188,6 +2378,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.comms,
         key="whatsapp_phone_number",
         env_var="WHATSAPP_PHONE_NUMBER",
+        value_type=SettingValueType.string,
+        default="",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="whatsapp_waba_id",
+        env_var="WHATSAPP_WABA_ID",
         value_type=SettingValueType.string,
         default="",
     ),
@@ -2588,6 +2785,7 @@ DOMAIN_SETTINGS_SERVICE = {
     SettingDomain.subscription_engine: settings_service.subscription_engine_settings,
     SettingDomain.gis: settings_service.gis_settings,
     SettingDomain.scheduler: settings_service.scheduler_settings,
+    SettingDomain.vas: settings_service.vas_settings,
 }
 
 

@@ -18,7 +18,16 @@ class TransferProofsScreen extends ConsumerWidget {
     final proofs = ref.watch(paymentProofsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Bank transfer payments')),
+      appBar: AppBar(
+        title: const Text('Bank transfer payments'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            onPressed: () => ref.invalidate(paymentProofsProvider),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
           final ok = await showModalBottomSheet<bool>(
@@ -67,7 +76,17 @@ class TransferProofsScreen extends ConsumerWidget {
                 )
               : ListView(
                   padding: const EdgeInsets.all(12),
-                  children: [for (final p in items) _ProofTile(proof: p)],
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(4, 4, 4, 12),
+                      child: Text(
+                        'Pull down or tap refresh to update status. Review '
+                        'usually takes up to 1 business day.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    for (final p in items) _ProofTile(proof: p),
+                  ],
                 ),
         ),
       ),
@@ -96,6 +115,8 @@ class _ProofTile extends StatelessWidget {
         title: Text(Fmt.money(p.amount, p.currency)),
         subtitle: Text(
           [
+            if (p.invoiceNumber != null) 'Invoice ${p.invoiceNumber}',
+            if (p.accountLabel != null) p.accountLabel!,
             if (p.bankName != null) p.bankName!,
             if (p.reference != null) p.reference!,
             if (p.createdAt != null) Fmt.date(p.createdAt!),

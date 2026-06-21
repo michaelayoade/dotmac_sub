@@ -4240,6 +4240,12 @@ CREATE TABLE public.network_devices (
     current_subscriber_count integer NOT NULL,
     health_status public.healthstatus NOT NULL,
     last_health_check_at timestamp with time zone,
+    zabbix_hostid character varying(20),
+    source character varying(40),
+    last_synced_at timestamp with time zone,
+    role_source character varying(20),
+    matched_device_type character varying(20),
+    matched_device_id uuid,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
@@ -5273,6 +5279,7 @@ CREATE TABLE public.pop_sites (
     reseller_id uuid,
     notes text,
     is_active boolean NOT NULL,
+    zabbix_group_id character varying(20),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
@@ -10182,6 +10189,13 @@ CREATE INDEX ix_netops_target ON public.network_operations USING btree (target_t
 
 
 --
+-- Name: uq_network_devices_zabbix_hostid; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_network_devices_zabbix_hostid ON public.network_devices USING btree (zabbix_hostid) WHERE (zabbix_hostid IS NOT NULL);
+
+
+--
 -- Name: ix_oauth_tokens_connector_config_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10235,6 +10249,13 @@ CREATE UNIQUE INDEX ix_ont_assignments_active_unit ON public.ont_assignments USI
 --
 
 CREATE INDEX ix_pop_sites_owner_subscriber_id ON public.pop_sites USING btree (owner_subscriber_id);
+
+
+--
+-- Name: uq_pop_sites_zabbix_group_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_pop_sites_zabbix_group_id ON public.pop_sites USING btree (zabbix_group_id) WHERE (zabbix_group_id IS NOT NULL);
 
 
 --

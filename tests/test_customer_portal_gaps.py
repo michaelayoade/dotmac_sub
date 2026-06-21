@@ -417,49 +417,93 @@ class TestPlanChangeUiHelpers:
         assert "wallet" in copy["billing_message"]
         assert "prorated difference" in copy["billing_message"]
 
-    def test_get_fup_status_uses_highest_active_rule_threshold_for_allowance(
-        self,
+    def test_get_fup_status_uses_nearest_rule_threshold_and_quota_bucket(
+        self, db_session, subscription, catalog_offer
     ) -> None:
-        from app.models.fup import FupDataUnit
+        # The web FUP panel must key off the same QuotaBucket + nearest (lowest)
+        # rule threshold + usage_warning setting as the mobile app and the
+        # enforcement task — not UsageRecord / highest-rule / hardcoded 80%.
+        from datetime import timedelta
+        from decimal import Decimal
+
+        from app.models.fup import FupAction, FupDataUnit, FupPolicy, FupRule
+        from app.models.usage import QuotaBucket
         from app.services.customer_portal_flow_services import _get_fup_status
 
-        db = MagicMock()
-        subscription_id = "00000000-0000-0000-0000-000000000123"
-        db.get.return_value = SimpleNamespace(
-            next_billing_at=datetime(2026, 3, 30, tzinfo=UTC)
-        )
-
-        query = MagicMock()
-        db.query.return_value = query
-        query.filter.return_value = query
-        query.first.return_value = SimpleNamespace(rx=None, tx=None)
-
-        policy = SimpleNamespace(
-            is_active=True,
-            rules=[
-                SimpleNamespace(
-                    is_active=True,
+        subscription.offer_id = catalog_offer.id
+        policy = FupPolicy(offer_id=catalog_offer.id, is_active=True)
+        db_session.add(policy)
+        db_session.flush()
+        db_session.add_all(
+            [
+                FupRule(
+                    policy_id=policy.id,
+                    name="reduce-80",
                     sort_order=1,
                     threshold_amount=80,
                     threshold_unit=FupDataUnit.gb,
+                    action=FupAction.reduce_speed,
                 ),
-                SimpleNamespace(
-                    is_active=True,
+                FupRule(
+                    policy_id=policy.id,
+                    name="reduce-120",
                     sort_order=2,
                     threshold_amount=120,
                     threshold_unit=FupDataUnit.gb,
+                    action=FupAction.reduce_speed,
                 ),
-            ],
-            offer=None,
+            ]
+        )
+        now = datetime.now(UTC)
+        db_session.add(
+            QuotaBucket(
+                subscription_id=subscription.id,
+                period_start=now - timedelta(days=5),
+                period_end=now + timedelta(days=25),
+                used_gb=Decimal("40"),
+            )
+        )
+        db_session.commit()
+
+        status = _get_fup_status(
+            db_session, str(catalog_offer.id), str(subscription.id)
         )
 
-        from unittest.mock import patch
-
-        with patch("app.services.fup.FupPolicies.get_by_offer", return_value=policy):
-            status = _get_fup_status(db, "offer-1", subscription_id)
-
         assert status is not None
-        assert status["allowance_gb"] == 120.0
+        # Nearest (lowest) rule threshold, not the highest (was 120).
+        assert status["allowance_gb"] == 80.0
+        # Usage sourced from the authoritative QuotaBucket (40), not UsageRecord.
+        assert status["usage_gb"] == 40.0
+        assert status["usage_pct"] == 50.0
+
+    def test_get_fup_status_ignores_unlimited_offer_fup_rules(
+        self, db_session, subscription, catalog_offer
+    ) -> None:
+        from app.models.fup import FupAction, FupDataUnit, FupPolicy, FupRule
+        from app.services.customer_portal_flow_services import _get_fup_status
+
+        catalog_offer.plan_family = "unlimited"
+        subscription.offer_id = catalog_offer.id
+        policy = FupPolicy(offer_id=catalog_offer.id, is_active=True)
+        db_session.add(policy)
+        db_session.flush()
+        db_session.add(
+            FupRule(
+                policy_id=policy.id,
+                name="stale-unlimited-fup",
+                sort_order=1,
+                threshold_amount=100,
+                threshold_unit=FupDataUnit.gb,
+                action=FupAction.reduce_speed,
+            )
+        )
+        db_session.commit()
+
+        status = _get_fup_status(
+            db_session, str(catalog_offer.id), str(subscription.id)
+        )
+
+        assert status is None
 
     def test_get_fup_status_prefers_usage_records_over_bandwidth_estimate(
         self, db_session, subscription, catalog_offer
@@ -816,6 +860,21 @@ class TestAdminUsageTemplateDefaults:
 
         assert "{% set usage_records_default_view = 'chart' %}" in template
 
+    def test_admin_stats_configures_direct_mikrotik_live_read(self) -> None:
+        stats_panel = Path("templates/admin/customers/_stats_panel.html").read_text(
+            encoding="utf-8"
+        )
+        usage_content = Path("templates/customer/usage/_content.html").read_text(
+            encoding="utf-8"
+        )
+
+        assert "/api/v1/bandwidth/mikrotik-live/" in stats_panel
+        assert "bandwidth_chart_direct_live_endpoint" in stats_panel
+        assert "directLiveEndpoint" in usage_content
+        assert "Live from MikroTik" in Path("static/js/bandwidth-chart.js").read_text(
+            encoding="utf-8"
+        )
+
 
 class TestPortalNotificationsPage:
     def test_notifications_page_merges_event_queue_and_customer_notification_events(
@@ -1049,7 +1108,8 @@ class TestCustomerProfileNotifications:
             updated = update_customer_profile(
                 db_session,
                 subscriber_id=str(subscriber.id),
-                name="Updated Customer",
+                first_name="Updated",
+                last_name="Customer",
                 email="updated@example.com",
                 phone="+2348000000012",
                 billing_notifications=False,

@@ -236,6 +236,15 @@ def get_change_plan_page(
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
     wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    # Surface arrears up-front: a self-service plan change is blocked at submit
+    # while the account has overdue invoices (block-until-settled, #30). Showing
+    # it here lets the customer settle first instead of hitting the error on
+    # submit.
+    from app.services.payment_arrangements import get_account_outstanding_balance
+
+    arrears_amount = get_account_outstanding_balance(
+        db, str(subscription.subscriber_id)
+    )
     # Plan-change quotes are computed lazily — one per offer the customer
     # selects — via get_plan_change_quote(). Pricing the whole catalog here ran a
     # proration calc per available offer, making this page take ~46s for large
@@ -261,6 +270,8 @@ def get_change_plan_page(
         "selected_offer_id": None,
         "insufficient_balance": None,
         "next_billing_date": next_billing_date,
+        "arrears_amount": _to_float(arrears_amount),
+        "in_arrears": arrears_amount > Decimal("0.00"),
         **copy,
     }
 
@@ -350,6 +361,18 @@ def submit_change_plan(
             "Contact support to migrate to it."
         )
 
+    # Same block-until-settled policy as apply_instant_plan_change: an account
+    # in arrears must clear overdue invoices before any plan change (including a
+    # future-dated request).
+    from app.services.payment_arrangements import get_account_outstanding_balance
+
+    arrears = get_account_outstanding_balance(db, str(subscription.subscriber_id))
+    if arrears > Decimal("0.00"):
+        raise ValueError(
+            f"You have an overdue balance of {arrears:,.2f}. "
+            "Please settle it before changing your plan."
+        )
+
     eff_date = datetime.strptime(effective_date, "%Y-%m-%d").date()
     if eff_date < date.today():
         raise ValueError("Effective date must be today or later.")
@@ -423,6 +446,12 @@ def get_change_plan_error_context(
         "selected_offer_id": selected_offer_id,
         "insufficient_balance": insufficient_balance,
         "next_billing_date": next_billing_date,
+        "arrears_amount": (
+            page_data.get("arrears_amount", 0.0) if page_data is not None else 0.0
+        ),
+        "in_arrears": (
+            bool(page_data.get("in_arrears", False)) if page_data is not None else False
+        ),
         **copy,
     }
 
@@ -589,8 +618,19 @@ def apply_instant_plan_change(
     lock_account(db, str(subscription.subscriber_id))
 
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
-    if not new_offer or not new_offer.is_active:
+    if not new_offer:
         raise ValueError("Selected plan is not available")
+    # Gate on the same single source as the deferred path: this enforces
+    # status==active + show_on_customer_portal + plan_family + reseller
+    # availability, not just is_active — otherwise the instant path could
+    # switch a customer onto an archived/hidden/cross-family offer by POSTing
+    # its id directly (the deferred/mobile path was already guarded).
+    available = get_available_portal_offers(db, subscription)
+    if str(new_offer.id) not in {str(o.id) for o in available}:
+        raise ValueError(
+            "This plan is not available for self-service change. "
+            "Contact support to migrate to it."
+        )
 
     current_offer = (
         db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
@@ -599,6 +639,20 @@ def apply_instant_plan_change(
         _validate_plan_change(db, subscription, str(new_offer.id))
     except HTTPException as exc:
         raise ValueError(str(exc.detail)) from exc
+
+    # Block self-service plan changes while the account is in arrears. Policy:
+    # the customer must settle overdue invoices first (covers prepaid AND
+    # postpaid — the old affordability gate only looked at prepaid wallet credit
+    # and never considered outstanding debt). Account 100000016 could upgrade
+    # while owing because this check did not exist.
+    from app.services.payment_arrangements import get_account_outstanding_balance
+
+    arrears = get_account_outstanding_balance(db, str(subscription.subscriber_id))
+    if arrears > Decimal("0.00"):
+        raise ValueError(
+            f"You have an overdue balance of {arrears:,.2f}. "
+            "Please settle it before changing your plan."
+        )
 
     old_price = (
         _get_offer_recurring_price(current_offer) if current_offer else Decimal("0")

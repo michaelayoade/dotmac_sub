@@ -1,0 +1,70 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Transfer Submitted - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+            <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <a href="/portal/billing/topup" class="hover:text-[var(--color-brand-600)]">Add Funds</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">Transfer Submitted</span>
+        </nav>
+    </div>
+
+    <div class="mx-auto max-w-3xl space-y-6">
+        <div class="text-center">
+            <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                <svg class="h-10 w-10 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+                </svg>
+            </div>
+            <h1 class="mt-6 text-2xl font-bold text-stone-900 dark:text-white">Receipt Submitted for Review</h1>
+            <p class="mt-2 text-stone-500 dark:text-stone-400">
+                We have received your transfer receipt. Your account will be credited after the payment is confirmed.
+            </p>
+        </div>
+
+        <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Submission Details</h2>
+            <dl class="mt-5 divide-y divide-stone-100 rounded-2xl border border-stone-100 dark:divide-stone-700 dark:border-stone-700">
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Status</dt>
+                    <dd class="text-sm font-semibold text-amber-700 dark:text-amber-300">Pending review</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Amount submitted</dt>
+                    <dd class="text-xl font-bold text-emerald-700 dark:text-emerald-300">{{ proof.currency }} {{ "{:,.2f}".format(proof.amount) }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Bank</dt>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ proof.bank_name or "Bank transfer" }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Reference</dt>
+                    <dd class="font-mono text-sm font-semibold text-stone-900 dark:text-white">{{ proof.reference or "-" }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Submitted</dt>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ proof.created_at.strftime("%Y-%m-%d %H:%M") if proof.created_at else "-" }}</dd>
+                </div>
+            </dl>
+        </section>
+
+        <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-200">
+            Keep your transfer reference until the payment is reviewed. If there is an issue with the receipt, support may contact you.
+        </div>
+
+        <div class="flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <a href="/portal/billing" class="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-brand-700)]">
+                Back to Billing
+            </a>
+            <a href="/portal/billing/topup" class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-6 py-2.5 text-sm font-semibold text-stone-700 shadow-sm hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                Add More Funds
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,11 +1,12 @@
 """Reseller portal routes."""
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Body, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_reseller_billing as web_reseller_billing_service
+from app.services import web_reseller_contacts as web_reseller_contacts_service
 from app.services import web_reseller_routes as web_reseller_routes_service
 
 
@@ -38,16 +39,94 @@ def reseller_dashboard(
     return web_reseller_routes_service.reseller_dashboard(request, db, page, per_page)
 
 
+@router.get("/vas", response_class=HTMLResponse)
+def reseller_vas(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_vas_page(request, db)
+
+
+@router.post("/vas/topup/intent")
+def reseller_vas_topup_intent(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_vas_topup_intent(
+        request, db, payload.get("amount")
+    )
+
+
+@router.get("/vas/topup/verify", response_class=HTMLResponse)
+def reseller_vas_topup_verify(
+    request: Request, reference: str, db: Session = Depends(get_db)
+):
+    return web_reseller_routes_service.reseller_vas_topup_verify(request, db, reference)
+
+
+@router.post("/vas/sell")
+def reseller_vas_sell(
+    request: Request,
+    service_id: str = Form(...),
+    identifier: str = Form(...),
+    variation_code: str = Form(""),
+    amount: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_vas_sell(
+        request,
+        db,
+        service_id=service_id,
+        identifier=identifier,
+        variation_code=variation_code,
+        amount=amount,
+    )
+
+
+@router.get("/service-requests", response_class=HTMLResponse)
+def reseller_service_requests(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_service_requests_page(request, db)
+
+
+@router.post("/service-requests", response_class=HTMLResponse)
+def reseller_service_request_create(
+    request: Request,
+    contact_name: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_email: str = Form(""),
+    address: str = Form(""),
+    latitude: str = Form(""),
+    longitude: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_service_request_create(
+        request,
+        db,
+        contact_name=contact_name,
+        contact_phone=contact_phone,
+        contact_email=contact_email,
+        address=address,
+        latitude=latitude,
+        longitude=longitude,
+        notes=notes,
+    )
+
+
 @router.get("/accounts", response_class=HTMLResponse)
 def reseller_accounts(
     request: Request,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=5, le=100),
     search: str = Query(""),
+    status_filter: str = Query(""),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_accounts(
-        request, db, page, per_page, search=search or None
+        request,
+        db,
+        page,
+        per_page,
+        search=search or None,
+        status_filter=status_filter or None,
     )
 
 
@@ -70,6 +149,18 @@ def reseller_account_invoices(
 ):
     return web_reseller_routes_service.reseller_account_invoices(
         request, db, account_id, page, per_page
+    )
+
+
+@router.post("/accounts/{account_id}/status", response_class=HTMLResponse)
+def reseller_account_status_update(
+    request: Request,
+    account_id: str,
+    action: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_account_status_update(
+        request, db, account_id, action
     )
 
 
@@ -121,6 +212,11 @@ def reseller_profile_update(
     )
 
 
+@router.post("/profile/verify-email/resend")
+def reseller_resend_email_verification(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_resend_email_verification(request, db)
+
+
 @router.post("/profile/mfa/setup", response_class=HTMLResponse)
 def reseller_mfa_setup(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_mfa_setup(request, db)
@@ -158,17 +254,50 @@ def reseller_fiber_map(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/billing", response_class=HTMLResponse)
-def reseller_billing(request: Request, db: Session = Depends(get_db)):
-    return web_reseller_billing_service.billing_overview(request, db)
+def reseller_billing(
+    request: Request,
+    allocated: str | None = Query(None),
+    error: str | None = Query(None),
+    subscriber_search: str = Query(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.billing_overview(
+        request,
+        db,
+        allocated=allocated,
+        error=error,
+        subscriber_search=subscriber_search or None,
+    )
+
+
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocate", response_class=HTMLResponse
+)
+def reseller_billing_allocate_subscriber(
+    request: Request,
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.allocate_subscriber_funds(
+        request, db, subscriber_id
+    )
 
 
 @router.post("/billing/pay/intent", response_class=HTMLResponse)
 def reseller_billing_pay_intent(
     request: Request,
     amount: str = Form(...),
+    payment_method_id: str = Form(""),
+    save_card: bool = Form(False),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_billing_service.billing_pay_intent(request, db, amount)
+    return web_reseller_billing_service.billing_pay_intent(
+        request,
+        db,
+        amount,
+        payment_method_id=payment_method_id or None,
+        save_card=save_card,
+    )
 
 
 @router.get("/billing/pay/verify", response_class=HTMLResponse)
@@ -180,4 +309,144 @@ def reseller_billing_pay_verify(
 ):
     return web_reseller_billing_service.billing_pay_verify(
         request, db, reference, provider=provider
+    )
+
+
+@router.get("/billing/payment-methods", response_class=HTMLResponse)
+def reseller_payment_methods(
+    request: Request,
+    saved: str | None = Query(None),
+    error: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.payment_methods(
+        request, db, saved=saved, error=error
+    )
+
+
+@router.post(
+    "/billing/payment-methods/{method_id}/default", response_class=HTMLResponse
+)
+def reseller_payment_method_default(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.payment_method_set_default(
+        request, db, method_id
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/remove", response_class=HTMLResponse)
+def reseller_payment_method_remove(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.payment_method_remove(request, db, method_id)
+
+
+@router.get("/contacts", response_class=HTMLResponse)
+def reseller_contacts(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_contacts_service.reseller_contacts(request, db)
+
+
+@router.post("/contacts", response_class=HTMLResponse)
+def reseller_contacts_create(
+    request: Request,
+    full_name: str | None = Form(None),
+    phone: str | None = Form(None),
+    email: str | None = Form(None),
+    whatsapp: str | None = Form(None),
+    facebook: str | None = Form(None),
+    instagram: str | None = Form(None),
+    x_handle: str | None = Form(None),
+    telegram: str | None = Form(None),
+    linkedin: str | None = Form(None),
+    other_social: str | None = Form(None),
+    relationship: str | None = Form(None),
+    contact_type: str | None = Form("general"),
+    is_authorized: bool = Form(False),
+    receives_notifications: bool = Form(False),
+    is_billing_contact: bool = Form(False),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_contacts_service.reseller_contacts_create(
+        request,
+        db,
+        full_name=full_name,
+        phone=phone,
+        email=email,
+        whatsapp=whatsapp,
+        facebook=facebook,
+        instagram=instagram,
+        x_handle=x_handle,
+        telegram=telegram,
+        linkedin=linkedin,
+        other_social=other_social,
+        relationship=relationship,
+        contact_type=contact_type,
+        is_authorized=is_authorized,
+        receives_notifications=receives_notifications,
+        is_billing_contact=is_billing_contact,
+        notes=notes,
+    )
+
+
+@router.post("/contacts/{contact_id}", response_class=HTMLResponse)
+def reseller_contacts_update(
+    request: Request,
+    contact_id: str,
+    intent: str | None = Form(None),
+    full_name: str | None = Form(None),
+    phone: str | None = Form(None),
+    email: str | None = Form(None),
+    whatsapp: str | None = Form(None),
+    facebook: str | None = Form(None),
+    instagram: str | None = Form(None),
+    x_handle: str | None = Form(None),
+    telegram: str | None = Form(None),
+    linkedin: str | None = Form(None),
+    other_social: str | None = Form(None),
+    relationship: str | None = Form(None),
+    contact_type: str | None = Form("general"),
+    is_authorized: bool = Form(False),
+    receives_notifications: bool = Form(False),
+    is_billing_contact: bool = Form(False),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_contacts_service.reseller_contacts_update(
+        request,
+        db,
+        contact_id,
+        intent,
+        full_name=full_name,
+        phone=phone,
+        email=email,
+        whatsapp=whatsapp,
+        facebook=facebook,
+        instagram=instagram,
+        x_handle=x_handle,
+        telegram=telegram,
+        linkedin=linkedin,
+        other_social=other_social,
+        relationship=relationship,
+        contact_type=contact_type,
+        is_authorized=is_authorized,
+        receives_notifications=receives_notifications,
+        is_billing_contact=is_billing_contact,
+        notes=notes,
+    )
+
+
+@router.post("/contacts/{contact_id}/delete", response_class=HTMLResponse)
+def reseller_contacts_delete(
+    request: Request,
+    contact_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_contacts_service.reseller_contacts_update(
+        request, db, contact_id, "delete"
     )

@@ -69,14 +69,15 @@ def _profile_context(request: Request, context, **extra):
     }
 
 
-def _reseller_mfa_methods(db: Session, subscriber_id) -> list[MFAMethod]:
-    return (
-        db.query(MFAMethod)
-        .filter(MFAMethod.subscriber_id == subscriber_id)
-        .filter(MFAMethod.is_active.is_(True))
-        .order_by(MFAMethod.created_at.desc())
-        .all()
-    )
+def _reseller_mfa_methods(db: Session, context) -> list[MFAMethod]:
+    """MFA methods for the acting principal — subscriber-backed reseller login
+    or a first-class reseller_user (Layer 3)."""
+    query = db.query(MFAMethod).filter(MFAMethod.is_active.is_(True))
+    if context.get("principal_type") == "reseller_user":
+        query = query.filter(MFAMethod.reseller_user_id == context["principal_id"])
+    else:
+        query = query.filter(MFAMethod.subscriber_id == context["principal_id"])
+    return query.order_by(MFAMethod.created_at.desc()).all()
 
 
 def reseller_home(request: Request, db: Session):
@@ -138,6 +139,7 @@ def reseller_accounts(
     page: int,
     per_page: int,
     search: str | None = None,
+    status_filter: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
@@ -147,6 +149,7 @@ def reseller_accounts(
         db,
         reseller_id=str(context["reseller"].id),
         search=search,
+        status_filter=status_filter,
     )
     total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
     page = min(page, total_pages)
@@ -157,6 +160,7 @@ def reseller_accounts(
         limit=per_page,
         offset=offset,
         search=search,
+        status_filter=status_filter,
     )
     return templates.TemplateResponse(
         "reseller/accounts/index.html",
@@ -169,6 +173,8 @@ def reseller_accounts(
             "page": page,
             "per_page": per_page,
             "search": search or "",
+            "status_filter": status_filter or "",
+            "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
             "total_pages": total_pages,
             "has_prev": page > 1,
@@ -237,7 +243,61 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
+            "status_success": request.query_params.get("status_success"),
+            "status_error": request.query_params.get("status_error"),
         },
+    )
+
+
+def reseller_account_status_update(
+    request: Request,
+    db: Session,
+    account_id: str,
+    action: str,
+):
+    from urllib.parse import quote_plus
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    try:
+        result = reseller_portal.update_customer_account_status(
+            db,
+            reseller_id=str(context["reseller"].id),
+            account_id=account_id,
+            action=action,
+            actor_id=context["principal_id"],
+        )
+    except ValueError:
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unsupported status action')}",
+            status_code=303,
+        )
+    except Exception:
+        logger.warning("reseller_account_status_update_failed", exc_info=True)
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unable to update account status')}",
+            status_code=303,
+        )
+
+    if not result:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+
+    status_label = str(result.get("status") or "updated").replace("_", " ").title()
+    if action.strip().lower() == "deactivate":
+        status_label = "Deactivated"
+    return RedirectResponse(
+        url=f"/reseller/accounts/{account_id}?status_success={quote_plus(f'Account status changed to {status_label}')}",
+        status_code=303,
     )
 
 
@@ -352,10 +412,36 @@ def reseller_profile(request: Request, db: Session):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    mfa_methods = _reseller_mfa_methods(db, context)
     return templates.TemplateResponse(
         "reseller/profile/index.html",
-        _profile_context(request, context, mfa_methods=mfa_methods),
+        _profile_context(
+            request,
+            context,
+            mfa_methods=mfa_methods,
+            verify_sent=request.query_params.get("verify_sent"),
+        ),
+    )
+
+
+def reseller_resend_email_verification(request: Request, db: Session):
+    """Resend the email-verification link to the reseller's login subscriber."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    sent = False
+    # Email verification is a subscriber-account concept; a first-class
+    # reseller_user principal has no backing subscriber, so this is a no-op
+    # (the profile template only shows the verify card when a subscriber exists).
+    subscriber = context["subscriber"]
+    if subscriber is not None:
+        try:
+            sent = auth_flow_service.send_email_verification(db, str(subscriber.id))
+        except Exception:
+            logger.warning("reseller_resend_email_verification_failed", exc_info=True)
+    return RedirectResponse(
+        url=f"/reseller/profile?verify_sent={'1' if sent else '0'}",
+        status_code=303,
     )
 
 
@@ -379,7 +465,7 @@ def reseller_profile_update(
         reseller.notes = notes.strip() or None
     db.commit()
     db.refresh(reseller)
-    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    mfa_methods = _reseller_mfa_methods(db, context)
 
     return templates.TemplateResponse(
         "reseller/profile/index.html",
@@ -397,9 +483,14 @@ def reseller_mfa_setup(request: Request, db: Session):
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    setup = auth_flow_service.auth_flow.mfa_setup(
-        db, str(context["subscriber"].id), "Authenticator app"
-    )
+    if context["principal_type"] == "reseller_user":
+        setup = auth_flow_service.auth_flow.reseller_mfa_setup(
+            db, context["principal_id"], "Authenticator app"
+        )
+    else:
+        setup = auth_flow_service.auth_flow.mfa_setup(
+            db, context["principal_id"], "Authenticator app"
+        )
     return templates.TemplateResponse(
         "reseller/profile/mfa_setup.html",
         {
@@ -420,9 +511,14 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.mfa_confirm(
-            db, method_id, code.strip(), str(context["subscriber"].id)
-        )
+        if context["principal_type"] == "reseller_user":
+            auth_flow_service.auth_flow.reseller_mfa_confirm(
+                db, method_id, code.strip(), context["principal_id"]
+            )
+        else:
+            auth_flow_service.auth_flow.mfa_confirm(
+                db, method_id, code.strip(), context["principal_id"]
+            )
     except Exception:
         return templates.TemplateResponse(
             "reseller/profile/mfa_setup.html",
@@ -439,7 +535,7 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
             status_code=401,
         )
 
-    mfa_methods = _reseller_mfa_methods(db, context["subscriber"].id)
+    mfa_methods = _reseller_mfa_methods(db, context)
     return templates.TemplateResponse(
         "reseller/profile/index.html",
         _profile_context(
@@ -511,3 +607,216 @@ def reseller_fiber_map(request: Request, db: Session):
             "read_only": True,
         },
     )
+
+
+def reseller_service_requests_page(request: Request, db: Session):
+    """New-service / installation requests: list + submission form."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    from app.services import reseller_service_requests
+
+    items = reseller_service_requests.list_for_reseller(
+        db, str(context["reseller"].id), limit=100, offset=0
+    )
+    return templates.TemplateResponse(
+        "reseller/service-requests/index.html",
+        {
+            "request": request,
+            "active_page": "service-requests",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "service_requests": items,
+            "form_error": request.query_params.get("error"),
+            "submitted": request.query_params.get("submitted") == "1",
+        },
+    )
+
+
+def reseller_service_request_create(
+    request: Request,
+    db: Session,
+    *,
+    contact_name: str,
+    contact_phone: str,
+    contact_email: str,
+    address: str,
+    latitude: str,
+    longitude: str,
+    notes: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    from urllib.parse import quote_plus
+
+    from app.services import reseller_service_requests
+
+    def _coord(raw: str, low: float, high: float) -> float | None:
+        try:
+            value = float(raw.strip())
+        except (TypeError, ValueError):
+            return None
+        return value if low <= value <= high else None
+
+    lat = _coord(latitude, -90.0, 90.0)
+    lon = _coord(longitude, -180.0, 180.0)
+    if (lat is None) != (lon is None):
+        lat = lon = None
+
+    try:
+        reseller_service_requests.create_request(
+            db,
+            str(context["reseller"].id),
+            subscriber_id=None,
+            contact_name=contact_name,
+            contact_phone=contact_phone,
+            contact_email=contact_email,
+            address=address,
+            latitude=lat,
+            longitude=lon,
+            notes=notes,
+        )
+    except HTTPException as exc:
+        return RedirectResponse(
+            url=f"/reseller/service-requests?error={quote_plus(str(exc.detail))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/reseller/service-requests?submitted=1", status_code=303
+    )
+
+
+def reseller_vas_page(request: Request, db: Session):
+    """Reseller VAS: float wallet, sell-for-customer, commissions."""
+    from app.services import vas_purchases, vas_wallet
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    if not vas_wallet.is_enabled(db):
+        raise HTTPException(status_code=404, detail="Not found")
+    reseller = context["reseller"]
+    wallet = vas_wallet.get_or_create_reseller_wallet(db, str(reseller.id))
+
+    from decimal import Decimal
+
+    from sqlalchemy import func as _func
+
+    from app.models.vas import VasEntryCategory, VasEntryType, VasWalletEntry
+
+    commission_total = db.query(
+        _func.coalesce(_func.sum(VasWalletEntry.amount), Decimal("0.00"))
+    ).filter(
+        VasWalletEntry.wallet_id == wallet.id,
+        VasWalletEntry.entry_type == VasEntryType.credit,
+        VasWalletEntry.category == VasEntryCategory.commission,
+    ).scalar() or Decimal("0.00")
+
+    from app.web.customer.bills import _jsonable_catalog
+
+    return templates.TemplateResponse(
+        "reseller/vas/index.html",
+        {
+            "request": request,
+            "active_page": "vas",
+            "reseller": reseller,
+            "balance": vas_wallet.wallet_balance(db, wallet.id),
+            "commission_total": Decimal(str(commission_total)),
+            "catalog": _jsonable_catalog(vas_purchases.customer_catalog(db)),
+            "transactions": vas_purchases.list_reseller_transactions(
+                db, str(reseller.id), limit=15
+            ),
+            "min_topup": 100,
+            "form_error": request.query_params.get("error"),
+            "funded": request.query_params.get("funded"),
+        },
+    )
+
+
+def reseller_vas_topup_intent(request: Request, db: Session, amount):
+    from decimal import Decimal, InvalidOperation
+
+    from fastapi.responses import JSONResponse
+
+    from app.services import vas_wallet
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError):
+        return JSONResponse({"detail": "Invalid amount"}, status_code=400)
+    try:
+        result = vas_wallet.initiate_reseller_topup(
+            db, str(context["reseller"].id), value
+        )
+    except HTTPException as exc:
+        return JSONResponse({"detail": str(exc.detail)}, status_code=exc.status_code)
+    return JSONResponse(
+        {
+            "provider_type": result["provider_type"],
+            "provider_public_key": result["provider_public_key"],
+            "reference": result["reference"],
+            "currency": result["currency"],
+        }
+    )
+
+
+def reseller_vas_topup_verify(request: Request, db: Session, reference: str):
+    from app.services import vas_wallet
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    try:
+        result = vas_wallet.verify_reseller_topup(
+            db, str(context["reseller"].id), reference
+        )
+    except (HTTPException, ValueError) as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return RedirectResponse(url=f"/reseller/vas?error={detail}", status_code=303)
+    return RedirectResponse(
+        url=f"/reseller/vas?funded={result['amount']}", status_code=303
+    )
+
+
+def reseller_vas_sell(
+    request: Request,
+    db: Session,
+    *,
+    service_id: str,
+    identifier: str,
+    variation_code: str,
+    amount: str,
+):
+    from decimal import Decimal, InvalidOperation
+
+    from app.services import vas_purchases
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    value = None
+    if amount.strip():
+        try:
+            value = Decimal(amount.strip())
+        except (InvalidOperation, ValueError):
+            return RedirectResponse(
+                url="/reseller/vas?error=Invalid amount", status_code=303
+            )
+    try:
+        vas_purchases.reseller_purchase(
+            db,
+            reseller_id=str(context["reseller"].id),
+            service_id=service_id,
+            identifier=identifier,
+            variation_code=variation_code.strip() or None,
+            amount=value,
+        )
+    except HTTPException as exc:
+        return RedirectResponse(
+            url=f"/reseller/vas?error={exc.detail}", status_code=303
+        )
+    return RedirectResponse(url="/reseller/vas?funded=sold", status_code=303)

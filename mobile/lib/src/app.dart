@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'config/env.dart';
+import 'core/messenger.dart';
 import 'core/payment_link_handler.dart';
 import 'providers/auth_controller.dart';
 import 'providers/theme_controller.dart';
@@ -17,14 +18,16 @@ class DotMacApp extends ConsumerStatefulWidget {
 class _DotMacAppState extends ConsumerState<DotMacApp>
     with WidgetsBindingObserver {
   bool _wasPaused = false;
-  final GlobalKey<ScaffoldMessengerState> _messengerKey =
-      GlobalKey<ScaffoldMessengerState>();
+  late final GlobalKey<ScaffoldMessengerState> _messengerKey;
   late final PaymentLinkHandler _paymentLinks;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Shared so non-widget callers (e.g. the impersonation-expiry handler) can
+    // surface a snackbar from outside any BuildContext.
+    _messengerKey = ref.read(scaffoldMessengerKeyProvider);
     _paymentLinks = PaymentLinkHandler(ref, _messengerKey)..start();
   }
 

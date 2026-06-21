@@ -100,6 +100,23 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
     return web_customer_actions_service.billing_form_defaults(customer)
 
 
+def _customer_audit_items(
+    db: Session, customer, limit: int = 5
+) -> list[dict[str, Any]]:
+    if not customer:
+        return []
+    try:
+        return web_customer_details_service.get_customer_audit_activity_items(
+            db,
+            str(customer.id),
+            limit=limit,
+        )
+    except Exception:
+        logger.exception("Unable to load customer audit items for %s", customer.id)
+        db.rollback()
+        return []
+
+
 def _normalize_usage_period(value: str | None) -> str:
     normalized = str(value or "").strip().lower().rstrip(".,;:!?")
     if normalized in _ALLOWED_USAGE_PERIODS:
@@ -172,65 +189,6 @@ def _toast_response(
         headers = {"HX-Trigger": json.dumps(trigger), "HX-Refresh": "true"}
         return Response(status_code=204, headers=headers)
     return RedirectResponse(url=redirect_url, status_code=303)
-
-
-def _contacts_base_context(
-    request: Request, db: Session, active_page: str = "contacts"
-):
-    """Base context for contacts pages."""
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    return {
-        "request": request,
-        "active_page": active_page,
-        "active_menu": "",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-    }
-
-
-@contacts_router.get(
-    "",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
-)
-def contacts_list(
-    request: Request,
-    search: str | None = None,
-    status: str | None = None,  # 'lead', 'contact', 'customer', or None for all
-    entity_type: str | None = None,  # 'person' or 'business'
-    page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
-    db: Session = Depends(get_db),
-):
-    """Unified contacts view for people and business customers."""
-    context = _contacts_base_context(request, db, "contacts")
-    context.update(
-        web_customer_lists_service.build_contacts_index_context(
-            db=db,
-            search=search,
-            status=status,
-            entity_type=entity_type,
-            page=page,
-            per_page=per_page,
-        )
-    )
-    # HTMX requests should return only the table+pagination partial.
-    template_name = (
-        "admin/contacts/_table.html"
-        if request.headers.get("HX-Request") == "true"
-        else "admin/contacts/index.html"
-    )
-    return templates.TemplateResponse(template_name, context)
-
-
-@contacts_router.get(
-    "/new",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
-)
-def contacts_new_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/admin/crm/contacts/new", status_code=302)
 
 
 @contacts_router.post(
@@ -713,12 +671,20 @@ def person_pppoe_password(
     equals takeover of the customer's connection.
     """
     from app.models.audit import AuditActorType
+    from app.services import web_admin as web_admin_service
     from app.services.audit_adapter import record_audit_event
     from app.services.rate_limiter_adapter import allow_operation
-    from app.web.admin import get_current_user
 
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor = web_admin_service.get_current_user(request)
+    actor_id = web_admin_service.get_actor_id(request)
+    actor_metadata = {
+        key: value
+        for key, value in {
+            "actor_name": actor.get("name") if actor else None,
+            "actor_email": actor.get("email") if actor else None,
+        }.items()
+        if value
+    }
 
     decision = allow_operation(
         f"pppoe-reveal:{actor_id or 'unknown'}",
@@ -733,7 +699,11 @@ def person_pppoe_password(
             entity_id=str(customer_id),
             actor_type=AuditActorType.user,
             actor_id=actor_id,
-            metadata={"credential_id": credential_id, "reason": "rate_limited"},
+            metadata={
+                "credential_id": credential_id,
+                "reason": "rate_limited",
+                **actor_metadata,
+            },
             status_code=429,
             is_success=False,
         )
@@ -754,7 +724,11 @@ def person_pppoe_password(
         entity_id=str(customer_id),
         actor_type=AuditActorType.user,
         actor_id=actor_id,
-        metadata={"credential_id": credential_id, "found": bool(found)},
+        metadata={
+            "credential_id": credential_id,
+            "found": bool(found),
+            **actor_metadata,
+        },
         status_code=200 if found else 404,
         is_success=bool(found),
     )
@@ -1156,6 +1130,7 @@ def person_edit(
             "action": "edit",
             "tax_rates": _load_tax_rates(db),
             "billing_form": _billing_form_defaults(db, "person", customer),
+            "customer_audit_items": _customer_audit_items(db, customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1200,6 +1175,7 @@ def business_edit(
             "action": "edit",
             "tax_rates": _load_tax_rates(db),
             "billing_form": _billing_form_defaults(db, "business", customer),
+            "customer_audit_items": _customer_audit_items(db, customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1311,6 +1287,10 @@ def person_update(
     except HTTPException:
         raise
     except Exception as e:
+        # Roll back the failed transaction before re-querying for the form
+        # re-render; otherwise the aborted session turns any DB error (e.g. a
+        # unique-email violation) into a 500 instead of a graceful 400.
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -1329,6 +1309,7 @@ def person_update(
                 "error": _safe_form_error(e),
                 "tax_rates": _load_tax_rates(db),
                 "billing_form": _billing_form_defaults(db, "person", customer),
+                "customer_audit_items": _customer_audit_items(db, customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1400,6 +1381,10 @@ def business_update(
             status_code=303,
         )
     except Exception as e:
+        # Roll back the failed transaction before re-querying for the form
+        # re-render; otherwise the aborted session turns any DB error (e.g. a
+        # unique-email violation) into a 500 instead of a graceful 400.
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -1418,6 +1403,7 @@ def business_update(
                 "error": _safe_form_error(e),
                 "tax_rates": _load_tax_rates(db),
                 "billing_form": _billing_form_defaults(db, "business", customer),
+                "customer_audit_items": _customer_audit_items(db, customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1539,6 +1525,7 @@ def person_delete(
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -1601,6 +1588,7 @@ def business_delete(
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -1665,9 +1653,28 @@ def create_address(
             return HTMLResponse(content="", headers={"HX-Redirect": redirect_url})
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    except (IntegrityError, ValueError) as e:
+        # Recoverable input errors (duplicate/constraint, bad id, validation)
+        # must not render a 500. Roll back first so the aborted transaction
+        # can't poison the error-path re-render (the #19/#24 pattern), then
+        # surface a clean toast (HX) or 4xx.
+        db.rollback()
+        conflict = isinstance(e, IntegrityError)
+        message = (
+            "This conflicts with an existing record."
+            if conflict
+            else _safe_form_error(e)
+        )
+        status_code = 409 if conflict else 400
+        if request.headers.get("HX-Request"):
+            return _htmx_error_response(
+                message, status_code=200, title="Could not save", reswap="none"
+            )
+        raise HTTPException(status_code=status_code, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
 
+        db.rollback()
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
@@ -1795,9 +1802,28 @@ def create_contact(
             return HTMLResponse(content="", headers={"HX-Redirect": redirect_url})
         return RedirectResponse(url=redirect_url, status_code=303)
 
+    except (IntegrityError, ValueError) as e:
+        # Recoverable input errors (duplicate/constraint, bad id, validation)
+        # must not render a 500. Roll back first so the aborted transaction
+        # can't poison the error-path re-render (the #19/#24 pattern), then
+        # surface a clean toast (HX) or 4xx.
+        db.rollback()
+        conflict = isinstance(e, IntegrityError)
+        message = (
+            "This conflicts with an existing record."
+            if conflict
+            else _safe_form_error(e)
+        )
+        status_code = 409 if conflict else 400
+        if request.headers.get("HX-Request"):
+            return _htmx_error_response(
+                message, status_code=200, title="Could not save", reswap="none"
+            )
+        raise HTTPException(status_code=status_code, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
 
+        db.rollback()
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
@@ -1897,6 +1923,26 @@ def bulk_send_customer_message(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get(
+    "/bulk/whatsapp-template",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def bulk_whatsapp_template_details(
+    name: str = Query(..., min_length=1),
+    language: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Fetch Meta WhatsApp template component details for the broadcast modal."""
+    try:
+        return web_customer_actions_service.whatsapp_template_details(
+            db=db,
+            name=name,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(

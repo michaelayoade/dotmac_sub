@@ -450,46 +450,123 @@
                 {% set initial_ipv4_addresses = subscription.ipv4_addresses if subscription.ipv4_addresses else ([subscription.ipv4_address] if subscription.ipv4_address else ['']) %}
                 {% set initial_ipv4_block_ids = subscription.ipv4_block_ids if subscription.ipv4_block_ids else [] %}
                 <div class="space-y-3">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">IPv4 Allocation</h3>
-                        <button type="button" @click="addIpv4Row()" :disabled="!blocks.length"
-                            :class="!blocks.length ? 'cursor-not-allowed opacity-50' : ''"
-                            class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:hover:bg-white dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:disabled:hover:bg-slate-800">
-                            Add more IPv4
-                        </button>
-                    </div>
+                    <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">IPv4 Allocation</h3>
                     {% if not ipv4_blocks %}
                     <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
-                        No active IPv4 blocks are available for subscription provisioning.
-                        There are {{ ipv4_pools|length }} active IPv4 pools, but none currently have an active block to allocate from.
-                        Add or activate a block in <a href="/admin/network/ip-management" class="font-medium underline underline-offset-2 hover:no-underline">IP Pools &amp; Blocks</a>.
+                        No active IPv4 ranges are available for subscription provisioning.
+                        There are {{ ipv4_pools|length }} active IPv4 pools, but none currently have an allocatable range.
+                        Add or activate a range in <a href="/admin/network/ip-management" class="font-medium underline underline-offset-2 hover:no-underline">IP Pools &amp; Blocks</a>.
                     </div>
                     {% endif %}
                     <template x-for="(row, idx) in rows" :key="idx">
                         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Block</label>
-                                <select :name="'ipv4_block_ids'" x-model="row.blockId" @change="populateIpFromBlock(row)"
+                                <input type="hidden" name="ipv4_block_ids" :value="row.blockId">
+                                <input type="text" x-model="row.blockQuery" list="ipv4-block-options"
+                                    @change="selectBlockForRow(row)" @input="syncTypedBlock(row)"
+                                    :placeholder="blocks.length ? 'Type block name or range' : 'No active IPv4 blocks configured'"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="" x-text="blocks.length ? 'Select block' : 'No active IPv4 blocks configured'"></option>
+                                <datalist id="ipv4-block-options">
                                     <template x-for="block in blocks" :key="block.id">
-                                        <option :value="block.id" x-text="block.display"></option>
+                                        <option :value="block.display"></option>
                                     </template>
-                                </select>
+                                </datalist>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Address</label>
                                 <input type="text" :name="'ipv4_addresses'" x-model="row.ip" :list="'ipv4-address-options-' + idx"
+                                    @focus="loadAvailableIps(row, { autoSelect: !row.ip, preserveExisting: true })"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <datalist :id="'ipv4-address-options-' + idx">
-                                    <template x-for="ip in availableIpsForBlock(row.blockId)" :key="ip">
+                                    <template x-for="ip in availableIpsForRow(row)" :key="ip">
                                         <option :value="ip"></option>
                                     </template>
                                 </datalist>
-                                <p class="mt-1 text-xs text-slate-500">Auto-fills the next free IP. You can replace it with another free IP from the selected block.</p>
+                                <p class="mt-1 text-xs text-slate-500" x-text="ipHelperText(row)">Auto-fills the next free IP. You can replace it with another free IP from the selected block.</p>
                             </div>
-                            <div class="sm:col-span-2 flex justify-end" x-show="rows.length > 1">
-                                <button type="button" @click="removeIpv4Row(idx)" class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400">Remove</button>
+                        </div>
+                    </template>
+                </div>
+
+                {% set initial_additional_route_cidrs = subscription.additional_route_cidrs if subscription.additional_route_cidrs else [''] %}
+                {% set initial_additional_route_metrics = subscription.additional_route_metrics if subscription.additional_route_metrics else [''] %}
+                <div class="space-y-3">
+                    <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Additional IP Billing Add-on</h3>
+                        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                            <div>
+                                <label for="ip_addon_id" class="block text-xs font-medium text-slate-600 dark:text-slate-300">Public IP add-on</label>
+                                <select name="ip_addon_id" id="ip_addon_id" x-model="selectedAddonId" @change="syncRoutesForAddon()"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">No additional IP add-on</option>
+                                    {% for add_on in ip_addon_options %}
+                                    <option value="{{ add_on.id }}" {% if subscription.ip_addon_id == add_on.id|string %}selected{% endif %}>
+                                        {{ add_on.name }}{% if add_on.ip_prefix_length %} (/{{ add_on.ip_prefix_length }}){% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="ip_addon_quantity" class="block text-xs font-medium text-slate-600 dark:text-slate-300">Quantity</label>
+                                <input type="number" min="1" name="ip_addon_quantity" id="ip_addon_quantity"
+                                    value="{{ subscription.ip_addon_quantity or '1' }}"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Additional Routed IP Blocks</h3>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose the public range that should be routed to this customer session. The CIDR is what RADIUS emits as Framed-Route.</p>
+                        </div>
+                        <button type="button" @click="addRouteRow()"
+                            class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            Add routed block
+                        </button>
+                    </div>
+                    <template x-for="(route, idx) in routeRows" :key="idx">
+                        <div class="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(12rem,0.8fr)_8rem_auto]">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Parent /24 Range</label>
+                                <input type="text" x-model="route.parentQuery" :list="'additional-route-parent-options-' + idx"
+                                    @change="selectRouteParent(route)" @input="syncTypedRouteParent(route)"
+                                    :placeholder="routeRanges.length ? 'Type range name or CIDR' : 'No IPv4 ranges configured'"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <datalist :id="'additional-route-parent-options-' + idx">
+                                    <template x-for="range in routeRanges" :key="range.id">
+                                        <option :value="range.display"></option>
+                                    </template>
+                                </datalist>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Assignable Subnet</label>
+                                <select x-model="route.childId" @change="populateRouteFromChild(route)"
+                                    :disabled="!selectedAddonPrefix || !route.parentId"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:disabled:bg-slate-800">
+                                    <option value="" x-text="childOptionsForRoute(route).length ? 'Select subnet' : childEmptyLabel(route)"></option>
+                                    <template x-for="child in childOptionsForRoute(route)" :key="child.id">
+                                        <option :value="child.id" x-text="child.display"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">CIDR</label>
+                                <input type="text" name="additional_route_cidrs" x-model="route.cidr"
+                                    readonly placeholder="Select range and subnet"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">Metric</label>
+                                <input type="number" min="1" name="additional_route_metrics" x-model="route.metric"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div class="flex items-end justify-end">
+                                <button type="button" @click="removeRouteRow(idx)" x-show="routeRows.length > 1 || route.cidr"
+                                    class="rounded-lg px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-900/20">
+                                    Remove
+                                </button>
                             </div>
                         </div>
                     </template>
@@ -577,30 +654,154 @@
 <script>
 function subscriptionProvisioning() {
     const blocks = {{ ipv4_blocks_json | safe }};
+    const routeRanges = {{ route_range_options_json | safe }};
+    const ipAddonOptions = {{ ip_addon_options_json | safe }};
+    const initialAddonId = {{ (subscription.ip_addon_id or '') | tojson }};
     const initialAddresses = {{ initial_ipv4_addresses | tojson }};
     const initialBlocks = {{ initial_ipv4_block_ids | tojson }};
-    const rows = initialAddresses.map((ip, idx) => ({
+    const initialRouteRows = {{ initial_route_rows_json | safe }};
+    const subscriberId = {{ (subscription.subscriber_id or '') | tojson }};
+    const blockLabel = (blockId) => {
+        const block = blocks.find((item) => item.id === blockId);
+        return block ? block.display : "";
+    };
+    const rows = initialAddresses.slice(0, 1).map((ip, idx) => ({
         blockId: initialBlocks[idx] || "",
+        blockQuery: blockLabel(initialBlocks[idx] || ""),
         ip: ip || "",
+        ipOptions: ip ? [ip] : [],
+        loadingIps: false,
+        ipError: "",
+        hasMoreIps: false,
     }));
+    const routeRows = initialRouteRows.map((row) => ({
+        parentId: row.parentId || "",
+        parentQuery: row.parentQuery || "",
+        childId: row.childId || "",
+        cidr: row.cidr || "",
+        metric: row.metric || "1",
+        childrenByPrefix: {},
+        loadingChildren: false,
+    }));
+    const initialRows = routeRows.length ? routeRows : [{
+        parentId: "",
+        parentQuery: "",
+        childId: "",
+        cidr: "",
+        metric: "1",
+        childrenByPrefix: {},
+        loadingChildren: false,
+    }];
     return {
         blocks,
-        rows: rows.length ? rows : [{ blockId: "", ip: "" }],
-        addIpv4Row() {
-            this.rows.push({ blockId: "", ip: "" });
+        routeRanges,
+        ipAddonOptions,
+        selectedAddonId: initialAddonId,
+        rows: rows.length ? rows : [{ blockId: "", blockQuery: "", ip: "", ipOptions: [], loadingIps: false, ipError: "", hasMoreIps: false }],
+        routeRows: initialRows,
+        init() {
+            this.routeRows.forEach((route) => {
+                if (route.parentId && this.selectedAddonPrefix) {
+                    this.loadChildrenForRoute(route);
+                }
+            });
         },
-        removeIpv4Row(index) {
-            this.rows.splice(index, 1);
-            if (!this.rows.length) {
-                this.rows.push({ blockId: "", ip: "" });
+        get selectedAddonPrefix() {
+            const option = this.ipAddonOptions.find((item) => item.id === this.selectedAddonId);
+            return option && option.prefix ? String(option.prefix) : "";
+        },
+        normalizeBlockQuery(value) {
+            return String(value || "").trim().toLowerCase();
+        },
+        blockMatchesQuery(block, query) {
+            const normalized = this.normalizeBlockQuery(query);
+            if (!normalized) {
+                return false;
+            }
+            return [block.display, block.name, block.pool_name, block.cidr]
+                .some((value) => this.normalizeBlockQuery(value) === normalized);
+        },
+        async selectBlockForRow(row) {
+            const block = this.blocks.find((item) => this.blockMatchesQuery(item, row.blockQuery));
+            row.blockId = block ? block.id : "";
+            if (block) {
+                row.blockQuery = block.display;
+            }
+            await this.loadAvailableIps(row, { autoSelect: true });
+        },
+        async syncTypedBlock(row) {
+            if (!row.blockQuery) {
+                row.blockId = "";
+                row.ip = "";
+                row.ipOptions = [];
+                row.ipError = "";
+                row.hasMoreIps = false;
+                return;
+            }
+            const block = this.blocks.find((item) => this.blockMatchesQuery(item, row.blockQuery));
+            if (block && block.id !== row.blockId) {
+                row.blockId = block.id;
+                row.blockQuery = block.display;
+                await this.loadAvailableIps(row, { autoSelect: true });
             }
         },
-        availableIpsForBlock(blockId) {
-            const block = this.blocks.find((item) => item.id === blockId);
-            return block && Array.isArray(block.available_ips) ? block.available_ips : [];
+        availableIpsForRow(row) {
+            return Array.isArray(row.ipOptions) ? row.ipOptions : [];
+        },
+        ipHelperText(row) {
+            if (row.loadingIps) {
+                return 'Loading available IPs...';
+            }
+            if (row.ipError) {
+                return row.ipError;
+            }
+            if (!row.blockId) {
+                return 'Choose an IPv4 block first.';
+            }
+            if (row.hasMoreIps) {
+                return 'Showing the first available IPs. Type a specific free IP if needed.';
+            }
+            return 'Auto-fills the next free IP. You can replace it with another free IP from the selected block.';
+        },
+        async loadAvailableIps(row, options = {}) {
+            row.ipOptions = row.ip ? [row.ip] : [];
+            row.ipError = "";
+            row.hasMoreIps = false;
+            if (!row.blockId) {
+                if (options.autoSelect) {
+                    row.ip = "";
+                }
+                return;
+            }
+            row.loadingIps = true;
+            try {
+                const params = new URLSearchParams({
+                    selector: row.blockId,
+                    limit: '1000',
+                });
+                const response = await fetch(`/admin/catalog/subscription-ipv4-addresses?${params.toString()}`, {
+                    headers: { 'Accept': 'application/json' },
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.error || 'Unable to load available IPs.');
+                }
+                row.ipOptions = Array.isArray(payload.addresses) ? payload.addresses : [];
+                row.hasMoreIps = Boolean(payload.has_more);
+                if (options.preserveExisting && row.ip && !row.ipOptions.includes(row.ip)) {
+                    row.ipOptions = [row.ip, ...row.ipOptions];
+                }
+                if (options.autoSelect) {
+                    this.populateIpFromBlock(row);
+                }
+            } catch (error) {
+                row.ipError = error.message || 'Unable to load available IPs.';
+            } finally {
+                row.loadingIps = false;
+            }
         },
         populateIpFromBlock(row) {
-            const availableIps = this.availableIpsForBlock(row.blockId);
+            const availableIps = this.availableIpsForRow(row);
             if (!availableIps.length) {
                 row.ip = "";
                 return;
@@ -616,6 +817,139 @@ function subscriptionProvisioning() {
             }
             const candidate = availableIps.find((ip) => !alreadyPicked.has(ip));
             row.ip = candidate || availableIps[0];
+        },
+        addRouteRow() {
+            this.routeRows.push({ parentId: "", parentQuery: "", childId: "", cidr: "", metric: "1" });
+        },
+        removeRouteRow(index) {
+            this.routeRows.splice(index, 1);
+            if (!this.routeRows.length) {
+                this.routeRows.push({ parentId: "", parentQuery: "", childId: "", cidr: "", metric: "1" });
+            }
+        },
+        routeRangeMatchesQuery(range, query) {
+            const normalized = this.normalizeBlockQuery(query);
+            if (!normalized) {
+                return false;
+            }
+            return [range.display, range.pool_name, range.cidr]
+                .some((value) => this.normalizeBlockQuery(value) === normalized);
+        },
+        clearRouteSelection(route, clearQuery = false) {
+            route.parentId = "";
+            route.childId = "";
+            route.cidr = "";
+            if (clearQuery) {
+                route.parentQuery = "";
+            }
+        },
+        selectRouteParent(route) {
+            const range = this.routeRanges.find((item) => this.routeRangeMatchesQuery(item, route.parentQuery));
+            if (!range) {
+                this.clearRouteSelection(route, true);
+                return;
+            }
+            route.parentId = range.id;
+            route.parentQuery = range.display;
+            this.populateRouteChildren(route);
+        },
+        syncTypedRouteParent(route) {
+            if (!route.parentQuery) {
+                this.clearRouteSelection(route);
+                return;
+            }
+            const range = this.routeRanges.find((item) => this.routeRangeMatchesQuery(item, route.parentQuery));
+            if (range && range.id !== route.parentId) {
+                route.parentId = range.id;
+                route.parentQuery = range.display;
+                route.childrenByPrefix = {};
+                this.populateRouteChildren(route);
+            }
+        },
+        childOptionsForRoute(route) {
+            if (!route.parentId || !this.selectedAddonPrefix) {
+                return [];
+            }
+            return (route.childrenByPrefix || {})[this.selectedAddonPrefix] || [];
+        },
+        childEmptyLabel(route) {
+            if (!this.selectedAddonPrefix) {
+                return 'Choose add-on first';
+            }
+            if (!route.parentId) {
+                return 'Choose /24 first';
+            }
+            if (route.loadingChildren) {
+                return 'Loading subnets';
+            }
+            return `No available /${this.selectedAddonPrefix}`;
+        },
+        async loadChildrenForRoute(route) {
+            if (!route.parentId || !this.selectedAddonPrefix || route.loadingChildren) {
+                return;
+            }
+            if ((route.childrenByPrefix || {})[this.selectedAddonPrefix]) {
+                return;
+            }
+            route.loadingChildren = true;
+            const params = new URLSearchParams({
+                parent_cidr: route.parentId,
+                prefix: this.selectedAddonPrefix,
+            });
+            if (subscriberId) {
+                params.set('subscriber_id', subscriberId);
+            }
+            try {
+                const response = await fetch(`/admin/catalog/subscriptions/ipam/route-children?${params.toString()}`, {
+                    headers: { Accept: 'application/json' },
+                });
+                if (!response.ok) {
+                    route.childrenByPrefix[this.selectedAddonPrefix] = [];
+                    return;
+                }
+                const payload = await response.json();
+                route.childrenByPrefix[this.selectedAddonPrefix] = Array.isArray(payload.children) ? payload.children : [];
+            } finally {
+                route.loadingChildren = false;
+            }
+        },
+        async populateRouteChildren(route) {
+            await this.loadChildrenForRoute(route);
+            const children = this.childOptionsForRoute(route);
+            if (!children.length) {
+                if (!route.cidr) {
+                    route.childId = "";
+                }
+                return;
+            }
+            if (route.childId && children.some((child) => child.id === route.childId)) {
+                this.populateRouteFromChild(route);
+                return;
+            }
+            route.childId = children[0].id;
+            route.cidr = children[0].cidr;
+        },
+        populateRouteFromChild(route) {
+            const child = this.childOptionsForRoute(route).find((item) => item.id === route.childId);
+            route.cidr = child ? child.cidr : "";
+        },
+        syncRoutesForAddon() {
+            this.routeRows.forEach((route) => {
+                if (!route.parentId) {
+                    route.childId = "";
+                    route.cidr = "";
+                    return;
+                }
+                this.populateRouteChildren(route);
+            });
+        },
+        init() {
+            this.syncRoutesForAddon();
+            this.rows.forEach((row) => {
+                if (row.blockId) {
+                    this.loadAvailableIps(row, { autoSelect: !row.ip, preserveExisting: true });
+                }
+            });
         },
     };
 }

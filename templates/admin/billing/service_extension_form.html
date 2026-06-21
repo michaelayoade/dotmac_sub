@@ -88,9 +88,9 @@
         </div>
 
         <div x-show="scope === 'subscribers'" x-cloak>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Subscriber IDs</label>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Customers</label>
             <textarea x-bind:name="scope === 'subscribers' ? 'subscriber_ids' : ''" rows="5"
-                      placeholder="One subscriber ID per line"
+                      placeholder="One customer UUID, account number, Splynx ID, email, or phone per line"
                       class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
         </div>
 

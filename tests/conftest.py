@@ -10,6 +10,13 @@ import os
 # circuit breaker keeps subsequent lookups cheap.
 os.environ["REDIS_URL"] = "redis://127.0.0.1:9/0"
 os.environ["SESSION_REDIS_URL"] = "redis://127.0.0.1:9/0"
+# Keep import-time globals such as Celery scheduler configuration from touching
+# the deployment database URL loaded from .env. Tests that need a real database
+# use TEST_DATABASE_URL or explicit SQLite engines below.
+os.environ["DATABASE_URL"] = (
+    "postgresql+psycopg://postgres:postgres@127.0.0.1:9/dotmac_sub_test"
+    "?connect_timeout=1"
+)
 # Likewise the radacct importer: .env carries real FreeRADIUS DB credentials
 # and the code has fallbacks; blank both so import_radius_accounting no-ops
 # unless a test explicitly points it at a fixture database.
@@ -339,6 +346,49 @@ def _reset_singletons():
         reset_dispatcher()
     except ImportError:
         pass
+    # Clear the OpenBao secret cache. _fetch_secret_data is lru_cache'd with
+    # id(httpx.get) as a cache-buster key; CPython recycles id() values across
+    # GC'd monkeypatched functions, so a cached 200 payload from an earlier test
+    # can leak into a later one and skip the live httpx call (e.g. a missing
+    # secret then trips the field-not-found 500 branch instead of returning 404).
+    try:
+        from app.services import secrets
+
+        secrets.clear_cache()
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_root_logging():
+    """Restore the root logger's handlers after each test.
+
+    Several app modules mutate the *root* logger at import time:
+    ``app.main`` calls ``configure_logging()`` and a handful of service /
+    migration modules call ``logging.basicConfig(...)`` at module scope. Each
+    of those attaches a ``StreamHandler`` bound to whatever ``sys.stdout`` /
+    ``sys.stderr`` is live *at import time* — which, under pytest, is the
+    capture stream of whichever test imported the module first. When pytest
+    tears that capture down, the still-attached handler points at a closed
+    stream, so every later test that logs through the root logger raises
+    ``ValueError: I/O operation on closed file`` ("--- Logging error ---" in
+    CI). That manifests as a broad, ordering-dependent cascade of failures in
+    otherwise-unrelated tests that all pass in isolation.
+
+    The handler itself is hardened at the source (see
+    ``app.logging.StderrStreamHandler``); this fixture is the defence in depth
+    that also neutralises the ``basicConfig`` import-time handlers, by
+    snapshotting the root logger's handler list before each test and restoring
+    it afterwards so no stale-stream handler can leak across test boundaries.
+    """
+    import logging
+
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    try:
+        yield
+    finally:
+        root.handlers[:] = saved_handlers
 
 
 @pytest.fixture()
@@ -411,7 +461,15 @@ def catalog_offer(db_session):
 
 @pytest.fixture()
 def subscription(db_session, subscriber, catalog_offer):
-    """Active subscription for usage tests."""
+    """Active subscription for usage tests.
+
+    Defaults to POSTPAID (the invoice-eligible mode). The model column default
+    is prepaid, but prepaid is billed by deposit drawdown and is excluded from
+    invoice generation, so a generic invoiceable subscription must be postpaid.
+    Prepaid tests override billing_mode explicitly.
+    """
+    from app.models.catalog import BillingMode
+
     subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
@@ -419,6 +477,8 @@ def subscription(db_session, subscriber, catalog_offer):
             offer_id=catalog_offer.id,
         ),
     )
+    subscription.billing_mode = BillingMode.postpaid
+    db_session.commit()
     return subscription
 
 

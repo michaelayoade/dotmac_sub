@@ -67,11 +67,17 @@ def _nominatim_search(db: Session, query: str, limit: int) -> list[dict]:
     user_agent = _setting_value(db, "user_agent") or "dotmac_sm"
     timeout_sec = _setting_int(db, "timeout_sec", 5)
     email = _setting_value(db, "email")
+    country_codes = _setting_value(db, "country_codes")
     params: dict[str, Any] = {
         "q": query,
         "format": "json",
         "limit": max(limit, 1),
+        "addressdetails": 1,
     }
+    if country_codes:
+        params["countrycodes"] = ",".join(
+            part.strip().lower() for part in country_codes.split(",") if part.strip()
+        )
     if email:
         params["email"] = email
     try:
@@ -88,6 +94,63 @@ def _nominatim_search(db: Session, query: str, limit: int) -> list[dict]:
     if not isinstance(results, list):
         raise HTTPException(status_code=502, detail="Invalid geocoding response")
     return results
+
+
+def _nominatim_reverse(db: Session, latitude: float, longitude: float) -> dict | None:
+    base_url = _setting_value(db, "base_url") or "https://nominatim.openstreetmap.org"
+    user_agent = _setting_value(db, "user_agent") or "dotmac_sm"
+    timeout_sec = _setting_int(db, "timeout_sec", 5)
+    email = _setting_value(db, "email")
+    params: dict[str, Any] = {
+        "lat": latitude,
+        "lon": longitude,
+        "format": "json",
+        "addressdetails": 1,
+        "zoom": 18,
+    }
+    if email:
+        params["email"] = email
+    try:
+        response = httpx.get(
+            f"{base_url.rstrip('/')}/reverse",
+            params=params,
+            headers={"User-Agent": user_agent},
+            timeout=float(timeout_sec),
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Geocoding request failed") from exc
+    result = response.json()
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="Invalid geocoding response")
+    # Nominatim signals "nothing here" with an error payload, not a 404.
+    if result.get("error"):
+        return None
+    return result
+
+
+def reverse_geocode(db: Session, latitude: float, longitude: float) -> dict | None:
+    """Resolve coordinates to the nearest known address (Nominatim only).
+
+    Returns a dict with display_name/latitude/longitude/address, or None when
+    geocoding is disabled or nothing is known at that point.
+    """
+    if not _setting_bool(db, "enabled", True):
+        return None
+    if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+        raise HTTPException(status_code=400, detail="Invalid coordinates")
+    result = _nominatim_reverse(db, latitude, longitude)
+    if not result:
+        return None
+    try:
+        return {
+            "display_name": result.get("display_name"),
+            "latitude": float(str(result.get("lat") or "")),
+            "longitude": float(str(result.get("lon") or "")),
+            "address": result.get("address") or {},
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 def _google_search(db: Session, query: str, limit: int) -> list[dict]:

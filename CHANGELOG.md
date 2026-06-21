@@ -1,0 +1,12 @@
+# Changelog
+
+All notable changes to DotMac Sub are tracked here.
+
+## 1.0.1 - 2026-06-19
+
+- Version bump.
+
+## 1.0.0 - 2026-06-16
+
+- Establish first formal app version baseline.
+- Includes the current production-scale billing, customer portal, reseller, mobile, RADIUS, provisioning, and network operations work already merged into `dev`.

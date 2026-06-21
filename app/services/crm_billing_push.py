@@ -62,10 +62,19 @@ def push_billing_snapshots(
     *,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """Push changed billing snapshots to all CRM-linked subscribers."""
-    from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM, push_subscriber_change
+    """Enqueue changed billing snapshots to all CRM-linked subscribers.
 
-    stats = {"considered": 0, "pushed": 0, "unchanged": 0, "failed": 0}
+    Each changed snapshot is dispatched through the retrying push task
+    (app.tasks.crm_sync.push_subscriber_change) rather than pushed inline:
+    a slow/unreachable CRM no longer blocks or silently drops the batch, and
+    terminal failures land in the dead-letter (crm_sync_failures). The task
+    stamps the snapshot key on SUCCESS, so a record we couldn't deliver stays
+    unstamped and is naturally re-enqueued next run (auto-heal).
+    """
+    from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM
+    from app.tasks.crm_sync import push_subscriber_change as push_task
+
+    stats = {"considered": 0, "enqueued": 0, "unchanged": 0}
 
     query = (
         db.query(Subscriber)
@@ -82,10 +91,6 @@ def push_billing_snapshots(
         stats["considered"] += 1
         snapshot = build_snapshot(db, subscriber)
         sendable = {k: v for k, v in snapshot.items() if v is not None}
-        metadata = dict(subscriber.metadata_ or {})
-        if metadata.get(_SNAPSHOT_KEY) == sendable:
-            stats["unchanged"] += 1
-            continue
         if subscriber.splynx_customer_id:
             external_id: int | str = subscriber.splynx_customer_id
             external_system = "splynx"
@@ -95,13 +100,17 @@ def push_billing_snapshots(
             external_id = str(subscriber.id)
             external_system = NATIVE_EXTERNAL_SYSTEM
             payload = sendable
-        if not push_subscriber_change(external_id, payload, external_system):
-            stats["failed"] += 1
-            logger.warning("CRM billing push failed subscriber=%s", subscriber.id)
+        # Dedupe on exactly what we transmit, which is what the task stamps.
+        metadata = dict(subscriber.metadata_ or {})
+        if metadata.get(_SNAPSHOT_KEY) == payload:
+            stats["unchanged"] += 1
             continue
-        metadata[_SNAPSHOT_KEY] = sendable
-        subscriber.metadata_ = metadata
-        db.commit()
-        stats["pushed"] += 1
+        push_task.delay(
+            external_id,
+            payload,
+            external_system,
+            billing_snapshot_subscriber_id=str(subscriber.id),
+        )
+        stats["enqueued"] += 1
 
     return stats

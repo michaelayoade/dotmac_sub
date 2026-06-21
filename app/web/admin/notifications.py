@@ -155,6 +155,7 @@ def notification_template_create(
             url=f"/admin/notifications/templates/{template.id}", status_code=303
         )
     except Exception as exc:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
@@ -240,6 +241,7 @@ def notification_template_update(
             url=f"/admin/notifications/templates/{template_id}", status_code=303
         )
     except Exception as exc:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
@@ -523,6 +525,7 @@ def alert_policy_create(
             status_code=303,
         )
     except Exception as exc:
+        db.rollback()
         state = web_alert_policies_service.alert_policy_form_data(db)
         from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -617,6 +620,7 @@ def alert_policy_update(
             status_code=303,
         )
     except Exception as exc:
+        db.rollback()
         state = web_alert_policies_service.alert_policy_detail_data(
             db, policy_id=str(policy_id)
         )
@@ -760,6 +764,7 @@ def oncall_rotation_create(
             status_code=303,
         )
     except Exception as exc:
+        db.rollback()
         state = web_alert_policies_service.oncall_rotations_list_data(
             db, page=1, per_page=25
         )
@@ -844,6 +849,7 @@ def oncall_rotation_update(
             status_code=303,
         )
     except Exception as exc:
+        db.rollback()
         state = web_alert_policies_service.oncall_rotation_detail_data(
             db, rotation_id=str(rotation_id)
         )

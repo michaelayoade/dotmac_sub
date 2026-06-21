@@ -14,8 +14,13 @@ import 'token_storage.dart';
 ///    replay the original request once,
 ///  * notify the app when the session can no longer be recovered.
 class ApiClient {
-  ApiClient({required TokenStorage storage, this.cache, this.onSessionExpired})
-      : _storage = storage {
+  ApiClient({
+    required TokenStorage storage,
+    this.cache,
+    this.onSessionExpired,
+    this.onImpersonationExpired,
+    this.onCacheState,
+  }) : _storage = storage {
     _dio = Dio(
       BaseOptions(
         baseUrl: Env.apiRoot,
@@ -44,7 +49,8 @@ class ApiClient {
     // auth interceptor so a post-refresh replay that times out — now rejected as
     // a DioException — also gets served from cache. No-op when no cache wired.
     if (cache != null) {
-      _dio.interceptors.add(CacheInterceptor(cache!));
+      _dio.interceptors
+          .add(CacheInterceptor(cache!, onCacheState: onCacheState));
     }
 
     // Breadcrumb every call (method + path + status only — never headers/body,
@@ -88,6 +94,15 @@ class ApiClient {
   /// Invoked when refresh fails and the user must re-authenticate.
   final void Function()? onSessionExpired;
 
+  /// Invoked when a request made under reseller "view as" gets a 401 — the
+  /// short-lived impersonation grant lapsed. The handler clears impersonation
+  /// and surfaces it to the user (no silent failure).
+  final void Function()? onImpersonationExpired;
+
+  /// Notified when a GET is served from the stale on-disk cache (true) or
+  /// completes fresh from the network (false). Drives the offline banner.
+  final void Function(bool fromCache)? onCacheState;
+
   late final Dio _dio;
   Dio get dio => _dio;
 
@@ -130,6 +145,16 @@ class ApiClient {
 
     final wasImpersonated =
         response.requestOptions.extra['impersonated'] == true;
+
+    // A 401 while impersonating means the short-lived "view as" grant lapsed.
+    // Never refresh the reseller's token into a customer request — instead
+    // clear impersonation and surface it, rather than failing silently.
+    if (response.statusCode == 401 && !skipAuth && wasImpersonated) {
+      onImpersonationExpired?.call();
+      handler.next(response);
+      return;
+    }
+
     if (response.statusCode == 401 &&
         !isAuthRetry &&
         !skipAuth &&

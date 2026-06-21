@@ -382,6 +382,7 @@ def _seed_startup_settings() -> None:
         seed_tr069_settings,
         seed_usage_policy_settings,
         seed_usage_settings,
+        seed_vas_settings,
         seed_wireguard_settings,
     )
 
@@ -422,6 +423,7 @@ def _seed_startup_settings() -> None:
         seed_collections_settings(db)
         seed_collections_policy_settings(db)
         seed_geocoding_settings(db)
+        seed_vas_settings(db)
         seed_radius_settings(db)
         seed_radius_policy_settings(db)
         seed_scheduler_settings(db)
@@ -543,6 +545,22 @@ async def lifespan(app: FastAPI):
     global _DEFERRED_ROUTER_TASK, _DEFERRED_STARTUP_TASK
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
+    # Cap the threadpool that runs sync request handlers so a worker never holds
+    # more concurrent DB-touching threads than the connection pool can serve.
+    try:
+        from anyio import to_thread
+
+        from app.config import settings as _settings
+
+        limit = _settings.web_threadpool_limit
+        if limit > 0:
+            to_thread.current_default_thread_limiter().total_tokens = limit
+            logger.info(
+                "threadpool_limit_set",
+                extra={"event": "threadpool_limit_set", "total_tokens": limit},
+            )
+    except Exception:
+        logger.warning("Failed to set threadpool limit", exc_info=True)
     _startup_preflight()
     from app.websocket.manager import get_connection_manager
 
@@ -805,6 +823,19 @@ def _web_auth_refresh_candidate(request: Request) -> bool:
     return any(path.startswith(prefix) for prefix in _WEB_AUTH_REFRESH_PATHS)
 
 
+async def _terminated_request_response(
+    request: Request, method: str, path: str
+) -> Response:
+    disconnected = await request.is_disconnected()
+    logger.info(
+        "No response returned from downstream app; request terminated (%s): %s %s",
+        "client_disconnected" if disconnected else "reload_or_shutdown",
+        method,
+        path,
+    )
+    return Response(status_code=204)
+
+
 @app.middleware("http")
 async def web_auth_refresh_middleware(request: Request, call_next):
     """Refresh expired web access cookies before protected routes handle the request."""
@@ -1043,16 +1074,9 @@ async def csrf_middleware(request: Request, call_next):
         response = await call_next(request)
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
-            disconnected = await request.is_disconnected()
             # During client disconnects and dev auto-reload windows Starlette may not
             # produce a downstream response; treat it as a benign terminated request.
-            logger.info(
-                "No response returned from downstream app; request terminated (%s): %s %s",
-                "client_disconnected" if disconnected else "reload_or_shutdown",
-                method,
-                path,
-            )
-            return Response(status_code=204)
+            return await _terminated_request_response(request, method, path)
         raise
 
     # Set CSRF cookie on responses if not present
@@ -1095,6 +1119,55 @@ def _request_is_https(request: Request) -> bool:
     return request.url.scheme == "https"
 
 
+_READONLY_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Paths under /portal that must keep working in a read-only (view-as) session,
+# above all exiting the impersonation back to the reseller portal.
+_READONLY_EXEMPT_PREFIXES = ("/portal/auth/",)
+
+
+@app.middleware("http")
+async def view_as_readonly_middleware(request: Request, call_next):
+    """Block state-changing requests in a read-only customer session.
+
+    Reseller "view as customer" sessions are view-only (see what the customer
+    sees, for support/diagnosis). Reseller actions on behalf of a customer go
+    through the reseller portal's own attributed, audited routes — never by
+    writing as the customer. Admin "Login as Customer" is not read-only.
+    """
+    if request.method.upper() in _READONLY_WRITE_METHODS:
+        path = request.url.path
+        if path.startswith("/portal/") and not any(
+            path.startswith(p) for p in _READONLY_EXEMPT_PREFIXES
+        ):
+            from starlette.responses import JSONResponse as _JSONResponse
+
+            from app.services import customer_portal
+
+            token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+            session = customer_portal.get_customer_session(token) if token else None
+            if session and session.get("read_only"):
+                logger.info(
+                    "Blocked read-only (view-as) write: %s %s", request.method, path
+                )
+                return _JSONResponse(
+                    {
+                        "detail": (
+                            "This is a view-only session. Switch to your reseller "
+                            "tools to act on this account."
+                        )
+                    },
+                    status_code=403,
+                )
+    try:
+        return await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return await _terminated_request_response(
+                request, request.method.upper(), request.url.path
+            )
+        raise
+
+
 @app.middleware("http")
 async def login_rate_limit_middleware(request: Request, call_next):
     if request.method == "POST" and request.url.path in _LOGIN_RATE_LIMIT_PATHS:
@@ -1123,7 +1196,14 @@ async def login_rate_limit_middleware(request: Request, call_next):
 async def security_headers_middleware(request: Request, call_next):
     """Emit baseline security headers from the app itself, independent of the
     reverse proxy (the deployed proxy config can drift from the repo)."""
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return await _terminated_request_response(
+                request, request.method.upper(), request.url.path
+            )
+        raise
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")

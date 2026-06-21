@@ -13,7 +13,7 @@ account-id endpoints simply surface that as a 404 (no IDOR).
 Mounted at ``/api/v1/reseller`` with router-level ``require_user_auth`` (main.py).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -37,6 +37,8 @@ class MfaConfirmRequest(BaseModel):
 
 class PayIntentRequest(BaseModel):
     amount: str = Field(min_length=1, max_length=20)
+    payment_method_id: str | None = Field(default=None, max_length=64)
+    save_card: bool = False
 
 
 class PayVerifyRequest(BaseModel):
@@ -56,12 +58,24 @@ class ServiceRequestCreate(BaseModel):
 
 
 def _reseller_id(db: Session, principal: dict) -> str:
-    """Return the caller's reseller_id, or 403 for non-reseller principals."""
-    if principal.get("principal_type") != "subscriber":
-        raise HTTPException(status_code=403, detail="A reseller account is required")
-    reseller_id = reseller_portal.reseller_id_for_subscriber(
-        db, str(principal["subscriber_id"])
-    )
+    """Return the caller's reseller_id, or 403 for non-reseller principals.
+
+    Handles both a legacy subscriber-backed reseller login and a first-class
+    reseller_user principal (Layer 3).
+    """
+    principal_type = principal.get("principal_type")
+    reseller_id: str | None = None
+    if principal_type == "reseller_user":
+        from app.models.subscriber import ResellerUser
+        from app.services.common import coerce_uuid
+
+        ru = db.get(ResellerUser, coerce_uuid(principal.get("principal_id")))
+        if ru is not None and ru.is_active and ru.reseller_id is not None:
+            reseller_id = str(ru.reseller_id)
+    elif principal_type == "subscriber":
+        reseller_id = reseller_portal.reseller_id_for_subscriber(
+            db, str(principal["subscriber_id"])
+        )
     if not reseller_id:
         raise HTTPException(status_code=403, detail="A reseller account is required")
     return reseller_id
@@ -248,10 +262,64 @@ def my_reseller_pay_intent(
     reseller_id = _reseller_id(db, principal)
     try:
         return reseller_portal_billing.start_consolidated_payment(
-            db, reseller_id, payload.amount
+            db,
+            reseller_id,
+            payload.amount,
+            payment_method_id=payload.payment_method_id,
+            save_card=payload.save_card,
+            login_subscriber_id=str(principal["subscriber_id"]),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/payment-methods")
+def my_reseller_payment_methods(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> list[dict]:
+    """The reseller's saved cards (keyed on the caller's login subscriber)."""
+    from app.services import reseller_portal_billing
+
+    _reseller_id(db, principal)  # 403 unless the caller is a reseller
+    methods = reseller_portal_billing.list_payment_methods(
+        db, str(principal["subscriber_id"])
+    )
+    return [reseller_portal_billing.payment_method_api_dict(m) for m in methods]
+
+
+@router.post("/payment-methods/{method_id}/default")
+def my_reseller_payment_method_default(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Make a saved card the default; 404 if it is not the caller's."""
+    from app.services import reseller_portal_billing
+
+    _reseller_id(db, principal)
+    if not reseller_portal_billing.set_default_payment_method(
+        db, str(principal["subscriber_id"]), method_id
+    ):
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return {"ok": True}
+
+
+@router.delete("/payment-methods/{method_id}", status_code=204)
+def my_reseller_payment_method_delete(
+    method_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> Response:
+    """Remove a saved card; 404 if it is not the caller's."""
+    from app.services import reseller_portal_billing
+
+    _reseller_id(db, principal)
+    if not reseller_portal_billing.remove_payment_method(
+        db, str(principal["subscriber_id"]), method_id
+    ):
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return Response(status_code=204)
 
 
 @router.post("/billing/pay/verify")
@@ -273,6 +341,24 @@ def my_reseller_pay_verify(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/billing/subscribers/{subscriber_id}/allocate")
+def my_reseller_allocate_subscriber(
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Allocate unallocated reseller funds to one managed subscriber."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    try:
+        return reseller_portal_billing.allocate_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/fiber-map")
 def my_reseller_fiber_map(
     db: Session = Depends(get_db),
@@ -284,6 +370,205 @@ def my_reseller_fiber_map(
     from app.services import web_network_fiber
 
     return web_network_fiber.get_fiber_plant_map_data(db)
+
+
+# --- VAS (bill payments) — reseller float wallet + sell-for-customer -------------
+#
+# Same vas.enabled flag as the customer surfaces (404 when off). Reseller
+# responses use VasResellerTransactionRead, which structurally excludes the
+# owner-side economics (override invisibility).
+
+
+def _vas_reseller_wallet(db: Session, principal: dict):
+    from app.services import vas_wallet
+
+    reseller_id = _reseller_id(db, principal)
+    return reseller_id, vas_wallet.get_or_create_reseller_wallet(db, reseller_id)
+
+
+def _reseller_txn_read(db: Session, txn):
+    from decimal import ROUND_DOWN, Decimal
+
+    from app.schemas.vas import VasResellerTransactionRead
+    from app.services import vas_purchases
+
+    commission = None
+    if txn.reseller_rate_pct is not None:
+        commission = (
+            Decimal(str(txn.amount)) * Decimal(str(txn.reseller_rate_pct)) / 100
+        ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    return VasResellerTransactionRead(
+        id=txn.id,
+        status=txn.status,
+        service_name=txn.service.name if txn.service else None,
+        identifier=txn.identifier,
+        variation_code=txn.variation_code,
+        amount=txn.amount,
+        commission_rate_pct=txn.reseller_rate_pct,
+        commission_amount=commission,
+        token=vas_purchases.transaction_token(txn),
+        error=txn.error,
+        created_at=txn.created_at,
+        delivered_at=txn.delivered_at,
+    )
+
+
+@router.get("/vas/wallet")
+def my_reseller_vas_wallet(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Reseller float wallet: balance + recent entries."""
+    from app.schemas.vas import VasWalletEntryRead
+    from app.services import vas_wallet
+    from app.services.vas_wallet import wallet_balance
+
+    vas_wallet.require_enabled(db)
+    _, wallet = _vas_reseller_wallet(db, principal)
+    entries = vas_wallet.wallet_entries(db, wallet.id, limit=20)
+    return {
+        "balance": wallet_balance(db, wallet.id),
+        "currency": "NGN",
+        "entries": [
+            VasWalletEntryRead.model_validate(entry).model_dump() for entry in entries
+        ],
+    }
+
+
+@router.post("/vas/wallet/topup/initiate")
+def my_reseller_vas_topup_initiate(
+    payload: dict,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    from decimal import Decimal as _Decimal
+
+    from app.services import vas_wallet
+
+    reseller_id = _reseller_id(db, principal)
+    return {
+        key: str(value) if isinstance(value, _Decimal) else value
+        for key, value in vas_wallet.initiate_reseller_topup(
+            db, reseller_id, _Decimal(str(payload.get("amount") or "0"))
+        ).items()
+    }
+
+
+@router.post("/vas/wallet/topup/verify")
+def my_reseller_vas_topup_verify(
+    payload: dict,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    from decimal import Decimal as _Decimal
+
+    from app.services import vas_wallet
+
+    reseller_id = _reseller_id(db, principal)
+    result = vas_wallet.verify_reseller_topup(
+        db,
+        reseller_id,
+        str(payload.get("reference") or ""),
+        provider=payload.get("provider"),
+    )
+    return {
+        key: str(value) if isinstance(value, _Decimal) else value
+        for key, value in result.items()
+    }
+
+
+@router.get("/vas/catalog")
+def my_reseller_vas_catalog(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    from app.services import vas_purchases
+
+    _reseller_id(db, principal)
+    return vas_purchases.customer_catalog(db)
+
+
+@router.post("/vas/verify")
+def my_reseller_vas_verify(
+    payload: dict,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    from app.services import vas_purchases
+
+    _reseller_id(db, principal)
+    result = vas_purchases.verify_identifier(
+        db,
+        service_id=str(payload.get("service_id") or ""),
+        identifier=str(payload.get("identifier") or ""),
+        variation_type=payload.get("variation_type"),
+    )
+    return {
+        "customer_name": result.get("customer_name"),
+        "address": result.get("address"),
+    }
+
+
+@router.post("/vas/purchases", status_code=201)
+def my_reseller_vas_purchase(
+    payload: dict,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Sell airtime/data/bills to a walk-in customer from the float wallet."""
+    from decimal import Decimal as _Decimal
+
+    from app.services import vas_purchases
+
+    reseller_id = _reseller_id(db, principal)
+    raw_amount = payload.get("amount")
+    txn = vas_purchases.reseller_purchase(
+        db,
+        reseller_id=reseller_id,
+        service_id=str(payload.get("service_id") or ""),
+        identifier=str(payload.get("identifier") or ""),
+        variation_code=payload.get("variation_code") or None,
+        amount=_Decimal(str(raw_amount)) if raw_amount is not None else None,
+        phone=payload.get("phone") or None,
+        confirm_duplicate=bool(payload.get("confirm_duplicate")),
+    )
+    return _reseller_txn_read(db, txn)
+
+
+@router.get("/vas/purchases")
+def my_reseller_vas_purchases(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    from app.services import vas_purchases
+
+    reseller_id = _reseller_id(db, principal)
+    return [
+        _reseller_txn_read(db, txn)
+        for txn in vas_purchases.list_reseller_transactions(
+            db, reseller_id, limit=limit
+        )
+    ]
+
+
+@router.get("/vas/commission-statement")
+def my_reseller_vas_commission_statement(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    from app.schemas.vas import VasCommissionStatementResponse, VasWalletEntryRead
+    from app.services import vas_wallet
+
+    vas_wallet.require_enabled(db)
+    _, wallet = _vas_reseller_wallet(db, principal)
+    summary = vas_wallet.commission_summary(db, wallet.id)
+    return VasCommissionStatementResponse(
+        total_earned=summary["total"],
+        entries=[
+            VasWalletEntryRead.model_validate(entry) for entry in summary["entries"]
+        ],
+    )
 
 
 @router.post("/service-requests")

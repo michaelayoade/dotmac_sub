@@ -216,8 +216,12 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     )
     logo_src = _logo_src(db)
     company_info = company_info_service.get_company_info(db)
+    # White-label: fall back to the configured brand legal name (brand.json)
+    # rather than a generic placeholder when company-info is unset.
+    from app.services.branding_config import get_brand
+
     company_name = html.escape(
-        (company_info.get("company_name") or "").strip() or "Your Company"
+        (company_info.get("company_name") or "").strip() or get_brand()["legal_name"]
     )
     company_block = "<br>".join(
         html.escape(line) for line in _company_lines(company_info)

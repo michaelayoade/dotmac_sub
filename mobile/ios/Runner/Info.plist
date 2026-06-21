@@ -4,6 +4,13 @@
 	<dict>
 		<key>NSFaceIDUsageDescription</key>
 		<string>Use Face ID to unlock the app.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>Attach your current location to a fault report so our technicians can find your service address.</string>
+		<!-- The app only uses foreground (when-in-use) location, but the
+		     geolocator plugin references the Always-authorization API, so
+		     App Store validation (ITMS-90683) requires this string too. -->
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>Attach your current location to a fault report so our technicians can find your service address.</string>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
 		<key>CFBundleDevelopmentRegion</key>
@@ -26,6 +33,11 @@
 		<string>????</string>
 		<key>CFBundleVersion</key>
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
+		<!-- Export compliance: the app uses only standard HTTPS/TLS (exempt
+		     encryption), so declare it here to skip the per-build "Missing
+		     Compliance" prompt in TestFlight/App Store Connect. -->
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
 		<!-- Payment gateway return scheme: the gateway redirects to
 		     dotmacpay://success|cancel after checkout, so the OS can hand the
 		     link back to the app even when a 3-D Secure / bank flow leaves the
@@ -70,6 +82,11 @@
 		<!-- Required by image_picker to choose a profile photo from the library. -->
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>Choose a profile photo for your account.</string>
+		<!-- image_picker references the camera API (UIImagePickerController), so
+		     App Store validation (ITMS-90683) requires this string even when the
+		     user picks from the library. -->
+		<key>NSCameraUsageDescription</key>
+		<string>Take a photo with your camera to set your profile picture.</string>
 		<!-- Allow plain-HTTP only to local/private addresses (e.g. a dev backend on
 	     the LAN). Public traffic still requires HTTPS (ATS stays enforced). -->
 		<key>NSAppTransportSecurity</key>

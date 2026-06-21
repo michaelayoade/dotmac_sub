@@ -314,6 +314,12 @@ class TestAdminPagesRender:
             assert resp.status_code == 200
             assert "Bank Transfer Proofs" in resp.text
             assert "TRF-FILE" in resp.text
+            assert "sticky left-0 z-30 min-w-56" in resp.text
+            assert "sticky left-0 z-20 min-w-56" in resp.text
+            assert (
+                f'href="/admin/billing/payment-proofs/{proof_env["proof"]["id"]}"'
+                in resp.text
+            )
 
             detail = client.get(
                 f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"

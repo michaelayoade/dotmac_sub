@@ -43,8 +43,8 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-right">
                     <div class="flex items-center justify-end gap-2">
                         <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-slate-400 hover:text-primary-600" title="View">
@@ -70,18 +70,6 @@
                 </td>
             </tr>
             {% endfor %}
-            <tr class="bg-slate-50 dark:bg-slate-800/70">
-                <td colspan="10" class="px-6 py-3">
-                    <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                        <span>Draft: {{ status_totals.draft.count }} (₦{{ "{:,.2f}".format(status_totals.draft.amount) }})</span>
-                        <span>Issued: {{ status_totals.issued.count }} (₦{{ "{:,.2f}".format(status_totals.issued.amount) }})</span>
-                        <span>Partially Paid: {{ status_totals.partially_paid.count }} (₦{{ "{:,.2f}".format(status_totals.partially_paid.amount) }})</span>
-                        <span>Paid: {{ status_totals.paid.count }} (₦{{ "{:,.2f}".format(status_totals.paid.amount) }})</span>
-                        <span>Overdue: {{ status_totals.overdue.count }} (₦{{ "{:,.2f}".format(status_totals.overdue.amount) }})</span>
-                        <span>Total: {{ status_totals.all.count }} (₦{{ "{:,.2f}".format(status_totals.all.amount) }})</span>
-                    </div>
-                </td>
-            </tr>
             {% else %}
             <tr><td colspan="10" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found</td></tr>
             {% endif %}

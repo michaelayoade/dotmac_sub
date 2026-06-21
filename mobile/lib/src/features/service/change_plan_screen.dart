@@ -58,12 +58,15 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
   Future<void> _confirm(PlanOffer offer) async {
     // Prorated quote for the selected plan (empty/no-op for postpaid).
     PlanChangeQuote? quote;
+    bool quoteFailed = false;
     try {
       quote = await ref
           .read(catalogRepositoryProvider)
           .planChangeQuote(_subId, offer.id);
     } catch (_) {
-      // quote is optional; proceed without a breakdown
+      // The quote is optional, but a failure must not look like a confident
+      // ₦0 cost — flag it so the sheet warns and the confirm is less assertive.
+      quoteFailed = true;
     }
     if (!mounted) return;
 
@@ -73,6 +76,7 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
       builder: (_) => _ConfirmSheet(
         offer: offer,
         quote: quote,
+        quoteFailed: quoteFailed,
         billingMessage: _options?.billingMessage,
       ),
     );
@@ -189,11 +193,16 @@ class _ConfirmSheet extends StatelessWidget {
     required this.offer,
     required this.quote,
     required this.billingMessage,
+    this.quoteFailed = false,
   });
 
   final PlanOffer offer;
   final PlanChangeQuote? quote;
   final String? billingMessage;
+
+  /// True when the cost quote couldn't be fetched — show a warning and a less
+  /// assertive confirm rather than implying a free / exact change.
+  final bool quoteFailed;
 
   @override
   Widget build(BuildContext context) {
@@ -266,6 +275,33 @@ class _ConfirmSheet extends StatelessWidget {
                 ),
               ],
             ],
+            if (quoteFailed) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        size: 18, color: theme.colorScheme.onErrorContainer),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Couldn't calculate the exact cost right now. You can "
+                        'still switch — the final charge or proration will be '
+                        'applied to your account.',
+                        style: TextStyle(
+                            color: theme.colorScheme.onErrorContainer,
+                            fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (billingMessage != null) ...[
               const SizedBox(height: 12),
               Text(billingMessage!, style: theme.textTheme.bodySmall),
@@ -283,7 +319,7 @@ class _ConfirmSheet extends StatelessWidget {
                 Expanded(
                   child: FilledButton(
                     onPressed: () => Navigator.pop(context, true),
-                    child: const Text('Confirm'),
+                    child: Text(quoteFailed ? 'Switch anyway' : 'Confirm'),
                   ),
                 ),
               ],

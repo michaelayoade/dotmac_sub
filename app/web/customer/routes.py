@@ -6,7 +6,17 @@ from urllib.parse import quote_plus
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Body, Depends, Form, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
@@ -19,8 +29,10 @@ from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services.audit_helpers import log_audit_event
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -50,6 +62,45 @@ def _format_bps(value: float | int | None) -> str:
         unit_index += 1
     precision = 0 if unit_index == 0 else (2 if amount < 10 else 1)
     return f"{amount:.{precision}f} {units[unit_index]}"
+
+
+def _profile_value(value):
+    if hasattr(value, "value"):
+        return value.value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _profile_audit_snapshot(subscriber) -> dict[str, object]:
+    metadata = dict(getattr(subscriber, "metadata_", None) or {})
+    return {
+        "first_name": subscriber.first_name,
+        "last_name": subscriber.last_name,
+        "display_name": subscriber.display_name,
+        "email": subscriber.email,
+        "phone": subscriber.phone,
+        "date_of_birth": _profile_value(subscriber.date_of_birth),
+        "gender": _profile_value(subscriber.gender),
+        "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
+        "address_line1": subscriber.address_line1,
+        "address_line2": subscriber.address_line2,
+        "city": subscriber.city,
+        "region": subscriber.region,
+        "postal_code": subscriber.postal_code,
+        "country_code": subscriber.country_code,
+        "billing_notifications": bool(metadata.get("billing_notifications")),
+        "sms_updates": bool(metadata.get("sms_updates")),
+        "email_verified": subscriber.email_verified,
+    }
+
+
+def _profile_audit_changes(before: dict, after: dict) -> dict[str, dict[str, object]]:
+    changes: dict[str, dict[str, object]] = {}
+    for key in sorted(set(before) | set(after)):
+        if before.get(key) != after.get(key):
+            changes[key] = {"from": before.get(key), "to": after.get(key)}
+    return changes
 
 
 def _load_initial_bandwidth_stats(
@@ -157,6 +208,7 @@ def customer_support_create(
     title: str = Form(...),
     description: str = Form(""),
     priority: str = Form("normal"),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -174,6 +226,7 @@ def customer_support_create(
         title,
         description,
         priority,
+        attachments=attachments,
     )
     if result["success"]:
         ticket = result["ticket"]
@@ -227,6 +280,7 @@ def customer_support_add_comment(
     request: Request,
     ticket_id: str,
     body: str = Form(...),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -235,7 +289,7 @@ def customer_support_add_comment(
 
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     result = crm_portal.handle_ticket_comment(
-        db, customer, subscriber_ids, ticket_id, body
+        db, customer, subscriber_ids, ticket_id, body, attachments=attachments
     )
     if not result.get("success"):
         context = crm_portal.ticket_detail_context(
@@ -639,7 +693,11 @@ def customer_bandwidth_live(
         customer_portal_bandwidth_service.live_bandwidth_events(
             subscription_id=subscription.id,
             is_disconnected=request.is_disconnected,
-        )
+        ),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1066,6 +1124,7 @@ def customer_notifications(
 def customer_profile(
     request: Request,
     saved: str | None = None,
+    verify_sent: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer profile settings."""
@@ -1100,6 +1159,7 @@ def customer_profile(
             ),
             "active_page": "profile",
             "success": "Profile updated successfully" if saved else None,
+            "verify_sent": verify_sent,
         },
     )
 
@@ -1107,9 +1167,20 @@ def customer_profile(
 @router.post("/profile", response_class=HTMLResponse)
 def customer_update_profile(
     request: Request,
-    name: str = Form(...),
+    first_name: str = Form(...),
+    last_name: str = Form(...),
     email: str = Form(...),
+    display_name: str = Form(None),
     phone: str = Form(None),
+    date_of_birth: str = Form(None),
+    gender: str = Form(None),
+    preferred_contact_method: str = Form(None),
+    address_line1: str = Form(None),
+    address_line2: str = Form(None),
+    city: str = Form(None),
+    region: str = Form(None),
+    postal_code: str = Form(None),
+    country_code: str = Form(None),
     billing_notifications: bool = Form(False),
     sms_updates: bool = Form(False),
     db: Session = Depends(get_db),
@@ -1120,21 +1191,79 @@ def customer_update_profile(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id:
+        from app.models.subscriber import Subscriber
         from app.services.web_customer_actions import update_customer_profile
 
-        update_customer_profile(
+        subscriber_before = db.get(Subscriber, subscriber_id)
+        before_snapshot = (
+            _profile_audit_snapshot(subscriber_before) if subscriber_before else {}
+        )
+        updated = update_customer_profile(
             db,
             subscriber_id=subscriber_id,
-            name=name,
+            first_name=first_name,
+            last_name=last_name,
+            display_name=display_name,
             email=email,
             phone=phone,
+            date_of_birth=date_of_birth,
+            gender=gender,
+            preferred_contact_method=preferred_contact_method,
+            address_line1=address_line1,
+            address_line2=address_line2,
+            city=city,
+            region=region,
+            postal_code=postal_code,
+            country_code=country_code,
             billing_notifications=billing_notifications,
             sms_updates=sms_updates,
         )
+        if updated is not None:
+            after_snapshot = _profile_audit_snapshot(updated)
+            changes = _profile_audit_changes(before_snapshot, after_snapshot)
+            if changes:
+                try:
+                    log_audit_event(
+                        db=db,
+                        request=request,
+                        action="portal_profile_update",
+                        entity_type="subscriber",
+                        entity_id=str(subscriber_id),
+                        actor_id=str(subscriber_id),
+                        metadata={"changes": changes, "source": "customer_portal"},
+                    )
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "Unable to log customer portal profile audit for %s",
+                        subscriber_id,
+                    )
 
     # POST-Redirect-GET: bounce to the profile page with a success flag so a
     # browser refresh after save can't accidentally resubmit the form.
     return RedirectResponse(url="/portal/profile?saved=1", status_code=303)
+
+
+@router.post("/profile/verify-email/resend")
+def customer_resend_email_verification(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Resend the email-verification link to the caller's own address."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    sent = False
+    subscriber_id = customer.get("subscriber_id")
+    if subscriber_id and not customer.get("read_only"):
+        try:
+            sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
+        except Exception:
+            logger.warning("customer_resend_email_verification_failed", exc_info=True)
+    return RedirectResponse(
+        url=f"/portal/profile?verify_sent={'1' if sent else '0'}",
+        status_code=303,
+    )
 
 
 @router.get("/profile/mfa/setup", response_class=HTMLResponse)
@@ -1443,6 +1572,45 @@ def customer_pay_invoice(
     )
 
 
+@router.post("/billing/pay/intent")
+def customer_create_invoice_payment_intent(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Start an invoice payment with the customer's chosen method."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if customer.get("read_only"):
+        return JSONResponse(
+            {"detail": "View-only sessions cannot make payments"}, status_code=403
+        )
+
+    invoice_id = str(payload.get("invoice") or payload.get("invoice_id") or "").strip()
+    if not invoice_id:
+        return JSONResponse({"detail": "invoice is required"}, status_code=400)
+    # An Idempotency-Key header (or body token) makes saved-card charges safe
+    # against double-submit; gateway-redirect flows ignore it.
+    idempotency_key = request.headers.get("Idempotency-Key") or payload.get(
+        "idempotency_key"
+    )
+    try:
+        result = customer_portal.create_invoice_payment_intent(
+            db,
+            customer,
+            invoice_id,
+            provider=payload.get("provider"),
+            payment_method_id=payload.get("payment_method_id"),
+            redirect_url=str(request.url_for("customer_verify_payment")),
+            idempotency_key=idempotency_key,
+        )
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    return JSONResponse(content=jsonable_encoder(result))
+
+
 @router.get("/billing/pay/verify", response_class=HTMLResponse)
 def customer_verify_payment(
     request: Request,
@@ -1465,6 +1633,11 @@ def customer_verify_payment(
 
         result = customer_portal.verify_and_record_payment(
             db, customer, reference, provider=provider
+        )
+        # Close out the pending invoice-checkout trace (no-op for references
+        # that never had one, e.g. saved-card charges or the bearer API).
+        customer_portal.complete_invoice_payment_intent(
+            db, reference, result.get("payment")
         )
         if save_card is True:
             # Best-effort, Paystack-only; never breaks the recorded payment.
@@ -1510,6 +1683,9 @@ def customer_billing_topup(
     request: Request,
     autopay_error: str | None = Query(None),
     autopay_success: str | None = Query(None),
+    transfer_success: str | None = Query(None),
+    add_card: bool = Query(False),
+    amount: int | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
     """Show add-funds page for a customer account."""
@@ -1521,7 +1697,6 @@ def customer_billing_topup(
     if not page_data.get("payment_options"):
         page_data["payment_options"] = [
             {"provider_type": "paystack", "label": "Pay with Paystack"},
-            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
         ]
     return templates.TemplateResponse(
         "customer/billing/topup.html",
@@ -1534,6 +1709,13 @@ def customer_billing_topup(
             ),
             "autopay_error": autopay_error,
             "autopay_success": autopay_success,
+            "transfer_success": transfer_success,
+            # When arriving from "Add card", default the provider to Paystack
+            # and pre-tick "save this card" so the top-up doubles as adding a
+            # reusable card.
+            "add_card": add_card,
+            # Optional prefill handed off from the dashboard "Pay Now" panel.
+            "prefill_amount": amount,
             "active_page": "billing",
         },
     )
@@ -1553,6 +1735,11 @@ def customer_create_topup_intent(
     amount_value = payload.get("amount")
     if amount_value is None:
         return JSONResponse({"detail": "amount is required"}, status_code=400)
+    # An Idempotency-Key header (or body token) makes saved-card charges safe
+    # against double-submit; gateway-redirect flows ignore it.
+    idempotency_key = request.headers.get("Idempotency-Key") or payload.get(
+        "idempotency_key"
+    )
     try:
         result = customer_portal.create_topup_intent(
             db,
@@ -1561,11 +1748,118 @@ def customer_create_topup_intent(
             provider=payload.get("provider"),
             payment_method_id=payload.get("payment_method_id"),
             redirect_url=str(request.url_for("customer_verify_topup")),
+            idempotency_key=idempotency_key,
         )
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.get("/billing/topup/transfer", response_class=HTMLResponse)
+def customer_direct_transfer_topup(
+    request: Request,
+    error: str | None = Query(None),
+    submitted: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show direct bank transfer instructions for the pending top-up intent."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        page_data = customer_portal.get_direct_transfer_topup_page(db, customer)
+    except ValueError as exc:
+        return RedirectResponse(
+            url=f"/portal/billing/topup?autopay_error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "customer/billing/topup_transfer.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "form_error": error,
+            "submitted": submitted,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.post("/billing/topup/transfer", response_class=HTMLResponse)
+async def customer_direct_transfer_topup_submit(
+    request: Request,
+    made_payment: str | None = Form(None),
+    selected_account_id: str | None = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Submit direct bank transfer proof for staff review."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if customer.get("read_only"):
+        return RedirectResponse(
+            url=(
+                "/portal/billing/topup/transfer?error="
+                f"{quote_plus('View-only sessions cannot submit payments')}"
+            ),
+            status_code=303,
+        )
+    try:
+        proof = await customer_portal.submit_direct_transfer_topup(
+            db,
+            customer,
+            made_payment=str(made_payment or "").lower() in {"1", "true", "on", "yes"},
+            selected_account_id=selected_account_id,
+            file=file,
+        )
+    except (ValueError, HTTPException) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return RedirectResponse(
+            url=f"/portal/billing/topup/transfer?error={quote_plus(str(detail))}",
+            status_code=303,
+        )
+    except Exception:
+        logger.warning("customer_direct_transfer_submit_failed", exc_info=True)
+        return RedirectResponse(
+            url="/portal/billing/topup/transfer?error=Unable to submit payment proof",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/portal/billing/topup/transfer/submitted?proof_id={quote_plus(str(proof.get('id') or ''))}",
+        status_code=303,
+    )
+
+
+@router.get("/billing/topup/transfer/submitted", response_class=HTMLResponse)
+def customer_direct_transfer_topup_submitted(
+    request: Request,
+    proof_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show acknowledgement after a direct-transfer receipt is submitted."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    proof = payment_proofs_service.get_proof(db, proof_id)
+    if proof is None or str(proof.account_id) != str(customer.get("account_id") or ""):
+        return RedirectResponse(
+            url="/portal/billing/topup?autopay_error="
+            + quote_plus("Submitted transfer receipt was not found."),
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "customer/billing/topup_transfer_submitted.html",
+        {
+            "request": request,
+            "customer": customer,
+            "proof": proof,
+            "active_page": "billing",
+        },
+    )
 
 
 @router.get("/billing/topup/verify", response_class=HTMLResponse)
@@ -1671,6 +1965,100 @@ def customer_autopay_disable(
     autopay_service.disable(db, str(customer.get("account_id") or ""))
     return RedirectResponse(
         url="/portal/billing/topup?autopay_success=" + quote_plus("Autopay is off."),
+        status_code=303,
+    )
+
+
+@router.get("/billing/payment-methods", response_class=HTMLResponse)
+def customer_payment_methods(
+    request: Request,
+    saved: str | None = Query(None),
+    error: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Manage saved cards, autopay, and the bank-transfer method in one place."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing/payment-methods",
+            status_code=303,
+        )
+    page_data = customer_portal.get_payment_methods_page(db, customer)
+    return templates.TemplateResponse(
+        "customer/billing/payment_methods.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "autopay": autopay_service.get_status(
+                db, str(customer.get("account_id") or "")
+            ),
+            "success": saved,
+            "form_error": error,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/default")
+def customer_payment_method_set_default(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Set a saved card as the default (self-scoped to the caller)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if customer.get("read_only"):
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("View-only sessions cannot change payment methods."),
+            status_code=303,
+        )
+    updated = customer_cards.set_default(
+        db, str(customer.get("account_id") or ""), method_id
+    )
+    if updated is None:
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("Card not found."),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/portal/billing/payment-methods?saved="
+        + quote_plus("Default card updated."),
+        status_code=303,
+    )
+
+
+@router.post("/billing/payment-methods/{method_id}/remove")
+def customer_payment_method_remove(
+    request: Request,
+    method_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove a saved card (also deactivates any autopay mandate on it)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if customer.get("read_only"):
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("View-only sessions cannot change payment methods."),
+            status_code=303,
+        )
+    removed = customer_cards.remove(
+        db, str(customer.get("account_id") or ""), method_id
+    )
+    if not removed:
+        return RedirectResponse(
+            url="/portal/billing/payment-methods?error="
+            + quote_plus("Card not found."),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/portal/billing/payment-methods?saved=" + quote_plus("Card removed."),
         status_code=303,
     )
 
@@ -2284,5 +2672,7 @@ def customer_payment_arrangement_detail(
             "customer": customer,
             **detail,
             "active_page": "billing",
+            # Drives the overdue-installment highlight in the template.
+            "today": datetime.now(UTC).date(),
         },
     )

@@ -184,6 +184,25 @@ def test_issue_and_decode_tokens(monkeypatch):
         auth_flow_service._decode_jwt(None, "bad-token", "access")
 
 
+def test_issue_and_decode_email_verification_token(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    sub_id = str(uuid.uuid4())
+    token = auth_flow_service._issue_email_verification_token(
+        None, sub_id, "user@example.com", ttl_minutes=60
+    )
+    payload = auth_flow_service._decode_email_verification_token(None, token)
+    assert payload["typ"] == "email_verification"
+    assert payload["principal_id"] == sub_id
+    assert payload["email"] == "user@example.com"
+
+    # Wrong type must be rejected by the email-verification decoder.
+    pw_token = auth_flow_service._issue_password_reset_token(
+        None, sub_id, "subscriber", "user@example.com", ttl_minutes=60
+    )
+    with pytest.raises(HTTPException):
+        auth_flow_service._decode_email_verification_token(None, pw_token)
+
+
 def test_decode_jwt_suppresses_python_jose_utcnow_deprecation(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     token = auth_flow_service._issue_access_token(None, "person", "session")

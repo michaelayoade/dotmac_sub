@@ -32,6 +32,7 @@ from app.services.billing._common import (
     _validate_account,
     _validate_invoice_line_amount,
     _validate_invoice_totals,
+    assert_legal_invoice_transition,
 )
 from app.services.common import (
     apply_ordering,
@@ -110,19 +111,40 @@ class Invoices(ListResponseMixin):
         db: Session,
         subscriber_id: str,
         subscription_id: str,
+        *,
+        allow_prepaid: bool = False,
     ) -> Invoice:
         """Create an invoice with line items auto-populated from a subscription's offer price.
 
         Looks up the subscription's active offer price and creates an invoice
         with a single line item for the recurring charge.  Tax is applied
         according to the subscriber's tax rate if set.
+
+        Prepaid subscriptions draw down a deposit and are not normally invoiced;
+        this raises unless ``allow_prepaid=True`` is passed as a deliberate
+        credit/admin override.
         """
-        from app.models.catalog import CatalogOffer, OfferPrice, Subscription
+        from app.models.catalog import (
+            BillingMode,
+            CatalogOffer,
+            OfferPrice,
+            Subscription,
+        )
         from app.models.subscriber import Subscriber
 
         subscription = db.get(Subscription, coerce_uuid(subscription_id))
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+
+        if subscription.billing_mode == BillingMode.prepaid and not allow_prepaid:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This is a prepaid subscription (billed by deposit drawdown). "
+                    "Invoicing it would double-bill the customer. Use the explicit "
+                    "credit override only if service was deliberately delivered on credit."
+                ),
+            )
 
         subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
         if not subscriber:
@@ -303,6 +325,8 @@ class Invoices(ListResponseMixin):
             "balance_due": data.get("balance_due", invoice.balance_due),
         }
         _validate_invoice_totals(merged)
+        if "status" in data:
+            assert_legal_invoice_transition(previous_status, data["status"])
         for key, value in data.items():
             setattr(invoice, key, value)
         db.commit()
@@ -382,10 +406,14 @@ class Invoices(ListResponseMixin):
         try:
             db.flush()
             _recalculate_invoice_totals(db, invoice)
-            # Write-offs are authoritative adjustments and should close
-            # any remaining balance even when no payment allocations exist.
+            # Write-offs are authoritative adjustments and should close any
+            # remaining balance even when no payment allocations exist. The
+            # invoice becomes ``written_off`` (closed, bad debt) — NOT ``void``
+            # (which means "never existed" and vanishes from AR/aging) and NOT
+            # ``paid`` (no cash was collected). The adjustment ledger entry
+            # above is the financial record of the loss.
             invoice.balance_due = Decimal("0.00")
-            invoice.status = InvoiceStatus.void
+            invoice.status = InvoiceStatus.written_off
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -403,6 +431,24 @@ class Invoices(ListResponseMixin):
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status == InvoiceStatus.void:
+            raise HTTPException(status_code=400, detail="Invoice is already void")
+        if invoice.status == InvoiceStatus.written_off:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot void a written-off invoice (it is already closed "
+                "as bad debt).",
+            )
+        if invoice.status == InvoiceStatus.paid:
+            # Voiding a paid invoice would reverse its AR debits while leaving
+            # the customer's payment allocated to it (stranded money / AR
+            # mismatch). Bulk void already skips paid invoices; enforce the same
+            # rule on the single-void path here in the canonical service.
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot void a paid invoice — refund the payment first, "
+                "then void.",
+            )
 
         # Create reversing entries for any active debit ledger entries
         active_debits = (
@@ -465,6 +511,10 @@ class Invoices(ListResponseMixin):
             db.flush()
             for invoice in affected_invoices:
                 _recalculate_invoice_totals(db, invoice)
+                # Close as bad debt (written_off), consistent with single
+                # write_off — not the recalc-derived 'paid' (no cash collected).
+                invoice.balance_due = Decimal("0.00")
+                invoice.status = InvoiceStatus.written_off
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -488,7 +538,18 @@ class Invoices(ListResponseMixin):
             raise HTTPException(
                 status_code=404, detail="One or more invoices not found"
             )
+        skipped = 0
         for invoice in invoices:
+            # Don't void a paid or already-void invoice — the single-invoice
+            # void() rejects this, but bulk_void previously voided paid
+            # invoices unconditionally, stranding their payments. Skip them.
+            if invoice.status in (
+                InvoiceStatus.paid,
+                InvoiceStatus.void,
+                InvoiceStatus.written_off,
+            ):
+                skipped += 1
+                continue
             # Reverse active debit ledger entries
             active_debits = (
                 db.query(LedgerEntry)
@@ -515,7 +576,7 @@ class Invoices(ListResponseMixin):
             if payload.memo:
                 invoice.memo = payload.memo
         db.commit()
-        return len(invoices)
+        return len(invoices) - skipped
 
     @staticmethod
     def bulk_void_response(db: Session, payload: InvoiceBulkVoidRequest) -> dict:

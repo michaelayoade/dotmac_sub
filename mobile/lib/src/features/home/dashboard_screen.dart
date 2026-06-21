@@ -9,6 +9,7 @@ import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 
@@ -62,16 +63,18 @@ class DashboardScreen extends ConsumerWidget {
     final sessItems = sessions.asData?.value.items;
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
-    final dataToday = todaySummary?.totalBytes;
     final fup = todaySummary?.fup;
-    // Unlimited-with-FUP plans have no quota bucket; their "remaining" is the
-    // distance to the fair-use slowdown, which the API reports even at full
-    // speed.
-    final fupHeadroom = fup?.gbUntilThrottle;
-    // Yesterday's total gives "77.3 GB" a point of reference; 0/unavailable
-    // just keeps the plain label.
-    final dataYesterday =
-        ref.watch(usageSummaryProvider('yesterday')).asData?.value.totalBytes;
+    // Data the current service has consumed this billing cycle — the headline
+    // data figure on Home: meaningful for capped AND unlimited plans, unlike
+    // "data left" which reads as 0/empty on an unlimited plan. Falls back to
+    // today's total when the cycle aggregate isn't populated yet, so the card
+    // is never a misleading empty 0.
+    final dataUsedCycle =
+        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    final dataToday = todaySummary?.totalBytes;
+    final dataUsed = (dataUsedCycle != null && dataUsedCycle > 0)
+        ? dataUsedCycle
+        : dataToday;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -86,17 +89,6 @@ class DashboardScreen extends ConsumerWidget {
             b.periodStart.isAfter(currentQuota.periodStart)) {
           currentQuota = b;
         }
-      }
-    }
-
-    // Plans that sell data bundles get a "Buy data" quick action, distinct
-    // from the wallet "Top up". Gated on the current service actually having
-    // buyable data add-ons — uncapped plans never see it.
-    Subscription? buyDataService;
-    if (currentService != null) {
-      final addons = ref.watch(addonsProvider(currentService.id)).asData?.value;
-      if (addons?.available.any((o) => o.isDataTopup) ?? false) {
-        buyDataService = currentService;
       }
     }
 
@@ -177,6 +169,7 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const OfflineBanner(),
             _ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
@@ -208,9 +201,27 @@ class DashboardScreen extends ConsumerWidget {
               _RenewBanner(
                 message: renewMessage,
                 expired: (daysLeft ?? 0) < 0,
-                onTap: () => context.go('/billing'),
+                // Straight to the pay/add-funds flow (renewal = top-up in the
+                // prepaid model), not the invoices list.
+                onTap: () => context.push('/topup'),
               ),
             ],
+            Consumer(builder: (context, ref, _) {
+              final wallet = ref.watch(walletProvider).asData?.value;
+              if (wallet == null) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.wallet_outlined),
+                    title: Text(Fmt.money(wallet.balance, wallet.currency)),
+                    subtitle: const Text('Wallet — fund once, pay bills'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/wallet'),
+                  ),
+                ),
+              );
+            }),
             const SizedBox(height: 16),
 
             // --- At-a-glance summary ---
@@ -233,22 +244,11 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Plan-type-aware: capped -> what's LEFT; unlimited with
-                    // a fair-use rule -> headroom to the slowdown (proactive,
-                    // not only when approaching); truly unlimited -> today's
-                    // usage with yesterday for scale.
-                    label: currentQuota != null
-                        ? 'Data left'
-                        : fupHeadroom != null
-                            ? 'To slowdown'
-                            : (dataYesterday ?? 0) > 0
-                                ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
-                                : 'Data today',
-                    value: currentQuota != null
-                        ? Fmt.gb(currentQuota.remainingGb ?? 0)
-                        : fupHeadroom != null
-                            ? Fmt.gb(fupHeadroom)
-                            : (dataToday == null ? null : Fmt.bytes(dataToday)),
+                    // Data used on the current service this billing cycle —
+                    // meaningful for capped and unlimited plans alike (replaces
+                    // the old "data left", which read as 0 on unlimited plans).
+                    label: 'Data used',
+                    value: dataUsed == null ? null : Fmt.bytes(dataUsed),
                     highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
@@ -271,11 +271,12 @@ class DashboardScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
 
-            // --- Quick actions ---
-            Text('Quick actions',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 10),
-            _QuickActions(buyDataService: buyDataService),
+            // --- Primary payment action ---
+            // A single, prominent "Add funds / Pay" entry (the wallet top-up
+            // flow), replacing the redundant "Pay bill" + "Top up" chips.
+            _AddFundsCard(
+              onTap: () => context.push('/topup'),
+            ),
             const SizedBox(height: 20),
 
             // --- Current service (with a switcher when there are several) ---
@@ -721,72 +722,53 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _QuickActions extends StatelessWidget {
-  const _QuickActions({this.buyDataService});
-
-  /// When set, the plan sells data bundles — show "Buy data" (GB for this
-  /// service) distinct from "Top up" (wallet cash).
-  final Subscription? buyDataService;
-
-  @override
-  Widget build(BuildContext context) {
-    final buyData = buyDataService;
-    final actions = <(IconData, String, VoidCallback)>[
-      (Icons.payment, 'Pay bill', () => context.go('/billing')),
-      // Wallet cash — pushed so the back gesture returns here.
-      (Icons.add_card_outlined, 'Top up', () => context.push('/topup')),
-      if (buyData != null)
-        (
-          Icons.add_chart_outlined,
-          'Buy data',
-          () => context.push('/service/${buyData.id}/buy-data', extra: buyData),
-        )
-      else
-        (Icons.wifi_outlined, 'Service', () => context.go('/usage')),
-      (Icons.receipt_long_outlined, 'Invoices', () => context.go('/billing')),
-      (Icons.support_agent_outlined, 'Support', () => context.go('/support')),
-      (Icons.person_outline, 'Profile', () => context.go('/profile')),
-    ];
-
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 10,
-      crossAxisSpacing: 10,
-      childAspectRatio: 1.4,
-      children: [
-        for (final (icon, label, onTap) in actions)
-          _ActionTile(icon: icon, label: label, onTap: onTap),
-      ],
-    );
-  }
-}
-
-class _ActionTile extends StatelessWidget {
-  const _ActionTile(
-      {required this.icon, required this.label, required this.onTap});
-  final IconData icon;
-  final String label;
+/// Primary, visually-dominant payment action on the dashboard. Funds the
+/// wallet (which pays bills), folding the old "Pay bill" + "Top up" chips into
+/// one clear CTA.
+class _AddFundsCard extends StatelessWidget {
+  const _AddFundsCard({required this.onTap});
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      margin: EdgeInsets.zero,
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.primary,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: theme.colorScheme.primary),
-            const SizedBox(height: 6),
-            Text(label,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelMedium),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          child: Row(
+            children: [
+              Icon(Icons.add_card_outlined, color: scheme.onPrimary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Add funds / Pay',
+                      style: TextStyle(
+                        color: scheme.onPrimary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Top up your wallet to pay bills',
+                      style: TextStyle(
+                        color: scheme.onPrimary.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: scheme.onPrimary),
+            ],
+          ),
         ),
       ),
     );

@@ -115,6 +115,10 @@ from app.models.connector import (  # noqa: F401
     ConnectorType,
 )
 from app.models.contracts import ContractSignature  # noqa: F401
+from app.models.crm_sync_failure import (  # noqa: F401
+    CrmSyncFailure,
+    CrmSyncFailureStatus,
+)
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
 from app.models.device_token import DeviceToken  # noqa: F401
 from app.models.domain_settings import (  # noqa: F401
@@ -453,6 +457,7 @@ from app.models.splynx_mapping import (  # noqa: F401
     SplynxEntityType,
     SplynxIdMapping,
 )
+from app.models.splynx_transaction import SplynxBillingTransaction  # noqa: F401
 from app.models.stored_file import StoredFile  # noqa: F401
 from app.models.subscriber import (  # noqa: F401
     Address,
@@ -516,6 +521,19 @@ from app.models.usage import (  # noqa: F401
     UsageRatingRunStatus,
     UsageRecord,
     UsageSource,
+)
+from app.models.vas import (  # noqa: F401
+    VasEntryCategory,
+    VasEntryType,
+    VasPartyType,
+    VasRateCard,
+    VasService,
+    VasServiceVariation,
+    VasTopupIntent,
+    VasTransaction,
+    VasTransactionStatus,
+    VasWallet,
+    VasWalletEntry,
 )
 from app.models.webhook import (  # noqa: F401
     WebhookDelivery,

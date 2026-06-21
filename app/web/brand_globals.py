@@ -15,14 +15,48 @@ before this installer runs keep working.
 from __future__ import annotations
 
 import logging
+import sys
+from datetime import UTC, datetime
 
 from fastapi.templating import Jinja2Templates
 
 from app.services.branding_config import get_brand
+from app.version import get_app_version
 
 logger = logging.getLogger(__name__)
 
 _installed = False
+
+
+def _current_year() -> int:
+    """Live current year for footers, so hardcoded years can't go stale."""
+    return datetime.now(UTC).year
+
+
+def _attach_globals(templates: Jinja2Templates) -> None:
+    templates.env.globals.setdefault("brand", get_brand())
+    templates.env.globals.setdefault("current_year", _current_year)
+    templates.env.globals.setdefault("app_version", get_app_version)
+
+
+def _backfill_loaded_template_instances() -> None:
+    """Attach globals to template instances created before the init patch."""
+    seen: set[int] = set()
+    for module in list(sys.modules.values()):
+        namespace = getattr(module, "__dict__", None)
+        if not namespace:
+            continue
+        for value in namespace.values():
+            if not isinstance(value, Jinja2Templates) or id(value) in seen:
+                continue
+            seen.add(id(value))
+            try:
+                _attach_globals(value)
+            except Exception:
+                logger.debug(
+                    "Could not backfill Jinja globals on existing template instance",
+                    exc_info=True,
+                )
 
 
 def install_brand_jinja_global() -> None:
@@ -36,17 +70,11 @@ def install_brand_jinja_global() -> None:
     def _patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         _original_init(self, *args, **kwargs)
         try:
-            self.env.globals.setdefault("brand", get_brand())
+            _attach_globals(self)
         except Exception:  # pragma: no cover - never break template setup
             logger.debug("Could not attach brand Jinja global", exc_info=True)
 
     Jinja2Templates.__init__ = _patched_init  # type: ignore[method-assign]
     _installed = True
 
-    # Backfill the shared templates instance if it was already imported.
-    try:
-        from app.web.templates import templates as _shared
-
-        _shared.env.globals.setdefault("brand", get_brand())
-    except Exception:  # pragma: no cover
-        logger.debug("Could not backfill shared templates brand global", exc_info=True)
+    _backfill_loaded_template_instances()

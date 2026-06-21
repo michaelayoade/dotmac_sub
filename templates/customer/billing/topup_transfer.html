@@ -1,0 +1,148 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Direct Bank Transfer - Customer Portal{% endblock %}
+
+{% block content %}
+{% set transfer_accounts = bank_transfer_accounts|default([]) %}
+{% set selected_transfer_account = transfer_accounts[0] if transfer_accounts else none %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+            <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <a href="/portal/billing/topup" class="hover:text-[var(--color-brand-600)]">Add Funds</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">Direct Bank Transfer</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Direct Bank Transfer</h1>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+            Make the transfer using the details below, then upload your receipt for review.
+        </p>
+    </div>
+
+    {% if form_error %}
+    <div class="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">
+        {{ form_error }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-[1fr,0.8fr]">
+        <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Payment Details</h2>
+            <dl class="mt-5 divide-y divide-stone-100 rounded-2xl border border-stone-100 dark:divide-stone-700 dark:border-stone-700">
+                {% if transfer_accounts|length > 1 %}
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Choose bank</dt>
+                    <dd>
+                        <select id="bank-transfer-account-select" class="block w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-semibold text-stone-900 focus:border-emerald-500 focus:ring-emerald-500 dark:border-stone-700 dark:bg-stone-900 dark:text-white">
+                            {% for account in transfer_accounts %}
+                            <option
+                                value="{{ account.id }}"
+                                data-bank-name="{{ account.bank_name }}"
+                                data-account-name="{{ account.account_name }}"
+                                data-account-number="{{ account.account_number }}">
+                                {{ account.bank_name }} - {{ account.account_number }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </dd>
+                </div>
+                {% endif %}
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Bank name</dt>
+                    <dd id="bank-transfer-bank-name" class="text-sm font-semibold text-stone-900 dark:text-white">{{ selected_transfer_account.bank_name if selected_transfer_account else bank_transfer.direct_bank_transfer_bank_name }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Account name</dt>
+                    <dd id="bank-transfer-account-name" class="text-sm font-semibold text-stone-900 dark:text-white">{{ selected_transfer_account.account_name if selected_transfer_account else bank_transfer.direct_bank_transfer_account_name }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Account number</dt>
+                    <dd id="bank-transfer-account-number" class="font-mono text-base font-bold tracking-wide text-stone-900 dark:text-white">{{ selected_transfer_account.account_number if selected_transfer_account else bank_transfer.direct_bank_transfer_account_number }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Amount to pay</dt>
+                    <dd class="text-xl font-bold text-emerald-700 dark:text-emerald-300">{{ intent.currency }} {{ "{:,.2f}".format(intent.requested_amount) }}</dd>
+                </div>
+                <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]" x-data="{ copied: false, copyRef() { const text = '{{ intent.reference }}'; (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => { this.copied = true; setTimeout(() => this.copied = false, 2000); }).catch(() => {}); } }">
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Payment reference</dt>
+                    <dd class="flex items-center gap-2">
+                        <span class="font-mono text-sm font-semibold text-stone-900 dark:text-white">{{ intent.reference }}</span>
+                        <button type="button" x-on:click="copyRef()"
+                                class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-xs font-semibold text-stone-600 hover:bg-stone-50 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700"
+                                :aria-label="copied ? 'Copied' : 'Copy reference'">
+                            <svg x-show="!copied" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                            <svg x-show="copied" class="h-3.5 w-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                            <span x-text="copied ? 'Copied' : 'Copy'"></span>
+                        </button>
+                    </dd>
+                </div>
+            </dl>
+            {% if bank_transfer.direct_bank_transfer_instructions %}
+            <div class="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+                {{ bank_transfer.direct_bank_transfer_instructions }}
+            </div>
+            {% endif %}
+        </section>
+
+        <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Submit Receipt</h2>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Accepted files: JPG, PNG, WEBP, or PDF up to 10 MB.</p>
+
+            {% if customer and customer.read_only %}
+            <div class="mt-5 rounded-xl bg-stone-100 px-4 py-3 text-sm text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                This is a view-only session. Payment submission is disabled.
+            </div>
+            {% else %}
+            <form method="post" action="/portal/billing/topup/transfer" enctype="multipart/form-data" class="mt-5 space-y-5">
+                {% include "components/forms/csrf_input.html" %}
+                <input id="selected-bank-transfer-account-id" type="hidden" name="selected_account_id" value="{{ selected_transfer_account.id if selected_transfer_account else '' }}">
+                <div>
+                    <label for="file" class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Receipt file</label>
+                    <input id="file" name="file" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" required class="mt-1 block w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 file:mr-4 file:rounded-lg file:border-0 file:bg-stone-100 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200 dark:border-stone-700 dark:bg-stone-900 dark:text-white dark:file:bg-stone-700 dark:file:text-stone-200">
+                </div>
+                <label class="flex cursor-pointer gap-3 rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700 dark:border-stone-700 dark:bg-stone-900/40 dark:text-stone-300">
+                    <input id="made-payment-checkbox" type="checkbox" name="made_payment" value="true" class="mt-0.5 h-4 w-4 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500">
+                    <span>I have made this payment to the account shown above.</span>
+                </label>
+                <button id="submit-transfer-receipt" type="submit" disabled class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
+                    Submit Receipt
+                </button>
+            </form>
+            {% endif %}
+        </section>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const accountSelect = document.getElementById('bank-transfer-account-select');
+    const selectedAccountInput = document.getElementById('selected-bank-transfer-account-id');
+    const bankName = document.getElementById('bank-transfer-bank-name');
+    const accountName = document.getElementById('bank-transfer-account-name');
+    const accountNumber = document.getElementById('bank-transfer-account-number');
+    const madePayment = document.getElementById('made-payment-checkbox');
+    const submitButton = document.getElementById('submit-transfer-receipt');
+
+    function applySelectedAccount() {
+        if (!accountSelect || !accountSelect.selectedOptions.length) {
+            return;
+        }
+        const option = accountSelect.selectedOptions[0];
+        selectedAccountInput.value = option.value;
+        bankName.textContent = option.dataset.bankName || '';
+        accountName.textContent = option.dataset.accountName || '';
+        accountNumber.textContent = option.dataset.accountNumber || '';
+    }
+
+    if (accountSelect) {
+        accountSelect.addEventListener('change', applySelectedAccount);
+        applySelectedAccount();
+    }
+    if (madePayment && submitButton) {
+        madePayment.addEventListener('change', function () {
+            submitButton.disabled = !madePayment.checked;
+        });
+    }
+});
+</script>
+{% endblock %}

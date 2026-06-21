@@ -21,12 +21,14 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_current_user, get_db
+from app.models.catalog import Subscription
 from app.services.bandwidth import (
     add_directions_to_series,
     bandwidth_samples,
     live_event_payload,
 )
 from app.services.metrics_store import get_metrics_store
+from app.services.nas import get_mikrotik_pppoe_live_bandwidth
 
 # The MikroTik poller skips devices with no live viewer when running in
 # on_demand mode. Each SSE tick refreshes this subscription's score so the
@@ -144,6 +146,27 @@ def get_bandwidth_stats(
     return BandwidthStats(**stats)
 
 
+@router.get("/mikrotik-live/{subscription_id}")
+def get_mikrotik_live_bandwidth(
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Read live PPPoE bandwidth directly from the subscription's MikroTik NAS."""
+    bandwidth_samples.check_subscription_access(db, subscription_id, current_user)
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    if not subscription.provisioning_nas_device:
+        raise HTTPException(
+            status_code=400, detail="Subscription has no provisioning NAS device"
+        )
+    return get_mikrotik_pppoe_live_bandwidth(
+        subscription.provisioning_nas_device,
+        login=subscription.login or "",
+    )
+
+
 @router.get("/live/{subscription_id}")
 def get_live_bandwidth(
     subscription_id: UUID,
@@ -239,7 +262,13 @@ def get_live_bandwidth(
                 except Exception as exc:
                     logger.debug("active viewer cleanup failed: %s", exc)
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/top-users", response_model=list[TopUserEntry])

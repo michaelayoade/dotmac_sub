@@ -72,8 +72,8 @@ class QueueStats:
 
     name: str
     target: str
-    rate_rx: int  # bytes per second
-    rate_tx: int  # bytes per second
+    rate_rx: int  # bits per second
+    rate_tx: int  # bits per second
     bytes_rx: int
     bytes_tx: int
     packets_rx: int
@@ -195,7 +195,7 @@ class MikroTikConnection:
 
             stats = []
             for q in queues:
-                # Parse rate strings like "12345/67890" (rx/tx in bytes)
+                # Parse rate strings like "12345/67890" (rx/tx in bits/s)
                 rate = q.get("rate", "0/0").split("/")
                 bytes_val = q.get("bytes", "0/0").split("/")
                 packets = q.get("packets", "0/0").split("/")
@@ -645,14 +645,14 @@ class BandwidthPoller:
                     device_id, qs.name
                 )
                 if subscription_id:
-                    # Convert bytes/s to bits/s (multiply by 8)
+                    # RouterOS simple-queue rate is already bits/s.
                     samples.append(
                         BandwidthSample(
                             subscription_id=str(subscription_id),
                             nas_device_id=str(device_id),
                             queue_name=qs.name,
-                            rx_bps=qs.rate_rx * 8,
-                            tx_bps=qs.rate_tx * 8,
+                            rx_bps=qs.rate_rx,
+                            tx_bps=qs.rate_tx,
                             sample_at=sample_time,
                         )
                     )

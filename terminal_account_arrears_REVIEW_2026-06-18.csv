@@ -1,0 +1,92 @@
+account_number,customer_name,category,service_status,invoice_number,splynx_invoice_id,issued_date,balance_due,ever_paid_native,recommendation
+8714,Hyperia (Nigeria Customs HQ),business,canceled,202603000031,109840,2026-03-07,48257096.78,f,finance_review_large_enterprise
+179,Hyperia TLS2,business,disabled,202601002932,109831,2026-03-07,17796777.58,f,finance_review_large_enterprise
+573,Hyperia Ltd Connexxion (Maitama 2) ,business,disabled,202603000030,109836,2026-03-07,11427481.18,f,finance_review_large_enterprise
+17010,FAO Conference,business,disabled,202601002951,109856,2026-03-07,4656021.51,f,finance_review_large_enterprise
+275,Hyson,business,canceled,202601005268,112357,2026-05-07,2150000.00,f,finance_review_large_enterprise
+275,Hyson,business,canceled,202601006423,113612,2026-06-07,2150000.00,f,finance_review_large_enterprise
+275,Hyson,business,canceled,202601004119,111096,2026-04-07,2150000.00,f,finance_review_large_enterprise
+8714,Hyperia (Nigeria Customs HQ),business,canceled,202603000093,113618,2026-06-07,752500.00,f,finance_review_other
+8714,Hyperia (Nigeria Customs HQ),business,canceled,202603000047,111102,2026-04-07,752500.00,f,finance_review_other
+8714,Hyperia (Nigeria Customs HQ),business,canceled,202603000067,112364,2026-05-07,752500.00,f,finance_review_other
+31,Victor,residential,disabled,202601001649,108470,2026-02-07,659980.65,f,finance_review_other
+16329,Gozie Ujam,residential,disabled,202501017344,105687,2025-12-07,504677.42,t,finance_review_other
+13953,NHIS OFFICE ASABA,business,disabled,202501015919,104153,2025-11-07,434608.29,f,finance_review_other
+13995,PSIN SFTAS,business,disabled,202301002031,43003,2023-02-01,327516.67,t,finance_review_other
+179,Hyperia TLS2,business,disabled,202603000091,113611,2026-06-07,212850.00,f,finance_review_other
+179,Hyperia TLS2,business,disabled,202603000063,112355,2026-05-07,212850.00,f,finance_review_other
+179,Hyperia TLS2,business,disabled,202603000043,111094,2026-04-07,212850.00,f,finance_review_other
+25472,Christ Embassy,business,disabled,202501015941,104183,2025-11-07,200000.00,f,finance_review_other
+573,Hyperia Ltd Connexxion (Maitama 2) ,business,disabled,202603000046,111099,2026-04-07,150500.00,f,finance_review_other
+573,Hyperia Ltd Connexxion (Maitama 2) ,business,disabled,202603000066,112360,2026-05-07,150500.00,f,finance_review_other
+573,Hyperia Ltd Connexxion (Maitama 2) ,business,disabled,202603000092,113614,2026-06-07,150500.00,f,finance_review_other
+42,NAPTIN-SURULERE,business,disabled,202601006414,113601,2026-06-07,141900.00,f,finance_review_other
+41,NAPTIN--IJORA,business,disabled,202601004109,111082,2026-04-07,141900.00,f,finance_review_other
+42,NAPTIN-SURULERE,business,disabled,202601004110,111083,2026-04-07,141900.00,f,finance_review_other
+41,NAPTIN--IJORA,business,disabled,202601005258,112344,2026-05-07,141900.00,f,finance_review_other
+42,NAPTIN-SURULERE,business,disabled,202601005259,112345,2026-05-07,141900.00,f,finance_review_other
+41,NAPTIN--IJORA,business,disabled,202601006413,113600,2026-06-07,141900.00,f,finance_review_other
+9293, Levene Energy Development Limited,business,hidden,202601002937,109841,2026-03-07,116666.67,t,finance_review_other
+15493,Megamore (Gwarimpa) Pizza Hut Office Downstairs,business,stopped,202322000034,57899,2023-09-07,100000.00,t,finance_review_other
+24656,NTEL KADO,residential,disabled,202501009849,97712,2025-07-07,94316.00,t,finance_review_other
+15492,Megamore (Gwarimpa) Pizza Hut Office Upstairs,business,canceled,202322000033,57898,2023-09-07,86000.00,t,finance_review_other
+47,NAPTIN-KANO,business,disabled,202601006419,113606,2026-06-07,70950.00,f,finance_review_other
+47,NAPTIN-KANO,business,disabled,202601004115,111088,2026-04-07,70950.00,f,finance_review_other
+46,NAPTIN-PHC,business,disabled,202601005263,112349,2026-05-07,70950.00,f,finance_review_other
+43,NAPTIN-KAINJI,business,disabled,202601004111,111084,2026-04-07,70950.00,f,finance_review_other
+43,NAPTIN-KAINJI,business,disabled,202601005260,112346,2026-05-07,70950.00,f,finance_review_other
+43,NAPTIN-KAINJI,business,disabled,202601006415,113602,2026-06-07,70950.00,f,finance_review_other
+45,NAPTIN-JOS,business,disabled,202601004113,111086,2026-04-07,70950.00,f,finance_review_other
+45,NAPTIN-JOS,business,disabled,202601006417,113604,2026-06-07,70950.00,f,finance_review_other
+45,NAPTIN-JOS,business,disabled,202601005262,112348,2026-05-07,70950.00,f,finance_review_other
+46,NAPTIN-PHC,business,disabled,202601006418,113605,2026-06-07,70950.00,f,finance_review_other
+46,NAPTIN-PHC,business,disabled,202601004114,111087,2026-04-07,70950.00,f,finance_review_other
+48,NAPTIN-ENUGU,business,disabled,202601004116,111089,2026-04-07,70950.00,f,finance_review_other
+48,NAPTIN-ENUGU,business,disabled,202601006420,113607,2026-06-07,70950.00,f,finance_review_other
+48,NAPTIN-ENUGU,business,disabled,202601005265,112351,2026-05-07,70950.00,f,finance_review_other
+47,NAPTIN-KANO,business,disabled,202601005264,112350,2026-05-07,70950.00,f,finance_review_other
+44,NAPTIN-KADUNA,business,disabled,202601006416,113603,2026-06-07,70950.00,f,finance_review_other
+44,NAPTIN-KADUNA,business,disabled,202601005261,112347,2026-05-07,70950.00,f,finance_review_other
+44,NAPTIN-KADUNA,business,disabled,202601004112,111085,2026-04-07,70950.00,f,finance_review_other
+87,Mutual Trust MFB,business,disabled,202101000823,9564,2021-02-04,70000.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202601002948,109853,2026-03-07,56437.50,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202601000326,107068,2026-01-07,56437.50,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202601001680,108508,2026-02-07,56437.50,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202601004130,111112,2026-04-07,56437.50,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202601005282,112376,2026-05-07,56437.50,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501011394,99362,2025-08-07,52500.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501009840,97701,2025-07-07,52500.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501017343,105686,2025-12-07,52500.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501015924,104159,2025-11-07,52500.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501008366,96134,2025-06-07,52500.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501014423,102564,2025-10-07,52500.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501012929,100986,2025-09-07,52500.00,t,finance_review_other
+8455,National Pension commission  (Blantyre Cres),business,canceled,202518000013,89594,2025-02-07,35000.00,t,finance_review_other
+8455,National Pension commission  (Blantyre Cres),business,canceled,202518000001,87854,2025-01-07,35000.00,t,finance_review_other
+8455,National Pension commission  (Blantyre Cres),business,canceled,202418000078,86204,2024-12-07,35000.00,t,finance_review_other
+25428,Ntel Gana,residential,disabled,202601002959,109870,2026-03-07,30000.00,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202501006870,94539,2025-05-07,24916.66,t,finance_review_other
+16149,National Pension Commission (Aisha Dahir-Umar),business,disabled,202601006435,113628,2026-06-07,18812.50,t,finance_review_other
+13734,Dr Makinde (BCN),residential,canceled,202601006570,113768,2026-04-07,18812.50,t,finance_review_other
+13734,Dr Makinde (BCN),residential,canceled,202601006567,113765,2026-03-07,18812.50,t,finance_review_other
+13734,Dr Makinde (BCN),residential,canceled,202601006571,113769,2026-06-07,18812.50,t,finance_review_other
+13734,Dr Makinde (BCN),residential,canceled,202601006569,113767,2026-05-07,18812.50,t,finance_review_other
+13734,Dr Makinde (BCN),residential,canceled,202601001672,108499,2026-02-07,18812.49,t,finance_review_other
+16329,Gozie Ujam,residential,disabled,202601000327,107069,2026-01-07,16125.00,t,finance_review_other
+16329,Gozie Ujam,residential,disabled,202601005283,112377,2026-05-07,16125.00,t,finance_review_other
+16329,Gozie Ujam,residential,disabled,202601002949,109854,2026-03-07,16125.00,t,finance_review_other
+16329,Gozie Ujam,residential,disabled,202601004131,111113,2026-04-07,16125.00,t,finance_review_other
+16329,Gozie Ujam,residential,disabled,202601001681,108509,2026-02-07,16125.00,t,finance_review_other
+16329,Gozie Ujam,residential,disabled,202601006436,113629,2026-06-07,16125.00,t,finance_review_other
+10065,NHIS IKEJA OFFICE 1,business,disabled,202401007793,73533,2024-05-07,7741.94,f,finance_review_other
+31,Victor,residential,disabled,202601006412,113599,2026-06-07,6450.00,f,finance_review_other
+31,Victor,residential,disabled,202601004108,111081,2026-04-07,6450.00,f,finance_review_other
+31,Victor,residential,disabled,202601005257,112343,2026-05-07,6450.00,f,finance_review_other
+31,Victor,residential,disabled,202601002920,109818,2026-03-07,6450.00,f,finance_review_other
+13857,Mr. Ayodele (BCN) ,residential,canceled,202401002328,67790,2024-02-07,4573.88,t,finance_review_other
+14292,BCN (Lugbe),business,disabled,202401000466,65833,2024-01-07,4083.00,t,finance_review_other
+13738,Toro (BCN),business,disabled,202401004162,69720,2024-03-07,1418.10,t,finance_review_other
+13739, Yusuf (BCN),residential,disabled,202401002327,67789,2024-02-07,1418.10,t,finance_review_other
+13736,Kido (BCN),residential,disabled,202401002324,67786,2024-02-07,835.10,t,finance_review_other
+9293, Levene Energy Development Limited,business,hidden,202601005272,112365,2026-05-07,333.33,t,finance_review_other
+8455,National Pension commission  (Blantyre Cres),business,canceled,202418000071,84261,2024-11-07,322.86,t,finance_review_other

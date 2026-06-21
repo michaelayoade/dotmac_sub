@@ -257,7 +257,7 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
                         SELECT SUM(amount)
                         FROM payments
                         WHERE is_active = true
-                          AND status = 'completed'
+                          AND status = 'succeeded'
                           AND paid_at >= date_trunc('month', NOW())
                           AND paid_at < date_trunc('month', NOW()) + INTERVAL '1 month'
                     ), 0) AS payments_this_month,
@@ -715,6 +715,28 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             }
         )
 
+    try:
+        pending_location_requests = web_admin_service._count_pending_location_requests(
+            db
+        )
+    except Exception:
+        logger.error(
+            "Failed to load pending location requests for dashboard", exc_info=True
+        )
+        _rollback_after_failed_query(db)
+        pending_location_requests = 0
+    if pending_location_requests > 0:
+        attention_items.append(
+            {
+                "label": (
+                    f"{pending_location_requests} pending pin "
+                    f"correction{'s' if pending_location_requests != 1 else ''}"
+                ),
+                "href": "/admin/gis?tab=customer-requests&status=pending",
+                "severity": "info",
+            }
+        )
+
     whats_new_items = admin_whats_new_service.serialize_for_dashboard(
         admin_whats_new_service.get_visible_items(db, limit=4)
     )
@@ -943,10 +965,19 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
 
 
 def dashboard_stats_partial(request: Request, db: Session):
-    stats = _get_cached_dashboard_stats(db)
+    show_financials, show_network, show_subscribers = _resolve_dashboard_permissions(
+        request, db
+    )
+    global_ctx = _get_cached_dashboard_global_context(db)
     return templates.TemplateResponse(
         "admin/dashboard/_stats.html",
-        {"request": request, "stats": stats},
+        {
+            "request": request,
+            "show_financials": show_financials,
+            "show_network": show_network,
+            "show_subscribers": show_subscribers,
+            **global_ctx,
+        },
     )
 
 

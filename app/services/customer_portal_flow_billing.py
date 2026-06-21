@@ -3,13 +3,21 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import (
+    CreditNote,
+    Invoice,
+    InvoiceStatus,
+    LedgerSource,
+    Payment,
+    PaymentStatus,
+)
 from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
@@ -24,6 +32,111 @@ from app.services.customer_portal_context import (
 from app.services.customer_portal_flow_common import _compute_total_pages
 
 logger = logging.getLogger(__name__)
+
+
+def _enum_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "")
+
+
+def _money_activity_timestamp(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> list[Any]:
+    """Build the customer-visible money trail.
+
+    The admin customer page exposes payments and credit notes directly. Some
+    credit notes do not have ledger rows, so a ledger-only portal view can miss
+    real account activity.
+    """
+    account_uuid = coerce_uuid(account_id)
+    activity: list[Any] = []
+
+    payments = (
+        db.query(Payment)
+        .filter(Payment.account_id == account_uuid)
+        .filter(Payment.is_active.is_(True))
+        .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
+        .limit(limit)
+        .all()
+    )
+    for payment in payments:
+        status = _enum_value(payment.status)
+        title = (
+            "Payment received"
+            if payment.status == PaymentStatus.succeeded
+            else "Payment update"
+        )
+        activity.append(
+            SimpleNamespace(
+                kind="payment",
+                direction="credit",
+                title=title,
+                description=payment.memo or status.replace("_", " ").title(),
+                amount=payment.amount or Decimal("0.00"),
+                currency=payment.currency or "NGN",
+                occurred_at=_money_activity_timestamp(
+                    payment.paid_at, payment.created_at
+                ),
+                reference=payment.receipt_number or payment.external_id,
+            )
+        )
+
+    credit_notes = (
+        db.query(CreditNote)
+        .filter(CreditNote.account_id == account_uuid)
+        .filter(CreditNote.is_active.is_(True))
+        .order_by(CreditNote.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for note in credit_notes:
+        status = _enum_value(note.status).replace("_", " ").title()
+        activity.append(
+            SimpleNamespace(
+                kind="credit_note",
+                direction="credit",
+                title="Credit added",
+                description=note.memo or status,
+                amount=note.total or Decimal("0.00"),
+                currency=note.currency or "NGN",
+                occurred_at=_money_activity_timestamp(note.created_at),
+                reference=note.credit_number,
+            )
+        )
+
+    ledger_entries = billing_service.ledger_entries.list(
+        db, account_id, None, None, True, "effective_date", "desc", limit, 0
+    )
+    for entry in ledger_entries:
+        source = _enum_value(entry.source)
+        if source in {LedgerSource.payment.value, LedgerSource.credit_note.value}:
+            continue
+        entry_type = _enum_value(entry.entry_type)
+        category = _enum_value(entry.category).replace("_", " ").title()
+        activity.append(
+            SimpleNamespace(
+                kind=source or "ledger",
+                direction=entry_type,
+                title=entry.memo or category or source.replace("_", " ").title(),
+                description=category or source.replace("_", " ").title(),
+                amount=entry.amount or Decimal("0.00"),
+                currency=entry.currency or "NGN",
+                occurred_at=_money_activity_timestamp(
+                    entry.effective_date, entry.created_at
+                ),
+                reference=None,
+            )
+        )
+
+    activity.sort(
+        key=lambda item: item.occurred_at or datetime.min,
+        reverse=True,
+    )
+    return activity[:limit]
 
 
 def get_billing_page(
@@ -48,6 +161,8 @@ def get_billing_page(
         "total": 0,
         "total_pages": 1,
         "prepaid_balance": None,
+        "ledger_entries": [],
+        "billing_activity": [],
     }
     if not account_id_str:
         return empty_result
@@ -83,6 +198,12 @@ def get_billing_page(
             exc_info=True,
         )
 
+    # Backwards-compatible raw ledger rows for older templates.
+    ledger_entries = billing_service.ledger_entries.list(
+        db, account_id_str, None, None, True, "effective_date", "desc", 25, 0
+    )
+    billing_activity = _build_billing_activity(db, account_id_str)
+
     return {
         "invoices": invoices,
         "status": status,
@@ -91,6 +212,8 @@ def get_billing_page(
         "total": total,
         "total_pages": _compute_total_pages(total, per_page),
         "prepaid_balance": prepaid_balance,
+        "ledger_entries": ledger_entries,
+        "billing_activity": billing_activity,
     }
 
 
