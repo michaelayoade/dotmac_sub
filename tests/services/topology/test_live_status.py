@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from app.models.network_monitoring import NetworkDevice
 from app.services.topology.live_status import warm_topology_status
 
@@ -96,3 +98,30 @@ def test_interface_availability_fallback(db_session):
     warm_topology_status(db_session, _FakeClient(hosts, []))
     n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="7").one()
     assert n.live_status == "down"
+
+
+def test_live_status_at_stamped_only_on_change(db_session):
+    # live_status_at must mark when the node ENTERED its current state (the
+    # dwell clock the customer-facing debounce relies on) — not every poll.
+    db_session.add(_node("5", "n5"))
+    db_session.flush()
+    up = [{"hostid": "5", "available": "1", "interfaces": []}]
+    down = [{"hostid": "5", "available": "2", "interfaces": []}]
+
+    warm_topology_status(db_session, _FakeClient(up, []))
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="5").one()
+    first_at = n.live_status_at
+
+    # same status next poll -> timestamp does NOT move
+    warm_topology_status(db_session, _FakeClient(up, []))
+    db_session.refresh(n)
+    assert n.live_status == "up"
+    assert n.live_status_at == first_at
+
+    # a real status change DOES move it
+    n.live_status_at = datetime(2020, 1, 1, tzinfo=UTC)
+    db_session.flush()
+    warm_topology_status(db_session, _FakeClient(down, []))
+    db_session.refresh(n)
+    assert n.live_status == "down"
+    assert n.live_status_at != datetime(2020, 1, 1, tzinfo=UTC)
