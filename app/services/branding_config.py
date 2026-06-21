@@ -46,7 +46,7 @@ _DEFAULTS: dict[str, str] = {
     "product_name": "DotMac Subs",
     "legal_name": "Dotmac Technologies",
     "tagline": "Sign in to manage your service",
-    "primary_color": "#3b82f6",
+    "primary_color": "#206a07",
     "support_email": "support@dotmac.ng",
     "from_email": "noreply@dotmac.ng",
     "from_name": "DotMac Selfcare",
