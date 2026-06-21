@@ -24,14 +24,39 @@ from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
-# Timeout for stuck "sending" notifications (5 minutes)
-SENDING_TIMEOUT_MINUTES = 5
+# Timeout before a "sending" notification is treated as stuck and reclaimed.
+# Kept comfortably longer than normal provider latency so a slow-but-live send
+# is not reclaimed (and re-sent) out from under us.
+SENDING_TIMEOUT_MINUTES = 10
 # Maximum delivery retries before marking as permanently failed
 MAX_RETRIES = 3
 # Default max age before a still-undelivered notification is expired instead
 # of sent (guards against draining weeks of stale dunning when the queue
 # runner is re-enabled). 0 disables expiry.
 DEFAULT_MAX_QUEUE_AGE_HOURS = 72
+
+# Per-channel reclaim policy for notifications stuck in "sending" (the worker
+# may have crashed AFTER handing the message to the provider but BEFORE the
+# status commit, so re-sending risks a duplicate). We have no provider-side
+# idempotency key yet, so the policy is content-driven:
+#   - at_most_once: noisy/low-value bulk (a duplicate blast harms sender
+#     reputation and the message is disposable) — do NOT re-send a stuck one.
+#   - at_least_once: everything else — critical transactional notices
+#     (billing/service/account/auth) where silently losing one is worse than a
+#     rare duplicate; re-send, but bounded by MAX_RETRIES.
+# A duplicate is the lesser evil for criticals; loss is the lesser evil for
+# bulk. True exactly-once (provider idempotency keys) is a follow-up.
+_AT_MOST_ONCE_CATEGORIES = frozenset({"general"})
+_AT_MOST_ONCE_EVENT_TYPES = frozenset({"service_bulk_message"})
+
+
+def _reclaim_policy(notification) -> str:
+    """Return 'at_most_once' for noisy/bulk notifications, else 'at_least_once'."""
+    if (notification.category or "") in _AT_MOST_ONCE_CATEGORIES:
+        return "at_most_once"
+    if (notification.event_type or "") in _AT_MOST_ONCE_EVENT_TYPES:
+        return "at_most_once"
+    return "at_least_once"
 
 
 def _max_queue_age_hours(db) -> int:
@@ -126,7 +151,42 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
     delivered = 0
     retried = 0
     failed = 0
+    reclaimed = 0
+    stuck_dropped = 0
     for notification in notifications:
+        # Reclaim handling: a notification still in "sending" was stuck past the
+        # timeout — the worker likely crashed mid-send, possibly AFTER the
+        # provider was already called. Apply the per-channel reclaim policy
+        # before re-handing it to the provider.
+        if notification.status == NotificationStatus.sending:
+            notification.retry_count = (notification.retry_count or 0) + 1
+            if _reclaim_policy(notification) == "at_most_once":
+                # No provider-side dedupe for bulk; a duplicate blast is worse
+                # than dropping a disposable message — do not re-send.
+                notification.status = NotificationStatus.failed
+                notification.last_error = "stuck_sending_not_resent (at-most-once)"
+                stuck_dropped += 1
+                db.commit()
+                continue
+            if notification.retry_count > MAX_RETRIES:
+                notification.status = NotificationStatus.failed
+                notification.last_error = "stuck_sending_reclaim_exhausted"
+                failed += 1
+                logger.warning(
+                    "Notification %s reclaim exhausted after %d attempts; giving up",
+                    notification.id,
+                    notification.retry_count,
+                )
+                db.commit()
+                continue
+            reclaimed += 1
+            logger.info(
+                "Reclaiming stuck-sending notification %s "
+                "(at-least-once, attempt %d/%d)",
+                notification.id,
+                notification.retry_count,
+                MAX_RETRIES,
+            )
         # Update status before sending
         notification.status = NotificationStatus.sending
         db.commit()
@@ -235,6 +295,8 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
         "retried": retried,
         "failed": failed,
         "expired": expired,
+        "reclaimed": reclaimed,
+        "stuck_dropped": stuck_dropped,
     }
 
 
