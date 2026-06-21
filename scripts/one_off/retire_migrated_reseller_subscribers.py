@@ -64,8 +64,10 @@ def _apply(db) -> None:
         ).all()
         if _has_active_local_credential(db, s.id)
     ]
-    print(f"Retiring {len(rows)} migrated reseller subscriber(s); "
-          f"{len(skipped)} skipped (still have an active login). (APPLY)")
+    print(
+        f"Retiring {len(rows)} migrated reseller subscriber(s); "
+        f"{len(skipped)} skipped (still have an active login). (APPLY)"
+    )
     n = 0
     for s in rows:
         if s.status == SubscriberStatus.canceled:
