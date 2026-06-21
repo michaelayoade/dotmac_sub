@@ -41,7 +41,7 @@ def _dwell_seconds(session: Session) -> int:
     if raw is None:
         return _DEFAULT_DWELL_SECONDS
     try:
-        return max(int(raw), 0)
+        return max(int(str(raw)), 0)
     except (TypeError, ValueError):
         return _DEFAULT_DWELL_SECONDS
 
