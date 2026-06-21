@@ -13,17 +13,26 @@ def _reseller_sub(db, email, *, with_credential):
     db.add(r)
     db.flush()
     s = Subscriber(
-        first_name="R", last_name="S", email=email,
-        user_type=UserType.reseller, reseller_id=r.id,
-        status=SubscriberStatus.active, is_active=True,
+        first_name="R",
+        last_name="S",
+        email=email,
+        user_type=UserType.reseller,
+        reseller_id=r.id,
+        status=SubscriberStatus.active,
+        is_active=True,
     )
     db.add(s)
     db.flush()
     if with_credential:
-        db.add(UserCredential(
-            subscriber_id=s.id, provider=AuthProvider.local, username=email,
-            password_hash=hash_password("secret"), is_active=True,  # noqa: S106
-        ))
+        db.add(
+            UserCredential(
+                subscriber_id=s.id,
+                provider=AuthProvider.local,
+                username=email,
+                password_hash=hash_password("secret"),
+                is_active=True,  # noqa: S106
+            )
+        )
     db.commit()
     return s
 
