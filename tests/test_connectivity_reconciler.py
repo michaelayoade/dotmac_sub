@@ -322,9 +322,7 @@ class TestDesiredConnectivity:
             assert d.kick_live_session is True  # INV-5: disconnect once
 
     def test_hard_reject_is_suspended_tier_still_retains_ip(self):
-        d = derive_desired_connectivity(
-            SubscriptionStatus.suspended, hard_reject=True
-        )
+        d = derive_desired_connectivity(SubscriptionStatus.suspended, hard_reject=True)
         assert d.access_state is AccessState.suspended
         assert d.credentials_active is True
         assert d.ip_retained is True  # even hard block keeps the address (INV-1)

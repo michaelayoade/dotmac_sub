@@ -162,9 +162,7 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
     """
     sid = coerce_uuid(subscriber_id)
     subs = list(
-        db.scalars(
-            select(Subscription).where(Subscription.subscriber_id == sid)
-        ).all()
+        db.scalars(select(Subscription).where(Subscription.subscriber_id == sid)).all()
     )
 
     sub_reports: list[dict[str, Any]] = []
