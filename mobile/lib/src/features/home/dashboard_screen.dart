@@ -836,8 +836,11 @@ class _CurrentServiceCard extends StatelessWidget {
             // Postpaid / no date expiry: show the next bill date, not a
             // (meaningless) validity countdown.
             null => s.nextBillingAt != null
-                ? (theme.colorScheme.outline, 'Next bill',
-                    Fmt.date(s.nextBillingAt))
+                ? (
+                    theme.colorScheme.outline,
+                    'Next bill',
+                    Fmt.date(s.nextBillingAt)
+                  )
                 : (theme.colorScheme.outline, null, null),
             0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
             // Active service with a momentarily-stale billing date: running, not

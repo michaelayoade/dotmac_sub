@@ -269,7 +269,8 @@ void main() {
         'next_billing_at': '2020-01-01T00:00:00Z',
       });
       expect(s.hasServerExpiry, isFalse);
-      expect(s.expiresAt, isNotNull); // local fallback for older/offline backend
+      expect(
+          s.expiresAt, isNotNull); // local fallback for older/offline backend
       expect(s.isExpired, isFalse); // active is never expired
     });
 

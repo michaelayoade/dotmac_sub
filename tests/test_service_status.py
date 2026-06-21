@@ -144,9 +144,7 @@ def test_contract_end_at_always_wins_as_expiry(
     assert _n(resp.services[0].expires_at) == _n(end)
 
 
-def test_ended_subscriptions_are_excluded(
-    db_session, subscriber_account, subscription
-):
+def test_ended_subscriptions_are_excluded(db_session, subscriber_account, subscription):
     subscriber_account.billing_mode = BillingMode.postpaid
     subscription.status = SubscriptionStatus.canceled
     subscription.canceled_at = datetime.now(UTC)

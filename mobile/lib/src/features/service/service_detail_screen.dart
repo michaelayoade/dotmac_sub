@@ -108,13 +108,18 @@ class _ExpiryCard extends StatelessWidget {
             // Postpaid / no date expiry: show the next bill date, not a scary
             // "validity unknown".
             null => s.nextBillingAt != null
-                ? (Colors.green.shade700, 'Next bill ${Fmt.date(s.nextBillingAt)}')
+                ? (
+                    Colors.green.shade700,
+                    'Next bill ${Fmt.date(s.nextBillingAt)}'
+                  )
                 : (scheme.outline, 'No expiry date'),
             0 => (scheme.error, 'Expires today'),
             // Active service, stale billing date: running, not expired.
             < 0 => (Colors.green.shade700, 'Active'),
-            <= 3 =>
-              (Colors.orange.shade800, '$days day${days == 1 ? '' : 's'} left'),
+            <= 3 => (
+                Colors.orange.shade800,
+                '$days day${days == 1 ? '' : 's'} left'
+              ),
             _ => (Colors.green.shade700, '$days days left'),
           };
     return Card(
