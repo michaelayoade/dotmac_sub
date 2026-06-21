@@ -20,6 +20,9 @@ class Subscription {
     this.startAt,
     this.endAt,
     this.nextBillingAt,
+    this.serverExpiresAt,
+    this.serverIsExpired,
+    this.hasServerExpiry = false,
   });
 
   final String id;
@@ -38,6 +41,15 @@ class Subscription {
   final DateTime? startAt;
   final DateTime? endAt;
   final DateTime? nextBillingAt;
+
+  /// Server-computed authoritative expiry (catalog.py `expires_at`/`is_expired`):
+  /// the backend is the source of truth for when a service genuinely lapses, so
+  /// the client doesn't have to guess from billing dates. [hasServerExpiry] is
+  /// false against older backends / offline cache, where we fall back to local
+  /// mode-aware logic.
+  final DateTime? serverExpiresAt;
+  final bool? serverIsExpired;
+  final bool hasServerExpiry;
 
   bool get isActive => status == 'active';
   bool get isPrepaid => billingMode == 'prepaid';
@@ -76,9 +88,14 @@ class Subscription {
   /// Only prepaid validity (or an explicit contract end) is a real expiry.
   bool get hasExpiry => endAt != null || isPrepaid;
 
-  /// When the service lapses, or null when it has no date-based expiry (e.g.
-  /// postpaid). Explicit contract end wins over the prepaid validity date.
-  DateTime? get expiresAt => hasExpiry ? (endAt ?? nextBillingAt) : null;
+  /// When the service lapses, or null when it has none. Prefer the server's
+  /// authoritative value; fall back to local mode-aware logic when the backend
+  /// didn't supply it (older API / offline cache). Note: postpaid and healthy
+  /// prepaid have no date expiry — the real prepaid lapse (low balance → grace)
+  /// comes from GET /me/service-status, not from next_billing_at.
+  DateTime? get expiresAt => hasServerExpiry
+      ? serverExpiresAt
+      : (hasExpiry ? (endAt ?? nextBillingAt) : null);
 
   /// Whole days until [expiresAt]; negative if already past, null when there is
   /// no date-based expiry (postpaid) or it's unknown.
@@ -93,6 +110,7 @@ class Subscription {
   /// momentarily-stale billing date (e.g. a prepaid validity date the runner
   /// hasn't advanced yet) must not override a running service.
   bool get isExpired {
+    if (hasServerExpiry) return serverIsExpired ?? false;
     if (isActive) return false;
     final d = daysUntilExpiry;
     return d != null && d < 0;
@@ -126,6 +144,9 @@ class Subscription {
       startAt: _toDate(json['start_at']),
       endAt: _toDate(json['end_at']),
       nextBillingAt: _toDate(json['next_billing_at']),
+      serverExpiresAt: _toDate(json['expires_at']),
+      serverIsExpired: json['is_expired'] as bool?,
+      hasServerExpiry: json.containsKey('is_expired'),
     );
   }
 }

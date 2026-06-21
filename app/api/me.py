@@ -54,6 +54,7 @@ from app.schemas.catalog import (
     SubscriptionRead,
 )
 from app.schemas.common import ListResponse
+from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.gis import (
     MyLocationRead,
     MyLocationRequestCreate,
@@ -310,6 +311,24 @@ def my_subscriptions(
     return catalog_service.subscriptions.list_response(
         db, subscriber_id, None, status, order_by, order_dir, limit, offset
     )
+
+
+@router.get("/service-status", response_model=ServiceStatusResponse)
+def my_service_status(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Truthful "is my service good, and when does it lapse" view.
+
+    Service expiry is not date-driven: prepaid lapses on balance exhaustion
+    (balance + grace/deactivation timers below), postpaid only via dunning on
+    overdue invoices. `next_charge_at` is the next charge/invoice date, never an
+    expiry — clients should read this endpoint (and `status`) rather than infer
+    expiry from `next_billing_at`.
+    """
+    from app.services.service_status import build_service_status
+
+    return build_service_status(db, _subscriber_id(principal))
 
 
 @router.get("/quota-buckets", response_model=ListResponse[QuotaBucketRead])

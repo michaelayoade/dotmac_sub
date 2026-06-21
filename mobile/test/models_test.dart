@@ -10,6 +10,7 @@ import 'package:dotmac_portal/src/models/page.dart';
 import 'package:dotmac_portal/src/models/payment_method.dart';
 import 'package:dotmac_portal/src/models/payment_flow.dart';
 import 'package:dotmac_portal/src/models/plan_change.dart';
+import 'package:dotmac_portal/src/models/service_status.dart';
 import 'package:dotmac_portal/src/models/session.dart';
 import 'package:dotmac_portal/src/models/subscription.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
@@ -237,6 +238,39 @@ void main() {
       });
       expect(s.hasExpiry, isTrue);
       expect(s.isExpired, isTrue);
+    });
+
+    test('prefers server is_expired/expires_at when the backend provides them',
+        () {
+      // Server says: active, no date expiry (prepaid lapses on balance, not
+      // next_billing_at). Client must trust it over local date math.
+      final s = Subscription.fromJson({
+        'id': 's9',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'active',
+        'billing_mode': 'prepaid',
+        'next_billing_at': '2020-01-01T00:00:00Z',
+        'expires_at': null,
+        'is_expired': false,
+      });
+      expect(s.hasServerExpiry, isTrue);
+      expect(s.expiresAt, isNull);
+      expect(s.isExpired, isFalse);
+    });
+
+    test('falls back to local logic when server fields are absent', () {
+      final s = Subscription.fromJson({
+        'id': 's10',
+        'account_id': 'a1',
+        'offer_id': 'o1',
+        'status': 'active',
+        'billing_mode': 'prepaid',
+        'next_billing_at': '2020-01-01T00:00:00Z',
+      });
+      expect(s.hasServerExpiry, isFalse);
+      expect(s.expiresAt, isNotNull); // local fallback for older/offline backend
+      expect(s.isExpired, isFalse); // active is never expired
     });
 
     test('expiresSoon only inside the 3-day window for date-based expiry', () {
@@ -538,6 +572,52 @@ void main() {
       expect(b.uploadBps, 3000000.0);
       expect(b.hasSignal, isTrue);
       expect(LiveBandwidth.fromJson(const {}).hasSignal, isFalse);
+    });
+  });
+
+  group('ServiceStatus', () {
+    test('prepaid low balance flags a renewal with the grace cut-off', () {
+      final s = ServiceStatus.fromJson({
+        'billing_mode': 'prepaid',
+        'currency': 'NGN',
+        'balance': '50.00',
+        'min_balance': '100.00',
+        'low_balance': true,
+        'grace_until': '2026-07-01T00:00:00Z',
+        'services': [
+          {
+            'subscription_id': 's1',
+            'status': 'active',
+            'billing_mode': 'prepaid',
+            'usable': true,
+            'reason': 'low_balance',
+          }
+        ],
+      });
+      expect(s.isPrepaid, isTrue);
+      expect(s.balance, 50.0);
+      expect(s.lowBalance, isTrue);
+      expect(s.graceUntil, isNotNull);
+      expect(s.needsRenewal, isTrue);
+      expect(s.services.single.actionable, isTrue);
+    });
+
+    test('healthy account does not flag a renewal', () {
+      final s = ServiceStatus.fromJson({
+        'billing_mode': 'postpaid',
+        'in_dunning': false,
+        'services': [
+          {
+            'subscription_id': 's1',
+            'status': 'active',
+            'billing_mode': 'postpaid',
+            'usable': true,
+            'reason': 'ok',
+          }
+        ],
+      });
+      expect(s.needsRenewal, isFalse);
+      expect(s.services.single.actionable, isFalse);
     });
   });
 }

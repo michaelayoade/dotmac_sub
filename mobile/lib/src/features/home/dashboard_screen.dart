@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
@@ -22,6 +23,7 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(currentUserProvider);
     final subs = ref.watch(subscriptionsProvider);
+    final serviceStatus = ref.watch(serviceStatusProvider).asData?.value;
     final invoices = ref.watch(invoicesProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final notifications = ref.watch(notificationsProvider);
@@ -101,7 +103,13 @@ class DashboardScreen extends ConsumerWidget {
       final name = currentService.displayName;
       if (currentService.isExpired) {
         renewMessage = '$name has expired — renew now';
+      } else if (serviceStatus?.needsRenewal ?? false) {
+        // The real, balance/dunning-driven nudge: a running service heading for
+        // a cut the customer can prevent by paying. The cut date (if known)
+        // comes from the prepaid grace timer — never from a billing date.
+        renewMessage = _renewFromServiceStatus(serviceStatus!);
       } else if (daysLeft != null && daysLeft >= 0 && daysLeft <= 3) {
+        // Contract end approaching (the only genuine date-based expiry).
         renewMessage = switch (daysLeft) {
           0 => '$name expires today — renew now',
           1 => '$name expires tomorrow — renew now',
@@ -157,6 +165,7 @@ class DashboardScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(subscriptionsProvider);
+          ref.invalidate(serviceStatusProvider);
           ref.invalidate(invoicesProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(usageSummaryProvider('today'));
@@ -202,9 +211,10 @@ class DashboardScreen extends ConsumerWidget {
               _RenewBanner(
                 message: renewMessage,
                 expired: currentService?.isExpired ?? false,
-                // Straight to the pay/add-funds flow (renewal = top-up in the
-                // prepaid model), not the invoices list.
-                onTap: () => context.push('/topup'),
+                // Prepaid renewal = top-up; postpaid overdue = pay the bill.
+                onTap: () => context.push(
+                  (serviceStatus?.isPrepaid ?? true) ? '/topup' : '/billing',
+                ),
               ),
             ],
             Consumer(builder: (context, ref, _) {
@@ -364,6 +374,19 @@ String? _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
     0 => 'Today',
     _ => '$days',
   };
+}
+
+/// Renewal nudge for a *running* service heading for a cut the customer can
+/// prevent by paying — driven by real balance/dunning state, not a billing
+/// date. Prepaid surfaces the grace cut-off date when known.
+String _renewFromServiceStatus(ServiceStatus s) {
+  if (s.isPrepaid) {
+    final when = s.graceUntil;
+    return when != null
+        ? 'Balance low — top up by ${Fmt.date(when)} to keep your service'
+        : 'Balance low — top up to keep your service';
+  }
+  return 'Payment overdue — pay now to avoid suspension';
 }
 
 /// Status-banner copy when service(s) are blocked/suspended: names the plan
