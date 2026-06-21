@@ -5,17 +5,18 @@
 
 // Theme colors matching Tailwind config
 const ChartColors = {
+    // Brand green (matches the --color-primary scale / theme.css).
     primary: {
-        50: '#ecfeff',
-        100: '#cffafe',
-        200: '#a5f3fc',
-        300: '#67e8f9',
-        400: '#22d3ee',
-        500: '#06b6d4',
-        600: '#0891b2',
-        700: '#0e7490',
-        800: '#155e75',
-        900: '#164e63',
+        50: '#edf3eb',
+        100: '#dbe7d7',
+        200: '#b8cfb0',
+        300: '#90b483',
+        400: '#5a9147',
+        500: '#367920',
+        600: '#206a07',
+        700: '#1a5706',
+        800: '#154605',
+        900: '#103504',
     },
     accent: {
         50: '#fff7ed',
