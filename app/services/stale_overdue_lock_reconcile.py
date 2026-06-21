@@ -28,6 +28,7 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.services.account_lifecycle import (
     SUSPENDED_EQUIVALENT,
     get_active_locks,
+    reactivation_blocked_by_active_login,
     restore_subscription,
 )
 from app.services.collections import has_overdue_balance
@@ -54,6 +55,7 @@ class ReconcileResult:
     candidates: int
     restored: int = 0
     lock_cleared_only: int = 0
+    skipped: int = 0
     items: list[ReconcileItem] = field(default_factory=list)
 
 
@@ -109,6 +111,18 @@ def reconcile(
             other_active_locks=other,
         )
         will_reactivate = not other
+
+        # Superseded duplicate (subscriber already active on this login) — don't
+        # flip it back to active (active-login uniqueness). Skip.
+        if will_reactivate and reactivation_blocked_by_active_login(db, sub):
+            item.action = "skipped"
+            item.detail = (
+                "subscriber already has an active subscription on this login "
+                "(superseded duplicate); review manually"
+            )
+            result.skipped += 1
+            result.items.append(item)
+            continue
 
         if not apply:
             item.action = (

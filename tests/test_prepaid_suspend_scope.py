@@ -9,6 +9,7 @@ Dunning, by contrast, suspends the whole account on arrears.
 
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
+from app.services.account_lifecycle import suspend_subscription
 from app.services.collections._core import _suspend_account
 
 
@@ -46,6 +47,33 @@ def test_prepaid_enforcement_spares_postpaid_service(
     db_session.refresh(postpaid)
     assert prepaid.status == SubscriptionStatus.suspended
     assert postpaid.status == SubscriptionStatus.active  # spared
+
+
+def test_skips_superseded_duplicate_active_login(db_session, subscriber, catalog_offer):
+    # Suspended dup carrying the wrongful prepaid lock, but the subscriber
+    # already has an active sub on the SAME login => reactivating would violate
+    # the active-login uniqueness index, so it must be skipped.
+    from app.services.prepaid_scope_repair import repair
+
+    active = _mk(db_session, subscriber, catalog_offer, BillingMode.postpaid)
+    active.login = "100000999"
+    dup = _mk(db_session, subscriber, catalog_offer, BillingMode.postpaid)
+    dup.login = "100000999"
+    dup.status = SubscriptionStatus.suspended  # only one active on the login
+    db_session.commit()
+    suspend_subscription(
+        db_session,
+        str(dup.id),
+        reason=EnforcementReason.prepaid,
+        source="prepaid_enforcement",
+    )
+
+    result = repair(db_session, apply=True)
+
+    item = next(i for i in result.items if i.subscription_id == str(dup.id))
+    assert item.action == "skipped"
+    db_session.refresh(dup)
+    assert dup.status == SubscriptionStatus.suspended  # not reactivated
 
 
 def test_dunning_suspend_still_covers_whole_account(

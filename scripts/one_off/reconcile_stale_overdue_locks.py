@@ -65,7 +65,7 @@ def main() -> int:
     print(
         f"\n[{mode}] candidates={result.candidates} "
         f"{'restored' if result.applied else 'would_restore'}={result.restored} "
-        f"lock_cleared_only={result.lock_cleared_only}",
+        f"lock_cleared_only={result.lock_cleared_only} skipped={result.skipped}",
         file=sys.stderr,
     )
     return 0

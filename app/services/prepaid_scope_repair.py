@@ -30,6 +30,7 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.services.account_lifecycle import (
     SUSPENDED_EQUIVALENT,
     get_active_locks,
+    reactivation_blocked_by_active_login,
     restore_subscription,
 )
 from app.services.collections import has_overdue_balance
@@ -120,6 +121,19 @@ def repair(
             continue
 
         will_reactivate = not other
+
+        # A suspended sub whose subscriber already has an active sub on the same
+        # login is a superseded duplicate — reactivating it would violate the
+        # active-login uniqueness index. Skip (don't clear the lock either).
+        if will_reactivate and reactivation_blocked_by_active_login(db, sub):
+            item.action = "skipped"
+            item.detail = (
+                "subscriber already has an active subscription on this login "
+                "(superseded duplicate); review manually"
+            )
+            result.skipped += 1
+            result.items.append(item)
+            continue
 
         if not apply:
             item.action = (
