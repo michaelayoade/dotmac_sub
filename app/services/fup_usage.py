@@ -158,7 +158,9 @@ async def get_fup_usage_gb_async(
 ) -> FupUsageWindow:
     """Windowed FUP usage for one subscription. Await this from async callers
     (e.g. the customer usage-summary endpoint)."""
-    return await _resolve_fup_usage(db, subscription, period, now or datetime.now(UTC), tz)
+    return await _resolve_fup_usage(
+        db, subscription, period, now or datetime.now(UTC), tz
+    )
 
 
 def get_fup_usage_gb(
