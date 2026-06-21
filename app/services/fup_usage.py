@@ -138,14 +138,16 @@ async def _resolve_fup_usage(
             is_authoritative=used is not None,
         )
 
-    total_bytes, authoritative = await windowed_used_bytes(
+    total_bytes, had_data = await windowed_used_bytes(
         db, [subscription.id], window.start, window.end, tz
     )
+    # "no_data" (offline OR metrics store down) is distinct from a measured 0 —
+    # enforcement must not act on a blind reading (#21 safeguard).
     return FupUsageWindow(
         used_gb=total_bytes / _GB_BYTES,
         window=window,
-        source="samples",
-        is_authoritative=authoritative,
+        source="samples" if had_data else "no_data",
+        is_authoritative=False,
     )
 
 

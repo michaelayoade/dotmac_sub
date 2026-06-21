@@ -427,12 +427,14 @@ async def windowed_used_bytes(
 ) -> tuple[int, bool]:
     """Integrate the throughput series over ``[start, end)`` into total bytes.
 
-    Returns ``(bytes, is_authoritative)``. The same samples/VM integration the
-    customer usage summary uses, exposed for an explicit window so FUP
-    enforcement and the summary share one definition (#21). Windows inside
-    Postgres' ~24h sample retention use raw samples; older windows use the
-    metrics store. Samples-derived totals are not authoritative (interim
-    accounting can be sparse or absent).
+    Returns ``(bytes, had_data)``. ``had_data`` is False when the window yielded
+    NO throughput points — the subscriber was offline, or (the case that
+    matters) the metrics store was unavailable. A blind zero must not be
+    mistaken for "used nothing": callers should not enforce on it (#21
+    safeguard). The same samples/VM integration the customer usage summary uses,
+    exposed for an explicit window so FUP enforcement and the summary share one
+    definition. Windows inside Postgres' ~24h sample retention use raw samples;
+    older windows use the metrics store.
     """
     if not sub_ids:
         return 0, False
@@ -441,8 +443,10 @@ async def windowed_used_bytes(
         points = _raw_samples(db, sub_ids, start, end)
     else:
         points = await _vm_points(db, sub_ids, start, end)
+    if not points:
+        return 0, False
     series = _integrate(points, "day", tz, end=min(end, now))
-    return int(round(sum(series.values()))), False
+    return int(round(sum(series.values()))), True
 
 
 def _coerce_ts(value) -> datetime | None:
