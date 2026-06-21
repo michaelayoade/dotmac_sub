@@ -238,6 +238,11 @@ async def verify_subscriber_nin(
     )
     db.commit()
 
+    if verification.status == NINVerificationStatus.success:
+        # Lock once verified — identity already confirmed; no new (paid) Mono
+        # lookup. Corrections go through an explicit admin re-verify path.
+        return {"status": "already_verified", "task_id": ""}
+
     dispatch = enqueue_task(
         verify_nin_task,
         args=[str(subscriber.id), normalized_nin],
