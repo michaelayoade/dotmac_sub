@@ -2,6 +2,17 @@
 
 {% block title %}Reseller Sign In - {{ portal_name or (brand.product_name if brand is defined and brand else 'DotMac Subs') }}{% endblock %}
 
+{% block auth_hero %}
+<div class="relative hidden lg:block lg:w-1/2 overflow-hidden">
+  <img src="/static/illustrations/login-hero-reseller.webp" alt="" class="absolute inset-0 h-full w-full object-cover">
+  <div class="absolute inset-0" style="background:linear-gradient(to top, rgba(16,53,4,0.88), rgba(16,53,4,0.22) 55%, rgba(16,53,4,0) 100%)"></div>
+  <div class="absolute inset-x-0 bottom-0 p-12 text-white">
+    <h1 class="text-4xl font-bold leading-tight">Grow your business with DotMac</h1>
+    <p class="mt-4 text-lg text-white/90 max-w-md">Manage your customers, billing and commissions — all in one reseller portal.</p>
+  </div>
+</div>
+{% endblock %}
+
 {% block content %}
 <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/90 p-8 shadow-2xl backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/90">
     <!-- Decorative gradient orbs -->
