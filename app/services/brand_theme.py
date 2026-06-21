@@ -7,6 +7,7 @@ primary colour can be themed at runtime without a CSS rebuild.
 from __future__ import annotations
 
 DEFAULT_HEX = "#206a07"
+DEFAULT_SECONDARY_HEX = "#06b6d4"
 
 # step -> (mix_ratio, mix_toward_white)
 # Light steps mix the base toward white; dark steps mix toward black.

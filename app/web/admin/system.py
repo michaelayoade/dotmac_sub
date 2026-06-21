@@ -2798,6 +2798,7 @@ def settings_branding_update(
     dark_logo_file: UploadFile | None = File(None),
     favicon_file: UploadFile | None = File(None),
     brand_primary_color: str | None = Form(None),
+    brand_secondary_color: str | None = Form(None),
     login_hero_customer_url: str | None = Form(None),
     login_hero_reseller_url: str | None = Form(None),
     login_hero_admin_url: str | None = Form(None),
@@ -2983,6 +2984,15 @@ def settings_branding_update(
                 )
             normalised = color_candidate.lstrip("#").lower()
             _persist_setting("brand_primary_color", f"#{normalised}")
+
+        secondary_candidate = (brand_secondary_color or "").strip()
+        if secondary_candidate:
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", secondary_candidate):
+                raise ValueError(
+                    "Brand colour must be a 6-digit hex value, e.g. #06b6d4."
+                )
+            normalised_secondary = secondary_candidate.lstrip("#").lower()
+            _persist_setting("brand_secondary_color", f"#{normalised_secondary}")
 
         return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:

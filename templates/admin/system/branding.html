@@ -129,6 +129,22 @@
             </section>
 
             <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Secondary Colour</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for links, highlights and secondary chart series.</p>
+                <div class="mt-4 flex items-center gap-3">
+                    <input type="color" name="brand_secondary_color"
+                           value="{{ current_brand_secondary_color or '#06b6d4' }}"
+                           oninput="this.form.brand_secondary_color_hex.value = this.value"
+                           class="h-10 w-14 cursor-pointer rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-700">
+                    <input type="text" name="brand_secondary_color_hex"
+                           value="{{ current_brand_secondary_color or '#06b6d4' }}"
+                           oninput="this.form.brand_secondary_color.value = this.value"
+                           placeholder="#06b6d4"
+                           class="block w-40 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Login Page Images</h3>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Hero image shown on each portal's login page. File upload overrides URL. Leave empty to use the bundled default.</p>
                 {% for portal, portal_label, current_hero in [

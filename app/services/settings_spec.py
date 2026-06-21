@@ -2272,6 +2272,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
+        key="brand_secondary_color",
+        env_var="BRAND_SECONDARY_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default="#06b6d4",
+        label="Brand Secondary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
         key="login_hero_customer_url",
         env_var="LOGIN_HERO_CUSTOMER_URL",
         value_type=SettingValueType.string,

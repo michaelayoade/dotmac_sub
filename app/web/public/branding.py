@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.stored_file import StoredFile
 from app.services import settings_spec
-from app.services.brand_theme import DEFAULT_HEX, generate_scale
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SECONDARY_HEX,
+    generate_scale,
+)
 from app.services.branding_config import get_brand
 from app.services.file_storage import file_uploads
 from app.services.object_storage import ObjectNotFoundError
@@ -28,7 +32,7 @@ router = APIRouter(prefix="/branding", tags=["public-branding"])
 _LOGIN_HERO_PORTALS = {"customer", "reseller", "admin"}
 
 
-def _theme_css(scale: dict[int, str]) -> str:
+def _theme_css(scale: dict[int, str], secondary_scale: dict[int, str]) -> str:
     primary_lines = "".join(
         f"  --color-primary-{step}:{scale[step]};\n"
         for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950)
@@ -37,16 +41,21 @@ def _theme_css(scale: dict[int, str]) -> str:
         f"  --color-brand-{step}:{scale[step]};\n"
         for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900)
     )
-    return ":root{\n" + primary_lines + brand_lines + "}\n"
+    accent_lines = "".join(
+        f"  --color-accent-{step}:{secondary_scale[step]};\n"
+        for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950)
+    )
+    return ":root{\n" + primary_lines + brand_lines + accent_lines + "}\n"
 
 
 @router.get("/theme.css", include_in_schema=False)
 def theme_css(db: Session = Depends(get_db)):
     """Runtime brand colour theme as a CSS variable stylesheet.
 
-    Reads ``brand_primary_color`` and emits an 11-stop scale for both the
-    ``--color-primary-*`` and ``--color-brand-*`` custom properties. Never
-    raises: any failure falls back to the default green scale.
+    Reads ``brand_primary_color`` and ``brand_secondary_color`` and emits an
+    11-stop scale for the ``--color-primary-*``, ``--color-brand-*`` and
+    ``--color-accent-*`` custom properties. Never raises: any failure falls
+    back to the default green/cyan scales.
     """
     try:
         raw = settings_spec.resolve_value(
@@ -56,8 +65,18 @@ def theme_css(db: Session = Depends(get_db)):
         scale = generate_scale(hex_color or DEFAULT_HEX)
     except Exception:
         scale = generate_scale(DEFAULT_HEX)
+    try:
+        raw_secondary = settings_spec.resolve_value(
+            db, SettingDomain.comms, "brand_secondary_color"
+        )
+        secondary_hex = (
+            str(raw_secondary).strip() if raw_secondary else DEFAULT_SECONDARY_HEX
+        )
+        secondary_scale = generate_scale(secondary_hex or DEFAULT_SECONDARY_HEX)
+    except Exception:
+        secondary_scale = generate_scale(DEFAULT_SECONDARY_HEX)
     return Response(
-        content=_theme_css(scale),
+        content=_theme_css(scale, secondary_scale),
         media_type="text/css",
         headers={"Cache-Control": "public, max-age=300"},
     )
