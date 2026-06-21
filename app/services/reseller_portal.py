@@ -218,6 +218,7 @@ def create_reseller_user_principal(
     password: str,
     email: str | None = None,
     full_name: str | None = None,
+    must_change_password: bool = False,
 ) -> ResellerUser:
     """Create a first-class reseller portal login (Layer 3).
 
@@ -226,6 +227,8 @@ def create_reseller_user_principal(
     that repoints existing reseller credentials. The login only authenticates
     when ``RESELLER_USER_PRINCIPAL_ENABLED`` is on.
     """
+    from datetime import UTC, datetime
+
     from app.models.auth import AuthProvider, UserCredential
 
     reseller_user = ResellerUser(
@@ -241,6 +244,8 @@ def create_reseller_user_principal(
         provider=AuthProvider.local,
         username=username,
         password_hash=auth_flow_service.hash_password(password),
+        must_change_password=must_change_password,
+        password_updated_at=datetime.now(UTC),
         is_active=True,
     )
     db.add(credential)
