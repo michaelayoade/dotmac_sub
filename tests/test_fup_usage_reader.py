@@ -3,16 +3,28 @@
 One reader for monthly (QuotaBucket) and daily/weekly (samples/VM). A window
 with no throughput points reports ``source="no_data"`` (distinct from a measured
 zero) so enforcement won't act on a blind reading.
+
+The reader's sync entry (``get_fup_usage_gb``) bridges async via asyncio.run and
+is only ever called from the Celery sweep (no ambient loop). Under pytest's CI
+loop we exercise the async variant in a worker thread instead — the same
+convention as test_usage_summary.
 """
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.bandwidth import BandwidthSample
 from app.models.usage import QuotaBucket
-from app.services.fup_usage import get_fup_usage_gb
+from app.services.fup_usage import get_fup_usage_gb_async
+
+
+def _run(coro):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def _month_bounds(now):
@@ -41,7 +53,7 @@ def test_monthly_reads_quota_bucket(db_session, subscription):
     )
     db_session.commit()
 
-    usage = get_fup_usage_gb(db_session, subscription, "monthly", now=now)
+    usage = _run(get_fup_usage_gb_async(db_session, subscription, "monthly", now=now))
     assert usage.source == "quota_bucket"
     assert usage.is_authoritative is True
     assert abs(usage.used_gb - 42.5) < 0.001
@@ -49,7 +61,7 @@ def test_monthly_reads_quota_bucket(db_session, subscription):
 
 
 def test_monthly_missing_bucket_is_zero_nonauthoritative(db_session, subscription):
-    usage = get_fup_usage_gb(db_session, subscription, "monthly")
+    usage = _run(get_fup_usage_gb_async(db_session, subscription, "monthly"))
     assert usage.used_gb == 0.0
     assert usage.is_authoritative is False  # no bucket on file
 
@@ -57,7 +69,7 @@ def test_monthly_missing_bucket_is_zero_nonauthoritative(db_session, subscriptio
 def test_daily_no_samples_is_no_data(db_session, subscription):
     # No samples / metrics store down -> "no_data", distinct from a measured 0,
     # so enforcement won't act on a blind reading (#21 safeguard).
-    usage = get_fup_usage_gb(db_session, subscription, "daily")
+    usage = _run(get_fup_usage_gb_async(db_session, subscription, "daily"))
     assert usage.used_gb == 0.0
     assert usage.source == "no_data"
     assert usage.is_authoritative is False
@@ -79,7 +91,7 @@ def test_daily_integrates_recent_samples(db_session, subscription):
         )
     db_session.commit()
 
-    usage = get_fup_usage_gb(db_session, subscription, "daily", now=now)
+    usage = _run(get_fup_usage_gb_async(db_session, subscription, "daily", now=now))
     assert usage.source == "samples"
     assert usage.is_authoritative is False
     assert usage.used_gb > 0
