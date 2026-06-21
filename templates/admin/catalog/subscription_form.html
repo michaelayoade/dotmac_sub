@@ -476,6 +476,7 @@
                             <div>
                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Address</label>
                                 <input type="text" :name="'ipv4_addresses'" x-model="row.ip" :list="'ipv4-address-options-' + idx"
+                                    @focus="loadAvailableIps(row, { autoSelect: !row.ip, preserveExisting: true })"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <datalist :id="'ipv4-address-options-' + idx">
                                     <template x-for="ip in availableIpsForRow(row)" :key="ip">
@@ -658,15 +659,11 @@ function subscriptionProvisioning() {
     const initialAddonId = {{ (subscription.ip_addon_id or '') | tojson }};
     const initialAddresses = {{ initial_ipv4_addresses | tojson }};
     const initialBlocks = {{ initial_ipv4_block_ids | tojson }};
-    const initialRouteCidrs = {{ initial_additional_route_cidrs | tojson }};
-    const initialRouteMetrics = {{ initial_additional_route_metrics | tojson }};
+    const initialRouteRows = {{ initial_route_rows_json | safe }};
+    const subscriberId = {{ (subscription.subscriber_id or '') | tojson }};
     const blockLabel = (blockId) => {
         const block = blocks.find((item) => item.id === blockId);
         return block ? block.display : "";
-    };
-    const routeRangeLabel = (parentId) => {
-        const range = routeRanges.find((item) => item.id === parentId);
-        return range ? range.display : "";
     };
     const rows = initialAddresses.slice(0, 1).map((ip, idx) => ({
         blockId: initialBlocks[idx] || "",
@@ -677,35 +674,23 @@ function subscriptionProvisioning() {
         ipError: "",
         hasMoreIps: false,
     }));
-    const routeRows = initialRouteCidrs.map((cidr, idx) => {
-        const parent = routeRanges.find((range) => {
-            if (!cidr) {
-                return false;
-            }
-            if (range.cidr === cidr) {
-                return true;
-            }
-            return Object.values(range.children_by_prefix || {})
-                .flat()
-                .some((child) => child.cidr === cidr);
-        }) || {};
-        const child = Object.values(parent.children_by_prefix || {})
-            .flat()
-            .find((item) => item.cidr === cidr) || {};
-        return {
-            parentId: parent.id || "",
-            parentQuery: routeRangeLabel(parent.id || ""),
-            childId: child.id || "",
-            cidr: cidr || "",
-            metric: initialRouteMetrics[idx] || "1",
-        };
-    });
+    const routeRows = initialRouteRows.map((row) => ({
+        parentId: row.parentId || "",
+        parentQuery: row.parentQuery || "",
+        childId: row.childId || "",
+        cidr: row.cidr || "",
+        metric: row.metric || "1",
+        childrenByPrefix: {},
+        loadingChildren: false,
+    }));
     const initialRows = routeRows.length ? routeRows : [{
         parentId: "",
         parentQuery: "",
         childId: "",
         cidr: "",
         metric: "1",
+        childrenByPrefix: {},
+        loadingChildren: false,
     }];
     return {
         blocks,
@@ -714,6 +699,13 @@ function subscriptionProvisioning() {
         selectedAddonId: initialAddonId,
         rows: rows.length ? rows : [{ blockId: "", blockQuery: "", ip: "", ipOptions: [], loadingIps: false, ipError: "", hasMoreIps: false }],
         routeRows: initialRows,
+        init() {
+            this.routeRows.forEach((route) => {
+                if (route.parentId && this.selectedAddonPrefix) {
+                    this.loadChildrenForRoute(route);
+                }
+            });
+        },
         get selectedAddonPrefix() {
             const option = this.ipAddonOptions.find((item) => item.id === this.selectedAddonId);
             return option && option.prefix ? String(option.prefix) : "";
@@ -870,15 +862,15 @@ function subscriptionProvisioning() {
             if (range && range.id !== route.parentId) {
                 route.parentId = range.id;
                 route.parentQuery = range.display;
+                route.childrenByPrefix = {};
                 this.populateRouteChildren(route);
             }
         },
         childOptionsForRoute(route) {
-            const range = this.routeRanges.find((item) => item.id === route.parentId);
-            if (!range || !this.selectedAddonPrefix) {
+            if (!route.parentId || !this.selectedAddonPrefix) {
                 return [];
             }
-            return (range.children_by_prefix || {})[this.selectedAddonPrefix] || [];
+            return (route.childrenByPrefix || {})[this.selectedAddonPrefix] || [];
         },
         childEmptyLabel(route) {
             if (!this.selectedAddonPrefix) {
@@ -887,13 +879,47 @@ function subscriptionProvisioning() {
             if (!route.parentId) {
                 return 'Choose /24 first';
             }
+            if (route.loadingChildren) {
+                return 'Loading subnets';
+            }
             return `No available /${this.selectedAddonPrefix}`;
         },
-        populateRouteChildren(route) {
+        async loadChildrenForRoute(route) {
+            if (!route.parentId || !this.selectedAddonPrefix || route.loadingChildren) {
+                return;
+            }
+            if ((route.childrenByPrefix || {})[this.selectedAddonPrefix]) {
+                return;
+            }
+            route.loadingChildren = true;
+            const params = new URLSearchParams({
+                parent_cidr: route.parentId,
+                prefix: this.selectedAddonPrefix,
+            });
+            if (subscriberId) {
+                params.set('subscriber_id', subscriberId);
+            }
+            try {
+                const response = await fetch(`/admin/catalog/subscriptions/ipam/route-children?${params.toString()}`, {
+                    headers: { Accept: 'application/json' },
+                });
+                if (!response.ok) {
+                    route.childrenByPrefix[this.selectedAddonPrefix] = [];
+                    return;
+                }
+                const payload = await response.json();
+                route.childrenByPrefix[this.selectedAddonPrefix] = Array.isArray(payload.children) ? payload.children : [];
+            } finally {
+                route.loadingChildren = false;
+            }
+        },
+        async populateRouteChildren(route) {
+            await this.loadChildrenForRoute(route);
             const children = this.childOptionsForRoute(route);
             if (!children.length) {
-                route.childId = "";
-                route.cidr = "";
+                if (!route.cidr) {
+                    route.childId = "";
+                }
                 return;
             }
             if (route.childId && children.some((child) => child.id === route.childId)) {

@@ -13,8 +13,20 @@ def _create_reseller(db_session, name: str = "Reseller A") -> Reseller:
     return reseller
 
 
+@pytest.fixture
+def flag_off():
+    # Pin the Layer 3 cutover flag OFF for legacy subscriber-path tests, so they
+    # are deterministic even if a post-cutover prod .env leaks the flag on.
+    from app.config import settings
+
+    old = settings.reseller_user_principal_enabled
+    object.__setattr__(settings, "reseller_user_principal_enabled", False)
+    yield
+    object.__setattr__(settings, "reseller_user_principal_enabled", old)
+
+
 def test_create_reseller_with_user_links_subscriber_without_reseller_users_table(
-    db_session, monkeypatch
+    db_session, monkeypatch, flag_off
 ):
     reseller = _create_reseller(db_session, "Fallback Reseller")
     monkeypatch.setattr(
@@ -220,3 +232,58 @@ def test_create_subscriber_credential_does_not_leave_orphan_on_auth_failure(
         .all()
     )
     assert remaining == []
+
+
+def test_create_reseller_with_user_mints_reseller_user_principal_when_flag_on(
+    db_session, monkeypatch
+):
+    # Layer 3 Phase 4: with the cutover flag ON, onboarding creates a first-class
+    # ResellerUser principal (no fake Subscriber), not a subscriber-with-reseller.
+    from app.config import settings
+    from app.models.auth import MFAMethod  # noqa: F401  (ensure metadata loaded)
+    from app.models.subscriber import ResellerUser
+
+    monkeypatch.setattr(
+        web_admin_resellers_service,
+        "send_reseller_portal_invite",
+        lambda _db, *, email: f"Invitation sent to {email}",
+    )
+    old = settings.reseller_user_principal_enabled
+    object.__setattr__(settings, "reseller_user_principal_enabled", True)
+    try:
+        reseller = _create_reseller(db_session, "Principal Reseller")
+        payload = {
+            "first_name": "Rey",
+            "last_name": "Seller",
+            "email": "principal-login@example.com",
+            "username": "principal-login",
+            "password": "Secret123!",
+            "role": None,
+        }
+        web_admin_resellers_service.create_reseller_with_user(
+            db_session, reseller=reseller, user_payload=payload
+        )
+    finally:
+        object.__setattr__(settings, "reseller_user_principal_enabled", old)
+
+    # No fake subscriber created for the login.
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == payload["email"])
+        .first()
+        is None
+    )
+    ru = (
+        db_session.query(ResellerUser)
+        .filter(ResellerUser.reseller_id == reseller.id)
+        .filter(ResellerUser.email == payload["email"])
+        .one()
+    )
+    assert ru.subscriber_id is None
+    cred = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.reseller_user_id == ru.id)
+        .one()
+    )
+    assert cred.username == payload["username"]
+    assert cred.must_change_password is True

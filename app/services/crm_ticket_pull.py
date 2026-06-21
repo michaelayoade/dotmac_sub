@@ -337,7 +337,16 @@ def _apply_ticket_fields(
     ticket.title = str(crm_ticket.get("title") or "").strip() or "CRM ticket"
     ticket.description = crm_ticket.get("description")
     ticket.region = crm_ticket.get("region")
-    ticket.status = _enum_value(crm_ticket.get("status")) or "open"
+    from app.services.support import transition_ticket_status
+
+    _crm_status = _enum_value(crm_ticket.get("status")) or "open"
+    try:
+        # Local precedence: a CRM pull never reopens a locally-terminal ticket
+        # (closed/canceled/merged). A new ticket (no current status) takes the
+        # CRM status as-is.
+        transition_ticket_status(ticket, _crm_status, source="crm_pull")
+    except ValueError:
+        logger.warning("crm_pull ignored invalid CRM status %r", _crm_status)
     ticket.priority = _enum_value(crm_ticket.get("priority")) or "normal"
     ticket.ticket_type = crm_ticket.get("ticket_type")
     ticket.channel = _safe_channel(crm_ticket.get("channel"))

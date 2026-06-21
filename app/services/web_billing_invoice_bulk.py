@@ -6,10 +6,12 @@ import io
 import logging
 import zipfile
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus
+from app.models.billing import InvoiceStatus, PaymentStatus
+from app.schemas.billing import PaymentAllocationApply, PaymentCreate
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import web_billing_invoices as web_billing_invoices_service
@@ -93,6 +95,7 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
             if invoice and invoice.status not in [
                 InvoiceStatus.paid,
                 InvoiceStatus.void,
+                InvoiceStatus.written_off,
             ]:
                 # Use the canonical void so debit ledger entries are reversed
                 # (previously bulk void only flipped the status, leaving the AR
@@ -122,10 +125,29 @@ def bulk_mark_paid(db, invoice_ids_csv: str) -> list[str]:
                 continue
             if invoice.status not in eligible_statuses:
                 continue
-            invoice.status = InvoiceStatus.paid
-            invoice.balance_due = 0
-            invoice.paid_at = datetime.now(UTC)
-            db.commit()
+            balance = invoice.balance_due or Decimal("0")
+            if balance <= 0:
+                continue
+            # Record a real succeeded payment allocated to the invoice instead
+            # of poking status=paid+balance=0 raw. The raw write had no backing
+            # PaymentAllocation, so the next _recalculate_invoice_totals (any
+            # later payment/credit/line change) reverted it to issued/overdue
+            # and re-triggered dunning. Routing through Payments.create produces
+            # the ledger + allocation, so the recalc keeps it paid. A per-invoice
+            # external_id dodges the 60s identical-amount duplicate guard.
+            billing_service.payments.create(
+                db,
+                PaymentCreate(
+                    account_id=invoice.account_id,
+                    amount=balance,
+                    currency=invoice.currency,
+                    status=PaymentStatus.succeeded,
+                    external_id=f"bulk-mark-paid:{invoice.id}",
+                    allocations=[
+                        PaymentAllocationApply(invoice_id=invoice.id, amount=balance)
+                    ],
+                ),
+            )
             updated.append(invoice_id)
         except Exception:
             logger.debug(

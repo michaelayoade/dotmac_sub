@@ -218,7 +218,10 @@ class CreditNoteApplyRequest(BaseModel):
 
 
 class PaymentMethodBase(BaseModel):
-    account_id: UUID
+    # Exactly one owner: customer subscriber (account_id) or reseller org
+    # (reseller_id, for subscriber-less reseller_user logins — Layer 3).
+    account_id: UUID | None = None
+    reseller_id: UUID | None = None
     payment_channel_id: UUID | None = None
     method_type: PaymentMethodType = PaymentMethodType.card
     label: str | None = Field(default=None, max_length=120)

@@ -122,6 +122,9 @@ def handle_subscription_create_form(
                 form
             )
             core.normalize_additional_routes(route_cidrs, route_metrics)
+            core.validate_additional_route_billing(
+                db, cidrs=route_cidrs, metrics=route_metrics
+            )
             core.validate_public_ip_addon_selection(
                 db,
                 add_on_id=str(form.get("ip_addon_id") or ""),
@@ -186,6 +189,9 @@ def handle_subscription_update_form(
                 form
             )
             core.normalize_additional_routes(route_cidrs, route_metrics)
+            core.validate_additional_route_billing(
+                db, cidrs=route_cidrs, metrics=route_metrics
+            )
             core.validate_public_ip_addon_selection(
                 db,
                 add_on_id=str(form.get("ip_addon_id") or ""),

@@ -20,9 +20,44 @@
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Wave 3 Subject</label><input type="text" name="wave3_subject" value="{{ reminders.wave3_subject or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Attach Invoices</label><input type="text" name="attach_invoices" value="{{ reminders.attach_invoices or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
         </div>
-        {% endcall %}
-        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Configuration</button></div>
-    </form>
-</div>
-{{ animation_styles() }}
-{% endblock %}
+	        {% endcall %}
+	        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Configuration</button></div>
+	    </form>
+	    <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+	        <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+	            <div class="flex items-center gap-3">
+	                <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+	                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+	                </div>
+	                <div>
+	                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Recent changes</h2>
+	                    <p class="text-xs text-slate-500 dark:text-slate-400">Audit trail for billing reminder settings</p>
+	                </div>
+	            </div>
+	            <a href="/admin/system/audit?entity_type=billing_reminder_config" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Full audit</a>
+	        </div>
+	        <div class="px-5 py-4">
+	            {% if audit_items %}
+	            <div class="grid gap-3 lg:grid-cols-2">
+	                {% for activity in audit_items[:4] %}
+	                <div class="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/40">
+	                    <div class="flex items-start justify-between gap-3">
+	                        <div class="min-w-0">
+	                            <p class="truncate text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
+	                            <p class="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
+	                        </div>
+	                        <span class="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">
+	                            {{ activity.occurred_at.strftime('%b %d') if activity.occurred_at else 'Recent' }}
+	                        </span>
+	                    </div>
+	                </div>
+	                {% endfor %}
+	            </div>
+	            {% else %}
+	            <p class="text-sm text-slate-500 dark:text-slate-400">No structured billing reminder audit entries yet.</p>
+	            {% endif %}
+	        </div>
+	    </section>
+	</div>
+	{{ animation_styles() }}
+	{% endblock %}

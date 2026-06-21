@@ -31,6 +31,7 @@ from app.services.customer_portal_flow_payments import (
     _resolve_payment_provider,
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,18 @@ def _login_subscriber_email(db: Session, login_subscriber_id: str | None) -> str
     return value if "@" in value else ""
 
 
+def _reseller_charge_email(db: Session, reseller_id: str) -> str:
+    """Gateway-charge email for a reseller_user payment (no login subscriber)."""
+    from app.models.subscriber import Reseller
+
+    coerced = coerce_uuid(reseller_id)
+    reseller = db.get(Reseller, coerced) if coerced else None
+    value = (
+        str(getattr(reseller, "contact_email", "") or "").strip() if reseller else ""
+    )
+    return value if "@" in value else ""
+
+
 def start_consolidated_payment(
     db: Session,
     reseller_id: str,
@@ -91,16 +104,24 @@ def start_consolidated_payment(
 
     provider_type = provider or _resolve_payment_provider(db)
 
+    # Card ownership (Layer 3 #329): subscriber-backed reseller login keys cards
+    # on the login subscriber; a subscriber-less reseller_user keys them on the
+    # reseller org.
+    use_reseller_cards = not login_subscriber_id
+
     selected_payment_method_id = str(payment_method_id or "").strip() or None
     selected_payment_token = None
     if selected_payment_method_id:
         if provider_type != "paystack":
             raise ValueError("Saved cards can only be used with Paystack")
-        if not login_subscriber_id:
-            raise ValueError("Payment method not found")
-        method = customer_cards._owned(
-            db, str(login_subscriber_id), selected_payment_method_id
-        )
+        if use_reseller_cards:
+            method = customer_cards._owned_by_reseller(
+                db, str(reseller_id), selected_payment_method_id
+            )
+        else:
+            method = customer_cards._owned(
+                db, str(login_subscriber_id), selected_payment_method_id
+            )
         if method is None:
             raise ValueError("Payment method not found")
         selected_payment_token = billing_service.payment_methods.get_decrypted_token(
@@ -114,9 +135,13 @@ def start_consolidated_payment(
     )
 
     intent_metadata = {"payment_flow": "reseller_consolidated"}
-    if save_card and login_subscriber_id:
+    if save_card:
         intent_metadata["save_card"] = "1"
-        intent_metadata["login_subscriber_id"] = str(login_subscriber_id)
+        if login_subscriber_id:
+            intent_metadata["login_subscriber_id"] = str(login_subscriber_id)
+        else:
+            # reseller_user: capture the card to the reseller org store.
+            intent_metadata["reseller_card_id"] = str(reseller_id)
     if selected_payment_method_id:
         intent_metadata["payment_method_id"] = selected_payment_method_id
 
@@ -153,7 +178,11 @@ def start_consolidated_payment(
         paystack.charge_authorization(
             db,
             authorization_code=selected_payment_token,
-            email=_login_subscriber_email(db, login_subscriber_id),
+            email=(
+                _login_subscriber_email(db, login_subscriber_id)
+                if login_subscriber_id
+                else _reseller_charge_email(db, reseller_id)
+            ),
             amount_kobo=paystack.amount_to_kobo(requested_amount),
             reference=gateway_context.reference,
             metadata=checkout_metadata,
@@ -209,7 +238,7 @@ def verify_and_record_consolidated_payment(
     if existing is not None:
         intent.completed_payment_id = existing.id
         intent.completed_at = datetime.now(UTC)
-        intent.status = "completed"
+        set_topup_intent_status(intent, "completed", source="reseller_existing_payment")
         intent.actual_amount = amount
         intent.external_id = external_id
         db.commit()
@@ -235,7 +264,7 @@ def verify_and_record_consolidated_payment(
 
     intent.completed_payment_id = payment.id
     intent.completed_at = datetime.now(UTC)
-    intent.status = "completed"
+    set_topup_intent_status(intent, "completed", source="reseller_new_payment")
     intent.actual_amount = amount
     intent.external_id = external_id
     db.commit()
@@ -278,12 +307,16 @@ def _maybe_capture_card(
     if str(metadata.get("save_card") or "") != "1":
         return
     login_subscriber_id = metadata.get("login_subscriber_id")
-    if not login_subscriber_id:
-        return
+    reseller_card_id = metadata.get("reseller_card_id")
     try:
-        customer_cards.capture_card_after_payment(
-            db, str(login_subscriber_id), reference, provider_type
-        )
+        if login_subscriber_id:
+            customer_cards.capture_card_after_payment(
+                db, str(login_subscriber_id), reference, provider_type
+            )
+        elif reseller_card_id:
+            customer_cards.capture_card_after_payment_for_reseller(
+                db, str(reseller_card_id), reference, provider_type
+            )
     except Exception:  # noqa: BLE001 - capture is non-critical
         logger.warning("reseller card capture skipped for %s", reference, exc_info=True)
 
@@ -301,10 +334,20 @@ def _coerce_uuid_str(value) -> str | None:
 # share one self-scoped implementation.
 
 
-def list_payment_methods(db: Session, login_subscriber_id: str) -> list:
+def list_payment_methods(
+    db: Session, login_subscriber_id: str | None, reseller_id: str | None = None
+) -> list:
     from app.models.billing import PaymentMethodType
 
-    cards = customer_cards.list_for_account(db, str(login_subscriber_id))
+    # Owner-routed (Layer 3 #329): subscriber-backed reseller login → cards keyed
+    # on the login Subscriber; a first-class reseller_user (no subscriber) → cards
+    # owned by the reseller org.
+    if login_subscriber_id:
+        cards = customer_cards.list_for_account(db, str(login_subscriber_id))
+    elif reseller_id:
+        cards = customer_cards.list_for_reseller(db, str(reseller_id))
+    else:
+        return []
     return [c for c in cards if c.method_type == PaymentMethodType.card]
 
 
@@ -325,26 +368,44 @@ def payment_method_api_dict(method) -> dict:
 
 
 def set_default_payment_method(
-    db: Session, login_subscriber_id: str, method_id: str
+    db: Session,
+    login_subscriber_id: str | None,
+    method_id: str,
+    reseller_id: str | None = None,
 ) -> bool:
-    return (
-        customer_cards.set_default(db, str(login_subscriber_id), method_id) is not None
-    )
+    if login_subscriber_id:
+        return (
+            customer_cards.set_default(db, str(login_subscriber_id), method_id)
+            is not None
+        )
+    if reseller_id:
+        return (
+            customer_cards.set_default_for_reseller(db, str(reseller_id), method_id)
+            is not None
+        )
+    return False
 
 
 def remove_payment_method(
-    db: Session, login_subscriber_id: str, method_id: str
+    db: Session,
+    login_subscriber_id: str | None,
+    method_id: str,
+    reseller_id: str | None = None,
 ) -> bool:
-    return customer_cards.remove(db, str(login_subscriber_id), method_id)
+    if login_subscriber_id:
+        return customer_cards.remove(db, str(login_subscriber_id), method_id)
+    if reseller_id:
+        return customer_cards.remove_for_reseller(db, str(reseller_id), method_id)
+    return False
 
 
 def get_payment_methods_page(
-    db: Session, reseller_id: str, login_subscriber_id: str
+    db: Session, reseller_id: str, login_subscriber_id: str | None
 ) -> dict:
     """Context for the reseller payment-methods management page."""
     summary = get_billing_account_summary(db, reseller_id)
     return {
-        "saved_cards": list_payment_methods(db, login_subscriber_id),
+        "saved_cards": list_payment_methods(db, login_subscriber_id, reseller_id),
         "provider_type": _resolve_payment_provider(db),
         "total_outstanding": summary["total_outstanding"],
         "billing_account": summary["billing_account"],

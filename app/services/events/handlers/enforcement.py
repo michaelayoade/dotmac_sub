@@ -12,6 +12,7 @@ from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec
 from app.services.enforcement import (
+    _resolve_effective_profile,
     _setting_bool,
     apply_radius_profile_to_account,
     apply_subscription_address_list_block,
@@ -440,6 +441,14 @@ class EnforcementHandler:
                 "Set 'fup_throttle_radius_profile_id' in usage domain settings."
             )
             return
+        # Capture the subscriber's current full-speed profile BEFORE the
+        # throttle overwrites it, so the period-reset lift can restore it. The
+        # offer's effective profile is the durable "should be" value.
+        original_profile_id = None
+        _sub_for_profile = db.get(Subscription, subscription_id)
+        if _sub_for_profile is not None:
+            _orig = _resolve_effective_profile(db, _sub_for_profile)
+            original_profile_id = str(_orig.id) if _orig else None
         try:
             updated = apply_radius_profile_to_account(
                 db, str(account_id), str(throttle_profile_id)
@@ -465,6 +474,7 @@ class EnforcementHandler:
                     rule_id,
                     action_status="throttled",
                     throttle_profile_id=str(throttle_profile_id),
+                    original_profile_id=original_profile_id,
                     cap_resets_at=cap_resets_at_raw,
                     notes="FUP throttle applied",
                 )
@@ -484,6 +494,7 @@ class EnforcementHandler:
         *,
         action_status: str,
         throttle_profile_id: str | None = None,
+        original_profile_id: str | None = None,
         cap_resets_at: str | None = None,
         notes: str | None = None,
     ) -> None:
@@ -525,6 +536,7 @@ class EnforcementHandler:
                 rule_id=rule_id,
                 action_status=status_map.get(action_status, FupActionStatus.none),
                 throttle_profile_id=throttle_profile_id,
+                original_profile_id=original_profile_id,
                 cap_resets_at=parsed_resets_at,
                 notes=notes,
             )

@@ -134,6 +134,40 @@ def _upsert_by_keys(
     return row
 
 
+def _deactivate_unseen_registrations(
+    db: Session,
+    olt_id,
+    seen_keys: set[tuple[str, int]],
+    imported_at,
+    *,
+    read_complete: bool = True,
+) -> int:
+    """Deactivate active registrations not seen in this import.
+
+    Returns the number deactivated, or ``-1`` if the destructive sweep was
+    SKIPPED because the enumeration was incomplete. A partial/flaky read (a
+    board or ONT we failed to enumerate) leaves ``seen_keys`` missing live
+    ONTs; deactivating "everything not seen" would then silently retire real
+    registrations. So when ``read_complete`` is False we deactivate nothing.
+    """
+    if not seen_keys:
+        return 0
+    if not read_complete:
+        return -1
+    existing = db.scalars(
+        select(OltOntRegistration)
+        .where(OltOntRegistration.olt_id == olt_id)
+        .where(OltOntRegistration.is_active.is_(True))
+    ).all()
+    count = 0
+    for row in existing:
+        if (row.fsp, row.ont_id_on_olt) not in seen_keys:
+            row.is_active = False
+            row.last_imported_at = imported_at
+            count += 1
+    return count
+
+
 def _onu_type_id_by_equipment(db: Session) -> dict[str, object]:
     rows = db.scalars(select(OnuType).where(OnuType.is_active.is_(True))).all()
     return {
@@ -729,15 +763,11 @@ def import_olt_state_from_dump(
                 )
                 registration_count += 1
 
-        if seen_registration_keys:
-            for row in db.scalars(
-                select(OltOntRegistration)
-                .where(OltOntRegistration.olt_id == olt.id)
-                .where(OltOntRegistration.is_active.is_(True))
-            ).all():
-                if (row.fsp, row.ont_id_on_olt) not in seen_registration_keys:
-                    row.is_active = False
-                    row.last_imported_at = imported_at
+        # Dump variant parses one complete running-config (all-or-nothing), so
+        # the read is always complete here.
+        _deactivate_unseen_registrations(
+            db, olt.id, seen_registration_keys, imported_at, read_complete=True
+        )
 
         onu_types = _onu_type_id_by_equipment(db)
         mapping_count = 0
@@ -930,6 +960,12 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
             )
 
         seen_registration_keys: set[tuple[str, int]] = set()
+        # A partial read (a board or ONT we failed to enumerate) means
+        # ``seen_registration_keys`` is incomplete, so we must NOT deactivate
+        # registrations that simply weren't seen — that would silently retire
+        # live ONTs on a board a transient SSH error skipped. Track whether the
+        # enumeration was complete; only run the destructive sweep if it was.
+        read_complete = True
         for pon_port in pon_ports:
             fsp = str(pon_port.name or "").strip()
             if not fsp:
@@ -941,6 +977,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                 )
             except ValueError as exc:
                 warnings.append(f"Skipped {fsp}: {exc}")
+                read_complete = False
                 continue
             summary = parse_ont_info(summary_output)
             for entry in summary.data:
@@ -955,6 +992,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                     warnings.append(
                         f"Skipped ONT detail {detail_fsp} {entry.ont_id}: {exc}"
                     )
+                    read_complete = False
                     continue
                 # Renamed to keep ``detail`` (the raw command output, ``str``)
                 # distinct from the parsed dataclass — earlier loops in this
@@ -1006,16 +1044,18 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                 )
                 registration_count += 1
 
-        if seen_registration_keys:
-            existing = db.scalars(
-                select(OltOntRegistration)
-                .where(OltOntRegistration.olt_id == olt.id)
-                .where(OltOntRegistration.is_active.is_(True))
-            ).all()
-            for row in existing:
-                if (row.fsp, row.ont_id_on_olt) not in seen_registration_keys:
-                    row.is_active = False
-                    row.last_imported_at = imported_at
+        deactivated = _deactivate_unseen_registrations(
+            db,
+            olt.id,
+            seen_registration_keys,
+            imported_at,
+            read_complete=read_complete,
+        )
+        if deactivated == -1:
+            warnings.append(
+                "Partial read: skipped registration deactivation to avoid "
+                "retiring live ONTs not seen this import."
+            )
 
         db.flush()
         mapping_count = _import_profile_mappings(db, olt, imported_at, warnings)

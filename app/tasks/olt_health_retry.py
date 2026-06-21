@@ -38,9 +38,17 @@ def retry_failed_olt_connections() -> dict[str, int]:
 
     try:
         with db_session_adapter.session() as db:
-            # Get all active OLTs
+            from app.models.network import DeviceStatus
+
+            # Get all active OLTs. Skip OLTs in maintenance/draining/retired/
+            # inactive lifecycle status — an operator who took the device down
+            # doesn't want it pinged and flap-alerted every cycle.
             olts = list(
-                db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
+                db.scalars(
+                    select(OLTDevice)
+                    .where(OLTDevice.is_active.is_(True))
+                    .where(OLTDevice.status == DeviceStatus.active)
+                ).all()
             )
 
             # Build lookup indexes for linked monitoring devices

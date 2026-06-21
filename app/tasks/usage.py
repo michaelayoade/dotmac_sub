@@ -125,6 +125,33 @@ def meter_usage_into_quota():
         session.close()
 
 
+def _fup_should_enforce(
+    *,
+    prior_status: str,
+    target_status: str,
+    cooldown_minutes: int,
+    state,
+    now,
+) -> bool:
+    """Transition-driven FUP enforcement to stop per-tick RADIUS churn.
+
+    Enforce when *entering* the throttled/blocked state; once already in it,
+    re-assert only after ``cooldown_minutes`` has elapsed (0 = never re-assert).
+    Previously the task re-emitted ``usage_exhausted`` and re-applied the RADIUS
+    profile / SSH address-list on every single tick.
+    """
+    from datetime import UTC
+
+    if prior_status != target_status:
+        return True
+    if cooldown_minutes and state is not None and state.last_evaluated_at is not None:
+        last = state.last_evaluated_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        return (now - last).total_seconds() / 60 >= cooldown_minutes
+    return False
+
+
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
 def evaluate_fup_rules() -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
@@ -151,6 +178,7 @@ def evaluate_fup_rules() -> dict[str, int]:
         now = datetime.now(UTC)
         processed = 0
         enforced = 0
+        submonthly_no_data = 0
         reset = 0
         # Customer notifications to emit AFTER the enforcement commit, so a
         # notification failure can't roll back enforcement state. Each entry:
@@ -191,9 +219,14 @@ def evaluate_fup_rules() -> dict[str, int]:
             # Check if FUP state needs reset (period boundary crossed)
             state = fup_state.get(session, str(sub.id))
             if state and state.cap_resets_at and now >= state.cap_resets_at:
-                fup_state.clear(session, str(sub.id))
+                # Lift the actual enforcement (RADIUS profile / address-list
+                # block / suspension), not just the state row — otherwise the
+                # subscriber stays throttled/blocked forever past the reset.
+                from app.services.enforcement import lift_fup_enforcement
+
+                lift_fup_enforcement(session, str(sub.id))
                 reset += 1
-                logger.info("Reset FUP state for subscription %s", sub.id)
+                logger.info("Lifted FUP enforcement for subscription %s", sub.id)
                 session.commit()
                 continue
 
@@ -207,6 +240,15 @@ def evaluate_fup_rules() -> dict[str, int]:
 
             current_usage = float(bucket.used_gb or 0)
 
+            # Per-period usage so daily/weekly rules measure their own window.
+            # A monthly-only offer yields {"monthly": current_usage} — identical
+            # to the legacy path (no extra queries, no async bridge).
+            from app.services.fup_usage import build_usage_by_period
+
+            usage_by_period = build_usage_by_period(
+                session, sub, str(sub.offer_id), now, current_usage
+            )
+
             # Status persisted from a prior run — used to notify the customer
             # only on a *transition* into throttled/blocked (not every tick).
             prior_status = state.action_status.value if state else "none"
@@ -217,34 +259,85 @@ def evaluate_fup_rules() -> dict[str, int]:
                 str(sub.offer_id),
                 current_usage_gb=current_usage,
                 current_time=now,
+                usage_by_period=usage_by_period,
             )
 
+            # Safeguard tripwire (#21): a sub-monthly rule whose window had no
+            # usage data (metrics store down / no samples) reads 0 and silently
+            # under-enforces — a real over-user would NOT be throttled. Surface
+            # it so the gap is visible rather than invisible.
+            for r in results:
+                if r.get("usage_source") == "no_data":
+                    submonthly_no_data += 1
+                    logger.warning(
+                        "FUP %s window for sub %s rule %s had no usage data — "
+                        "not enforced this run (metrics store down or no samples)",
+                        r.get("consumption_period"),
+                        sub.id,
+                        r.get("rule_id"),
+                    )
+
             triggered = [r for r in results if r.get("triggered")]
+
             if triggered:
                 # Find the highest-severity triggered rule
                 for rule_result in reversed(triggered):
-                    if rule_result.get("action") == "block":
-                        emit_event(
-                            session,
-                            EventType.usage_exhausted,
-                            {
-                                "subscription_id": str(sub.id),
-                                "offer_id": str(sub.offer_id),
-                                "rule_id": rule_result.get("rule_id"),
-                                "current_usage_gb": current_usage,
-                                "threshold_gb": rule_result.get("threshold_gb"),
-                                # cap resets at the quota period boundary — lets
-                                # enforcement auto-lift the throttle/block then.
-                                "cap_resets_at": (
-                                    bucket.period_end.isoformat()
-                                    if bucket.period_end
-                                    else None
-                                ),
-                            },
-                            subscription_id=sub.id,
-                            account_id=sub.subscriber_id,
+                    # Cap auto-lifts at the end of THIS rule's consumption window
+                    # (daily -> next local midnight, weekly -> next Monday,
+                    # monthly -> the billing-period end). Falls back to the quota
+                    # period boundary when no window is attached.
+                    cap_resets_at = rule_result.get("window_end") or (
+                        bucket.period_end.isoformat() if bucket.period_end else None
+                    )
+
+                    # Defense-in-depth (#21): never enforce a sub-monthly rule on
+                    # a blind reading (already reads 0, but make the intent
+                    # explicit and cover a 0-GB threshold).
+                    if rule_result.get("usage_source") == "no_data":
+                        continue
+
+                    # Observability: structured record of every sub-monthly
+                    # enforcement decision for ops review before/after rollout.
+                    if rule_result.get("consumption_period") != "monthly":
+                        logger.info(
+                            "fup_submonthly_enforce sub=%s rule=%s period=%s "
+                            "used_gb=%s threshold_gb=%s source=%s authoritative=%s "
+                            "window=%s..%s action=%s",
+                            sub.id,
+                            rule_result.get("rule_id"),
+                            rule_result.get("consumption_period"),
+                            rule_result.get("current_usage_gb"),
+                            rule_result.get("threshold_gb"),
+                            rule_result.get("usage_source"),
+                            rule_result.get("is_authoritative"),
+                            rule_result.get("window_start"),
+                            rule_result.get("window_end"),
+                            rule_result.get("action"),
                         )
-                        enforced += 1
+
+                    if rule_result.get("action") == "block":
+                        if _fup_should_enforce(
+                            prior_status=prior_status,
+                            target_status="blocked",
+                            cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
+                            state=state,
+                            now=now,
+                        ):
+                            emit_event(
+                                session,
+                                EventType.usage_exhausted,
+                                {
+                                    "subscription_id": str(sub.id),
+                                    "offer_id": str(sub.offer_id),
+                                    "rule_id": rule_result.get("rule_id"),
+                                    "current_usage_gb": current_usage,
+                                    "threshold_gb": rule_result.get("threshold_gb"),
+                                    "cap_resets_at": cap_resets_at,
+                                },
+                                subscription_id=sub.id,
+                                account_id=sub.subscriber_id,
+                            )
+                            enforced += 1
                         if prior_status != "blocked":
                             pending_notifs.append(
                                 {
@@ -260,27 +353,28 @@ def evaluate_fup_rules() -> dict[str, int]:
                         )
                         break
                     elif rule_result.get("action") == "reduce_speed":
-                        emit_event(
-                            session,
-                            EventType.usage_exhausted,
-                            {
-                                "subscription_id": str(sub.id),
-                                "offer_id": str(sub.offer_id),
-                                "rule_id": rule_result.get("rule_id"),
-                                "current_usage_gb": current_usage,
-                                "threshold_gb": rule_result.get("threshold_gb"),
-                                # cap resets at the quota period boundary — lets
-                                # enforcement auto-lift the throttle/block then.
-                                "cap_resets_at": (
-                                    bucket.period_end.isoformat()
-                                    if bucket.period_end
-                                    else None
-                                ),
-                            },
-                            subscription_id=sub.id,
-                            account_id=sub.subscriber_id,
-                        )
-                        enforced += 1
+                        if _fup_should_enforce(
+                            prior_status=prior_status,
+                            target_status="throttled",
+                            cooldown_minutes=rule_result.get("cooldown_minutes") or 0,
+                            state=state,
+                            now=now,
+                        ):
+                            emit_event(
+                                session,
+                                EventType.usage_exhausted,
+                                {
+                                    "subscription_id": str(sub.id),
+                                    "offer_id": str(sub.offer_id),
+                                    "rule_id": rule_result.get("rule_id"),
+                                    "current_usage_gb": current_usage,
+                                    "threshold_gb": rule_result.get("threshold_gb"),
+                                    "cap_resets_at": cap_resets_at,
+                                },
+                                subscription_id=sub.id,
+                                account_id=sub.subscriber_id,
+                            )
+                            enforced += 1
                         if prior_status != "throttled":
                             pending_notifs.append(
                                 {
@@ -340,17 +434,20 @@ def evaluate_fup_rules() -> dict[str, int]:
         # failure never rolls back enforcement state.
         notified = _emit_fup_notifications(session, pending_notifs)
         logger.info(
-            "FUP evaluation: %d processed, %d enforced, %d reset, %d notified",
+            "FUP evaluation: %d processed, %d enforced, %d reset, %d notified, "
+            "%d sub-monthly no-data",
             processed,
             enforced,
             reset,
             notified,
+            submonthly_no_data,
         )
         return {
             "processed": processed,
             "enforced": enforced,
             "reset": reset,
             "notified": notified,
+            "submonthly_no_data": submonthly_no_data,
         }
     except Exception:
         session.rollback()

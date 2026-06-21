@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -30,6 +31,12 @@ class InvoiceStatus(enum.Enum):
     paid = "paid"
     void = "void"
     overdue = "overdue"
+    # Closed-but-not-collected: the obligation was written off as bad debt.
+    # Materially distinct from ``paid`` (obligation satisfied) and ``void``
+    # (invoice should never have existed). The loss is recorded as a credit
+    # adjustment in the ledger (the financial source of truth); the invoice
+    # stays on record, excluded from outstanding/aging but NOT counted as cash.
+    written_off = "written_off"
 
 
 class InvoicePdfExportStatus(enum.Enum):
@@ -457,12 +464,26 @@ class InvoiceLine(Base):
 
 class PaymentMethod(Base):
     __tablename__ = "payment_methods"
+    __table_args__ = (
+        # Exactly one owner: a customer subscriber (account_id) OR — for a
+        # first-class reseller_user login that has no backing subscriber
+        # (Layer 3) — the reseller org (reseller_id). CASE-sum form works on
+        # both Postgres and the SQLite test DB.
+        CheckConstraint(
+            "(CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN reseller_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_payment_methods_exactly_one_owner",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
+    )
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id"), nullable=True
     )
     payment_channel_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_channels.id")
@@ -489,6 +510,7 @@ class PaymentMethod(Base):
     )
 
     account = relationship("Subscriber")
+    reseller = relationship("Reseller")
     payment_channel = relationship("PaymentChannel", back_populates="payment_methods")
     payments = relationship("Payment", back_populates="payment_method")
 

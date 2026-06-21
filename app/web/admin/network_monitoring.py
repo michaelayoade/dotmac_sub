@@ -119,7 +119,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     incidents. No auto-detection, no notification sending."""
     from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.topology.affected import list_basestations
-    from app.services.topology.outage import list_open_incidents
+    from app.services.topology.outage import is_stale_open, list_open_incidents
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
@@ -133,7 +133,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
             target = f"Node: {node.name}" if node else "Node"
         else:
             target = "—"
-        rows.append({"incident": inc, "target": target})
+        rows.append({"incident": inc, "target": target, "stale": is_stale_open(inc)})
     context["incidents"] = rows
     return templates.TemplateResponse("admin/network/outages.html", context)
 

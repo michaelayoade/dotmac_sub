@@ -24,7 +24,11 @@ from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_desired_config import clear_desired_config
-from app.services.network.ont_status import reset_status_for_inventory
+from app.services.network.ont_status import (
+    clear_authorization_status,
+    reset_status_for_inventory,
+    set_provisioning_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -706,9 +710,9 @@ def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") 
     for instance in wan_service_instances:
         db.delete(instance)
 
-    ont.provisioning_status = OntProvisioningStatus.unprovisioned
+    set_provisioning_status(ont, OntProvisioningStatus.unprovisioned, strict=False)
     ont.last_provisioned_at = None
-    ont.authorization_status = None
+    clear_authorization_status(ont, reason="inventory_reset")
     ont.mac_address = None
     ont.observed_wan_ip = None
     ont.observed_pppoe_status = None
