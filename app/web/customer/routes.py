@@ -1634,6 +1634,11 @@ def customer_verify_payment(
         result = customer_portal.verify_and_record_payment(
             db, customer, reference, provider=provider
         )
+        # Close out the pending invoice-checkout trace (no-op for references
+        # that never had one, e.g. saved-card charges or the bearer API).
+        customer_portal.complete_invoice_payment_intent(
+            db, reference, result.get("payment")
+        )
         if save_card is True:
             # Best-effort, Paystack-only; never breaks the recorded payment.
             # (`is True` so a direct call's Query default never triggers it.)

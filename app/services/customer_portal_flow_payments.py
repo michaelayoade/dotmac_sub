@@ -74,7 +74,12 @@ def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
     return provider.id if provider else None
 
 
-def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str, str]]:
+def _topup_payment_options(
+    db: Session,
+    default_provider: str,
+    *,
+    direct_transfer_enabled: bool | None = None,
+) -> list[dict[str, str]]:
     """Return online provider options for customer payments.
 
     Paystack is always offered as the baseline gateway (it works even with no
@@ -82,6 +87,9 @@ def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str,
     Flutterwave provider row exists, because it needs configured API keys —
     listing it without keys would hand the customer a checkout that can't
     complete. The configured default provider is surfaced first.
+
+    Pass ``direct_transfer_enabled`` when the caller has already resolved it to
+    avoid re-running the bank-transfer settings query.
     """
     active: list[str] = []
     try:
@@ -116,7 +124,9 @@ def _topup_payment_options(db: Session, default_provider: str) -> list[dict[str,
         for provider_type in active
         if provider_type in _ONLINE_PROVIDER_LABELS
     ]
-    if direct_bank_transfer_enabled(db):
+    if direct_transfer_enabled is None:
+        direct_transfer_enabled = direct_bank_transfer_enabled(db)
+    if direct_transfer_enabled:
         options.append(
             {
                 "provider_type": _DIRECT_TRANSFER_PROVIDER,
@@ -211,6 +221,9 @@ def enabled_direct_bank_transfer_accounts(db: Session) -> list[dict[str, str]]:
 
 
 def direct_bank_transfer_enabled(db: Session) -> bool:
+    # Resolve from a single settings read (the accounts list is already attached
+    # by direct_bank_transfer_settings) rather than calling
+    # enabled_direct_bank_transfer_accounts, which would re-query the same rows.
     settings = direct_bank_transfer_settings(db)
     enabled = settings.get("direct_bank_transfer_enabled", "").lower() in {
         "1",
@@ -218,7 +231,11 @@ def direct_bank_transfer_enabled(db: Session) -> bool:
         "yes",
         "on",
     }
-    return bool(enabled and enabled_direct_bank_transfer_accounts(db))
+    has_account = any(
+        account.get("enabled") == "true"
+        for account in settings.get("direct_bank_transfer_accounts_list", [])
+    )
+    return bool(enabled and has_account)
 
 
 def _resolve_topup_limits(db: Session) -> tuple[int, int]:
@@ -457,9 +474,7 @@ def get_payment_page(
 
     amount_due = round_money(
         to_decimal(
-            getattr(invoice, "balance_due", None)
-            or getattr(invoice, "total_amount", 0)
-            or 0
+            getattr(invoice, "balance_due", None) or getattr(invoice, "total", 0) or 0
         )
     )
 
@@ -472,6 +487,7 @@ def get_payment_page(
         provider_type=provider_type,
         invoice_number=getattr(invoice, "invoice_number", None),
     )
+    dbt_enabled = direct_bank_transfer_enabled(db)
     return {
         "invoice": invoice,
         "amount": amount_due,
@@ -481,9 +497,11 @@ def get_payment_page(
         if gateway_context.provider_type == "paystack"
         else None,
         "payment_reference": gateway_context.reference,
-        "payment_options": _topup_payment_options(db, provider_type),
+        "payment_options": _topup_payment_options(
+            db, provider_type, direct_transfer_enabled=dbt_enabled
+        ),
         "payment_methods": payment_methods,
-        "direct_bank_transfer_enabled": direct_bank_transfer_enabled(db),
+        "direct_bank_transfer_enabled": dbt_enabled,
         "customer_email": email,
     }
 
@@ -506,7 +524,83 @@ def _invoice_charge_replay(reference: str) -> dict:
     }
 
 
-def _init_flutterwave_invoice_checkout(
+def _reserve_charge_idempotency_key(
+    db: Session,
+    *,
+    scope: str,
+    key: str,
+    account_id: uuid.UUID,
+    replay,
+) -> tuple["IdempotencyKey | None", dict | None]:
+    """Reserve an idempotency key before a server-side card charge.
+
+    Returns ``(reservation, replay_result)``. If ``replay_result`` is not None
+    the card was already charged on a prior request — the caller MUST return it
+    immediately and not charge again. Otherwise ``reservation`` is a freshly
+    committed row whose ``ref_id`` the caller sets after a successful charge
+    (:func:`_commit_charge_idempotency_ref`) or releases on failure
+    (:func:`_release_charge_idempotency_key`). ``replay(ref_id)`` maps a stored
+    ref_id to a replay payload, or None when the prior attempt left no usable
+    result (then the stale key is dropped and re-reserved).
+    """
+    prior = db.scalars(
+        select(IdempotencyKey).where(
+            IdempotencyKey.scope == scope,
+            IdempotencyKey.key == key,
+        )
+    ).first()
+    if prior is not None:
+        if str(prior.account_id) != str(account_id):
+            raise ValueError("Idempotency key already used")
+        replayed = replay(prior.ref_id) if prior.ref_id else None
+        if replayed is not None:
+            return None, replayed
+        db.delete(prior)
+        db.commit()
+    reservation = IdempotencyKey(
+        scope=scope,
+        key=key,
+        account_id=account_id,
+        ref_id=None,
+    )
+    db.add(reservation)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == scope,
+                IdempotencyKey.key == key,
+            )
+        ).first()
+        replayed = replay(prior.ref_id) if (prior and prior.ref_id) else None
+        if replayed is not None:
+            return None, replayed
+        raise ValueError("A payment with this key is already in progress.")
+    return reservation, None
+
+
+def _release_charge_idempotency_key(
+    db: Session, reservation: "IdempotencyKey | None"
+) -> None:
+    """Release a reserved key so the customer can retry (e.g. after a decline)."""
+    if reservation is not None:
+        db.delete(reservation)
+        db.commit()
+
+
+def _commit_charge_idempotency_ref(
+    db: Session, reservation: "IdempotencyKey | None", ref_id: str
+) -> None:
+    """Bind a successful charge's ref to its reserved key so replays are safe."""
+    if reservation is not None:
+        reservation.ref_id = ref_id
+        db.add(reservation)
+        db.commit()
+
+
+def _init_flutterwave_checkout(
     db: Session,
     customer: dict,
     *,
@@ -514,11 +608,16 @@ def _init_flutterwave_invoice_checkout(
     reference: str,
     redirect_url: str | None,
     metadata: dict,
+    default_callback_path: str,
 ) -> str:
-    """Start a Flutterwave hosted checkout for an invoice and return its link."""
+    """Start a Flutterwave hosted checkout and return its link.
+
+    Shared by the top-up and invoice-pay flows; they differ only in
+    ``default_callback_path`` (the verify route to return to).
+    """
     from app.services import flutterwave
 
-    callback_url = redirect_url or "/portal/billing/pay/verify"
+    callback_url = redirect_url or default_callback_path
     if callback_url.startswith("/"):
         # Flutterwave requires an absolute redirect_url; a relative path breaks
         # the hosted-checkout return leg (mobile hits this branch).
@@ -587,44 +686,20 @@ def _charge_saved_card_for_invoice(
     )
     reference = gateway_context.reference
 
-    # Reserve the idempotency key BEFORE charging so a concurrent same-key
-    # request fails the unique constraint here rather than charging twice.
+    # Reserve the idempotency key BEFORE charging so a concurrent (or replayed)
+    # same-key request returns the original reference instead of charging twice.
     idem_key = (idempotency_key or "").strip() or None
     reservation: IdempotencyKey | None = None
     if idem_key:
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == _INVOICE_CHARGE_IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == idem_key,
-            )
-        ).first()
-        if prior is not None:
-            if str(prior.account_id) != str(account_id):
-                raise ValueError("Idempotency key already used")
-            if prior.ref_id:
-                return _invoice_charge_replay(prior.ref_id)
-            db.delete(prior)
-            db.commit()
-        reservation = IdempotencyKey(
+        reservation, replayed = _reserve_charge_idempotency_key(
+            db,
             scope=_INVOICE_CHARGE_IDEMPOTENCY_SCOPE,
             key=idem_key,
             account_id=account_id,
-            ref_id=None,
+            replay=lambda ref_id: _invoice_charge_replay(ref_id) if ref_id else None,
         )
-        db.add(reservation)
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            prior = db.scalars(
-                select(IdempotencyKey).where(
-                    IdempotencyKey.scope == _INVOICE_CHARGE_IDEMPOTENCY_SCOPE,
-                    IdempotencyKey.key == idem_key,
-                )
-            ).first()
-            if prior and prior.ref_id:
-                return _invoice_charge_replay(prior.ref_id)
-            raise ValueError("A payment with this key is already in progress.")
+        if replayed is not None:
+            return replayed
 
     from app.services import paystack
 
@@ -639,14 +714,9 @@ def _charge_saved_card_for_invoice(
         )
     except Exception:
         # Release the key so the customer can retry with a different card.
-        if reservation is not None:
-            db.delete(reservation)
-            db.commit()
+        _release_charge_idempotency_key(db, reservation)
         raise
-    if reservation is not None:
-        reservation.ref_id = reference
-        db.add(reservation)
-        db.commit()
+    _commit_charge_idempotency_ref(db, reservation, reference)
 
     return {
         "provider_type": "paystack",
@@ -700,9 +770,7 @@ def create_invoice_payment_intent(
 
     amount = round_money(
         to_decimal(
-            getattr(invoice, "balance_due", None)
-            or getattr(invoice, "total_amount", 0)
-            or 0
+            getattr(invoice, "balance_due", None) or getattr(invoice, "total", 0) or 0
         )
     )
     if amount <= Decimal("0.00"):
@@ -711,10 +779,18 @@ def create_invoice_payment_intent(
     provider_type = provider or _resolve_payment_provider(db)
 
     # Bank transfer: reuse the direct-transfer proof flow, prefilled with the
-    # invoice balance. The reviewed transfer credits the account and
-    # auto-allocation settles this (and any older outstanding) invoice.
+    # invoice balance and tagged with the invoice so the proof is traceable.
+    # Limits are NOT enforced here (a real invoice may be below the top-up
+    # minimum, e.g. a small reconnection fee). The reviewed transfer credits the
+    # account and auto-allocation settles outstanding invoices oldest-first.
     if provider_type == _DIRECT_TRANSFER_PROVIDER:
-        return create_direct_transfer_topup_intent(db, customer, amount)
+        return create_direct_transfer_topup_intent(
+            db,
+            customer,
+            amount,
+            invoice_id=str(invoice.id),
+            enforce_limits=False,
+        )
 
     invoice_number = getattr(invoice, "invoice_number", None)
     checkout_metadata = {
@@ -746,6 +822,18 @@ def create_invoice_payment_intent(
         provider_type=provider_type,
         invoice_number=invoice_number,
     )
+    # Durable, expirable trace of the started checkout, mirroring the TopupIntent
+    # the top-up flow always creates — so a hosted checkout that debits the
+    # customer but never returns is reconcilable. Completed in
+    # verify_and_record_payment's caller via complete_invoice_payment_intent.
+    _record_invoice_checkout_intent(
+        db,
+        account_id=uuid.UUID(str(invoice.account_id)),
+        reference=gateway_context.reference,
+        provider_type=gateway_context.provider_type,
+        amount=amount,
+        metadata=checkout_metadata,
+    )
     result = {
         "provider_type": gateway_context.provider_type,
         "provider_public_key": gateway_context.public_key,
@@ -757,15 +845,77 @@ def create_invoice_payment_intent(
         "checkout_url": None,
     }
     if gateway_context.provider_type == "flutterwave":
-        result["checkout_url"] = _init_flutterwave_invoice_checkout(
+        result["checkout_url"] = _init_flutterwave_checkout(
             db,
             customer,
             amount=amount,
             reference=gateway_context.reference,
             redirect_url=redirect_url,
             metadata=checkout_metadata,
+            default_callback_path="/portal/billing/pay/verify",
         )
     return result
+
+
+def _record_invoice_checkout_intent(
+    db: Session,
+    *,
+    account_id: uuid.UUID,
+    reference: str,
+    provider_type: str,
+    amount: Decimal,
+    metadata: dict,
+) -> TopupIntent:
+    """Persist a pending record tracing a started invoice gateway checkout.
+
+    Reuses ``TopupIntent`` (provider_type + metadata distinguish it) so abandoned
+    hosted checkouts are queryable/expirable; it is not consumed by the verify
+    path (which works off ``Payment.external_id``), only completed for audit by
+    :func:`complete_invoice_payment_intent`.
+    """
+    intent = TopupIntent(
+        account_id=account_id,
+        reference=reference,
+        provider_type=provider_type,
+        currency="NGN",
+        requested_amount=amount,
+        status="pending",
+        expires_at=datetime.now(UTC) + _TOPUP_INTENT_TTL,
+        metadata_=dict(metadata),
+    )
+    db.add(intent)
+    db.commit()
+    db.refresh(intent)
+    return intent
+
+
+def complete_invoice_payment_intent(
+    db: Session, reference: str, payment: Payment | None
+) -> None:
+    """Best-effort: mark a pending invoice checkout record completed after verify.
+
+    No-op when the reference has no invoice checkout record (saved-card charges
+    use an IdempotencyKey instead; bearer-API/legacy references have none)."""
+    try:
+        intent = db.scalars(
+            select(TopupIntent).where(TopupIntent.reference == reference)
+        ).first()
+        if intent is None or intent.completed_payment_id:
+            return
+        if str((intent.metadata_ or {}).get("payment_flow")) != "invoice_payment":
+            return
+        intent.completed_payment_id = getattr(payment, "id", None)
+        set_topup_intent_status(intent, "completed", source="invoice_verify")
+        intent.completed_at = datetime.now(UTC)
+        db.add(intent)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Failed to complete invoice checkout intent for %s",
+            reference,
+            exc_info=True,
+        )
 
 
 def verify_and_record_payment(
@@ -1126,41 +1276,15 @@ def create_topup_intent(
     idem_key = (idempotency_key or "").strip() or None
     reservation: IdempotencyKey | None = None
     if idem_key and selected_payment_method is not None:
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == _TOPUP_CHARGE_IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == idem_key,
-            )
-        ).first()
-        if prior is not None:
-            if str(prior.account_id) != str(account_id):
-                raise ValueError("Idempotency key already used")
-            replayed = _topup_intent_replay(db, prior.ref_id)
-            if replayed is not None:
-                return replayed
-            db.delete(prior)
-            db.commit()
-        reservation = IdempotencyKey(
+        reservation, replayed = _reserve_charge_idempotency_key(
+            db,
             scope=_TOPUP_CHARGE_IDEMPOTENCY_SCOPE,
             key=idem_key,
             account_id=account_id,
-            ref_id=None,
+            replay=lambda ref_id: _topup_intent_replay(db, ref_id),
         )
-        db.add(reservation)
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            prior = db.scalars(
-                select(IdempotencyKey).where(
-                    IdempotencyKey.scope == _TOPUP_CHARGE_IDEMPOTENCY_SCOPE,
-                    IdempotencyKey.key == idem_key,
-                )
-            ).first()
-            replayed = _topup_intent_replay(db, prior.ref_id) if prior else None
-            if replayed is not None:
-                return replayed
-            raise ValueError("A payment with this key is already in progress.")
+        if replayed is not None:
+            return replayed
 
     intent_metadata = {"payment_flow": "account_topup"}
     if selected_payment_method_id:
@@ -1205,56 +1329,22 @@ def create_topup_intent(
             )
         except Exception:
             # Release the key so the customer can retry with a different card.
-            if reservation is not None:
-                db.delete(reservation)
-                db.commit()
+            _release_charge_idempotency_key(db, reservation)
             raise
         charged = True
-        if reservation is not None:
-            reservation.ref_id = str(intent.id)
-            db.add(reservation)
-            db.commit()
+        _commit_charge_idempotency_ref(db, reservation, str(intent.id))
 
     checkout_url = None
     if gateway_context.provider_type == "flutterwave":
-        from app.services import flutterwave
-
-        callback_url = redirect_url or "/portal/billing/topup/verify"
-        if callback_url.startswith("/"):
-            # Flutterwave requires an absolute redirect_url; a relative path
-            # breaks the hosted-checkout return leg (mobile hits this branch).
-            from app.services.email import _get_app_url
-
-            base_url = _get_app_url(db) or ""
-            if base_url:
-                callback_url = f"{base_url}{callback_url}"
-        separator = "&" if "?" in callback_url else "?"
-        try:
-            checkout = flutterwave.initialize_transaction(
-                db,
-                email=_resolve_customer_email(db, customer),
-                amount=requested_amount,
-                reference=gateway_context.reference,
-                redirect_url=(
-                    f"{callback_url}{separator}reference={gateway_context.reference}"
-                    "&provider=flutterwave"
-                ),
-                metadata=checkout_metadata,
-            )
-        except ValueError:
-            raise
-        except Exception as exc:
-            logger.warning("Flutterwave checkout initialization failed", exc_info=True)
-            raise ValueError(
-                "Unable to start Flutterwave checkout. Check Flutterwave configuration and try again."
-            ) from exc
-        checkout_url = checkout.get("link")
-        if not checkout_url:
-            logger.warning(
-                "Flutterwave checkout initialization returned no link: %s",
-                checkout,
-            )
-            raise ValueError("Flutterwave did not return a checkout link")
+        checkout_url = _init_flutterwave_checkout(
+            db,
+            customer,
+            amount=requested_amount,
+            reference=gateway_context.reference,
+            redirect_url=redirect_url,
+            metadata=checkout_metadata,
+            default_callback_path="/portal/billing/topup/verify",
+        )
 
     return {
         "intent_id": str(intent.id),
@@ -1304,8 +1394,17 @@ def create_direct_transfer_topup_intent(
     db: Session,
     customer: dict,
     amount: Decimal | int | float | str,
+    *,
+    invoice_id: str | None = None,
+    enforce_limits: bool = True,
 ) -> dict:
-    """Create or replace a pending direct-transfer top-up intent."""
+    """Create or replace a pending direct-transfer intent.
+
+    Used for both account top-ups and (with ``invoice_id`` set) invoice
+    payments. For invoice payments ``enforce_limits=False`` skips the top-up
+    min/max so a small invoice can still be paid by transfer, and the invoice is
+    tagged in metadata so the submitted proof is traceable to it.
+    """
     if not direct_bank_transfer_enabled(db):
         raise ValueError("Direct bank transfer is not configured")
 
@@ -1314,15 +1413,23 @@ def create_direct_transfer_topup_intent(
     if requested_amount <= Decimal("0.00"):
         raise ValueError("Top-up amount must be greater than ₦0.00")
 
-    min_amount_value, max_amount_value = _resolve_topup_limits(db)
-    if requested_amount < Decimal(str(min_amount_value)):
-        raise ValueError(
-            f"Top-up amount must be at least {_format_naira(min_amount_value)}"
-        )
-    if requested_amount > Decimal(str(max_amount_value)):
-        raise ValueError(
-            f"Top-up amount must not exceed {_format_naira(max_amount_value)}"
-        )
+    if enforce_limits:
+        min_amount_value, max_amount_value = _resolve_topup_limits(db)
+        if requested_amount < Decimal(str(min_amount_value)):
+            raise ValueError(
+                f"Top-up amount must be at least {_format_naira(min_amount_value)}"
+            )
+        if requested_amount > Decimal(str(max_amount_value)):
+            raise ValueError(
+                f"Top-up amount must not exceed {_format_naira(max_amount_value)}"
+            )
+
+    intent_metadata: dict[str, str] = {
+        "payment_method": "bank_transfer",
+        "payment_flow": "invoice_payment" if invoice_id else "account_topup",
+    }
+    if invoice_id:
+        intent_metadata["invoice_id"] = invoice_id
 
     _cancel_pending_direct_transfer_intents(db, account_id)
     intent = TopupIntent(
@@ -1333,7 +1440,7 @@ def create_direct_transfer_topup_intent(
         requested_amount=requested_amount,
         status="pending",
         expires_at=datetime.now(UTC) + _DIRECT_TRANSFER_TTL,
-        metadata_={"payment_flow": "account_topup", "payment_method": "bank_transfer"},
+        metadata_=intent_metadata,
     )
     db.add(intent)
     db.commit()
@@ -1625,6 +1732,7 @@ def verify_and_record_topup(
 
 __all__ = [
     "_resolve_payment_provider",
+    "complete_invoice_payment_intent",
     "create_invoice_payment_intent",
     "create_topup_intent",
     "create_direct_transfer_topup_intent",

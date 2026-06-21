@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 from app.models.billing import (
     CreditNote,
@@ -577,6 +578,88 @@ def test_create_invoice_payment_intent_bank_transfer_hands_off(
     assert payload["provider_type"] == "direct_bank_transfer"
     assert payload["redirect_url"] == "/portal/billing/topup/transfer"
     assert payload["requested_amount"] == Decimal("2500.00")
+    # The pending transfer intent is tagged with the invoice so the proof is
+    # traceable back to it.
+    intent = db_session.scalars(
+        select(TopupIntent).where(TopupIntent.reference == payload["reference"])
+    ).first()
+    assert intent.metadata_["invoice_id"] == str(invoice.id)
+    assert intent.metadata_["payment_flow"] == "invoice_payment"
+
+
+def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
+    monkeypatch, db_session, subscriber
+):
+    # A real invoice can be below the top-up minimum (e.g. a small fee); paying
+    # it by transfer must not be blocked by the top-up limit.
+    _patch_topup_settings(monkeypatch, min_amount=1000)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="500.00", invoice_number="INV-PAY-SMALL"
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="direct_bank_transfer",
+    )
+
+    assert payload["requested_amount"] == Decimal("500.00")
+    assert payload["redirect_url"] == "/portal/billing/topup/transfer"
+
+
+def test_create_invoice_payment_intent_records_and_completes_gateway_trace(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-TRACE"
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack", public_key="pk", reference="pay-ref-trace"
+        ),
+    )
+
+    create_invoice_payment_intent(
+        db_session, _invoice_customer(subscriber), str(invoice.id), provider="paystack"
+    )
+
+    # A durable pending record exists for the started checkout.
+    intent = db_session.scalars(
+        select(TopupIntent).where(TopupIntent.reference == "pay-ref-trace")
+    ).first()
+    assert intent is not None
+    assert intent.status == "pending"
+    assert intent.metadata_["invoice_id"] == str(invoice.id)
+
+    # After verify, the trace is marked completed (idempotent, no-op if missing).
+    from app.services.customer_portal_flow_payments import (
+        complete_invoice_payment_intent,
+    )
+
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("2500.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+    )
+    db_session.add(payment)
+    db_session.commit()
+    db_session.refresh(payment)
+
+    complete_invoice_payment_intent(db_session, "pay-ref-trace", payment)
+    db_session.refresh(intent)
+    assert intent.status == "completed"
+    assert intent.completed_payment_id == payment.id
+
+    # No-op for an unknown reference.
+    complete_invoice_payment_intent(db_session, "no-such-ref", payment)
 
 
 def test_create_invoice_payment_intent_initializes_flutterwave(

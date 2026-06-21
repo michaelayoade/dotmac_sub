@@ -6,6 +6,12 @@
 {% set pay_options = payment_options|default([
     {"provider_type": "paystack", "label": "Pay with Paystack"}
 ], true) %}
+{# Default the chooser to the configured provider only if it is actually
+   rendered (Flutterwave is omitted unless an active provider row exists),
+   otherwise fall back to the first available option so the pre-selected radio
+   always matches a visible choice. #}
+{% set pay_provider_values = pay_options|map(attribute="provider_type")|list %}
+{% set default_pay_provider = provider_type if provider_type in pay_provider_values else (pay_options[0].provider_type if pay_options else "paystack") %}
 <div class="space-y-6" x-data="paymentPage()">
     <div>
         <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
@@ -34,7 +40,7 @@
             <div class="text-right">
                 <p class="text-sm font-medium text-stone-500 dark:text-stone-400">Amount Due</p>
                 <p class="mt-1 text-3xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
-                    &#8358;{{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total_amount or 0) }}
+                    &#8358;{{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total or 0) }}
                 </p>
             </div>
         </div>
@@ -90,16 +96,27 @@
     </div>
 </div>
 
+{% include "customer/billing/_payment_intent_js.html" %}
 <script>
 function paymentPage() {
     return {
         processing: false,
         saveCard: false,
         errorMessage: '',
-        selectedPaymentChoice: 'provider:{{ provider_type }}',
+        selectedPaymentChoice: 'provider:{{ default_pay_provider }}',
+        // One idempotency key per page session (not per click): if a saved-card
+        // charge succeeds but the response is lost and the customer clicks again,
+        // the server replays the original reference instead of charging twice.
+        idempotencyKey: null,
         csrfToken() {
             const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
             return match ? decodeURIComponent(match[1]) : '';
+        },
+        ensureIdempotencyKey() {
+            if (!this.idempotencyKey) {
+                this.idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
+            }
+            return this.idempotencyKey;
         },
         buttonLabel() {
             if (this.processing) {
@@ -109,68 +126,46 @@ function paymentPage() {
             if (choice === 'provider:direct_bank_transfer') {
                 return 'Continue to bank transfer';
             }
-            return 'Pay ₦{{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total_amount or 0) }}';
+            return 'Pay ₦{{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total or 0) }}';
         },
         async startPayment() {
             this.processing = true;
             this.errorMessage = '';
             const self = this;
-            const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
+            const selectedChoice = this.selectedPaymentChoice || 'provider:{{ default_pay_provider }}';
             const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
             const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
-            // Saved-card charges go server-side immediately, so guard against a
-            // double-submit with an Idempotency-Key (one per charge attempt).
-            const idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
-            let intent;
 
+            let result;
             try {
-                const response = await fetch('/portal/billing/pay/intent', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': this.csrfToken(),
-                        'Idempotency-Key': idempotencyKey,
-                    },
-                    body: JSON.stringify({
+                result = await submitPaymentIntent({
+                    endpoint: '/portal/billing/pay/intent',
+                    verifyPath: '/portal/billing/pay/verify',
+                    csrfToken: this.csrfToken(),
+                    idempotencyKey: this.ensureIdempotencyKey(),
+                    body: {
                         invoice: '{{ invoice.id }}',
                         provider: requestProvider,
                         payment_method_id: selectedPaymentMethodId,
-                    }),
+                    },
                 });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Unable to start payment.');
-                }
-                intent = payload;
-                if (intent.redirect_url) {
-                    window.location.href = intent.redirect_url;
-                    return;
-                }
-                if (intent.charged) {
-                    window.location.href = '/portal/billing/pay/verify?reference=' + encodeURIComponent(intent.reference) + '&provider=paystack';
-                    return;
-                }
-                if (intent.checkout_url) {
-                    window.location.href = intent.checkout_url;
-                    return;
-                }
             } catch (error) {
                 this.processing = false;
                 this.errorMessage = error.message || 'Unable to start payment.';
                 return;
             }
-
-            if (intent.provider_type === 'flutterwave') {
-                this.processing = false;
-                this.errorMessage = 'Unable to start Flutterwave checkout.';
+            if (result.handled) {
                 return;
             }
+            const intent = result.intent;
 
             const handler = PaystackPop.setup({
                 key: intent.provider_public_key,
                 email: '{{ customer_email }}',
-                amount: {{ ((amount or invoice.balance_due or invoice.total_amount or 0) * 100) | int }},
+                // Charge the server-authoritative intent amount, not the (possibly
+                // stale) amount rendered at page load.
+                amount: Math.round((intent.amount || {{ (amount or invoice.balance_due or invoice.total or 0) | float }}) * 100),
                 currency: intent.currency || 'NGN',
                 ref: intent.reference,
                 metadata: intent.checkout_metadata || {
@@ -190,8 +185,7 @@ function paymentPage() {
 }
 </script>
 
-{% set pay_provider_types = pay_options|map(attribute="provider_type")|list %}
-{% if "paystack" in pay_provider_types %}
+{% if "paystack" in pay_provider_values %}
 <script src="https://js.paystack.co/v1/inline.js"></script>
 {% endif %}
 {% endblock %}

@@ -28,6 +28,7 @@ from app.services.customer_portal_flow_common import (
 )
 from app.services.customer_portal_flow_payments import (
     _resolve_payment_provider,
+    complete_invoice_payment_intent,
     create_invoice_payment_intent,
     create_topup_intent,
     direct_bank_transfer_enabled,
@@ -75,6 +76,7 @@ __all__ = [
     "get_payment_arrangement_detail",
     "get_invoice_detail",
     "_resolve_payment_provider",
+    "complete_invoice_payment_intent",
     "create_invoice_payment_intent",
     "create_topup_intent",
     "direct_bank_transfer_enabled",

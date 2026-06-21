@@ -1,0 +1,48 @@
+{#
+  Shared customer payment-intent submitter, used by pay.html and topup.html.
+
+  POSTs the selected method to an intent endpoint and dispatches on the response:
+    redirect_url -> bank-transfer instructions page
+    charged      -> saved card already charged server-side, go straight to verify
+    checkout_url -> hosted gateway checkout (Flutterwave)
+    flutterwave with no checkout_url -> throw (misconfigured)
+  Returns {handled: true} when it navigated away, or {handled: false, intent}
+  so the caller can open an inline gateway (Paystack) with the minted intent.
+
+  Keeping this in one place stops pay.html and topup.html from drifting on the
+  intent-response contract (idempotency header, redirect/charged/checkout
+  branching).
+#}
+<script>
+window.submitPaymentIntent = async function (opts) {
+    const response = await fetch(opts.endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': opts.csrfToken,
+            'Idempotency-Key': opts.idempotencyKey,
+        },
+        body: JSON.stringify(opts.body),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        throw new Error(payload.detail || 'Unable to start payment.');
+    }
+    if (payload.redirect_url) {
+        window.location.href = payload.redirect_url;
+        return { handled: true };
+    }
+    if (payload.charged) {
+        window.location.href = opts.verifyPath + '?reference=' + encodeURIComponent(payload.reference) + '&provider=paystack';
+        return { handled: true };
+    }
+    if (payload.checkout_url) {
+        window.location.href = payload.checkout_url;
+        return { handled: true };
+    }
+    if (payload.provider_type === 'flutterwave') {
+        throw new Error('Unable to start Flutterwave checkout.');
+    }
+    return { handled: false, intent: payload };
+};
+</script>
