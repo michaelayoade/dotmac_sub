@@ -1,11 +1,14 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
 
-# Production runs the bind-mount stack defined in docker-compose.yml (code is
-# bind-mounted from this checkout; deploy = `git pull` + `make prod-migrate` +
-# `make prod-restart`). The old immutable-image overlay (docker-compose.prod.yml)
-# was removed: it was stale/broken (worker services with no command, a
-# non-existent dotmac_sub:latest image, no alembic/templates mounts).
-PROD_COMPOSE = docker compose
+# Production runs IMMUTABLE images: the base docker-compose.yml has no source
+# bind-mounts and pulls code only from the baked image (built by `prod-build`).
+# `-f docker-compose.yml` deliberately EXCLUDES docker-compose.override.yml (the
+# dev-only overlay that re-adds build:/bind-mounts), so prod never runs from this
+# working tree. Plain `docker compose` (dev) auto-loads the override.
+PROD_COMPOSE = docker compose -f docker-compose.yml
+# Image tag baked/run by the prod stack. Override per-deploy, e.g.
+#   make prod-build APP_IMAGE=dotmac_sub:$(git rev-parse --short HEAD)
+APP_IMAGE ?= dotmac_sub:latest
 
 # Default target
 help: ## Show this help
@@ -111,7 +114,15 @@ docker-shell: ## Open shell in app container
 docker-migrate: ## Run migrations inside Docker
 	docker exec dotmac_sub_app alembic upgrade head
 
-prod-up: ## Start the production (bind-mount) Docker stack
+prod-build: ## Build + tag the immutable prod image from the current checkout
+	docker build -t $(APP_IMAGE) -t dotmac_sub:latest .
+
+prod-deploy: ## Full deploy: build image, apply migrations, recreate app+workers from it
+	$(MAKE) prod-build
+	$(MAKE) prod-migrate
+	$(MAKE) prod-restart
+
+prod-up: ## Start the production (immutable-image) Docker stack
 	$(PROD_COMPOSE) up -d
 
 prod-down: ## Stop the production Docker stack
@@ -120,10 +131,10 @@ prod-down: ## Stop the production Docker stack
 prod-logs: ## Tail production Docker logs
 	$(PROD_COMPOSE) logs -f --tail=100
 
-prod-restart: ## Restart production app + worker services (loads current bind-mounted code)
+prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
 	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
-prod-migrate: ## Apply DB migrations in the production stack (uses bind-mounted alembic/)
+prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
 	$(PROD_COMPOSE) run --rm app alembic upgrade head
 
 prod-check: ## Run deployment reconciliation checks in the production stack
