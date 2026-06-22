@@ -2234,6 +2234,9 @@ def test_create_subscription_with_audit_reconciles_active_subscription_after_cre
     subscriber,
     catalog_offer,
 ):
+    subscriber.subscriber_number = "SUB-000002"
+    db_session.add(subscriber)
+    db_session.commit()
     payload = {
         "account_id": subscriber.id,
         "offer_id": catalog_offer.id,
@@ -2265,6 +2268,8 @@ def test_create_subscription_with_audit_prefers_generated_pppoe_credential_when_
     subscriber,
     catalog_offer,
 ):
+    subscriber.subscriber_number = "SUB-000001"
+    db_session.add(subscriber)
     db_session.add_all(
         [
             _radius_setting(
@@ -2316,9 +2321,9 @@ def test_create_subscription_with_audit_prefers_generated_pppoe_credential_when_
         .one()
     )
 
-    assert credential.username == "105000001"
-    assert created.login == "105000001"
-    assert created.login != web_catalog_subscriptions_service._generated_service_login(
+    assert credential.username == "10000001"
+    assert created.login == "10000001"
+    assert created.login == web_catalog_subscriptions_service._generated_service_login(
         subscriber
     )
 

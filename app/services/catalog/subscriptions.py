@@ -234,21 +234,33 @@ def _auto_generate_pppoe(
     subscription: Subscription,
 ) -> None:
     """Auto-generate PPPoE credentials for newly activated subscriptions."""
-    try:
-        from app.services.pppoe_credentials import auto_generate_pppoe_credential
+    from app.models.catalog import AccessCredential
+    from app.services.pppoe_credentials import auto_generate_pppoe_credential
 
-        profile_id = subscription.radius_profile_id
-        auto_generate_pppoe_credential(
-            db,
-            str(subscription.subscriber_id),
-            radius_profile_id=str(profile_id) if profile_id else None,
+    profile_id = subscription.radius_profile_id
+    auto_generate_pppoe_credential(
+        db,
+        str(subscription.subscriber_id),
+        radius_profile_id=str(profile_id) if profile_id else None,
+    )
+    active_credential = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscription.subscriber_id,
+            AccessCredential.is_active.is_(True),
         )
-    except Exception as exc:
-        logger.warning(
-            "PPPoE auto-generation failed for subscription %s: %s",
-            subscription.id,
-            exc,
+        .first()
+    )
+    if active_credential is None:
+        raise RuntimeError(
+            f"PPPoE credential is required before activating subscription {subscription.id}."
         )
+    # Keep subscription.login in sync with the credential actually minted. The
+    # canonical and sequence-fallback paths can yield different usernames, so we
+    # bind login to the real credential rather than re-deriving it (which would
+    # leave login empty/stale for non-canonical subscriber numbers).
+    if not str(subscription.login or "").strip():
+        subscription.login = active_credential.username
 
 
 def _resolve_offer_radius_profile_id(db: Session, offer_id: str | None):
@@ -516,6 +528,23 @@ def _handle_status_transition_via_lifecycle(
     elif to_status == SubscriptionStatus.active:
         from app.services.account_lifecycle import resolve_locks_for_trigger
 
+        def _revert_failed_activation() -> None:
+            subscription.status = from_status or SubscriptionStatus.pending
+            compute_account_status(db, subscriber_id)
+            db.commit()
+
+        # Mint/verify the PPPoE credential FIRST. A derived-username collision
+        # raises here, before we resolve enforcement locks — the revert path
+        # cannot recreate those locks, so resolving them ahead of a possible
+        # failure would leave a suspended subscription with its locks cleared.
+        # The re-call inside _emit_subscription_status_event is idempotent (it
+        # finds the now-active credential and skips).
+        try:
+            _auto_generate_pppoe(db, subscription)
+        except Exception:
+            _revert_failed_activation()
+            raise
+
         if from_status in SUSPENDED_EQUIVALENT:
             resolve_locks_for_trigger(
                 db,
@@ -525,7 +554,11 @@ def _handle_status_transition_via_lifecycle(
                 emit=False,
             )
         compute_account_status(db, subscriber_id)
-        _emit_subscription_status_event(db, subscription, from_status, to_status)
+        try:
+            _emit_subscription_status_event(db, subscription, from_status, to_status)
+        except Exception:
+            _revert_failed_activation()
+            raise
 
     elif to_status == SubscriptionStatus.canceled:
         from app.services.account_lifecycle import (
@@ -1217,7 +1250,15 @@ class Subscriptions(ListResponseMixin):
             sync_credentials=False,
         )
         db.add(subscription)
-        db.commit()
+        activating = subscription.status == SubscriptionStatus.active
+        try:
+            if activating:
+                db.flush()
+                _auto_generate_pppoe(db, subscription)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         db.refresh(subscription)
 
         # Auto-create Service Order for pending subscriptions that need provisioning
@@ -1238,11 +1279,8 @@ class Subscriptions(ListResponseMixin):
             account_id=subscription.subscriber_id,
         )
 
-        # If created as active, generate credentials and sync to RADIUS FIRST
-        # so the provisioning handler (triggered by the activation event) sees them.
-        if subscription.status == SubscriptionStatus.active:
-            _auto_generate_pppoe(db, subscription)
-
+        # If created as active, credentials were minted in the create transaction.
+        if activating:
             # CRITICAL: Sync credentials to RADIUS BEFORE emitting events
             # This ensures provisioning handlers can access RadiusUser records
             _sync_credentials_to_radius(db, subscription.subscriber_id)
