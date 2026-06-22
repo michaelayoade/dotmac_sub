@@ -1,6 +1,11 @@
 .PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
 
-PROD_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.prod.yml
+# Production runs the bind-mount stack defined in docker-compose.yml (code is
+# bind-mounted from this checkout; deploy = `git pull` + `make prod-migrate` +
+# `make prod-restart`). The old immutable-image overlay (docker-compose.prod.yml)
+# was removed: it was stale/broken (worker services with no command, a
+# non-existent dotmac_sub:latest image, no alembic/templates mounts).
+PROD_COMPOSE = docker compose
 
 # Default target
 help: ## Show this help
@@ -106,22 +111,22 @@ docker-shell: ## Open shell in app container
 docker-migrate: ## Run migrations inside Docker
 	docker exec dotmac_sub_app alembic upgrade head
 
-prod-up: ## Start production-style Docker containers from immutable images
+prod-up: ## Start the production (bind-mount) Docker stack
 	$(PROD_COMPOSE) up -d
 
-prod-down: ## Stop production-style Docker containers
+prod-down: ## Stop the production Docker stack
 	$(PROD_COMPOSE) down
 
-prod-logs: ## Tail production-style Docker logs
+prod-logs: ## Tail production Docker logs
 	$(PROD_COMPOSE) logs -f --tail=100
 
-prod-restart: ## Restart production-style app and worker services
-	$(PROD_COMPOSE) up -d app celery-worker celery-worker-nin celery-worker-tr069 celery-worker-acs celery-worker-bandwidth celery-worker-ingestion celery-beat
+prod-restart: ## Restart production app + worker services (loads current bind-mounted code)
+	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
-prod-migrate: ## Run migrations explicitly in the production-style stack
+prod-migrate: ## Apply DB migrations in the production stack (uses bind-mounted alembic/)
 	$(PROD_COMPOSE) run --rm app alembic upgrade head
 
-prod-check: ## Run deployment reconciliation checks in the production-style stack
+prod-check: ## Run deployment reconciliation checks in the production stack
 	$(PROD_COMPOSE) run --rm app python scripts/setup/deploy_reconcile.py
 
 # ─── Credentials ──────────────────────────────────────────
