@@ -78,10 +78,11 @@ def _seed_policy(policy_id: str, name: str) -> None:
             """
             INSERT INTO policy_sets (
                 id, name, proration_policy, downgrade_policy,
-                suspension_action, refund_policy, is_active, created_at, updated_at
+                suspension_action, refund_policy, trial_card_required,
+                is_active, created_at, updated_at
             )
             SELECT CAST(:id AS uuid), :name, 'immediate', 'next_cycle',
-                   'suspend', 'none', true, now(), now()
+                   'suspend', 'none', false, true, now(), now()
             WHERE NOT EXISTS (
                 SELECT 1 FROM policy_sets WHERE id = CAST(:id AS uuid)
             )
