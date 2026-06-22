@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -7,6 +8,7 @@ import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../core/payment_errors.dart';
 import '../../models/reseller.dart';
+import '../../models/topup.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../billing/payment_webview_screen.dart';
@@ -94,11 +96,60 @@ Future<bool> runResellerPay(
   }
 }
 
+/// A copyable bank-account row (bank, account name, number) for transfers.
+class _ResellerBankAccountCard extends StatelessWidget {
+  const _ResellerBankAccountCard({required this.account});
+
+  final BankAccount account;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 6),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(account.bankName,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                  Text(account.accountNumber,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  Text(account.accountName, style: theme.textTheme.bodyMedium),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy_outlined, size: 20),
+              tooltip: 'Copy account number',
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: account.accountNumber));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Account number copied')),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Bottom sheet to record a reseller bulk bank transfer, optionally net of
 /// withholding tax. The account is credited the gross on staff verification and
 /// the withheld tax is tracked as a receivable. Returns true on submit.
 class _ResellerTransferSheet extends ConsumerStatefulWidget {
-  const _ResellerTransferSheet();
+  const _ResellerTransferSheet({this.accounts = const [], this.instructions});
+
+  final List<BankAccount> accounts;
+  final String? instructions;
 
   @override
   ConsumerState<_ResellerTransferSheet> createState() =>
@@ -189,6 +240,21 @@ class _ResellerTransferSheetState
               'and credit your balance.',
               style: theme.textTheme.bodySmall,
             ),
+            if (widget.accounts.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text('Transfer to', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 6),
+              for (final acct in widget.accounts)
+                _ResellerBankAccountCard(account: acct),
+              if (widget.instructions != null &&
+                  widget.instructions!.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(widget.instructions!,
+                      style: theme.textTheme.bodySmall),
+                ),
+              const Divider(height: 24),
+            ],
             const SizedBox(height: 12),
             TextField(
               controller: _net,
@@ -294,12 +360,15 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
     }
   }
 
-  Future<void> _payByTransfer() async {
+  Future<void> _payByTransfer(BankTransferConfig bankTransfer) async {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => const _ResellerTransferSheet(),
+      builder: (_) => _ResellerTransferSheet(
+        accounts: bankTransfer.accounts,
+        instructions: bankTransfer.instructions,
+      ),
     );
     if (ok == true) {
       ref.invalidate(resellerBillingProvider);
@@ -422,11 +491,13 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                     Text(_paying ? 'Starting payment…' : 'Pay another amount'),
               ),
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _paying ? null : _payByTransfer,
-                icon: const Icon(Icons.account_balance_outlined, size: 18),
-                label: const Text('Pay by bank transfer'),
-              ),
+              if (b.bankTransfer.hasAccounts)
+                OutlinedButton.icon(
+                  onPressed:
+                      _paying ? null : () => _payByTransfer(b.bankTransfer),
+                  icon: const Icon(Icons.account_balance_outlined, size: 18),
+                  label: const Text('Pay by bank transfer'),
+                ),
               const SizedBox(height: 16),
               Text('Activity', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
