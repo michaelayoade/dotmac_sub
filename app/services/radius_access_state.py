@@ -115,7 +115,7 @@ _GROUP_FOR_STATE: dict[AccessState, str] = {
 def derive_access_state(
     subscription_status: SubscriptionStatus,
     *,
-    captive_redirect_enabled: bool = True,
+    captive_redirect_enabled: bool = False,
     hard_reject: bool = False,
 ) -> AccessState | None:
     """Pure mapping: subscription.status (+ flags) → AccessState.
@@ -124,21 +124,17 @@ def derive_access_state(
     (pending, hidden, archived). Callers should treat None as "no
     radusergroup row should exist for this user".
 
-    Blocked statuses map to ``captive`` BY DEFAULT (decided 2026-06-11):
-    payment-suspension keeps just enough connectivity to reach the pay
-    page — that's the recoverable-revenue path and matches the deployed
-    walled-garden mechanism. ``suspended`` (Auth-Type := Reject) is the
-    hard tier, reserved for abuse/fraud via ``hard_reject=True``.
-
-    ``captive_redirect_enabled`` is retained for compatibility; setting
-    it False no longer demotes a subscriber to hard reject — only
-    ``hard_reject`` does.
+    Blocked statuses map to ``captive`` (soft walled-garden — keeps the
+    pay-page path) ONLY when the subscriber has opted in via
+    ``captive_redirect_enabled``. By default (opt-out) a blocked subscriber
+    maps to ``suspended`` (Auth-Type := Reject — hard offline): the captive
+    redirect is a per-customer opt-in, not applied to every account.
+    ``hard_reject=True`` forces ``suspended`` regardless (abuse/fraud tier).
     """
-    del captive_redirect_enabled  # captive is the default; flag is legacy
     if subscription_status in _ACTIVE_STATUSES:
         return AccessState.active
     if subscription_status in _BLOCKED_STATUSES:
-        if hard_reject:
+        if hard_reject or not captive_redirect_enabled:
             return AccessState.suspended
         return AccessState.captive
     if subscription_status in _TERMINATED_STATUSES:
