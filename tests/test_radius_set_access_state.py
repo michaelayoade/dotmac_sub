@@ -99,10 +99,10 @@ class TestSetAccessStateWrites:
         "state,expected_aggregate,expected_group",
         [
             (AccessState.active, "active", "dotmac-active"),
-            # Captive-by-default (2026-06-11): a suspended-status subscription
-            # aggregates to captive — dotmac-suspended is the explicit
-            # hard_reject abuse tier, never derived from status alone.
-            (AccessState.suspended, "captive", "dotmac-captive"),
+            # Captive redirect is opt-in: a suspended-status sub with NO opt-in
+            # aggregates to suspended (hard reject); only an opted-in sub →
+            # captive (the captive case sets captive_redirect_enabled below).
+            (AccessState.suspended, "suspended", "dotmac-suspended"),
             (AccessState.captive, "captive", "dotmac-captive"),
         ],
     )
@@ -116,6 +116,11 @@ class TestSetAccessStateWrites:
         subscriber,
         catalog_offer,
     ):
+        # The captive aggregate requires the per-customer opt-in; without it a
+        # suspended-status sub hard-rejects (dotmac-suspended).
+        if state == AccessState.captive:
+            subscriber.captive_redirect_enabled = True
+            db_session.commit()
         sub, _ = _seed_subscription(
             db_session,
             subscriber,
@@ -246,10 +251,10 @@ class TestSetAccessStateIdempotency:
                 db_session, str(sub.id), AccessState.suspended
             )
 
-        # Captive-by-default: the suspended-status aggregate lands in
-        # dotmac-captive (dotmac-suspended is the explicit abuse tier).
+        # Captive redirect is opt-in; this subscriber didn't opt in, so the
+        # suspended-status aggregate lands in dotmac-suspended (hard reject).
         assert _read_radusergroup(radius_db, "set-state-trans") == [
-            ("set-state-trans", "dotmac-captive", 0)
+            ("set-state-trans", "dotmac-suspended", 0)
         ]
 
 
