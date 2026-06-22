@@ -10,7 +10,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import Date, cast, func
 from sqlalchemy.orm import joinedload
 
 from app.models.billing import (
@@ -20,6 +20,7 @@ from app.models.billing import (
     LedgerEntryType,
     LedgerSource,
 )
+from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Reseller, Subscriber
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
@@ -85,6 +86,38 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
         memo=label,
         effective_date=invoice.issued_at,
         created_at=invoice.created_at,
+        is_active=True,
+    )
+
+
+def _splynx_credit_as_ledger_row(txn, account) -> SimpleNamespace:  # type: ignore[no-untyped-def]
+    """Adapt an unmigrated Splynx credit transaction into a display row.
+
+    Some pre-cutover Splynx credits (back-office corrections, credit notes,
+    withholding-tax, service credits) were not imported 1:1 into ledger_entries;
+    their VALUE is already reflected in each prepaid account's balance via the
+    cutover deposit true-up, so they must NOT be inserted as real ledger rows
+    (that would double-count the balance). This surfaces them in the view only —
+    it never affects get_account_credit_balance or any total.
+    """
+    when = datetime(
+        txn.transaction_date.year,
+        txn.transaction_date.month,
+        txn.transaction_date.day,
+        tzinfo=UTC,
+    )
+    label = txn.description or txn.category_name or "Credit"
+    return SimpleNamespace(
+        id=txn.id,
+        account_id=txn.subscriber_id,
+        account=account,
+        entry_type=SimpleNamespace(value="credit"),
+        source=SimpleNamespace(value="credit_note"),
+        amount=txn.amount,
+        currency="NGN",
+        memo=f"{label} (Splynx)",
+        effective_date=when,
+        created_at=when,
         is_active=True,
     )
 
@@ -210,8 +243,81 @@ def build_ledger_entries_data(
                 .all()
             ]
 
+        # Merge pre-cutover Splynx credits that were never migrated 1:1 into the
+        # ledger (corrections / credit notes / withholding-tax / service credits),
+        # so they are visible "as they were in Splynx". Display-only: deduped
+        # against existing ledger credits (same account+amount+date) so already-
+        # migrated ones aren't shown twice; never written to ledger_entries, so
+        # balances are untouched. They are credits, shown under "credit_note".
+        # These Splynx credits are all pre-cutover (<= 2026-03-15), so in an
+        # unscoped, recency-ordered view they can never beat the post-cutover
+        # top-N — running the (correlated) dedup scan there is pure cost for zero
+        # rows. Only evaluate it when the view is scoped to a customer/partner or
+        # a date range, i.e. when a pre-cutover row could actually surface.
+        is_scoped = bool(account_ids or selected_partner_id or range_start)
+        splynx_credit_rows: list[SimpleNamespace] = []
+        if (
+            is_scoped
+            and (want_type in (None, LedgerEntryType.credit))
+            and (selected_category in ("", "credit_note"))
+        ):
+            already_in_ledger = (
+                db.query(LedgerEntry.id)
+                .filter(LedgerEntry.account_id == SplynxBillingTransaction.subscriber_id)
+                .filter(LedgerEntry.is_active.is_(True))
+                .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
+                .filter(LedgerEntry.amount == SplynxBillingTransaction.amount)
+                .filter(
+                    cast(
+                        func.coalesce(
+                            LedgerEntry.effective_date, LedgerEntry.created_at
+                        ),
+                        Date,
+                    )
+                    == SplynxBillingTransaction.transaction_date
+                )
+                .exists()
+            )
+            sx_q = (
+                db.query(SplynxBillingTransaction, Subscriber)
+                .join(
+                    Subscriber,
+                    Subscriber.id == SplynxBillingTransaction.subscriber_id,
+                )
+                .filter(SplynxBillingTransaction.deleted.is_(False))
+                .filter(SplynxBillingTransaction.entry_type == "credit")
+                .filter(SplynxBillingTransaction.splynx_payment_id.is_(None))
+                .filter(SplynxBillingTransaction.transaction_date.isnot(None))
+                .filter(
+                    SplynxBillingTransaction.transaction_date <= _LEDGER_CUTOVER.date()
+                )
+                .filter(~already_in_ledger)
+            )
+            if account_ids:
+                sx_q = sx_q.filter(
+                    SplynxBillingTransaction.subscriber_id.in_(account_ids)
+                )
+            if selected_partner_id:
+                sx_q = sx_q.filter(
+                    Subscriber.reseller_id == UUID(selected_partner_id)
+                )
+            if range_start is not None:
+                sx_q = sx_q.filter(
+                    SplynxBillingTransaction.transaction_date >= range_start.date()
+                )
+            splynx_credit_rows = [
+                _splynx_credit_as_ledger_row(txn, account)
+                for txn, account in sx_q.order_by(
+                    SplynxBillingTransaction.transaction_date.desc()
+                )
+                .limit(limit)
+                .all()
+            ]
+
         entries = sorted(
-            [*ledger_rows, *invoice_rows], key=_display_date, reverse=True
+            [*ledger_rows, *invoice_rows, *splynx_credit_rows],
+            key=_display_date,
+            reverse=True,
         )[:limit]
 
     credit_entries = [
