@@ -23,6 +23,7 @@ from app.services.collections._core import (
     get_available_balance,
     has_overdue_balance,
     prepaid_enforcement,
+    reconcile_retired_enforcement_locks,
     # Public functions
     restore_account_services,
 )
@@ -41,5 +42,6 @@ __all__ = [
     # Public functions
     "get_available_balance",
     "has_overdue_balance",
+    "reconcile_retired_enforcement_locks",
     "restore_account_services",
 ]
