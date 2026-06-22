@@ -7,12 +7,19 @@ import io
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.models.subscriber import Reseller, Subscriber
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
@@ -28,6 +35,63 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
     "other": (LedgerSource.other,),
 }
 
+# Splynx cutover: the migrated ledger carries invoice debits only through this
+# instant. Native invoice issuance does NOT post a debit to ledger_entries (the
+# invoice row itself is the AR record), so without merging post-cutover invoices
+# the ledger view looks frozen at March 2026. Invoices issued on/before the
+# cutover are already represented by migrated ledger rows — including them would
+# double-count, so only issued_at strictly after this is merged.
+_LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
+
+
+def _range_start(date_range: str | None) -> datetime | None:
+    if date_range not in {"today", "week", "month", "quarter", "year"}:
+        return None
+    now = datetime.now(UTC)
+    if date_range == "today":
+        return datetime(now.year, now.month, now.day, tzinfo=UTC)
+    if date_range == "week":
+        return datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+            days=now.weekday()
+        )
+    if date_range == "month":
+        return datetime(now.year, now.month, 1, tzinfo=UTC)
+    if date_range == "quarter":
+        quarter_start_month = ((now.month - 1) // 3) * 3 + 1
+        return datetime(now.year, quarter_start_month, 1, tzinfo=UTC)
+    return datetime(now.year, 1, 1, tzinfo=UTC)
+
+
+def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
+    """Adapt an Invoice into a display row matching the ledger template/CSV.
+
+    Display-only: the amount shown is the invoice total (the charge); payments
+    against it are already in ledger_entries as credits. Account balances/AR are
+    NOT derived from this view — they come from invoices.balance_due.
+    """
+    label = invoice.memo or (
+        f"Invoice {invoice.invoice_number}"
+        if invoice.invoice_number
+        else "Invoice"
+    )
+    return SimpleNamespace(
+        id=invoice.id,
+        account_id=invoice.account_id,
+        account=invoice.account,
+        entry_type=SimpleNamespace(value="debit"),
+        source=SimpleNamespace(value="invoice"),
+        amount=invoice.total,
+        currency=invoice.currency or "NGN",
+        memo=label,
+        effective_date=invoice.issued_at,
+        created_at=invoice.created_at,
+        is_active=True,
+    )
+
+
+def _display_date(entry) -> datetime:  # type: ignore[no-untyped-def]
+    return getattr(entry, "effective_date", None) or entry.created_at
+
 
 def build_ledger_entries_data(
     db,
@@ -39,24 +103,7 @@ def build_ledger_entries_data(
     partner_id: str | None = None,
     limit: int = 200,
 ) -> dict[str, object]:
-    def _apply_date_range(query):  # type: ignore[no-untyped-def]
-        if date_range not in {"today", "week", "month", "quarter", "year"}:
-            return query
-        now = datetime.now(UTC)
-        if date_range == "today":
-            start = datetime(now.year, now.month, now.day, tzinfo=UTC)
-        elif date_range == "week":
-            start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
-                days=now.weekday()
-            )
-        elif date_range == "month":
-            start = datetime(now.year, now.month, 1, tzinfo=UTC)
-        elif date_range == "quarter":
-            quarter_start_month = ((now.month - 1) // 3) * 3 + 1
-            start = datetime(now.year, quarter_start_month, 1, tzinfo=UTC)
-        else:
-            start = datetime(now.year, 1, 1, tzinfo=UTC)
-        return query.filter(LedgerEntry.created_at >= start)
+    range_start = _range_start(date_range)
 
     account_ids = []
     if customer_ref:
@@ -69,13 +116,29 @@ def build_ledger_entries_data(
 
     entries = []
     selected_partner_id = (partner_id or "").strip() or None
+    # Only offer partners that actually own ledger activity. Listing every active
+    # reseller surfaces empty/test partners (e.g. ones with zero subscribers),
+    # and selecting one returns a blank ledger that reads as a broken filter.
+    has_ledger_activity = (
+        db.query(LedgerEntry.id)
+        .join(Subscriber, Subscriber.id == LedgerEntry.account_id)
+        .filter(Subscriber.reseller_id == Reseller.id)
+        .filter(LedgerEntry.is_active.is_(True))
+        .exists()
+    )
     partner_options = [
         {"id": str(item.id), "name": item.name}
         for item in db.query(Reseller)
         .filter(Reseller.is_active.is_(True))
+        .filter(has_ledger_activity)
         .order_by(Reseller.name.asc())
         .all()
     ]
+    want_type = (
+        validate_enum(entry_type, LedgerEntryType, "entry_type") if entry_type else None
+    )
+    selected_category = (category or "").strip().lower()
+
     if account_ids or not customer_ref:
         query = (
             db.query(LedgerEntry)
@@ -84,31 +147,72 @@ def build_ledger_entries_data(
         )
         if account_ids:
             query = query.filter(LedgerEntry.account_id.in_(account_ids))
-        if entry_type:
-            query = query.filter(
-                LedgerEntry.entry_type
-                == validate_enum(entry_type, LedgerEntryType, "entry_type")
-            )
+        if want_type is not None:
+            query = query.filter(LedgerEntry.entry_type == want_type)
         if selected_partner_id:
             query = query.filter(
                 LedgerEntry.account.has(
                     Subscriber.reseller_id == UUID(selected_partner_id)
                 )
             )
-        selected_category = (category or "").strip().lower()
         if selected_category in _CATEGORY_SOURCES:
             query = query.filter(
                 LedgerEntry.source.in_(_CATEGORY_SOURCES[selected_category])
             )
-        query = _apply_date_range(query)
-        entries = (
+        if range_start is not None:
+            query = query.filter(
+                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
+                >= range_start
+            )
+        ledger_rows = (
             query.order_by(
                 func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at).desc()
             )
             .limit(limit)
-            .offset(0)
             .all()
         )
+
+        # Merge post-cutover invoices as synthetic debit rows so the ledger view
+        # reflects ongoing billing (native invoices don't post to ledger_entries).
+        # Invoices are debits categorised as "service", so only include them when
+        # the active filters don't exclude that combination.
+        invoice_rows: list[SimpleNamespace] = []
+        if (want_type in (None, LedgerEntryType.debit)) and (
+            selected_category in ("", "service")
+        ):
+            inv_q = (
+                db.query(Invoice)
+                .options(joinedload(Invoice.account))
+                .filter(Invoice.is_active.is_(True))
+                .filter(Invoice.is_proforma.is_(False))
+                .filter(
+                    Invoice.status.notin_(
+                        [InvoiceStatus.void, InvoiceStatus.draft]
+                    )
+                )
+                .filter(Invoice.issued_at.isnot(None))
+                .filter(Invoice.issued_at > _LEDGER_CUTOVER)
+            )
+            if account_ids:
+                inv_q = inv_q.filter(Invoice.account_id.in_(account_ids))
+            if selected_partner_id:
+                inv_q = inv_q.filter(
+                    Invoice.account.has(
+                        Subscriber.reseller_id == UUID(selected_partner_id)
+                    )
+                )
+            if range_start is not None:
+                inv_q = inv_q.filter(Invoice.issued_at >= range_start)
+            invoice_rows = [
+                _invoice_as_ledger_row(invoice)
+                for invoice in inv_q.order_by(Invoice.issued_at.desc())
+                .limit(limit)
+                .all()
+            ]
+
+        entries = sorted(
+            [*ledger_rows, *invoice_rows], key=_display_date, reverse=True
+        )[:limit]
 
     credit_entries = [
         entry
@@ -159,12 +263,15 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
             "credit_amount",
             "currency",
             "description",
-            "created_at",
+            "date",
         ]
     )
     for entry in entries:
         entry_type = getattr(getattr(entry, "entry_type", None), "value", "") or ""
         amount = Decimal(str(getattr(entry, "amount", 0) or 0))
+        # Prefer the real transaction date; created_at is the import instant for
+        # migrated rows and would mislabel every one as 2026-03-15.
+        entry_date = getattr(entry, "effective_date", None) or entry.created_at
         writer.writerow(
             [
                 str(entry.id),
@@ -175,7 +282,7 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
                 f"{amount:.2f}" if entry_type == "credit" else "",
                 entry.currency or "NGN",
                 entry.memo or "",
-                entry.created_at.isoformat() if entry.created_at else "",
+                entry_date.isoformat() if entry_date else "",
             ]
         )
     return buffer.getvalue()
