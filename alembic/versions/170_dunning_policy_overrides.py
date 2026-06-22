@@ -127,7 +127,8 @@ def upgrade() -> None:
                 """
                 INSERT INTO policy_dunning_steps
                     (id, policy_set_id, day_offset, action, note)
-                SELECT CAST(:sid AS uuid), CAST(:pid AS uuid), :day, :action, :note
+                SELECT CAST(:sid AS uuid), CAST(:pid AS uuid), :day,
+                       CAST(:action AS dunningaction), :note
                 WHERE NOT EXISTS (
                     SELECT 1 FROM policy_dunning_steps WHERE id = CAST(:sid AS uuid)
                 )
