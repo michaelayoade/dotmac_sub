@@ -89,7 +89,10 @@ in the deploy note (it shifts when existing daily jobs fire).
    `collections.billing_notifications_hourly_enabled`); it owns the reminder/
    escalation emits and the daily cycle skips them when enabled. Activates
    `billing_notif_send_hour` (sends only during `[send_hour, send_hour+1)` local).
-3. **Cron model + scheduler** — migration, enum, `build_beat_schedule` branch.
+3. **Cron model + scheduler** *(landed)* — migration 168 (`crontab` enum value +
+   nullable `cron_expr`); `_cron_to_beat_schedule` parses a 5-field cron;
+   `build_beat_schedule` honours `schedule_type == crontab` rows. Settable via DB
+   now; the admin UI is phase 4.
 4. **Cron admin UI** — edit type/cron/interval + next-run preview.
 5. **Unify timezone** — celery app TZ ← `scheduler.timezone`.
 6. **Enforcement gating** — postpaid suspend/dunning hourly + once-per-day +
