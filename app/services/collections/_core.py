@@ -6,7 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceStatus
@@ -1716,78 +1716,109 @@ class PrepaidEnforcement(ListResponseMixin):
         accounts_deactivated = 0
         skipped = 0
 
+        if not payload.dry_run:
+            # Each account is enforced and committed independently (below), so a
+            # transient row-lock (e.g. a poller holding a subscription row) only
+            # skips that one account instead of aborting the whole run. A short
+            # lock_timeout makes a contended FOR UPDATE fail fast into the
+            # per-account skip path rather than block the run.
+            db.execute(text("SET lock_timeout = '5s'"))
+
         for (account_id,) in prepaid_accounts:
             accounts_scanned += 1
             if account_id in postpaid_account_ids:
                 skipped += 1
                 continue
-            account = db.get(Subscriber, account_id)
-            if not account:
-                skipped += 1
-                continue
-            default_threshold = settings_spec.resolve_value(
-                db, SettingDomain.collections, "prepaid_default_min_balance"
-            )
-            threshold_value = (
-                account.min_balance
-                if account.min_balance is not None
-                else (default_threshold if default_threshold is not None else "0.00")
-            )
-            threshold = Decimal(str(threshold_value))
-            balance = _resolve_prepaid_available_balance(db, str(account_id))
-            if balance >= threshold:
-                if not payload.dry_run:
-                    if (
-                        account.prepaid_low_balance_at
-                        or account.prepaid_deactivation_at
-                    ):
-                        account.prepaid_low_balance_at = None
-                        account.prepaid_deactivation_at = None
-                continue
-
-            low_balance_at = account.prepaid_low_balance_at or run_at
-            if not payload.dry_run and account.prepaid_low_balance_at is None:
-                account.prepaid_low_balance_at = run_at
-                if deactivation_days_default:
-                    account.prepaid_deactivation_at = run_at + timedelta(
-                        days=deactivation_days_default
-                    )
-            grace_days = (
-                int(account.grace_period_days)
-                if account.grace_period_days is not None
-                else grace_days_default
-            )
-            grace_until = (
-                low_balance_at + timedelta(days=grace_days)
-                if grace_days > 0
-                else low_balance_at
-            )
-            if run_at < grace_until:
-                if not payload.dry_run:
-                    _create_prepaid_warning_notification(
-                        db, str(account_id), str(balance), str(threshold)
-                    )
-                accounts_warned += 1
-                continue
-
-            deactivation_at = account.prepaid_deactivation_at
-            if deactivation_at and run_at >= deactivation_at:
-                if not payload.dry_run:
-                    _deactivate_prepaid_subscriptions(db, str(account_id), run_at)
-                accounts_deactivated += 1
-                continue
-
-            if not payload.dry_run:
-                _suspend_account(
-                    db,
-                    str(account_id),
-                    reason=EnforcementReason.prepaid,
-                    source="prepaid_enforcement",
-                    # Prepaid balance enforcement must only cut prepaid services;
-                    # a postpaid service on the same account lapses via dunning.
-                    only_billing_mode=BillingMode.prepaid,
+            # Per-account transaction: on any error (lock timeout, etc.) roll
+            # back just this account and continue; the hourly cadence retries it.
+            try:
+                account = db.get(Subscriber, account_id)
+                if not account:
+                    skipped += 1
+                    continue
+                default_threshold = settings_spec.resolve_value(
+                    db, SettingDomain.collections, "prepaid_default_min_balance"
                 )
-            accounts_suspended += 1
+                threshold_value = (
+                    account.min_balance
+                    if account.min_balance is not None
+                    else (
+                        default_threshold
+                        if default_threshold is not None
+                        else "0.00"
+                    )
+                )
+                threshold = Decimal(str(threshold_value))
+                balance = _resolve_prepaid_available_balance(db, str(account_id))
+                if balance >= threshold:
+                    if not payload.dry_run:
+                        if (
+                            account.prepaid_low_balance_at
+                            or account.prepaid_deactivation_at
+                        ):
+                            account.prepaid_low_balance_at = None
+                            account.prepaid_deactivation_at = None
+                            db.commit()
+                    continue
+
+                low_balance_at = account.prepaid_low_balance_at or run_at
+                if not payload.dry_run and account.prepaid_low_balance_at is None:
+                    account.prepaid_low_balance_at = run_at
+                    if deactivation_days_default:
+                        account.prepaid_deactivation_at = run_at + timedelta(
+                            days=deactivation_days_default
+                        )
+                grace_days = (
+                    int(account.grace_period_days)
+                    if account.grace_period_days is not None
+                    else grace_days_default
+                )
+                grace_until = (
+                    low_balance_at + timedelta(days=grace_days)
+                    if grace_days > 0
+                    else low_balance_at
+                )
+                if run_at < grace_until:
+                    if not payload.dry_run:
+                        _create_prepaid_warning_notification(
+                            db, str(account_id), str(balance), str(threshold)
+                        )
+                        db.commit()
+                    accounts_warned += 1
+                    continue
+
+                deactivation_at = account.prepaid_deactivation_at
+                if deactivation_at and run_at >= deactivation_at:
+                    if not payload.dry_run:
+                        _deactivate_prepaid_subscriptions(
+                            db, str(account_id), run_at
+                        )
+                        db.commit()
+                    accounts_deactivated += 1
+                    continue
+
+                if not payload.dry_run:
+                    _suspend_account(
+                        db,
+                        str(account_id),
+                        reason=EnforcementReason.prepaid,
+                        source="prepaid_enforcement",
+                        # Prepaid balance enforcement must only cut prepaid
+                        # services; a postpaid service on the same account
+                        # lapses via dunning.
+                        only_billing_mode=BillingMode.prepaid,
+                    )
+                    db.commit()
+                accounts_suspended += 1
+            except Exception:
+                db.rollback()
+                skipped += 1
+                logger.warning(
+                    "prepaid enforcement: skipped account %s after error",
+                    account_id,
+                    exc_info=True,
+                )
+                continue
 
         if not payload.dry_run:
             _set_prepaid_last_run_date(db, run_date)
