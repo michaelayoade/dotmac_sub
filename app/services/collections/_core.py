@@ -1,9 +1,8 @@
 import logging
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
@@ -33,7 +32,7 @@ from app.schemas.collections import (
     PrepaidEnforcementRunRequest,
     PrepaidEnforcementRunResponse,
 )
-from app.services import settings_spec
+from app.services import enforcement_window, settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -45,20 +44,6 @@ from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_blocking_time(value: str | None) -> time | None:
-    if not value:
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    for fmt in ("%H:%M", "%H:%M:%S"):
-        try:
-            return datetime.strptime(raw, fmt).time()
-        except ValueError:
-            continue
-    return None
 
 
 def _get_prepaid_last_run_date(db: Session) -> date | None:
@@ -1590,14 +1575,10 @@ class PrepaidEnforcement(ListResponseMixin):
         db: Session, payload: PrepaidEnforcementRunRequest
     ) -> PrepaidEnforcementRunResponse:
         run_at = payload.run_at or datetime.now(UTC)
-        timezone_name = str(
-            settings_spec.resolve_value(db, SettingDomain.scheduler, "timezone")
-            or "UTC"
-        )
         blocking_time_value = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_blocking_time"
         )
-        blocking_time = _parse_blocking_time(
+        blocking_time = enforcement_window.parse_time(
             str(blocking_time_value) if blocking_time_value is not None else None
         )
         skip_weekends = settings_spec.resolve_value(
@@ -1632,31 +1613,15 @@ class PrepaidEnforcement(ListResponseMixin):
         except (TypeError, ValueError):
             deactivation_days_default = 0
 
-        try:
-            local_run_at = run_at.astimezone(ZoneInfo(timezone_name))
-        except Exception:
-            local_run_at = run_at
+        local_run_at = enforcement_window.to_local(db, run_at)
         run_date = local_run_at.date()
 
-        if blocking_time and local_run_at.time() < blocking_time:
-            return PrepaidEnforcementRunResponse(
-                run_at=run_at,
-                accounts_scanned=0,
-                accounts_warned=0,
-                accounts_suspended=0,
-                accounts_deactivated=0,
-                skipped=0,
-            )
-        if skip_weekends and local_run_at.weekday() >= 5:
-            return PrepaidEnforcementRunResponse(
-                run_at=run_at,
-                accounts_scanned=0,
-                accounts_warned=0,
-                accounts_suspended=0,
-                accounts_deactivated=0,
-                skipped=0,
-            )
-        if isinstance(skip_holidays, list) and run_date.isoformat() in skip_holidays:
+        if enforcement_window.window_block_reason(
+            local_run_at,
+            start_time=blocking_time,
+            skip_weekends=bool(skip_weekends),
+            skip_holidays=skip_holidays if isinstance(skip_holidays, list) else None,
+        ):
             return PrepaidEnforcementRunResponse(
                 run_at=run_at,
                 accounts_scanned=0,
