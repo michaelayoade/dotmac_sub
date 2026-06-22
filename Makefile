@@ -114,8 +114,17 @@ docker-shell: ## Open shell in app container
 docker-migrate: ## Run migrations inside Docker
 	docker exec dotmac_sub_app alembic upgrade head
 
-prod-build: ## Build + tag the immutable prod image from the current checkout
-	docker build -t $(APP_IMAGE) -t dotmac_sub:latest .
+prod-build: ## Build + tag the immutable prod image from a CLEAN checkout of HEAD (working-tree edits are NOT baked)
+	@set -eu; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "WARNING: working tree has uncommitted changes — building committed HEAD only; they will NOT be in the image."; \
+	fi; \
+	sha=$$(git rev-parse --short HEAD); \
+	wt=$$(mktemp -d "$${TMPDIR:-/tmp}/dotmac-prod-build.XXXXXX"); \
+	trap 'git worktree remove --force "$$wt" >/dev/null 2>&1 || rm -rf "$$wt"' EXIT INT TERM; \
+	git worktree add --detach --quiet "$$wt" HEAD; \
+	echo "Building $(APP_IMAGE) (+ dotmac_sub:latest, dotmac_sub:$$sha) from clean HEAD $$sha"; \
+	docker build -t $(APP_IMAGE) -t dotmac_sub:latest -t "dotmac_sub:$$sha" "$$wt"
 
 prod-deploy: ## Full deploy: build image, apply migrations, recreate app+workers from it
 	$(MAKE) prod-build
