@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
@@ -22,6 +23,7 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(currentUserProvider);
     final subs = ref.watch(subscriptionsProvider);
+    final serviceStatus = ref.watch(serviceStatusProvider).asData?.value;
     final invoices = ref.watch(invoicesProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final notifications = ref.watch(notificationsProvider);
@@ -94,19 +96,28 @@ class DashboardScreen extends ConsumerWidget {
 
     // Expiry urgency: lift a renew prompt to the banner area when the current
     // service is within 3 days of lapsing (the payment banner takes priority).
+    // An *active* service is never "expired" — a momentarily-stale billing date
+    // must not nag a running service; genuine lapses surface via [isExpired]
+    // (a non-active current service). Postpaid has no date expiry at all.
     final daysLeft = currentService?.daysUntilExpiry;
     String? renewMessage;
-    if (currentService != null &&
-        needsPayment.isEmpty &&
-        daysLeft != null &&
-        daysLeft <= 3) {
+    if (currentService != null && needsPayment.isEmpty) {
       final name = currentService.displayName;
-      renewMessage = switch (daysLeft) {
-        < 0 => '$name has expired — renew now',
-        0 => '$name expires today — renew now',
-        1 => '$name expires tomorrow — renew now',
-        final d => '$name expires in $d days — renew now',
-      };
+      if (currentService.isExpired) {
+        renewMessage = '$name has expired — renew now';
+      } else if (serviceStatus?.needsRenewal ?? false) {
+        // The real, balance/dunning-driven nudge: a running service heading for
+        // a cut the customer can prevent by paying. The cut date (if known)
+        // comes from the prepaid grace timer — never from a billing date.
+        renewMessage = _renewFromServiceStatus(serviceStatus!);
+      } else if (daysLeft != null && daysLeft >= 0 && daysLeft <= 3) {
+        // Contract end approaching (the only genuine date-based expiry).
+        renewMessage = switch (daysLeft) {
+          0 => '$name expires today — renew now',
+          1 => '$name expires tomorrow — renew now',
+          final d => '$name expires in $d days — renew now',
+        };
+      }
     }
 
     // Connection status: an open RADIUS accounting session (no end) means the
@@ -156,6 +167,7 @@ class DashboardScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(subscriptionsProvider);
+          ref.invalidate(serviceStatusProvider);
           ref.invalidate(invoicesProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(usageSummaryProvider('today'));
@@ -200,10 +212,11 @@ class DashboardScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               _RenewBanner(
                 message: renewMessage,
-                expired: (daysLeft ?? 0) < 0,
-                // Straight to the pay/add-funds flow (renewal = top-up in the
-                // prepaid model), not the invoices list.
-                onTap: () => context.push('/topup'),
+                expired: currentService?.isExpired ?? false,
+                // Prepaid renewal = top-up; postpaid overdue = pay the bill.
+                onTap: () => context.push(
+                  (serviceStatus?.isPrepaid ?? true) ? '/topup' : '/billing',
+                ),
               ),
             ],
             Consumer(builder: (context, ref, _) {
@@ -262,8 +275,10 @@ class DashboardScreen extends ConsumerWidget {
                     icon: Icons.hourglass_bottom_outlined,
                     label: 'Days left',
                     value: _daysLeftLabel(subList, currentService),
-                    // Urgent when expiring within 3 days or already expired.
-                    highlight: (currentService?.daysUntilExpiry ?? 99) <= 3,
+                    // Urgent when expiring within 3 days or genuinely expired
+                    // (never for an active service with a stale billing date).
+                    highlight: (currentService?.expiresSoon ?? false) ||
+                        (currentService?.isExpired ?? false),
                     onTap: () => context.go('/billing'),
                   ),
                 ),
@@ -340,13 +355,29 @@ class DashboardScreen extends ConsumerWidget {
 /// (urgency-worded) day count.
 String? _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
   if (subList == null) return null;
-  final days = service?.daysUntilExpiry;
+  if (service == null) return '—';
+  if (service.isExpired) return 'Expired';
+  final days = service.daysUntilExpiry;
   return switch (days) {
     null => '—',
-    < 0 => 'Expired',
+    // Active service with a stale billing date: not expired, just no countdown.
+    < 0 => '—',
     0 => 'Today',
     _ => '$days',
   };
+}
+
+/// Renewal nudge for a *running* service heading for a cut the customer can
+/// prevent by paying — driven by real balance/dunning state, not a billing
+/// date. Prepaid surfaces the grace cut-off date when known.
+String _renewFromServiceStatus(ServiceStatus s) {
+  if (s.isPrepaid) {
+    final when = s.graceUntil;
+    return when != null
+        ? 'Balance low — top up by ${Fmt.date(when)} to keep your service'
+        : 'Balance low — top up to keep your service';
+  }
+  return 'Payment overdue — pay now to avoid suspension';
 }
 
 /// Status-banner copy when service(s) are blocked/suspended: names the plan
@@ -788,13 +819,31 @@ class _CurrentServiceCard extends StatelessWidget {
     final s = service;
     final theme = Theme.of(context);
     final days = s.daysUntilExpiry;
-    final (expiryColor, expiryText) = switch (days) {
-      null => (theme.colorScheme.outline, null),
-      < 0 => (theme.colorScheme.error, 'Expired'),
-      0 => (theme.colorScheme.error, 'Expires today'),
-      <= 3 => (Colors.orange.shade800, '$days day${days == 1 ? '' : 's'} left'),
-      _ => (Colors.green.shade700, '$days days left'),
-    };
+    // The validity stat sits next to the IP address; it must never show a red
+    // "Expired" for a running (active) service, or it reads as "the IP expired".
+    final (expiryColor, expiryLabel, expiryText) = s.isExpired
+        ? (theme.colorScheme.error, 'Validity', 'Expired')
+        : switch (days) {
+            // Postpaid / no date expiry: show the next bill date, not a
+            // (meaningless) validity countdown.
+            null => s.nextBillingAt != null
+                ? (
+                    theme.colorScheme.outline,
+                    'Next bill',
+                    Fmt.date(s.nextBillingAt)
+                  )
+                : (theme.colorScheme.outline, null, null),
+            0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
+            // Active service with a momentarily-stale billing date: running, not
+            // expired — show nothing rather than alarm next to the IP.
+            < 0 => (theme.colorScheme.outline, null, null),
+            <= 3 => (
+                Colors.orange.shade800,
+                'Validity',
+                '$days day${days == 1 ? '' : 's'} left'
+              ),
+            _ => (Colors.green.shade700, 'Validity', '$days days left'),
+          };
 
     return Card(
       child: InkWell(
@@ -838,7 +887,7 @@ class _CurrentServiceCard extends StatelessWidget {
                     Expanded(
                       child: _MiniStat(
                         icon: Icons.schedule,
-                        label: 'Validity',
+                        label: expiryLabel ?? 'Validity',
                         value: expiryText,
                         color: expiryColor,
                       ),
