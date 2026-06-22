@@ -324,6 +324,38 @@ class TestAutoGeneratePppoeCredential:
             is None
         )
 
+    def test_active_create_login_matches_sequence_fallback_credential(
+        self,
+        db_session,
+        subscriber,
+        catalog_offer,
+    ):
+        """Non-canonical subscriber numbers fall back to a sequence username for
+        the credential; subscription.login must match that real credential
+        username (not be left empty, which would desync login from RADIUS)."""
+        _seed_pppoe_settings(db_session, prefix="SEQ", padding=5, start=1)
+        _set_subscriber_number(db_session, subscriber, "100000127")
+
+        created = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                account_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+            ),
+        )
+
+        credential = (
+            db_session.query(AccessCredential)
+            .filter(
+                AccessCredential.subscriber_id == subscriber.id,
+                AccessCredential.is_active.is_(True),
+            )
+            .one()
+        )
+        assert credential.username.startswith("SEQ")
+        assert created.login == credential.username
+
 
 class TestGenerateRandomPassword:
     """Tests for _generate_random_password."""

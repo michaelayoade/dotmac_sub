@@ -30,7 +30,6 @@ from app.services.topology.customer_path import (
 )
 from app.services.topology.zabbix_reconcile import SOURCE
 
-DEFAULT_SUBSCRIPTION_GAP_LIMIT = 200
 DEFAULT_TABLE_PER_PAGE = 50
 
 
@@ -151,6 +150,12 @@ def _device_node_state(
 
 
 def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
+    # NOTE: This is a batched (set-based) reimplementation of the per-subscription
+    # gap classification in ``resolve_customer_path`` (app/services/topology/
+    # customer_path.py), avoiding an N+1 across all active subscriptions. The two
+    # MUST stay in sync — ``resolve_customer_path`` remains the canonical reader
+    # for a single subscription's path; this function must produce the same
+    # GAP_NO_ONT / GAP_NO_NODE / GAP_NO_BASESTATION verdict in aggregate.
     active_subs = db.execute(
         select(
             Subscription.id,

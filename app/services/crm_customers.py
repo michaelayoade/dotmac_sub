@@ -124,13 +124,18 @@ def _normalized_name(subscriber: Subscriber) -> str:
 
 
 def _matching_metadata_clause(metadata: dict[str, Any]):
+    # Match only on identifiers that are 1:1 with a single CRM customer:
+    # the person, and the order/quote that belongs to one customer. crm_person_id
+    # is the strongest identity, so when present we match on it alone. We
+    # deliberately do NOT match on crm_project_id — a project can span multiple
+    # customers, so an OR on it could merge two distinct customers (overwriting
+    # one with the other's name/email/phone on a later webhook).
+    person_id = _text(metadata.get("crm_person_id"))
+    if person_id:
+        return Subscriber.metadata_["crm_person_id"].as_string() == person_id
+
     clauses = []
-    for key in (
-        "crm_project_id",
-        "crm_person_id",
-        "crm_quote_id",
-        "crm_sales_order_id",
-    ):
+    for key in ("crm_sales_order_id", "crm_quote_id"):
         value = _text(metadata.get(key))
         if value:
             clauses.append(Subscriber.metadata_[key].as_string() == value)

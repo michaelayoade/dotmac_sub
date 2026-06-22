@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import secrets
 import string
-import uuid
 from typing import TYPE_CHECKING
 
 from app.models.catalog import AccessCredential, ConnectionType
@@ -190,7 +189,9 @@ def auto_generate_pppoe_credential(
     credential.is_active = True
     credential.connection_type = ConnectionType.pppoe
     if radius_profile_id:
-        credential.radius_profile_id = uuid.UUID(str(radius_profile_id))
+        # The column's GUID type coerces str/UUID; assign raw so a malformed
+        # profile id doesn't turn into an activation-blocking ValueError here.
+        credential.radius_profile_id = radius_profile_id
 
     db.flush()
     logger.info(

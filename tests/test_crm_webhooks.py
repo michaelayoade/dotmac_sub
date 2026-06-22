@@ -250,6 +250,38 @@ def test_customer_accepted_retry_returns_existing_subscriber(db_session):
     )
 
 
+def test_shared_project_id_does_not_merge_distinct_customers(db_session):
+    """A crm_project_id can span multiple customers, so it must NOT be used to
+    dedupe — two distinct people on the same project stay distinct subscribers."""
+    project_id = "5e9d2c11-7a44-4b0e-9a3c-2f1d6b8e4c77"
+    first_body = {
+        "crm_person_id": "11111111-1111-4111-8111-111111111111",
+        "crm_project_id": project_id,
+        "name": "Person One",
+        "email": "person.one@example.com",
+        "phone": "+09000000001",
+        "status": "new",
+    }
+    second_body = {
+        "crm_person_id": "22222222-2222-4222-8222-222222222222",
+        "crm_project_id": project_id,
+        "name": "Person Two",
+        "email": "person.two@example.com",
+        "phone": "+09000000002",
+        "status": "new",
+    }
+    with _with_secret(SECRET):
+        first = _post_customer(db_session, first_body)
+        second = _post_customer(db_session, second_body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["id"] != second.json()["id"]
+    # Person One must not have been overwritten with Person Two's email.
+    person_one = db_session.get(Subscriber, first.json()["id"])
+    assert person_one.email == "person.one@example.com"
+
+
 def test_customer_webhook_rejects_bad_signature(db_session):
     raw = json.dumps({"name": "Bad Sig", "email": "bad@example.com"}).encode()
     with _with_secret(SECRET):
