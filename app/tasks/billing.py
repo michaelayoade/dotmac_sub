@@ -57,3 +57,32 @@ def mark_invoices_overdue() -> dict[str, int]:
         raise
     finally:
         session.close()
+
+
+@celery_app.task(name="app.tasks.billing.run_billing_notifications")
+@idempotent_task(
+    key_func=lambda: (
+        f"billing_notifications:{datetime.now(UTC).strftime('%Y-%m-%d-%H')}"
+    )
+)
+def run_billing_notifications() -> dict[str, int | bool]:
+    """Hourly task: emit invoice reminders + dunning escalations within the
+    configured send window (no-op outside it). Enable via
+    ``collections.billing_notifications_hourly_enabled``."""
+    logger.info("Starting billing notifications run")
+    session = SessionLocal()
+    try:
+        result = billing_automation_service.run_billing_notifications(session)
+        logger.info(
+            "Billing notifications run completed: %s reminders, %s escalations%s",
+            result.get("invoice_reminders_sent", 0),
+            result.get("dunning_escalations_sent", 0),
+            " (outside send window)" if result.get("skipped_outside_window") else "",
+        )
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

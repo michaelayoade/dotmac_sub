@@ -83,9 +83,12 @@ in the deploy note (it shifts when existing daily jobs fire).
 
 1. **Window helper + tests** — `enforcement_window.py`; refactor prepaid to use it
    (byte-equivalent). *(landed; no behavior change.)*
-2. **Notification gating** — hourly billing-notifications cadence (flag, default
-   off) + `within_send_window` on the emit functions; activate
-   `billing_notif_send_hour`.
+2. **Notification gating** *(landed; flag default off → no behavior change)* —
+   `within_send_window` gates a dedicated hourly runner
+   (`app.tasks.billing.run_billing_notifications`, enabled by
+   `collections.billing_notifications_hourly_enabled`); it owns the reminder/
+   escalation emits and the daily cycle skips them when enabled. Activates
+   `billing_notif_send_hour` (sends only during `[send_hour, send_hour+1)` local).
 3. **Cron model + scheduler** — migration, enum, `build_beat_schedule` branch.
 4. **Cron admin UI** — edit type/cron/interval + next-run preview.
 5. **Unify timezone** — celery app TZ ← `scheduler.timezone`.

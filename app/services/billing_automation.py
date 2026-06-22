@@ -33,7 +33,7 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
-from app.services import settings_spec
+from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
@@ -704,6 +704,42 @@ def subscription_invoice_eligible(
     return subscription.billing_mode != BillingMode.prepaid
 
 
+def _hourly_notifications_enabled(db: Session) -> bool:
+    """Whether the dedicated hourly billing-notifications runner owns the emits."""
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "billing_notifications_hourly_enabled"
+        )
+    )
+
+
+def run_billing_notifications(
+    db: Session,
+    run_at: datetime | None = None,
+) -> dict[str, int | bool]:
+    """Emit invoice reminders + dunning escalations, gated by the send window.
+
+    Intended to run hourly: the send-window gate (``billing_notif_send_hour``)
+    restricts the actual sends to the configured local hour, while the existing
+    per-invoice metadata markers keep them idempotent across the hourly fires.
+    """
+    run_at = run_at or datetime.now(UTC)
+    if not enforcement_window.within_send_window(db, run_at):
+        return {
+            "invoice_reminders_sent": 0,
+            "dunning_escalations_sent": 0,
+            "skipped_outside_window": True,
+        }
+    reminders = _emit_invoice_reminders(db, run_at)
+    escalations = _emit_dunning_escalations(db, run_at)
+    db.commit()
+    return {
+        "invoice_reminders_sent": reminders,
+        "dunning_escalations_sent": escalations,
+        "skipped_outside_window": False,
+    }
+
+
 def run_invoice_cycle(
     db: Session,
     run_at: datetime | None = None,
@@ -1172,8 +1208,15 @@ def run_invoice_cycle(
                     event_exc,
                 )
 
-        summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
-        summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
+        # When the dedicated hourly notifications runner is enabled it owns the
+        # reminder/escalation emits (so they honour the configured send window);
+        # the daily cycle then skips them to avoid an off-hours duplicate path.
+        if _hourly_notifications_enabled(db):
+            summary["invoice_reminders_sent"] = 0
+            summary["dunning_escalations_sent"] = 0
+        else:
+            summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
+            summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
         db.commit()
 
         summary["run_id"] = run_id_str
