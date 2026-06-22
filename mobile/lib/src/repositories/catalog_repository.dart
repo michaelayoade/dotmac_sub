@@ -6,6 +6,7 @@ import '../core/http.dart';
 import '../models/addon.dart';
 import '../models/page.dart';
 import '../models/plan_change.dart';
+import '../models/service_status.dart';
 import '../models/subscription.dart';
 
 /// Wraps the catalog subscription endpoints (app/api/catalog.py).
@@ -27,6 +28,14 @@ class CatalogRepository {
               'offset': offset,
             }));
     return Page.fromJson(data as Map<String, dynamic>, Subscription.fromJson);
+  }
+
+  /// GET /me/service-status — truthful account + per-service status (balance,
+  /// grace/deactivation, dunning). The source of truth for "is my service good
+  /// and when does it lapse", instead of guessing from a billing date.
+  Future<ServiceStatus> serviceStatus() async {
+    final data = await guard(() => dio.get('/me/service-status'));
+    return ServiceStatus.fromJson((data as Map).cast<String, dynamic>());
   }
 
   /// GET /subscriptions/{id}

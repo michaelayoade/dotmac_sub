@@ -669,8 +669,8 @@ class TestEnforcementHandler:
     )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
-    def test_usage_exhausted_block_action(
-        self, mock_settings, mock_disconnect, mock_block, db_session
+    def test_usage_exhausted_block_action_opted_in_applies_captive(
+        self, mock_settings, mock_disconnect, mock_block, db_session, subscription
     ):
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -678,19 +678,61 @@ class TestEnforcementHandler:
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
+        # Opted in → the FUP block applies the soft captive walled-garden.
+        from app.models.subscriber import Subscriber
+
+        sub_obj = db_session.get(Subscriber, subscription.subscriber_id)
+        sub_obj.captive_redirect_enabled = True
+        subscription.status = SubscriptionStatus.active
+        db_session.flush()
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
         )
         handler.handle(db_session, event)
         mock_disconnect.assert_called_once_with(
-            db_session, str(sub_id), reason="fup_block"
+            db_session, str(subscription.id), reason="fup_block"
         )
-        mock_block.assert_called_once_with(db_session, str(sub_id))
+        mock_block.assert_called_once_with(db_session, str(subscription.id))
+
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.settings_spec")
+    def test_usage_exhausted_block_action_not_opted_in_hard_blocks(
+        self, mock_settings, mock_disconnect, mock_block, db_session, subscription
+    ):
+        """Not opted into captive → the FUP 'block' action falls through to a
+        hard suspend; no captive address-list is applied (opt-in, not every
+        account)."""
+
+        def settings_side_effect(db, domain, key):
+            if key == "fup_action":
+                return "block"
+            return None
+
+        mock_settings.resolve_value.side_effect = settings_side_effect
+        from app.models.subscriber import Subscriber
+
+        sub_obj = db_session.get(Subscriber, subscription.subscriber_id)
+        sub_obj.captive_redirect_enabled = False  # explicit: not opted in
+        subscription.status = SubscriptionStatus.active
+        db_session.flush()
+        handler = EnforcementHandler()
+        event = self._make_event(
+            EventType.usage_exhausted,
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+        handler.handle(db_session, event)
+        # Distinguisher: the hard path changes lifecycle status to suspended
+        # (→ Auth-Type := Reject via populate). The captive path would leave the
+        # status untouched. _persist_fup_state notes are "FUP suspension applied".
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
 
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_usage_exhausted_none_action_is_noop(self, mock_settings, db_session):

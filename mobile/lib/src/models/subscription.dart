@@ -20,6 +20,9 @@ class Subscription {
     this.startAt,
     this.endAt,
     this.nextBillingAt,
+    this.serverExpiresAt,
+    this.serverIsExpired,
+    this.hasServerExpiry = false,
   });
 
   final String id;
@@ -38,6 +41,15 @@ class Subscription {
   final DateTime? startAt;
   final DateTime? endAt;
   final DateTime? nextBillingAt;
+
+  /// Server-computed authoritative expiry (catalog.py `expires_at`/`is_expired`):
+  /// the backend is the source of truth for when a service genuinely lapses, so
+  /// the client doesn't have to guess from billing dates. [hasServerExpiry] is
+  /// false against older backends / offline cache, where we fall back to local
+  /// mode-aware logic.
+  final DateTime? serverExpiresAt;
+  final bool? serverIsExpired;
+  final bool hasServerExpiry;
 
   bool get isActive => status == 'active';
   bool get isPrepaid => billingMode == 'prepaid';
@@ -70,15 +82,45 @@ class Subscription {
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
-  /// When the service lapses: explicit end date, else the next billing date
-  /// (for prepaid this is effectively the expiry).
-  DateTime? get expiresAt => endAt ?? nextBillingAt;
+  /// Whether the service has a date-based expiry at all. Postpaid bills in
+  /// arrears — it does NOT lapse on [nextBillingAt] (that's just the next
+  /// invoice date), so postpaid has no expiry unless a contract [endAt] is set.
+  /// Only prepaid validity (or an explicit contract end) is a real expiry.
+  bool get hasExpiry => endAt != null || isPrepaid;
 
-  /// Whole days until [expiresAt]; negative if already expired, null if unknown.
+  /// When the service lapses, or null when it has none. Prefer the server's
+  /// authoritative value; fall back to local mode-aware logic when the backend
+  /// didn't supply it (older API / offline cache). Note: postpaid and healthy
+  /// prepaid have no date expiry — the real prepaid lapse (low balance → grace)
+  /// comes from GET /me/service-status, not from next_billing_at.
+  DateTime? get expiresAt => hasServerExpiry
+      ? serverExpiresAt
+      : (hasExpiry ? (endAt ?? nextBillingAt) : null);
+
+  /// Whole days until [expiresAt]; negative if already past, null when there is
+  /// no date-based expiry (postpaid) or it's unknown.
   int? get daysUntilExpiry {
     final e = expiresAt;
     if (e == null) return null;
     return e.difference(DateTime.now()).inDays;
+  }
+
+  /// Genuinely lapsed: a past expiry on a service that is NOT active. An active
+  /// service is never "expired" — `status` is the source of truth, and a
+  /// momentarily-stale billing date (e.g. a prepaid validity date the runner
+  /// hasn't advanced yet) must not override a running service.
+  bool get isExpired {
+    if (hasServerExpiry) return serverIsExpired ?? false;
+    if (isActive) return false;
+    final d = daysUntilExpiry;
+    return d != null && d < 0;
+  }
+
+  /// Within the 3-day renewal-nudge window and not already past. False for
+  /// services without a date-based expiry (postpaid).
+  bool get expiresSoon {
+    final d = daysUntilExpiry;
+    return d != null && d >= 0 && d <= 3;
   }
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
@@ -102,6 +144,9 @@ class Subscription {
       startAt: _toDate(json['start_at']),
       endAt: _toDate(json['end_at']),
       nextBillingAt: _toDate(json['next_billing_at']),
+      serverExpiresAt: _toDate(json['expires_at']),
+      serverIsExpired: json['is_expired'] as bool?,
+      hasServerExpiry: json.containsKey('is_expired'),
     );
   }
 }

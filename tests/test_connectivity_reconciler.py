@@ -316,7 +316,8 @@ class TestDesiredConnectivity:
             SubscriptionStatus.stopped,
         ):
             d = derive_desired_connectivity(status)
-            assert d.access_state is AccessState.captive  # default = walled-garden
+            # Default is suspended; walled-garden (captive) is opt-in per customer (#216).
+            assert d.access_state is AccessState.suspended
             assert d.credentials_active is True
             assert d.ip_active is True and d.ip_retained is True
             assert d.kick_live_session is True  # INV-5: disconnect once
