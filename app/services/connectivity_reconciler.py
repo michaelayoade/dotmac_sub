@@ -26,16 +26,26 @@ careful remediation, not a column rewrite.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
+from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import (
+    AccessCredential,
+    AccessState,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
 from app.services.ip_consistency_audit import _external_ip_state, _norm
+from app.services.radius_access_state import derive_access_state
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +53,202 @@ logger = logging.getLogger(__name__)
 # radreply deleted by design, so "fixing" them would fight the enforcement
 # path. Mirrors the audit population.
 _CONVERGE_STATUS = SubscriptionStatus.active
+
+
+# ---------------------------------------------------------------------------
+# Step 2c — desired-state derivation + observability (shadow only, NO writes).
+# See docs/designs/CONNECTIVITY_STATE_MACHINE.md §2 (transition table, INV-1..5)
+# and §5 (guardrails). This increment proves the desired-state function and the
+# shadow/legacy-write observability; it migrates no writers.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DesiredConnectivity:
+    """Desired value of each connectivity dimension for ONE subscription,
+    derived purely from its lifecycle status. The single place the §2
+    transition table is encoded."""
+
+    access_state: AccessState | None
+    credentials_active: bool
+    ip_active: bool
+    ip_retained: bool
+    kick_live_session: bool
+
+
+def derive_desired_connectivity(
+    status: SubscriptionStatus, *, hard_reject: bool = False
+) -> DesiredConnectivity:
+    """Pure: ``SubscriptionStatus`` (+ fraud ``hard_reject``) → desired
+    connectivity. No I/O. Encodes the design-doc invariants:
+
+    - pending/hidden/archived → not provisioned (no RADIUS row, no IP).
+    - active → full access, IP active AND retained, don't kick.
+    - blocked family (suspended/blocked/stopped) → ``captive`` by default,
+      ``suspended`` under ``hard_reject``; credentials stay active and the IP is
+      RETAINED (INV-1 paid→offline / INV-3 reversible), kick the live session
+      once (INV-5).
+    - terminal (canceled/expired/disabled) → ``terminated``; credentials
+      inactive, IP released and cache cleared (INV-3/INV-4), kick once.
+    """
+    access = derive_access_state(status, hard_reject=hard_reject)
+    if access is None:
+        return DesiredConnectivity(None, False, False, False, False)
+    if access is AccessState.active:
+        return DesiredConnectivity(AccessState.active, True, True, True, False)
+    if access in (AccessState.captive, AccessState.suspended):
+        # Blocked but reversible: keep creds + IP, walled off at the RADIUS
+        # group; disconnect any live session exactly once.
+        return DesiredConnectivity(access, True, True, True, True)
+    # AccessState.terminated
+    return DesiredConnectivity(AccessState.terminated, False, False, False, True)
+
+
+# Write-source marker. The reconciler is the legitimate single writer of
+# connectivity-derived state. It wraps its apply phase in
+# ``reconciler_write_scope()`` so ``note_connectivity_write`` — called from
+# legacy writer sites as they are migrated — can distinguish a reconciler write
+# (``source=reconciler``) from a legacy direct write and avoid false-positive
+# noise once apply=True ships. Defaults to ``legacy`` so any unmarked caller is
+# attributed correctly.
+_write_source: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "connectivity_write_source", default="legacy"
+)
+
+
+@contextlib.contextmanager
+def reconciler_write_scope() -> Iterator[None]:
+    """Mark connectivity writes performed within as reconciler-originated."""
+    token = _write_source.set("reconciler")
+    try:
+        yield
+    finally:
+        _write_source.reset(token)
+
+
+def current_write_source() -> str:
+    """The active connectivity write source (``reconciler`` or ``legacy``)."""
+    return _write_source.get()
+
+
+def note_connectivity_write(field: str, caller: str) -> None:
+    """Record a write to a reconciler-owned connectivity field, attributed to
+    the current write source. ``source=reconciler`` (inside
+    ``reconciler_write_scope``) is the legitimate path; anything else is a legacy
+    direct write to drive to zero before absorbing that writer. Low-noise (DEBUG
+    for legacy), metric always, never raises."""
+    source = _write_source.get()
+    try:
+        from app.metrics import CONNECTIVITY_DIRECT_WRITE
+
+        CONNECTIVITY_DIRECT_WRITE.labels(field=field, source=source).inc()
+    except Exception:  # pragma: no cover - metrics must never break a write
+        pass
+    if source != "reconciler":
+        logger.debug(
+            "legacy connectivity write field=%s caller=%s (not via reconciler)",
+            field,
+            caller,
+        )
+
+
+def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
+    """READ-ONLY. Compare desired connectivity (derived) vs actual stored state
+    for a subscriber across access_state / credentials / IP. Logs and counts
+    disagreements via ``connectivity_shadow_diff_total``. Writes nothing — the
+    step-2c observability path that must look sane before any apply=True cutover.
+
+    Returns a structured report; ``diffs`` lists the disagreeing dimensions.
+    """
+    sid = coerce_uuid(subscriber_id)
+    subs = list(
+        db.scalars(select(Subscription).where(Subscription.subscriber_id == sid)).all()
+    )
+
+    sub_reports: list[dict[str, Any]] = []
+    any_creds_desired = False
+    any_ip_desired = False
+    access_mismatch = False
+    for sub in subs:
+        desired = derive_desired_connectivity(sub.status)
+        any_creds_desired = any_creds_desired or desired.credentials_active
+        any_ip_desired = any_ip_desired or desired.ip_active
+        desired_access = (
+            desired.access_state.value if desired.access_state is not None else None
+        )
+        match = desired_access == sub.access_state
+        access_mismatch = access_mismatch or not match
+        sub_reports.append(
+            {
+                "id": str(sub.id),
+                "status": sub.status.value,
+                "desired_access_state": desired_access,
+                "actual_access_state": sub.access_state,
+                "match": match,
+            }
+        )
+
+    actual_creds_active = (
+        db.scalar(
+            select(func.count())
+            .select_from(AccessCredential)
+            .where(
+                AccessCredential.subscriber_id == sid,
+                AccessCredential.is_active.is_(True),
+            )
+        )
+        or 0
+    )
+    actual_ip_active = (
+        db.scalar(
+            select(func.count())
+            .select_from(IPAssignment)
+            .where(
+                IPAssignment.subscriber_id == sid,
+                IPAssignment.is_active.is_(True),
+            )
+        )
+        or 0
+    )
+
+    creds_match = (actual_creds_active > 0) == any_creds_desired
+    ip_match = (actual_ip_active > 0) == any_ip_desired
+
+    diffs: list[str] = []
+    if access_mismatch:
+        diffs.append("access_state")
+    if not creds_match:
+        diffs.append("credentials_active")
+    if not ip_match:
+        diffs.append("ip_active")
+
+    if diffs:
+        try:
+            from app.metrics import CONNECTIVITY_SHADOW_DIFF
+
+            for dim in diffs:
+                CONNECTIVITY_SHADOW_DIFF.labels(dimension=dim).inc()
+        except Exception:  # pragma: no cover - observability must not raise
+            pass
+        logger.info(
+            "connectivity shadow-diff subscriber=%s diffs=%s", subscriber_id, diffs
+        )
+
+    return {
+        "subscriber_id": str(sid),
+        "subscriptions": sub_reports,
+        "credentials": {
+            "desired": any_creds_desired,
+            "actual": actual_creds_active > 0,
+            "match": creds_match,
+        },
+        "ip": {
+            "desired": any_ip_desired,
+            "actual": actual_ip_active > 0,
+            "match": ip_match,
+        },
+        "diffs": diffs,
+    }
 
 
 def _active_assignment_ip(db: Session, subscription: Subscription) -> str:
@@ -191,17 +397,21 @@ def converge_subscription_connectivity(
 
     applied: list[str] = []
     needs_refresh = False
-    for action in plan["actions"]:
-        if action["kind"] == "set_column":
-            subscription.ipv4_address = action["to"]
-            applied.append("set_column")
-            needs_refresh = True
-        elif action["kind"] == "refresh_radius":
-            needs_refresh = True
-        # backfill_ipam: never auto-applied.
+    with reconciler_write_scope():
+        for action in plan["actions"]:
+            if action["kind"] == "set_column":
+                subscription.ipv4_address = action["to"]
+                note_connectivity_write(
+                    "subscription.ipv4_address", "connectivity_reconciler"
+                )
+                applied.append("set_column")
+                needs_refresh = True
+            elif action["kind"] == "refresh_radius":
+                needs_refresh = True
+            # backfill_ipam: never auto-applied.
 
-    if "set_column" in applied:
-        db.commit()
+        if "set_column" in applied:
+            db.commit()
 
     if needs_refresh:
         try:
