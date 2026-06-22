@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import logging
+import re
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.notification import (
     Notification,
@@ -46,6 +48,7 @@ from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
+from app.services.branding_config import get_brand
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
 from app.services.customer_identity_normalization import (
@@ -69,6 +72,9 @@ WHATSAPP_VARIABLE_CUSTOMER_FIELDS = {
     "phone",
     "account_number",
 }
+
+_DOUBLE_BRACE_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+_SINGLE_BRACE_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{\s*([a-zA-Z0-9_]+)\s*\}(?!\})")
 
 
 def parse_json_object(value: str | None, field: str) -> dict | None:
@@ -513,38 +519,161 @@ def _resolve_notification_recipient(
     return None
 
 
-def _notification_template_variables(subscriber: Subscriber) -> dict[str, str]:
-    primary_subscription = next(iter(subscriber.subscriptions or []), None)
+def _primary_subscription_for_notification(
+    subscriber: Subscriber,
+) -> Subscription | None:
+    subscriptions = list(subscriber.subscriptions or [])
+    if not subscriptions:
+        return None
+    status_rank = {
+        SubscriptionStatus.active: 0,
+        SubscriptionStatus.pending: 1,
+        SubscriptionStatus.suspended: 2,
+    }
+    return sorted(
+        subscriptions,
+        key=lambda item: (
+            status_rank.get(item.status, 9),
+            item.created_at or datetime.min.replace(tzinfo=UTC),
+        ),
+    )[0]
+
+
+def _format_money_ngn(value: Decimal | int | float | str | None) -> str:
+    try:
+        amount = Decimal(str(value or "0"))
+    except (InvalidOperation, ValueError):
+        amount = Decimal("0")
+    return f"₦{amount:,.2f}"
+
+
+def _billing_template_variables(db: Session, subscriber: Subscriber) -> dict[str, str]:
+    now = datetime.now(UTC)
+    open_statuses = (
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.overdue,
+    )
+    invoices = list(
+        db.scalars(
+            select(Invoice)
+            .where(Invoice.account_id == subscriber.id)
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status.in_(open_statuses))
+            .where(Invoice.balance_due > 0)
+            .order_by(Invoice.due_at.asc().nullslast(), Invoice.created_at.asc())
+        ).all()
+    )
+    outstanding = sum(
+        (Decimal(str(invoice.balance_due or 0)) for invoice in invoices),
+        Decimal("0"),
+    )
+    overdue_invoices = [
+        invoice
+        for invoice in invoices
+        if invoice.due_at and invoice.due_at.date() < now.date()
+    ]
+    oldest_overdue = overdue_invoices[0] if overdue_invoices else None
+    days_overdue = (
+        max(0, (now.date() - oldest_overdue.due_at.date()).days)
+        if oldest_overdue and oldest_overdue.due_at
+        else 0
+    )
+    app_url = get_brand()["app_url"].rstrip("/")
+    return {
+        "amount": _format_money_ngn(outstanding),
+        "total_amount": _format_money_ngn(outstanding),
+        "balance_due": _format_money_ngn(outstanding),
+        "days_overdue": str(days_overdue),
+        "invoice_number": str(oldest_overdue.invoice_number or "")
+        if oldest_overdue
+        else "",
+        "due_date": oldest_overdue.due_at.strftime("%b %d, %Y")
+        if oldest_overdue and oldest_overdue.due_at
+        else "",
+        "payment_link": f"{app_url}/portal/billing",
+        "portal_url": f"{app_url}/portal",
+        "website": app_url,
+    }
+
+
+def _notification_template_variables(
+    db: Session, subscriber: Subscriber
+) -> dict[str, str]:
+    primary_subscription = _primary_subscription_for_notification(subscriber)
     nas_name = ""
     pop_site_name = ""
     pppoe_login = ""
     ipv4_address = ""
+    offer_name = ""
     if primary_subscription:
         pppoe_login = str(primary_subscription.login or "")
         ipv4_address = str(primary_subscription.ipv4_address or "")
+        offer = getattr(primary_subscription, "offer", None)
+        offer_name = str(
+            (offer.name if offer else None)
+            or primary_subscription.service_description
+            or "your service"
+        )
         if primary_subscription.provisioning_nas_device:
             nas_name = str(primary_subscription.provisioning_nas_device.name or "")
             if primary_subscription.provisioning_nas_device.pop_site:
                 pop_site_name = str(
                     primary_subscription.provisioning_nas_device.pop_site.name or ""
                 )
-    return {
+    customer_name = str(
+        subscriber.company_name
+        or subscriber.display_name
+        or subscriber.full_name
+        or "Valued Customer"
+    ).strip()
+    brand = get_brand()
+    variables = {
         "first_name": str(subscriber.first_name or ""),
         "last_name": str(subscriber.last_name or ""),
         "full_name": str(subscriber.full_name or "").strip(),
-        "customer_name": subscriber.company_name
-        or subscriber.display_name
-        or subscriber.full_name,
+        "customer_name": customer_name,
+        "subscriber_name": customer_name,
         "account_number": str(subscriber.account_number or ""),
         "subscriber_number": str(subscriber.subscriber_number or ""),
         "email": str(subscriber.email or ""),
         "phone": str(subscriber.phone or ""),
         "status": subscriber.status.value if subscriber.status else "",
+        "offer_name": offer_name or "your service",
+        "plan_name": offer_name or "your service",
         "pppoe_login": pppoe_login,
         "ipv4_address": ipv4_address,
         "nas_name": nas_name,
         "location": pop_site_name,
+        "company_name": brand["legal_name"],
+        "support_email": brand["support_email"],
     }
+    variables.update(_billing_template_variables(db, subscriber))
+    return variables
+
+
+def _render_manual_template_text(text: str | None, variables: dict[str, str]) -> str:
+    if not text:
+        return ""
+
+    def _replace_double(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return variables[key] if key in variables else match.group(0)
+
+    return render_template_text(
+        _DOUBLE_BRACE_PLACEHOLDER_RE.sub(_replace_double, text),
+        variables,
+    )
+
+
+def _unresolved_template_variables(text: str | None) -> list[str]:
+    if not text:
+        return []
+    names = {
+        *(_DOUBLE_BRACE_PLACEHOLDER_RE.findall(text or "")),
+        *(_SINGLE_BRACE_PLACEHOLDER_RE.findall(text or "")),
+    }
+    return sorted(names)
 
 
 def _parse_whatsapp_registry_template_id(template_id: str) -> tuple[str, str] | None:
@@ -655,7 +784,7 @@ def queue_bulk_message_from_payload(
             )
             continue
 
-        variables = _notification_template_variables(subscriber)
+        variables = _notification_template_variables(db, subscriber)
         if whatsapp_template:
             subject = None
             payload_variables = payload.get("template_variables") or {}
@@ -680,10 +809,26 @@ def queue_bulk_message_from_payload(
         else:
             if template is None:
                 raise HTTPException(status_code=404, detail="Template not found")
-            subject = render_template_text(
+            subject = _render_manual_template_text(
                 template.subject or "Service Update", variables
             )
-            body = render_template_text(template.body, variables)
+            body = _render_manual_template_text(template.body, variables)
+            if channel == NotificationChannel.email:
+                unresolved = sorted(
+                    {
+                        *_unresolved_template_variables(subject),
+                        *_unresolved_template_variables(body),
+                    }
+                )
+                if unresolved:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Email template has unsupported or unavailable "
+                            "variable(s): "
+                            + ", ".join("{" + name + "}" for name in unresolved)
+                        ),
+                    )
         status = NotificationStatus.queued
         last_error = None
         if not is_notification_enabled_for_subscriber(
