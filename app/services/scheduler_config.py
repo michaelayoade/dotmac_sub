@@ -395,6 +395,68 @@ def _interval_to_beat_schedule(task_id, interval_seconds: int):
     return timedelta(seconds=interval_seconds)
 
 
+def _cron_to_beat_schedule(cron_expr: str | None):
+    """Parse a standard 5-field cron expression into a celery ``crontab``.
+
+    Fields are ``minute hour day-of-month month day-of-week``. Returns ``None``
+    for a missing/malformed expression (celery validates each field and raises
+    on bad syntax), so callers skip the entry rather than crash the scheduler.
+    """
+    if not cron_expr:
+        return None
+    fields = str(cron_expr).split()
+    if len(fields) != 5:
+        return None
+    minute, hour, day_of_month, month_of_year, day_of_week = fields
+    try:
+        return crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    except Exception:
+        return None
+
+
+def _scheduled_row_to_entry(task) -> tuple[str, dict] | None:
+    """Build a beat-schedule (key, entry) for a ScheduledTask row, or None to skip.
+
+    Honours ``schedule_type``: ``crontab`` rows use ``cron_expr`` (skipped with a
+    warning if malformed); ``interval`` rows use the interval anchoring. Pure (no
+    DB) so it can be unit-tested against in-memory rows.
+    """
+    options: dict = {}
+    if task.task_name in TR069_TASK_QUEUE_NAMES:
+        options["queue"] = "acs"
+    if task.schedule_type == ScheduleType.crontab:
+        task_schedule = _cron_to_beat_schedule(task.cron_expr)
+        if task_schedule is None:
+            logger.warning(
+                "scheduled_task_invalid_cron",
+                extra={
+                    "task_id": str(task.id),
+                    "task_name": task.task_name,
+                    "cron_expr": task.cron_expr,
+                },
+            )
+            return None
+    elif task.schedule_type == ScheduleType.interval:
+        interval_seconds = max(task.interval_seconds or 0, 1)
+        options["expires"] = _entry_expires_seconds(interval_seconds)
+        task_schedule = _interval_to_beat_schedule(task.id, interval_seconds)
+    else:
+        return None
+    return f"scheduled_task_{task.id}", {
+        "task": task.task_name,
+        "schedule": task_schedule,
+        "args": task.args_json or [],
+        "kwargs": task.kwargs_json or {},
+        "options": options,
+    }
+
+
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
@@ -1719,19 +1781,9 @@ def build_beat_schedule() -> dict:
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
         )
         for task in tasks:
-            if task.schedule_type != ScheduleType.interval:
-                continue
-            interval_seconds = max(task.interval_seconds or 0, 1)
-            options: dict = {"expires": _entry_expires_seconds(interval_seconds)}
-            if task.task_name in TR069_TASK_QUEUE_NAMES:
-                options["queue"] = "acs"
-            schedule[f"scheduled_task_{task.id}"] = {
-                "task": task.task_name,
-                "schedule": _interval_to_beat_schedule(task.id, interval_seconds),
-                "args": task.args_json or [],
-                "kwargs": task.kwargs_json or {},
-                "options": options,
-            }
+            entry = _scheduled_row_to_entry(task)
+            if entry is not None:
+                schedule[entry[0]] = entry[1]
     except Exception:
         logger.exception("Failed to build Celery beat schedule.")
     finally:
