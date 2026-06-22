@@ -1,7 +1,7 @@
 import logging
 import os
 from collections.abc import Iterable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from celery.schedules import crontab
 
@@ -416,6 +416,27 @@ def _cron_to_beat_schedule(cron_expr: str | None):
             month_of_year=month_of_year,
             day_of_week=day_of_week,
         )
+    except Exception:
+        return None
+
+
+def is_valid_cron(cron_expr: str | None) -> bool:
+    """Whether ``cron_expr`` is a usable 5-field cron expression."""
+    return _cron_to_beat_schedule(cron_expr) is not None
+
+
+def next_cron_run(cron_expr: str | None):
+    """Best-effort next fire time (UTC) from now for a cron expr, or None.
+
+    Uses celery's ``crontab.remaining_estimate`` which is relative to the real
+    current time, so this is a live preview, not a pure function of an argument.
+    """
+    sched = _cron_to_beat_schedule(cron_expr)
+    if sched is None:
+        return None
+    try:
+        now = datetime.now(UTC)
+        return now + sched.remaining_estimate(now)
     except Exception:
         return None
 

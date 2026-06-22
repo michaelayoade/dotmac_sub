@@ -8,7 +8,8 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.scheduler import ScheduledTask
+from app.models.scheduler import ScheduledTask, ScheduleType
+from app.services import enforcement_window, scheduler_config
 from app.services import scheduler as scheduler_service
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,14 @@ def get_scheduler_task_detail_data(
     if not task:
         return None
     next_run = None
-    if task.enabled and task.last_run_at:
-        next_run = task.last_run_at + timedelta(seconds=task.interval_seconds)
+    if task.enabled:
+        if task.schedule_type == ScheduleType.crontab:
+            next_run = scheduler_config.next_cron_run(task.cron_expr)
+        elif task.last_run_at:
+            next_run = task.last_run_at + timedelta(seconds=task.interval_seconds)
     return {
         "task": task,
         "next_run": next_run,
+        "active_timezone": enforcement_window.resolve_timezone_name(db),
         "runs": [],
     }

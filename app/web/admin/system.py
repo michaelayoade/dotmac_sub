@@ -2644,6 +2644,7 @@ def scheduler_task_detail(
             "request": request,
             "task": detail_data["task"],
             "next_run": detail_data["next_run"],
+            "active_timezone": detail_data["active_timezone"],
             "runs": detail_data["runs"],
             "active_page": "scheduler",
             "active_menu": "system",
@@ -2651,6 +2652,48 @@ def scheduler_task_detail(
             "sidebar_stats": get_sidebar_stats(db),
         },
     )
+
+
+@router.post(
+    "/scheduler/{task_id}/schedule",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_update_schedule(
+    request: Request,
+    task_id: str,
+    schedule_type: str = Form(...),
+    interval_seconds: str = Form(default=""),
+    cron_expr: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    """Update a scheduled task's cadence (interval seconds or cron expression)."""
+    from app.models.scheduler import ScheduleType
+    from app.schemas.scheduler import ScheduledTaskUpdate
+    from app.services import scheduler_config
+
+    base = f"/admin/system/scheduler/{task_id}"
+    if schedule_type == "crontab":
+        expr = cron_expr.strip()
+        if not scheduler_config.is_valid_cron(expr):
+            return RedirectResponse(url=f"{base}?error=invalid_cron", status_code=303)
+        update = ScheduledTaskUpdate(schedule_type=ScheduleType.crontab, cron_expr=expr)
+    else:
+        try:
+            seconds = int(interval_seconds)
+            if seconds < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return RedirectResponse(
+                url=f"{base}?error=invalid_interval", status_code=303
+            )
+        update = ScheduledTaskUpdate(
+            schedule_type=ScheduleType.interval,
+            interval_seconds=seconds,
+            cron_expr=None,
+        )
+    scheduler_service.scheduled_tasks.update(db, task_id, update)
+    return RedirectResponse(url=f"{base}?saved=1", status_code=303)
 
 
 @router.post(

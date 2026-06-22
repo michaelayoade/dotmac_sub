@@ -93,7 +93,7 @@ in the deploy note (it shifts when existing daily jobs fire).
    nullable `cron_expr`); `_cron_to_beat_schedule` parses a 5-field cron;
    `build_beat_schedule` honours `schedule_type == crontab` rows. Settable via DB
    now; the admin UI is phase 4.
-4. **Cron admin UI** — edit type/cron/interval + next-run preview.
+4. **Cron admin UI** *(landed)* — edit type/cron/interval, server-side cron validation, active-TZ + next-run preview.
 5. **Unify timezone** — celery app TZ ← `scheduler.timezone`.
 6. **Enforcement gating** — postpaid suspend/dunning hourly + once-per-day +
    `within_enforcement_window`; **audit-first** (log "would-gate" before
