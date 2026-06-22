@@ -100,6 +100,9 @@ class DashboardScreen extends ConsumerWidget {
     // must not nag a running service; genuine lapses surface via [isExpired]
     // (a non-active current service). Postpaid has no date expiry at all.
     final daysLeft = currentService?.daysUntilExpiry;
+    // Third stat card: expiry countdown for date-expiry plans, else next-bill.
+    final (expiryStatLabel, expiryStatValue) =
+        _expiryOrBillingStat(subList, currentService);
     String? renewMessage;
     if (currentService != null && needsPayment.isEmpty) {
       final name = currentService.displayName;
@@ -273,8 +276,8 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.hourglass_bottom_outlined,
-                    label: 'Days left',
-                    value: _daysLeftLabel(subList, currentService),
+                    label: expiryStatLabel,
+                    value: expiryStatValue,
                     // Urgent when expiring within 3 days or genuinely expired
                     // (never for an active service with a stale billing date).
                     highlight: (currentService?.expiresSoon ?? false) ||
@@ -353,18 +356,26 @@ class DashboardScreen extends ConsumerWidget {
 /// Days-left figure for the stat row: null while loading (renders a
 /// skeleton), '—' when the service has no known expiry, otherwise the
 /// (urgency-worded) day count.
-String? _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
-  if (subList == null) return null;
-  if (service == null) return '—';
-  if (service.isExpired) return 'Expired';
+/// Third stat card: a genuine expiry countdown for date-expiry plans, else the
+/// next-bill date for postpaid/unlimited (which has no expiry) so the card is
+/// meaningful instead of a bare "—". Returns (label, value).
+(String, String?) _expiryOrBillingStat(
+  List<Subscription>? subList,
+  Subscription? service,
+) {
+  if (subList == null) return ('Days left', null);
+  if (service == null) return ('Days left', '—');
+  if (service.isExpired) return ('Days left', 'Expired');
   final days = service.daysUntilExpiry;
-  return switch (days) {
-    null => '—',
-    // Active service with a stale billing date: not expired, just no countdown.
-    < 0 => '—',
-    0 => 'Today',
-    _ => '$days',
-  };
+  if (days != null && days >= 0) {
+    return ('Days left', days == 0 ? 'Today' : '$days');
+  }
+  // No date-based expiry (postpaid/unlimited): show the next bill instead of a
+  // confusing empty "Days left".
+  if (service.nextBillingAt != null) {
+    return ('Next bill', Fmt.date(service.nextBillingAt));
+  }
+  return ('Days left', '—');
 }
 
 /// Renewal nudge for a *running* service heading for a cut the customer can

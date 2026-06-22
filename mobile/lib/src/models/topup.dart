@@ -2,6 +2,66 @@
 
 import '../core/parsers.dart';
 
+/// An online checkout option (Paystack/Flutterwave) for the pay selector.
+class PaymentProviderOption {
+  PaymentProviderOption({required this.providerType, required this.label});
+
+  final String providerType;
+  final String label;
+
+  factory PaymentProviderOption.fromJson(Map<String, dynamic> json) =>
+      PaymentProviderOption(
+        providerType: json['provider_type'] as String? ?? 'paystack',
+        label: json['label'] as String? ?? 'Pay online',
+      );
+}
+
+/// One admin-configured bank account shown under the bank-transfer option.
+class BankAccount {
+  BankAccount({
+    required this.bankName,
+    required this.accountName,
+    required this.accountNumber,
+  });
+
+  final String bankName;
+  final String accountName;
+  final String accountNumber;
+
+  factory BankAccount.fromJson(Map<String, dynamic> json) => BankAccount(
+        bankName: json['bank_name'] as String? ?? '',
+        accountName: json['account_name'] as String? ?? '',
+        accountNumber: json['account_number'] as String? ?? '',
+      );
+}
+
+/// Direct-bank-transfer config: the account(s) to pay into + instructions.
+class BankTransferConfig {
+  BankTransferConfig({
+    this.enabled = false,
+    this.instructions,
+    this.accounts = const [],
+  });
+
+  final bool enabled;
+  final String? instructions;
+  final List<BankAccount> accounts;
+
+  bool get hasAccounts => enabled && accounts.isNotEmpty;
+
+  factory BankTransferConfig.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return BankTransferConfig();
+    return BankTransferConfig(
+      enabled: json['enabled'] as bool? ?? false,
+      instructions: json['instructions'] as String?,
+      accounts: (json['accounts'] as List? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(BankAccount.fromJson)
+          .toList(),
+    );
+  }
+}
+
 class TopupPage {
   TopupPage({
     required this.providerType,
@@ -12,7 +72,9 @@ class TopupPage {
     this.prepaidBalance,
     this.presetAmounts = const [],
     this.customerEmail,
-  });
+    this.providers = const [],
+    BankTransferConfig? bankTransfer,
+  }) : bankTransfer = bankTransfer ?? BankTransferConfig();
 
   final String providerType;
   final String currency;
@@ -22,6 +84,12 @@ class TopupPage {
   final double? prepaidBalance;
   final List<int> presetAmounts;
   final String? customerEmail;
+
+  /// Online gateway options (Paystack/Flutterwave), default provider first.
+  final List<PaymentProviderOption> providers;
+
+  /// Direct bank-transfer option (admin bank account + receipt upload).
+  final BankTransferConfig bankTransfer;
 
   factory TopupPage.fromJson(Map<String, dynamic> json) => TopupPage(
         providerType: json['provider_type'] as String? ?? 'paystack',
@@ -34,6 +102,12 @@ class TopupPage {
             .map((e) => (e as num).toInt())
             .toList(),
         customerEmail: json['customer_email'] as String?,
+        providers: (json['payment_options'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(PaymentProviderOption.fromJson)
+            .toList(),
+        bankTransfer: BankTransferConfig.fromJson(
+            json['direct_bank_transfer'] as Map<String, dynamic>?),
       );
 }
 

@@ -14,7 +14,8 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.services import reseller_portal, reseller_portal_billing
+from app.services import customer_portal_flow_payments as customer_payments
+from app.services import payment_proofs, reseller_portal, reseller_portal_billing
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,19 @@ def billing_overview(
             ),
             "allocation_success": allocated,
             "allocation_error": error,
+            "payment_options": [
+                opt
+                for opt in customer_payments._topup_payment_options(
+                    db, customer_payments._resolve_payment_provider(db)
+                )
+                if opt["provider_type"] != "direct_bank_transfer"
+            ],
+            "bank_transfer_accounts": (
+                customer_payments.enabled_direct_bank_transfer_accounts(db)
+            ),
+            "direct_bank_transfer_enabled": (
+                customer_payments.direct_bank_transfer_enabled(db)
+            ),
             **summary,
         },
     )
@@ -165,6 +179,7 @@ def billing_pay_intent(
     db: Session,
     amount: str,
     *,
+    provider: str | None = None,
     payment_method_id: str | None = None,
     save_card: bool = False,
 ):
@@ -177,6 +192,7 @@ def billing_pay_intent(
             db,
             reseller_id,
             Decimal(amount),
+            provider=provider or None,
             payment_method_id=payment_method_id or None,
             save_card=save_card,
             login_subscriber_id=_login_subscriber_id(context),
@@ -247,4 +263,59 @@ def billing_pay_verify(
             "current_user": context["current_user"],
             "result": result,
         },
+    )
+
+
+async def billing_submit_transfer_proof(
+    request: Request,
+    db: Session,
+    *,
+    file,
+    amount: str,
+    gross_amount: str | None = None,
+    wht_rate: str | None = None,
+    bank_name: str | None = None,
+    reference: str | None = None,
+):
+    """Record a reseller bulk bank-transfer receipt (optionally net of WHT).
+
+    ``amount`` is the net cash transferred; ``gross_amount``/``wht_rate`` capture
+    any tax withheld at source. The billing account is credited the gross on
+    staff verification and the WHT becomes a tracked receivable."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    reseller_id = str(context["reseller"].id)
+    from app.services import billing as billing_service
+
+    try:
+        ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+        path = await payment_proofs.save_proof_file(file)
+        payment_proofs.submit_proof(
+            db,
+            None,
+            submitted_by=_login_subscriber_id(context),
+            amount=amount,
+            currency=ba.currency,
+            bank_name=bank_name,
+            reference=reference,
+            file_path=path,
+            billing_account_id=str(ba.id),
+            gross_amount=gross_amount,
+            wht_rate=wht_rate,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface as a friendly redirect
+        detail = getattr(exc, "detail", None) or str(exc)
+        return RedirectResponse(
+            url="/reseller/billing?error="
+            + quote_plus(f"Could not submit receipt: {detail}"),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/reseller/billing?allocated="
+        + quote_plus(
+            "Transfer receipt submitted — we will verify it and credit your "
+            "account, then you can allocate it to invoices."
+        ),
+        status_code=303,
     )

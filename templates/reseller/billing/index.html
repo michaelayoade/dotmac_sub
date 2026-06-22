@@ -48,11 +48,25 @@
   </div>
 
   <!-- Pay (consolidated) -->
-  <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
+  <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80"
+       x-data="{ tab: 'online' }">
     <h3 class="text-base font-semibold text-slate-900 dark:text-white">Make a payment</h3>
     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Pay any amount into unallocated credit, then allocate it to the subscribers you choose.</p>
+
+    {% if direct_bank_transfer_enabled %}
+    <div class="mt-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-900">
+      <button type="button" x-on:click="tab = 'online'"
+              :class="tab === 'online' ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-800 dark:text-indigo-300' : 'text-slate-500'"
+              class="rounded-lg px-4 py-1.5 text-sm font-semibold transition">Pay online</button>
+      <button type="button" x-on:click="tab = 'transfer'"
+              :class="tab === 'transfer' ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-800 dark:text-indigo-300' : 'text-slate-500'"
+              class="rounded-lg px-4 py-1.5 text-sm font-semibold transition">Bank transfer</button>
+    </div>
+    {% endif %}
+
+    <!-- Online (Paystack / Flutterwave / saved card) -->
     <form method="post" action="/reseller/billing/pay/intent" class="mt-4 space-y-4"
-          x-data="{ amount: '', method: '' }">
+          x-show="tab === 'online'" x-data="{ amount: '', method: '' }">
       {% include "components/forms/csrf_input.html" %}
       <div class="flex flex-col gap-4 sm:flex-row sm:items-end">
         <div class="flex-1">
@@ -66,6 +80,17 @@
           </button>
           {% endif %}
         </div>
+        {% if payment_options and payment_options | length > 1 %}
+        <div class="flex-1">
+          <label for="provider" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway</label>
+          <select id="provider" name="provider" x-show="!method"
+                  class="mt-1.5 block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+            {% for opt in payment_options %}
+            <option value="{{ opt.provider_type }}">{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
         {% if saved_cards %}
         <div class="flex-1">
           <label for="payment_method_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Pay with</label>
@@ -87,8 +112,75 @@
         Save this card for next time (Paystack)
       </label>
     </form>
+
+    {% if direct_bank_transfer_enabled %}
+    <!-- Bank transfer + withholding tax + receipt -->
+    <form method="post" action="/reseller/billing/pay/transfer" enctype="multipart/form-data" class="mt-4 space-y-4"
+          x-show="tab === 'transfer'" x-cloak
+          x-data="{ net: '', rate: '',
+                    get gross() { const n = parseFloat(this.net)||0; const r = parseFloat(this.rate)||0; return r > 0 && r < 100 ? n/(1-r/100) : n; },
+                    get wht() { return this.gross - (parseFloat(this.net)||0); } }">
+      {% include "components/forms/csrf_input.html" %}
+      {% if bank_transfer_accounts %}
+      <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900">
+        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Transfer to</p>
+        <div class="mt-2 grid gap-3 sm:grid-cols-2">
+          {% for acct in bank_transfer_accounts %}
+          <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">{{ acct.bank_name }}</p>
+            <p class="text-base font-bold tabular-nums text-slate-900 dark:text-white">{{ acct.account_number }}</p>
+            <p class="text-sm text-slate-700 dark:text-slate-300">{{ acct.account_name }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      <div class="grid gap-4 sm:grid-cols-3">
+        <div>
+          <label for="t_amount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Amount transferred ({{ billing_account.currency }})</label>
+          <input type="number" step="0.01" min="0.01" id="t_amount" name="amount" x-model="net" required
+                 class="mt-1.5 block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+          <p class="mt-1 text-xs text-slate-400">Net cash you sent (after WHT).</p>
+        </div>
+        <div>
+          <label for="t_rate" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Withholding tax %</label>
+          <input type="number" step="0.01" min="0" max="99" id="t_rate" name="wht_rate" x-model="rate" placeholder="0"
+                 class="mt-1.5 block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+          <p class="mt-1 text-xs text-slate-400">Leave blank if none.</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Credited (gross)</label>
+          <p class="mt-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold tabular-nums text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+             x-text="'{{ billing_account.currency }} ' + gross.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})"></p>
+          <p class="mt-1 text-xs text-slate-400" x-show="wht > 0" x-text="'WHT receivable: {{ billing_account.currency }} ' + wht.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})"></p>
+        </div>
+      </div>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label for="t_bank" class="block text-sm font-medium text-slate-700 dark:text-slate-300">From bank (optional)</label>
+          <input type="text" id="t_bank" name="bank_name"
+                 class="mt-1.5 block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+        </div>
+        <div>
+          <label for="t_ref" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Transfer reference (optional)</label>
+          <input type="text" id="t_ref" name="reference"
+                 class="mt-1.5 block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+        </div>
+      </div>
+      <div>
+        <label for="t_file" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Receipt (JPG, PNG or PDF)</label>
+        <input type="file" id="t_file" name="file" accept="image/*,application/pdf" required
+               class="mt-1.5 block w-full text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 dark:text-slate-300">
+      </div>
+      <button type="submit" class="rounded-xl bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700">
+        Submit transfer receipt
+      </button>
+      <p class="text-xs text-slate-500 dark:text-slate-400">We verify the receipt and credit the gross to your account; the withheld tax is tracked until you provide a WHT certificate.</p>
+    </form>
+    {% endif %}
+
     {% if not saved_cards %}
-    <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Pay by card on the gateway and you can choose to save it on the <a href="/reseller/billing/payment-methods" class="font-semibold text-indigo-600 hover:underline dark:text-indigo-400">payment methods</a> page.</p>
+    <p class="mt-3 text-xs text-slate-500 dark:text-slate-400" x-show="tab === 'online'">Pay by card on the gateway and you can choose to save it on the <a href="/reseller/billing/payment-methods" class="font-semibold text-indigo-600 hover:underline dark:text-indigo-400">payment methods</a> page.</p>
     {% endif %}
   </div>
 

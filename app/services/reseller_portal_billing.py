@@ -42,10 +42,13 @@ def get_billing_account_summary(
     db: Session, reseller_id: str, subscriber_search: str | None = None
 ) -> dict:
     """Return the consolidated-billing statement for a reseller."""
+    from app.services import customer_portal_flow_payments as customer_payments
+
     ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
     statement = billing_service.billing_accounts.statement(
         db, str(ba.id), subscriber_search=subscriber_search
     )
+    transfer_settings = customer_payments.direct_bank_transfer_settings(db)
     return {
         "billing_account": statement.billing_account,
         "subscribers": [s.model_dump() for s in statement.subscribers],
@@ -53,6 +56,15 @@ def get_billing_account_summary(
         "total_outstanding": statement.total_outstanding,
         "unallocated_balance": statement.unallocated_balance,
         "subscriber_search": (subscriber_search or "").strip(),
+        # Admin bank account(s) for the bank-transfer pay option (mobile shows
+        # these inline; the web reseller page resolves them separately).
+        "direct_bank_transfer": {
+            "enabled": customer_payments.direct_bank_transfer_enabled(db),
+            "instructions": (
+                transfer_settings.get("direct_bank_transfer_instructions") or None
+            ),
+            "accounts": customer_payments.enabled_direct_bank_transfer_accounts(db),
+        },
     }
 
 

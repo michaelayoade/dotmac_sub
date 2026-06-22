@@ -24,20 +24,43 @@ class PaymentProofStatus(enum.Enum):
     rejected = "rejected"
 
 
+class WithholdingTaxStatus(enum.Enum):
+    pending = "pending"  # awaiting the reseller's WHT certificate
+    certified = "certified"  # certificate received
+    reclaimed = "reclaimed"  # offset/reclaimed from the tax authority
+    written_off = "written_off"
+
+
 class PaymentProof(Base):
     __tablename__ = "payment_proofs"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False, index=True
+    # A proof targets EITHER a subscriber account (customer / reseller-for-one-
+    # account transfer) OR a reseller's consolidated billing account (bulk
+    # reseller transfer). Exactly one is set, so account_id is now nullable.
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True, index=True
+    )
+    billing_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id"),
+        nullable=True,
+        index=True,
     )
     # Who uploaded it — the customer themselves or a reseller user.
     submitted_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
     )
+    # ``amount`` is the net cash actually transferred (what's on the receipt).
+    # For a reseller bulk transfer with withholding tax, ``gross_amount`` is the
+    # billed value to credit and ``wht_amount`` the tax withheld at source
+    # (gross = net + wht). For ordinary transfers gross/wht stay null.
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    gross_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    wht_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    wht_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     # Amount the reviewer actually confirmed against the bank statement; the
     # Payment is created for this value (defaults to the claimed amount).
     verified_amount: Mapped[Decimal | None] = mapped_column(
@@ -70,4 +93,61 @@ class PaymentProof(Base):
     )
 
     account = relationship("Subscriber", foreign_keys=[account_id])
+    billing_account = relationship("BillingAccount", foreign_keys=[billing_account_id])
     payment = relationship("Payment")
+
+
+class WithholdingTaxRecord(Base):
+    """A withholding-tax receivable raised when a reseller pays net of WHT.
+
+    The reseller transfers cash net of tax; on verification the billing account
+    is credited the full ``gross_amount`` and this row tracks the ``wht_amount``
+    the company expects to reclaim once the reseller provides a WHT certificate.
+    """
+
+    __tablename__ = "withholding_tax_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id"),
+        nullable=False,
+        index=True,
+    )
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id"), nullable=True, index=True
+    )
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payments.id"), nullable=True
+    )
+    payment_proof_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_proofs.id"), nullable=True
+    )
+    gross_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    wht_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    wht_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="NGN")
+    status: Mapped[WithholdingTaxStatus] = mapped_column(
+        Enum(WithholdingTaxStatus),
+        default=WithholdingTaxStatus.pending,
+        nullable=False,
+        index=True,
+    )
+    certificate_path: Mapped[str | None] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    billing_account = relationship("BillingAccount")
+    payment = relationship("Payment")
+    payment_proof = relationship("PaymentProof")
