@@ -53,7 +53,11 @@ class ServiceDetailScreen extends StatelessWidget {
           _Section(title: 'Plan', rows: [
             _Row('Billing', s.isPrepaid ? 'Prepaid' : 'Postpaid'),
             _Row('Started', Fmt.date(s.startAt)),
-            _Row('Expires', Fmt.date(s.expiresAt)),
+            // Postpaid doesn't expire on a date — show the next bill instead.
+            if (s.hasExpiry)
+              _Row('Expires', Fmt.date(s.expiresAt))
+            else if (s.nextBillingAt != null)
+              _Row('Next bill', Fmt.date(s.nextBillingAt)),
           ]),
           const SizedBox(height: 24),
           OutlinedButton.icon(
@@ -96,14 +100,28 @@ class _ExpiryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final days = service.daysUntilExpiry;
-    final (color, label) = switch (days) {
-      null => (scheme.outline, 'Validity unknown'),
-      < 0 => (scheme.error, 'Expired ${-days} day${days == -1 ? '' : 's'} ago'),
-      0 => (scheme.error, 'Expires today'),
-      <= 3 => (Colors.orange.shade800, '$days day${days == 1 ? '' : 's'} left'),
-      _ => (Colors.green.shade700, '$days days left'),
-    };
+    final s = service;
+    final days = s.daysUntilExpiry;
+    final (color, label) = s.isExpired
+        ? (scheme.error, 'Expired ${-days!} day${days == -1 ? '' : 's'} ago')
+        : switch (days) {
+            // Postpaid / no date expiry: show the next bill date, not a scary
+            // "validity unknown".
+            null => s.nextBillingAt != null
+                ? (
+                    Colors.green.shade700,
+                    'Next bill ${Fmt.date(s.nextBillingAt)}'
+                  )
+                : (scheme.outline, 'No expiry date'),
+            0 => (scheme.error, 'Expires today'),
+            // Active service, stale billing date: running, not expired.
+            < 0 => (Colors.green.shade700, 'Active'),
+            <= 3 => (
+                Colors.orange.shade800,
+                '$days day${days == 1 ? '' : 's'} left'
+              ),
+            _ => (Colors.green.shade700, '$days days left'),
+          };
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -118,8 +136,9 @@ class _ExpiryCard extends StatelessWidget {
                   Text(label,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           color: color, fontWeight: FontWeight.w700)),
-                  Text('Valid until ${Fmt.date(service.expiresAt)}',
-                      style: Theme.of(context).textTheme.bodySmall),
+                  if (s.expiresAt != null)
+                    Text('Valid until ${Fmt.date(s.expiresAt)}',
+                        style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ),
