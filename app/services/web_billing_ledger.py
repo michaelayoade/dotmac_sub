@@ -71,9 +71,7 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
     NOT derived from this view — they come from invoices.balance_due.
     """
     label = invoice.memo or (
-        f"Invoice {invoice.invoice_number}"
-        if invoice.invoice_number
-        else "Invoice"
+        f"Invoice {invoice.invoice_number}" if invoice.invoice_number else "Invoice"
     )
     return SimpleNamespace(
         id=invoice.id,
@@ -219,9 +217,7 @@ def build_ledger_entries_data(
                 .filter(Invoice.is_active.is_(True))
                 .filter(Invoice.is_proforma.is_(False))
                 .filter(
-                    Invoice.status.notin_(
-                        [InvoiceStatus.void, InvoiceStatus.draft]
-                    )
+                    Invoice.status.notin_([InvoiceStatus.void, InvoiceStatus.draft])
                 )
                 .filter(Invoice.issued_at.isnot(None))
                 .filter(Invoice.issued_at > _LEDGER_CUTOVER)
@@ -263,7 +259,9 @@ def build_ledger_entries_data(
         ):
             already_in_ledger = (
                 db.query(LedgerEntry.id)
-                .filter(LedgerEntry.account_id == SplynxBillingTransaction.subscriber_id)
+                .filter(
+                    LedgerEntry.account_id == SplynxBillingTransaction.subscriber_id
+                )
                 .filter(LedgerEntry.is_active.is_(True))
                 .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
                 .filter(LedgerEntry.amount == SplynxBillingTransaction.amount)
@@ -298,9 +296,7 @@ def build_ledger_entries_data(
                     SplynxBillingTransaction.subscriber_id.in_(account_ids)
                 )
             if selected_partner_id:
-                sx_q = sx_q.filter(
-                    Subscriber.reseller_id == UUID(selected_partner_id)
-                )
+                sx_q = sx_q.filter(Subscriber.reseller_id == UUID(selected_partner_id))
             if range_start is not None:
                 sx_q = sx_q.filter(
                     SplynxBillingTransaction.transaction_date >= range_start.date()
