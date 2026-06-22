@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     AccessCredential,
+    BillingCycle,
     BillingMode,
+    CatalogOffer,
     DunningAction,
     PolicyDunningStep,
     RadiusProfile,
@@ -464,17 +466,27 @@ def reconcile_retired_enforcement_locks(
     """
     from app.services.account_lifecycle import restore_subscription
 
-    summary = {"resolved": 0, "restored": 0, "still_locked": 0, "errors": 0}
+    summary = {
+        "resolved": 0,
+        "restored": 0,
+        "still_locked": 0,
+        "stale_cleared": 0,
+        "errors": 0,
+    }
     for reason in reasons:
-        sub_ids = [
+        # Pass 1: suspended subs — restore via the normal path (resolves the lock,
+        # flips status to active, emits a resume event so RADIUS re-provisions).
+        suspended_sub_ids = [
             row[0]
             for row in db.query(EnforcementLock.subscription_id)
+            .join(Subscription, Subscription.id == EnforcementLock.subscription_id)
             .filter(EnforcementLock.is_active.is_(True))
             .filter(EnforcementLock.reason == reason)
+            .filter(Subscription.status == SubscriptionStatus.suspended)
             .distinct()
             .all()
         ]
-        for sub_id in sub_ids:
+        for sub_id in suspended_sub_ids:
             try:
                 restored = restore_subscription(
                     db,
@@ -500,6 +512,28 @@ def reconcile_retired_enforcement_locks(
                     reason.value,
                     exc,
                 )
+
+        # Pass 2: locks that survive on non-suspended subs (restore_subscription
+        # only resolves locks on suspended subs). The reason is retired, so these
+        # are obsolete records — resolve them directly; no status/RADIUS change.
+        now = datetime.now(UTC)
+        stale = (
+            db.query(EnforcementLock)
+            .filter(EnforcementLock.is_active.is_(True))
+            .filter(EnforcementLock.reason == reason)
+            .all()
+        )
+        for lock in stale:
+            lock.is_active = False
+            lock.resolved_at = now
+            lock.resolved_by = resolved_by
+            lock.notes = (lock.notes or "") + (
+                f" [reason {reason.value!r} retired; stale lock cleared]"
+            )
+            summary["resolved"] += 1
+            summary["stale_cleared"] += 1
+        if stale:
+            db.commit()
     logger.info("retired-lock reconcile summary: %s", summary)
     return summary
 
@@ -1422,11 +1456,33 @@ class DunningWorkflow(ListResponseMixin):
                 InvoiceStatus.partially_paid,
             }:
                 invoice.status = InvoiceStatus.overdue
+        # Dunning enforces postpaid accounts, plus prepaid_monthly (prepaid on a
+        # MONTHLY-cycle offer, invoiced due-on-issue) once the cutover flag is on.
+        # Default OFF keeps dunning postpaid-only — no behaviour change. Genuine
+        # daily/balance prepaid has no invoices so is never in scope here.
+        _pm_flag = settings_spec.resolve_value(
+            db, SettingDomain.billing, "prepaid_monthly_invoicing_enabled"
+        )
+        include_prepaid_monthly = str(_pm_flag).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        enforce_mode_filter = Subscription.billing_mode == BillingMode.postpaid
+        if include_prepaid_monthly:
+            monthly_offer_ids = select(CatalogOffer.id).where(
+                CatalogOffer.billing_cycle == BillingCycle.monthly
+            )
+            enforce_mode_filter = or_(
+                Subscription.billing_mode == BillingMode.postpaid,
+                Subscription.offer_id.in_(monthly_offer_ids),
+            )
         postpaid_account_ids = {
             row[0]
             for row in (
                 db.query(Subscription.subscriber_id)
-                .filter(Subscription.billing_mode == BillingMode.postpaid)
+                .filter(enforce_mode_filter)
                 .filter(
                     Subscription.status.in_(
                         [

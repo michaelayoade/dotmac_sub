@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 
@@ -23,6 +24,7 @@ from app.models.catalog import (
     AddOnPrice,
     BillingCycle,
     BillingMode,
+    CatalogOffer,
     DiscountType,
     OfferPrice,
     OfferVersionPrice,
@@ -826,15 +828,31 @@ def run_invoice_cycle(
         SubscriberStatus.suspended,
         SubscriberStatus.delinquent,
     )
-    # Prepaid subscriptions draw down a deposit and must never be invoiced
-    # (see subscription_invoice_eligible); excluding them here is the single
-    # source of the postpaid-only rule for the scheduled cycle.
+    # Postpaid subscriptions are always invoiced. ``prepaid_monthly`` accounts
+    # (prepaid billing_mode on a MONTHLY-cycle offer) are invoiced too — billed
+    # in advance, due on issue — but ONLY when the cutover flag is enabled;
+    # default OFF keeps the scheduled cycle postpaid-only (no behaviour change),
+    # so this is safe to deploy before the prepaid-monthly migration runs.
+    # Genuine daily/balance prepaid stays off-invoice regardless.
+    include_prepaid_monthly = _setting_truthy(
+        db, "prepaid_monthly_invoicing_enabled", default=False
+    )
+    mode_filter = Subscription.billing_mode != BillingMode.prepaid
+    if include_prepaid_monthly:
+        monthly_offer_ids = select(CatalogOffer.id).where(
+            CatalogOffer.billing_cycle == BillingCycle.monthly
+        )
+        mode_filter = or_(
+            Subscription.billing_mode != BillingMode.prepaid,
+            Subscription.offer_id.in_(monthly_offer_ids),
+        )
+
     active_subscriptions = (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
         .filter(Subscriber.status.in_(billable_account_statuses))
-        .filter(Subscription.billing_mode != BillingMode.prepaid)
+        .filter(mode_filter)
         .all()
     )
 
@@ -846,7 +864,7 @@ def run_invoice_cycle(
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .filter(Subscription.status == SubscriptionStatus.pending)
             .filter(Subscriber.status == SubscriberStatus.active)
-            .filter(Subscription.billing_mode != BillingMode.prepaid)
+            .filter(mode_filter)
             .all()
         )
 
@@ -1009,6 +1027,10 @@ def run_invoice_cycle(
                 if account
                 else global_due_days
             )
+            # prepaid_monthly is billed in advance: the invoice is due on issue
+            # (a short grace lives in dunning) so non-payment enforces promptly.
+            if subscription.billing_mode == BillingMode.prepaid:
+                due_days = 0
             invoice = Invoice(
                 account_id=subscription.subscriber_id,
                 invoice_number=next_invoice_number(db),
