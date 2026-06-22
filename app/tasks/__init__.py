@@ -19,7 +19,11 @@ from app.tasks.bandwidth import (
 )
 from app.tasks.billing import run_invoice_cycle
 from app.tasks.catalog import expire_subscriptions
-from app.tasks.collections import run_dunning, run_prepaid_enforcement
+from app.tasks.collections import (
+    run_dunning,
+    run_prepaid_enforcement,
+    run_retired_lock_reconcile,
+)
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.crm_sync import redrive_crm_dead_letters
@@ -181,6 +185,7 @@ __all__ = [
     "expire_subscriptions",
     "run_dunning",
     "run_prepaid_enforcement",
+    "run_retired_lock_reconcile",
     "run_prepaid_charges_task",
     "check_billing_switch_task",
     "push_crm_subscriber_change",

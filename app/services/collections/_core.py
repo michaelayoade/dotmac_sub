@@ -20,7 +20,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.enforcement_lock import EnforcementReason
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.collections import (
     DunningActionLogCreate,
@@ -436,6 +436,72 @@ def _restore_account(
             "Restored %d subscriptions for account %s", restored_count, account_id
         )
     return restored_count
+
+
+# Enforcement reasons that have been retired from the product. Locks created by
+# a retired reason are obsolete and must be resolved so service is restored —
+# the subsystem that would have lifted them no longer runs. Deposit-based prepaid
+# enforcement was retired post-cutover (due-date dunning is the sole enforcer).
+RETIRED_ENFORCEMENT_REASONS: tuple[EnforcementReason, ...] = (
+    EnforcementReason.prepaid,
+)
+
+
+def reconcile_retired_enforcement_locks(
+    db: Session,
+    *,
+    reasons: tuple[EnforcementReason, ...] = RETIRED_ENFORCEMENT_REASONS,
+    resolved_by: str = "retired-enforcement-reconcile",
+) -> dict[str, int]:
+    """Resolve enforcement locks whose reason has been retired, restoring service.
+
+    For each active lock with a retired reason, resolve it via the normal
+    restore path (``restore_subscription``) so RADIUS is re-provisioned and a
+    resume event is emitted. A subscription left with no other active lock is
+    reactivated; one still held by another reason (e.g. ``overdue``) stays
+    suspended. Per-subscription commit, idempotent, safe to re-run — once no
+    retired locks remain it is a no-op.
+    """
+    from app.services.account_lifecycle import restore_subscription
+
+    summary = {"resolved": 0, "restored": 0, "still_locked": 0, "errors": 0}
+    for reason in reasons:
+        sub_ids = [
+            row[0]
+            for row in db.query(EnforcementLock.subscription_id)
+            .filter(EnforcementLock.is_active.is_(True))
+            .filter(EnforcementLock.reason == reason)
+            .distinct()
+            .all()
+        ]
+        for sub_id in sub_ids:
+            try:
+                restored = restore_subscription(
+                    db,
+                    str(sub_id),
+                    trigger="admin",
+                    resolved_by=resolved_by,
+                    reason=reason,
+                    notes=(
+                        f"Enforcement reason {reason.value!r} retired; "
+                        "obsolete lock resolved by reconcile."
+                    ),
+                    emit=True,
+                )
+                db.commit()
+                summary["resolved"] += 1
+                summary["restored" if restored else "still_locked"] += 1
+            except Exception as exc:  # noqa: BLE001 - keep going, count failures
+                db.rollback()
+                summary["errors"] += 1
+                logger.error(
+                    "retired-lock reconcile failed for subscription %s (reason=%s): %s",
+                    sub_id,
+                    reason.value,
+                    exc,
+                )
+    logger.info("retired-lock reconcile summary: %s", summary)
+    return summary
 
 
 def _get_account_email(db: Session, account_id: str) -> str | None:

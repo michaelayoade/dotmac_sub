@@ -759,51 +759,36 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=dunning_interval_seconds,
         )
-        prepaid_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "prepaid_enforcement_enabled",
-            "PREPAID_ENFORCEMENT_ENABLED",
-            True,
-        )
-        prepaid_interval_seconds = _effective_int(
-            session,
-            SettingDomain.collections,
-            "prepaid_enforcement_interval_seconds",
-            "PREPAID_ENFORCEMENT_INTERVAL_SECONDS",
-            3600,
-        )
-        prepaid_interval_seconds = max(prepaid_interval_seconds, 300)
+        # RETIRED: deposit-based prepaid enforcement suspended paid customers on a
+        # stale Splynx deposit / derived balance. Due-date dunning is the sole
+        # enforcer now. Forced OFF here (hardcoded) so it can never be re-enabled
+        # by a setting/env default. See run_prepaid_enforcement (no-op) and
+        # run_retired_lock_reconcile (clears the obsolete prepaid locks).
         _sync_scheduled_task(
             session,
             name="prepaid_enforcement_runner",
             task_name="app.tasks.collections.run_prepaid_enforcement",
-            enabled=prepaid_enabled,
-            interval_seconds=prepaid_interval_seconds,
+            enabled=False,
+            interval_seconds=3600,
         )
-        # Prepaid drawdown charges (per-period debit; cadence/idempotency live
-        # in the service; ultimately gated by billing_enabled in the task).
-        prepaid_charges_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "prepaid_charges_enabled",
-            "PREPAID_CHARGES_ENABLED",
-            True,
-        )
-        prepaid_charges_interval_seconds = _effective_int(
-            session,
-            SettingDomain.billing,
-            "prepaid_charges_interval_seconds",
-            "PREPAID_CHARGES_INTERVAL_SECONDS",
-            86400,
-        )
-        prepaid_charges_interval_seconds = max(prepaid_charges_interval_seconds, 3600)
+        # RETIRED: prepaid drawdown charges drove balances negative against the
+        # stale deposit. Forced OFF.
         _sync_scheduled_task(
             session,
             name="prepaid_charges_runner",
             task_name="app.tasks.prepaid_billing.run_prepaid_charges",
-            enabled=prepaid_charges_enabled,
-            interval_seconds=prepaid_charges_interval_seconds,
+            enabled=False,
+            interval_seconds=86400,
+        )
+        # Resolves obsolete enforcement locks from retired reasons (prepaid) and
+        # restores service via the normal restore path. Idempotent; no-op once
+        # none remain.
+        _sync_scheduled_task(
+            session,
+            name="retired_lock_reconcile_runner",
+            task_name="app.tasks.collections.run_retired_lock_reconcile",
+            enabled=True,
+            interval_seconds=86400,
         )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.

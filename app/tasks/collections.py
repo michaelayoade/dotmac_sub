@@ -1,7 +1,7 @@
 import logging
 
 from app.celery_app import celery_app
-from app.schemas.collections import DunningRunRequest, PrepaidEnforcementRunRequest
+from app.schemas.collections import DunningRunRequest
 from app.services import collections as collections_service
 from app.services.billing_settings import billing_enabled
 from app.services.db_session_adapter import db_session_adapter
@@ -44,35 +44,26 @@ def run_dunning() -> dict[str, int | str]:
 
 @celery_app.task(name="app.tasks.collections.run_prepaid_enforcement")
 def run_prepaid_enforcement() -> dict[str, int | str]:
-    logger.info("Starting prepaid enforcement run")
+    """RETIRED. Deposit-based prepaid enforcement suspended paid customers on a
+    stale Splynx deposit/derived balance; due-date dunning (run_dunning) is now
+    the sole enforcer. This is a no-op kept only so the task name still resolves;
+    it never suspends. Obsolete prepaid locks are cleared by
+    run_retired_lock_reconcile.
+    """
+    logger.info("prepaid enforcement is retired; no-op (use due-date dunning)")
+    return {"skipped": "prepaid_enforcement_retired"}
+
+
+@celery_app.task(name="app.tasks.collections.run_retired_lock_reconcile")
+def run_retired_lock_reconcile() -> dict[str, int | str]:
+    """Resolve enforcement locks from retired reasons (e.g. prepaid) and restore
+    service via the normal restore path. Idempotent; no-op once none remain."""
+    logger.info("Starting retired-enforcement-lock reconcile")
     session = SessionLocal()
     try:
-        if not billing_enabled(session):
-            logger.info(
-                "prepaid enforcement skipped: local billing disabled (billing_enabled)"
-            )
-            return {"skipped": "billing_disabled"}
-        result = collections_service.prepaid_enforcement.run(
-            session, PrepaidEnforcementRunRequest()
-        )
-        summary: dict[str, int | str] = {
-            "accounts_scanned": int(result.accounts_scanned),
-            "accounts_warned": int(result.accounts_warned),
-            "accounts_suspended": int(result.accounts_suspended),
-            "accounts_deactivated": int(result.accounts_deactivated),
-            "skipped": int(result.skipped),
-        }
-        logger.info(
-            "Prepaid enforcement completed: accounts_scanned=%d accounts_warned=%d "
-            "accounts_suspended=%d accounts_deactivated=%d skipped=%d",
-            summary["accounts_scanned"],
-            summary["accounts_warned"],
-            summary["accounts_suspended"],
-            summary["accounts_deactivated"],
-            summary["skipped"],
-        )
-        session.commit()
-        return summary
+        summary = collections_service.reconcile_retired_enforcement_locks(session)
+        logger.info("retired-lock reconcile completed: %s", summary)
+        return {k: int(v) for k, v in summary.items()}
     except Exception:
         session.rollback()
         raise
