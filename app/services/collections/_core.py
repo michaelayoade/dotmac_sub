@@ -196,7 +196,15 @@ def _general_default_policy_set_id(db: Session, account: Subscriber):
         if account.billing_mode == BillingMode.prepaid
         else "default_postpaid_policy_set_id"
     )
-    raw = settings_spec.resolve_value(db, SettingDomain.collections, key)
+    # Read the setting row directly: these are seeded data settings, not declared
+    # in SETTINGS_SPECS, so settings_spec.resolve_value() would ignore them.
+    raw = (
+        db.query(DomainSetting.value_text)
+        .filter(DomainSetting.domain == SettingDomain.collections)
+        .filter(DomainSetting.key == key)
+        .filter(DomainSetting.is_active.is_(True))
+        .scalar()
+    )
     if not raw:
         return None
     try:
