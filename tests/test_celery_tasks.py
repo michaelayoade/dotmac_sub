@@ -254,19 +254,8 @@ class TestBillingMasterSwitchGates:
                     mock_run.assert_not_called()
                     assert result == {"skipped": "billing_disabled"}
 
-    def test_prepaid_enforcement_skipped_when_billing_disabled(self):
-        mock_session = MagicMock()
-        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch("app.tasks.collections.billing_enabled", return_value=False):
-                with patch(
-                    "app.tasks.collections.collections_service.prepaid_enforcement.run"
-                ) as mock_run:
-                    from app.tasks.collections import run_prepaid_enforcement
-
-                    result = run_prepaid_enforcement()
-
-                    mock_run.assert_not_called()
-                    assert result == {"skipped": "billing_disabled"}
+    # NOTE: prepaid enforcement is retired (always a no-op), so it is no longer
+    # gated by the billing master switch — see test_run_prepaid_enforcement_is_retired_noop.
 
     def test_autopay_skipped_when_billing_disabled(self):
         mock_session = MagicMock()
