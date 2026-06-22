@@ -80,9 +80,11 @@ def _seed_policy(policy_id: str, name: str) -> None:
                 id, name, proration_policy, downgrade_policy,
                 suspension_action, refund_policy, is_active, created_at, updated_at
             )
-            SELECT :id, :name, 'immediate', 'next_cycle', 'suspend', 'none',
-                   true, now(), now()
-            WHERE NOT EXISTS (SELECT 1 FROM policy_sets WHERE id = :id)
+            SELECT CAST(:id AS uuid), :name, 'immediate', 'next_cycle',
+                   'suspend', 'none', true, now(), now()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM policy_sets WHERE id = CAST(:id AS uuid)
+            )
             """
         ).bindparams(id=policy_id, name=name)
     )
@@ -124,9 +126,9 @@ def upgrade() -> None:
                 """
                 INSERT INTO policy_dunning_steps
                     (id, policy_set_id, day_offset, action, note)
-                SELECT :sid, :pid, :day, :action, :note
+                SELECT CAST(:sid AS uuid), CAST(:pid AS uuid), :day, :action, :note
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM policy_dunning_steps WHERE id = :sid
+                    SELECT 1 FROM policy_dunning_steps WHERE id = CAST(:sid AS uuid)
                 )
                 """
             ).bindparams(
@@ -163,7 +165,8 @@ def downgrade() -> None:
     )
     op.execute(
         sa.text(
-            "DELETE FROM policy_dunning_steps WHERE policy_set_id IN (:a, :b)"
+            "DELETE FROM policy_dunning_steps WHERE policy_set_id IN "
+            "(CAST(:a AS uuid), CAST(:b AS uuid))"
         ).bindparams(a=PREPAID_POLICY_ID, b=POSTPAID_POLICY_ID)
     )
     bind = op.get_bind()
@@ -177,7 +180,7 @@ def downgrade() -> None:
         op.drop_constraint("fk_resellers_policy_set", "resellers", type_="foreignkey")
         op.drop_column("resellers", "policy_set_id")
     op.execute(
-        sa.text("DELETE FROM policy_sets WHERE id IN (:a, :b)").bindparams(
-            a=PREPAID_POLICY_ID, b=POSTPAID_POLICY_ID
-        )
+        sa.text(
+            "DELETE FROM policy_sets WHERE id IN (CAST(:a AS uuid), CAST(:b AS uuid))"
+        ).bindparams(a=PREPAID_POLICY_ID, b=POSTPAID_POLICY_ID)
     )
