@@ -954,6 +954,23 @@ def _execute_dunning_action(
             )
             return "shielded"
 
+        # Phase 6 (audit-first): record whether this enforcing dunning action
+        # would be deferred by the enforcement time-of-day window — WITHOUT
+        # skipping yet. Flip to actually gating once the would_gate logs confirm
+        # the window config. See docs/designs/BILLING_ENFORCEMENT_WINDOW.md.
+        if not enforcement_window.within_enforcement_window(db):
+            logger.info(
+                "enforcement_window_audit",
+                extra={
+                    "event": "enforcement_window_audit",
+                    "path": "dunning",
+                    "action": action.value,
+                    "account_id": account_id,
+                    "would_gate": True,
+                    "timezone": enforcement_window.resolve_timezone_name(db),
+                },
+            )
+
     if action == DunningAction.notify:
         _create_suspension_warning_notification(db, account_id, day_offset, note)
         return "notification_sent"

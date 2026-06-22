@@ -532,6 +532,36 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=3600,
         min_value=300,
     ),
+    # Enforcement (suspend/block) time-of-day window. Default unset = no gate;
+    # phase 6 audit-only logs "would_gate" without skipping until enforced.
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="enforcement_window_start",
+        env_var="ENFORCEMENT_WINDOW_START",
+        value_type=SettingValueType.string,
+        default=None,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="enforcement_window_end",
+        env_var="ENFORCEMENT_WINDOW_END",
+        value_type=SettingValueType.string,
+        default=None,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="enforcement_skip_weekends",
+        env_var="ENFORCEMENT_SKIP_WEEKENDS",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="enforcement_skip_holidays",
+        env_var="ENFORCEMENT_SKIP_HOLIDAYS",
+        value_type=SettingValueType.json,
+        default=[],
+    ),
     SettingSpec(
         domain=SettingDomain.collections,
         key="prepaid_skip_weekends",

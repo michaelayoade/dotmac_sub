@@ -8,9 +8,9 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscriber import SubscriberStatus as AccountStatus
+from app.services import enforcement_window, settings_spec
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
-from app.services import settings_spec
 from app.services.enforcement import (
     _resolve_effective_profile,
     _setting_bool,
@@ -719,6 +719,23 @@ class EnforcementHandler:
                     shield_reason,
                 )
                 return
+
+            # Phase 6 (audit-first): record whether this overdue auto-suspension
+            # would be deferred by the enforcement time-of-day window — WITHOUT
+            # skipping yet. Flip to actually gating once the would_gate logs
+            # confirm the window config (docs/designs/BILLING_ENFORCEMENT_WINDOW.md).
+            if not enforcement_window.within_enforcement_window(db):
+                logger.info(
+                    "enforcement_window_audit",
+                    extra={
+                        "event": "enforcement_window_audit",
+                        "path": "overdue_event",
+                        "action": "auto_suspend",
+                        "account_id": str(account_id),
+                        "would_gate": True,
+                        "timezone": enforcement_window.resolve_timezone_name(db),
+                    },
+                )
 
             # Past grace period — suspend via lifecycle enforcement locks.
             # Use emit=False to prevent re-entrant event dispatch (this handler
