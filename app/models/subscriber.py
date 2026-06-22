@@ -140,6 +140,11 @@ class Reseller(Base):
     code: Mapped[str | None] = mapped_column(String(60), unique=True)
     contact_email: Mapped[str | None] = mapped_column(String(255))
     contact_phone: Mapped[str | None] = mapped_column(String(40))
+    # Reseller-level dunning policy override (applies to the reseller's accounts
+    # unless an account sets its own). See Subscriber.policy_set_id.
+    policy_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_sets.id")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_house: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
@@ -253,6 +258,11 @@ class Subscriber(Base):
     # === Billing Fields (from SubscriberAccount) ===
     tax_rate_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tax_rates.id")
+    )
+    # Account-level dunning policy override. Resolution order for an account is
+    # account -> reseller -> offer -> general default (by billing mode).
+    policy_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_sets.id")
     )
     billing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     captive_redirect_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

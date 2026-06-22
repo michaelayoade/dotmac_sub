@@ -23,7 +23,7 @@ from app.models.catalog import (
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.collections import (
     DunningActionLogCreate,
     DunningActionLogUpdate,
@@ -184,7 +184,47 @@ def has_overdue_balance(db: Session, account_id: str) -> bool:
     return row is not None
 
 
+def _general_default_policy_set_id(db: Session, account: Subscriber):
+    """The general (fallback) dunning policy for an account's billing mode.
+
+    Configured via the collections settings ``default_prepaid_policy_set_id`` /
+    ``default_postpaid_policy_set_id`` (seeded to the immediate-suspend prepaid
+    policy and the 30-day postpaid policy respectively).
+    """
+    key = (
+        "default_prepaid_policy_set_id"
+        if account.billing_mode == BillingMode.prepaid
+        else "default_postpaid_policy_set_id"
+    )
+    raw = settings_spec.resolve_value(db, SettingDomain.collections, key)
+    if not raw:
+        return None
+    try:
+        return coerce_uuid(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
 def _resolve_policy_set_for_account(db: Session, account_id: str):
+    """Resolve the dunning policy for an account, most specific override first:
+
+    1. account override   (subscriber.policy_set_id)
+    2. reseller override   (reseller.policy_set_id)
+    3. offer / offer_version policy_set_id
+    4. general default by billing mode (collections setting)
+    """
+    account = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(account_id)))
+    if account is None:
+        return None
+    # 1. account-level override
+    if account.policy_set_id:
+        return account.policy_set_id
+    # 2. reseller-level override
+    if account.reseller_id:
+        reseller = db.get(Reseller, account.reseller_id)
+        if reseller and reseller.policy_set_id:
+            return reseller.policy_set_id
+    # 3. offer / offer_version assignment
     subscriptions = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account_id)
@@ -203,8 +243,6 @@ def _resolve_policy_set_for_account(db: Session, account_id: str):
         )
         .all()
     )
-    if not subscriptions:
-        return None
     priority = {
         SubscriptionStatus.active: 0,
         SubscriptionStatus.suspended: 1,
@@ -221,7 +259,8 @@ def _resolve_policy_set_for_account(db: Session, account_id: str):
             return subscription.offer_version.policy_set_id
         if subscription.offer and subscription.offer.policy_set_id:
             return subscription.offer.policy_set_id
-    return None
+    # 4. general default by billing mode
+    return _general_default_policy_set_id(db, account)
 
 
 def _resolve_dunning_steps(db: Session, policy_set_id: str):
