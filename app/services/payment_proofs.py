@@ -135,7 +135,7 @@ def submit_proof(
     db: Session,
     account_id: str | None,
     *,
-    submitted_by: str,
+    submitted_by: str | None,
     amount,
     currency: str = "NGN",
     bank_name: str | None = None,

@@ -291,7 +291,8 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 6),
-              for (final acct in widget.accounts) _BankAccountCard(account: acct),
+              for (final acct in widget.accounts)
+                _BankAccountCard(account: acct),
               if (widget.instructions != null &&
                   widget.instructions!.trim().isNotEmpty)
                 Padding(

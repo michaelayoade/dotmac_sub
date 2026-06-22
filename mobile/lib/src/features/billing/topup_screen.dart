@@ -170,7 +170,8 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       final result = await ref.read(billingRepositoryProvider).verifyTopup(
             reference,
             // "Save this card" only applies to a brand-new Paystack card.
-            saveCard: cardId == null && _selectedGateway == 'paystack' && _saveCard,
+            saveCard:
+                cardId == null && _selectedGateway == 'paystack' && _saveCard,
           );
       // Top-up credits the wallet — refresh balance + ledger + invoices.
       ref.invalidate(invoicesProvider);
@@ -333,7 +334,8 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed: _busy || !_amountValid || _selection == null ? null : _submit,
+          onPressed:
+              _busy || !_amountValid || _selection == null ? null : _submit,
           icon: _busy
               ? const SizedBox(
                   height: 18,

@@ -242,7 +242,8 @@ class _ResellerTransferSheetState
             OutlinedButton.icon(
               onPressed: _pick,
               icon: const Icon(Icons.photo_library_outlined, size: 18),
-              label: Text(_file == null ? 'Choose receipt image *' : _file!.name),
+              label:
+                  Text(_file == null ? 'Choose receipt image *' : _file!.name),
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
