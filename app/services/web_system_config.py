@@ -604,10 +604,6 @@ RADIUS_KEYS = [
     "captive_portal_url",
     "allow_unknown_nas",
     "default_nas_id",
-    # PPPoE auto-generation
-    "pppoe_username_prefix",
-    "pppoe_username_padding",
-    "pppoe_username_start",
     "pppoe_default_password_length",
 ]
 

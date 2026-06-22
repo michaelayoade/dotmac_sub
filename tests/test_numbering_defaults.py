@@ -65,7 +65,7 @@ def test_credit_note_number_defaults_use_settings(db_session, subscriber_account
     assert credit_note.credit_number == "CRX-007"
 
 
-def test_subscriber_account_number_defaults_use_settings(db_session, person):
+def test_subscriber_account_number_derives_from_subscriber_number(db_session, person):
     settings_api.upsert_subscriber_setting(
         db_session,
         "subscriber_number_prefix",
@@ -100,10 +100,10 @@ def test_subscriber_account_number_defaults_use_settings(db_session, person):
         db_session,
         SubscriberCreate(person_id=person.id),
     )
-    assert subscriber.account_number == "ACX-009"
+    assert subscriber.account_number == "ACX-0012"
     account = subscriber_service.accounts.create(
         db_session,
         SubscriberAccountCreate(subscriber_id=subscriber.id),
     )
     assert subscriber.subscriber_number == "SUBX-0012"
-    assert account.account_number == "ACX-009"
+    assert account.account_number == "ACX-0012"

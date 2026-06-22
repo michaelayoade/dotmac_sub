@@ -41,6 +41,7 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.crud import CRUDManager
+from app.services.customer_identifiers import pppoe_username_from_subscriber_number
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.query_builders import apply_optional_equals
@@ -234,21 +235,38 @@ def _auto_generate_pppoe(
     subscription: Subscription,
 ) -> None:
     """Auto-generate PPPoE credentials for newly activated subscriptions."""
-    try:
-        from app.services.pppoe_credentials import auto_generate_pppoe_credential
+    from app.models.catalog import AccessCredential
+    from app.services.pppoe_credentials import auto_generate_pppoe_credential
 
-        profile_id = subscription.radius_profile_id
-        auto_generate_pppoe_credential(
-            db,
-            str(subscription.subscriber_id),
-            radius_profile_id=str(profile_id) if profile_id else None,
+    profile_id = subscription.radius_profile_id
+    auto_generate_pppoe_credential(
+        db,
+        str(subscription.subscriber_id),
+        radius_profile_id=str(profile_id) if profile_id else None,
+    )
+    active_credential = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscription.subscriber_id,
+            AccessCredential.is_active.is_(True),
         )
-    except Exception as exc:
-        logger.warning(
-            "PPPoE auto-generation failed for subscription %s: %s",
-            subscription.id,
-            exc,
+        .first()
+    )
+    if active_credential is None:
+        raise RuntimeError(
+            f"PPPoE credential is required before activating subscription {subscription.id}."
         )
+
+
+def _derived_pppoe_username_for_subscriber(
+    db: Session, subscriber_id: str
+) -> str | None:
+    from app.models.subscriber import Subscriber
+
+    subscriber = db.get(Subscriber, str(subscriber_id))
+    if subscriber is None:
+        return None
+    return pppoe_username_from_subscriber_number(db, subscriber.subscriber_number)
 
 
 def _resolve_offer_radius_profile_id(db: Session, offer_id: str | None):
@@ -525,7 +543,13 @@ def _handle_status_transition_via_lifecycle(
                 emit=False,
             )
         compute_account_status(db, subscriber_id)
-        _emit_subscription_status_event(db, subscription, from_status, to_status)
+        try:
+            _emit_subscription_status_event(db, subscription, from_status, to_status)
+        except Exception:
+            subscription.status = from_status or SubscriptionStatus.pending
+            compute_account_status(db, subscriber_id)
+            db.commit()
+            raise
 
     elif to_status == SubscriptionStatus.canceled:
         from app.services.account_lifecycle import (
@@ -1189,6 +1213,16 @@ class Subscriptions(ListResponseMixin):
             if end_at:
                 data["end_at"] = end_at
 
+        if (
+            data.get("status") == SubscriptionStatus.active
+            and not str(data.get("login") or "").strip()
+        ):
+            derived_login = _derived_pppoe_username_for_subscriber(
+                db, str(payload.subscriber_id)
+            )
+            if derived_login:
+                data["login"] = derived_login
+
         # Snapshot the offer's recurring price when no explicit unit_price is
         # given, so the subscription carries its effective monthly amount (the
         # invoice already resolves the offer price, but the customer/admin
@@ -1217,7 +1251,15 @@ class Subscriptions(ListResponseMixin):
             sync_credentials=False,
         )
         db.add(subscription)
-        db.commit()
+        activating = subscription.status == SubscriptionStatus.active
+        try:
+            if activating:
+                db.flush()
+                _auto_generate_pppoe(db, subscription)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         db.refresh(subscription)
 
         # Auto-create Service Order for pending subscriptions that need provisioning
@@ -1238,11 +1280,8 @@ class Subscriptions(ListResponseMixin):
             account_id=subscription.subscriber_id,
         )
 
-        # If created as active, generate credentials and sync to RADIUS FIRST
-        # so the provisioning handler (triggered by the activation event) sees them.
-        if subscription.status == SubscriptionStatus.active:
-            _auto_generate_pppoe(db, subscription)
-
+        # If created as active, credentials were minted in the create transaction.
+        if activating:
             # CRITICAL: Sync credentials to RADIUS BEFORE emitting events
             # This ensures provisioning handlers can access RadiusUser records
             _sync_credentials_to_radius(db, subscription.subscriber_id)
@@ -1485,6 +1524,14 @@ class Subscriptions(ListResponseMixin):
             nas_device_id = _select_nas_for_subscriber(db, subscriber_id)
             if nas_device_id:
                 data["provisioning_nas_device_id"] = nas_device_id
+
+        if (
+            status == SubscriptionStatus.active
+            and not str(data.get("login") or subscription.login or "").strip()
+        ):
+            derived_login = _derived_pppoe_username_for_subscriber(db, subscriber_id)
+            if derived_login:
+                data["login"] = derived_login
 
         for key, value in data.items():
             setattr(subscription, key, value)

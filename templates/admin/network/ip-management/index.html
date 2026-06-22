@@ -271,6 +271,9 @@
                             <td colspan="8" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools configured</td>
                         </tr>
                         {% endfor %}
+                        <tr data-empty-search-row hidden>
+                            <td colspan="8" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools match your search.</td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -375,6 +378,9 @@
                             <td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP blocks configured</td>
                         </tr>
                         {% endfor %}
+                        <tr data-empty-search-row hidden>
+                            <td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP blocks match your search.</td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -401,20 +407,21 @@
             <select data-pool-filter class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
                 <option value="">All Pools</option>
                 {% for pool in pools %}
-                <option value="{{ pool.id }}">{{ pool.name }}</option>
+                <option value="{{ pool.id }}" {% if pool_filter and pool_filter == pool.id|string %}selected{% endif %}>{{ pool.name }}</option>
                 {% endfor %}
             </select>
             {% endif %}
             <form method="get" action="/admin/network/ip-management" class="ml-auto flex items-center gap-2">
-            <input type="hidden" name="page" value="{{ pagination.page if pagination else 1 }}">
+            <input type="hidden" name="tab" value="addresses">
+            <input type="hidden" name="page" value="1">
             {% if pool_filter %}
             <input type="hidden" name="pool_filter" value="{{ pool_filter }}">
             {% endif %}
-            <input type="text" name="search" value="{{ search or '' }}" placeholder="Search addresses..."
+            <input type="text" name="search" value="{{ search or '' }}" placeholder="Search addresses..." data-address-search
                    class="w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
             <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Search</button>
             {% if search %}
-            <a href="/admin/network/ip-management" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+            <a href="/admin/network/ip-management?tab=addresses{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
             {% endif %}
         </form>
         </div>
@@ -479,6 +486,9 @@
                         {% else %}
                         <tr><td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500">No IPv4 addresses</td></tr>
                         {% endfor %}
+                        <tr data-empty-search-row hidden>
+                            <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IPv4 addresses match your search.</td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -489,11 +499,11 @@
                 </div>
                 <div class="flex items-center gap-2">
                     {% if pagination.page > 1 %}
-                    <a href="?page={{ pagination.page - 1 }}{% if search %}&search={{ search }}{% endif %}{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
+                    <a href="?tab=addresses&page={{ pagination.page - 1 }}{% if search %}&search={{ search }}{% endif %}{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                     {% endif %}
                     <span class="px-3 py-1.5 text-sm text-slate-500">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
                     {% if pagination.page < pagination.total_pages %}
-                    <a href="?page={{ pagination.page + 1 }}{% if search %}&search={{ search }}{% endif %}{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
+                    <a href="?tab=addresses&page={{ pagination.page + 1 }}{% if search %}&search={{ search }}{% endif %}{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                     {% endif %}
                 </div>
             </div>
@@ -630,6 +640,9 @@
                         {% else %}
                         <tr><td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500">No IP assignments</td></tr>
                         {% endfor %}
+                        <tr data-empty-search-row hidden>
+                            <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP assignments match your search.</td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -755,6 +768,7 @@ function setupTableTools(tableEl) {
     const selectAll = tableEl.querySelector('[data-select-all]');
     const rowChecks = Array.from(tableEl.querySelectorAll('[data-row-check]'));
     const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+    const emptySearchRow = tableEl.querySelector('[data-empty-search-row]');
     const selectedCount = tableEl.querySelector('[data-selected-count]');
     const copyBtn = tableEl.querySelector('[data-copy-selected]');
     const clearBtn = tableEl.querySelector('[data-clear-selected]');
@@ -768,10 +782,16 @@ function setupTableTools(tableEl) {
     const filterRows = () => {
         if (!searchInput) return;
         const query = searchInput.value.trim().toLowerCase();
+        let visibleCount = 0;
         rows.forEach((row) => {
             const text = (row.getAttribute('data-row-text') || '').toLowerCase();
-            row.style.display = !query || text.includes(query) ? '' : 'none';
+            const isVisible = !query || text.includes(query);
+            row.style.display = isVisible ? '' : 'none';
+            if (isVisible) visibleCount += 1;
         });
+        if (emptySearchRow) {
+            emptySearchRow.hidden = !query || visibleCount > 0;
+        }
     };
 
     if (searchInput) {
@@ -837,13 +857,20 @@ function setupAddressFilters() {
         const poolId = poolFilter?.value || '';
         tables.forEach((tableEl) => {
             const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+            const emptySearchRow = tableEl.querySelector('[data-empty-search-row]');
+            let visibleCount = 0;
             rows.forEach((row) => {
                 const text = (row.getAttribute('data-row-text') || '').toLowerCase();
                 const rowPool = row.getAttribute('data-pool-id') || '';
                 const matchesText = !query || text.includes(query);
                 const matchesPool = !poolId || rowPool === poolId;
-                row.style.display = matchesText && matchesPool ? '' : 'none';
+                const isVisible = matchesText && matchesPool;
+                row.style.display = isVisible ? '' : 'none';
+                if (isVisible) visibleCount += 1;
             });
+            if (emptySearchRow) {
+                emptySearchRow.hidden = (!query && !poolId) || visibleCount > 0;
+            }
         });
     };
 

@@ -10,6 +10,17 @@ import os
 # circuit breaker keeps subsequent lookups cheap.
 os.environ["REDIS_URL"] = "redis://127.0.0.1:9/0"
 os.environ["SESSION_REDIS_URL"] = "redis://127.0.0.1:9/0"
+os.environ["CELERY_BROKER_URL"] = "memory://"
+os.environ["CELERY_RESULT_BACKEND"] = "cache+memory://"
+os.environ["CELERY_TASK_ALWAYS_EAGER"] = "false"
+os.environ["GLITCHTIP_ENABLED"] = "false"
+os.environ["GLITCHTIP_DSN"] = ""
+os.environ["OTEL_ENABLED"] = "false"
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
+os.environ["OPENBAO_ADDR"] = ""
+os.environ["OPENBAO_TOKEN"] = ""
+os.environ["VAULT_ADDR"] = ""
+os.environ["VAULT_TOKEN"] = ""
 # Keep import-time globals such as Celery scheduler configuration from touching
 # the deployment database URL loaded from .env. Tests that need a real database
 # use TEST_DATABASE_URL or explicit SQLite engines below.
@@ -22,6 +33,7 @@ os.environ["DATABASE_URL"] = (
 # unless a test explicitly points it at a fixture database.
 os.environ["RADIUS_DB_DSN"] = ""
 os.environ["RADIUS_DB_HOST"] = ""
+os.environ["RADIUS_SYNC_DB_URL"] = ""
 
 import sqlite3
 import uuid
@@ -60,6 +72,14 @@ def _patch_jose_datetime(monkeypatch):
     import jose.jwt as jose_jwt
 
     monkeypatch.setattr(jose_jwt, "datetime", _JoseDateTimeProxy(), raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _disable_bundled_external_radius(monkeypatch):
+    """Do not let unit tests fall back to the deployment FreeRADIUS database."""
+    from app.services import radius as radius_service
+
+    monkeypatch.setattr(radius_service, "_bundled_external_db_config", lambda: None)
 
 
 # Register UUID adapter for SQLite - store as string

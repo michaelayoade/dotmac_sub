@@ -1495,20 +1495,30 @@ def build_ip_management_data(
     )
 
     # Pagination for addresses
+    page = max(int(page or 1), 1)
     offset = (page - 1) * address_limit
-    search_term = search.strip() if search else None
+    search_term = search.strip().lower() if search else None
     pool_id = pool_filter if pool_filter else None
 
-    # Get total counts using SQL
+    ipv4_filters = [IPv4Address.is_reserved == False]
+    ipv6_filters = [IPv6Address.is_reserved == False]
+    if pool_id:
+        ipv4_filters.append(IPv4Address.pool_id == pool_id)
+        ipv6_filters.append(IPv6Address.pool_id == pool_id)
+    if search_term:
+        ipv4_filters.append(IPv4Address.address.ilike(f"%{search_term}%"))
+        ipv6_filters.append(IPv6Address.address.ilike(f"%{search_term}%"))
+
+    # Get total counts using the same address filters that drive pagination.
     total_ipv4 = (
         db.execute(
-            select(func.count(IPv4Address.id)).where(IPv4Address.is_reserved == False)
+            select(func.count(IPv4Address.id)).where(*ipv4_filters)
         ).scalar()
         or 0
     )
     total_ipv6 = (
         db.execute(
-            select(func.count(IPv6Address.id)).where(IPv6Address.is_reserved == False)
+            select(func.count(IPv6Address.id)).where(*ipv6_filters)
         ).scalar()
         or 0
     )
@@ -1521,12 +1531,11 @@ def build_ip_management_data(
             selectinload(IPv4Address.pool),
             selectinload(IPv4Address.assignment),
         )
+        .where(*ipv4_filters)
         .order_by(IPv4Address.address.asc())
         .limit(address_limit)
         .offset(offset)
     )
-    if pool_id:
-        ipv4_q = ipv4_q.where(IPv4Address.pool_id == pool_id)
     ipv4_addresses = list(db.scalars(ipv4_q).all())
     _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
 
@@ -1536,22 +1545,12 @@ def build_ip_management_data(
             selectinload(IPv6Address.pool),
             selectinload(IPv6Address.assignment),
         )
+        .where(*ipv6_filters)
         .order_by(IPv6Address.address.asc())
         .limit(address_limit)
         .offset(offset)
     )
-    if pool_id:
-        ipv6_q = ipv6_q.where(IPv6Address.pool_id == pool_id)
     ipv6_addresses = list(db.scalars(ipv6_q).all())
-
-    # If there's a search term, filter in-memory for better UX (server-side search)
-    if search_term:
-        ipv4_addresses = [
-            addr for addr in ipv4_addresses if search_term in str(addr.address).lower()
-        ]
-        ipv6_addresses = [
-            addr for addr in ipv6_addresses if search_term in str(addr.address).lower()
-        ]
 
     total_addresses = total_ipv4 + total_ipv6
     total_pages = max(1, (total_addresses + address_limit - 1) // address_limit)

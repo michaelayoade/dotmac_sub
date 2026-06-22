@@ -40,6 +40,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.customer_identifiers import account_number_from_subscriber_number
 from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
@@ -398,17 +399,11 @@ class Subscribers(ListResponseMixin):
                 if generated:
                     subscriber.subscriber_number = generated
             if not subscriber.account_number:
-                generated_account = numbering.generate_number(
-                    db,
-                    SettingDomain.subscriber,
-                    "account_number",
-                    "account_number_enabled",
-                    "account_number_prefix",
-                    "account_number_padding",
-                    "account_number_start",
+                derived_account = account_number_from_subscriber_number(
+                    db, subscriber.subscriber_number
                 )
-                if generated_account:
-                    subscriber.account_number = generated_account
+                if derived_account:
+                    subscriber.account_number = derived_account
             _apply_billing_defaults(db, subscriber)
             rebuild_identity_index_for_subscriber(db, subscriber.id)
             db.commit()
@@ -437,17 +432,11 @@ class Subscribers(ListResponseMixin):
             if generated:
                 data["subscriber_number"] = generated
         if not data.get("account_number"):
-            generated_account = numbering.generate_number(
-                db,
-                SettingDomain.subscriber,
-                "account_number",
-                "account_number_enabled",
-                "account_number_prefix",
-                "account_number_padding",
-                "account_number_start",
+            derived_account = account_number_from_subscriber_number(
+                db, data.get("subscriber_number")
             )
-            if generated_account:
-                data["account_number"] = generated_account
+            if derived_account:
+                data["account_number"] = derived_account
         subscriber = Subscriber(**data)
         if category is not None:
             subscriber.category = (
@@ -1151,17 +1140,11 @@ class Accounts(ListResponseMixin):
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
         if not subscriber.account_number:
-            generated = numbering.generate_number(
-                db,
-                SettingDomain.subscriber,
-                "account_number",
-                "account_number_enabled",
-                "account_number_prefix",
-                "account_number_padding",
-                "account_number_start",
+            derived_account = account_number_from_subscriber_number(
+                db, subscriber.subscriber_number
             )
-            if generated:
-                subscriber.account_number = generated
+            if derived_account:
+                subscriber.account_number = derived_account
                 db.commit()
                 db.refresh(subscriber)
         return subscriber

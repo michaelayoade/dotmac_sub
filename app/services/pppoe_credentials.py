@@ -1,6 +1,6 @@
 """PPPoE credential auto-generation service.
 
-Generates PPPoE usernames from a DocumentSequence and random passwords
+Generates PPPoE usernames from the subscriber canonical id and random passwords
 when a subscription is activated and no active AccessCredential exists.
 This always runs on subscription activation — PPPoE credentials are
 mandatory for all subscribers.
@@ -16,14 +16,16 @@ from typing import TYPE_CHECKING
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.services import numbering, settings_spec
+from app.services import settings_spec
 from app.services.credential_crypto import encrypt_credential
+from app.services.customer_identifiers import pppoe_username_from_subscriber_number
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# Deprecated: retained for import/backward compatibility.
 SEQUENCE_KEY = "pppoe_username"
 
 
@@ -83,17 +85,13 @@ def _resolve_radius_setting(db: Session, key: str) -> object | None:
     return value
 
 
-def _generate_pppoe_username(db: Session) -> str | None:
-    prefix_value = _resolve_radius_setting(db, "pppoe_username_prefix")
-    padding_value = _resolve_radius_setting(db, "pppoe_username_padding")
-    start_value = _resolve_radius_setting(db, "pppoe_username_start")
-    return numbering.generate_number_with_config(
-        db,
-        SEQUENCE_KEY,
-        prefix=prefix_value if isinstance(prefix_value, str) else None,
-        padding=_resolve_int_setting(padding_value, 5),
-        start_value=_resolve_int_setting(start_value, 1),
-    )
+def _generate_pppoe_username(db: Session, subscriber_id: str) -> str | None:
+    from app.models.subscriber import Subscriber
+
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        return None
+    return pppoe_username_from_subscriber_number(db, subscriber.subscriber_number)
 
 
 def auto_generate_pppoe_credential(
@@ -104,8 +102,8 @@ def auto_generate_pppoe_credential(
 ) -> AccessCredential | None:
     """Auto-generate a PPPoE AccessCredential if none exists.
 
-    If the subscriber has no active AccessCredential, generates one with a
-    sequential username (prefix + zero-padded sequence) and a random
+    If the subscriber has no active AccessCredential, generates one with the
+    canonical PPPoE username (``10`` + subscriber canonical id) and a random
     encrypted password.
 
     Args:
@@ -133,11 +131,10 @@ def auto_generate_pppoe_credential(
         )
         return None
 
-    # Generate username via DocumentSequence
-    username = _generate_pppoe_username(db)
+    username = _generate_pppoe_username(db, subscriber_id)
     if not username:
         logger.warning(
-            "PPPoE username generation returned None for subscriber %s",
+            "PPPoE username derivation returned None for subscriber %s",
             subscriber_id,
         )
         return None
@@ -150,48 +147,35 @@ def auto_generate_pppoe_credential(
     plain_password = _generate_random_password(password_length)
     encrypted_password = encrypt_credential(plain_password)
 
-    # Retry loop: handle username collisions from migrated data
-    max_retries = 5
-    for attempt in range(max_retries):
+    credential = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.username == username)
+        .first()
+    )
+    if credential is not None and str(credential.subscriber_id) != str(subscriber_id):
+        raise ValueError(
+            f"Derived PPPoE username {username} is already used by another subscriber."
+        )
+
+    if credential is None:
         credential = AccessCredential(
             subscriber_id=subscriber_id,
             username=username,
-            secret_hash=encrypted_password,
             is_active=True,
-            radius_profile_id=radius_profile_id,
             connection_type=ConnectionType.pppoe,
         )
         db.add(credential)
-        try:
-            db.flush()
-            logger.info(
-                "Auto-generated PPPoE credential %s for subscriber %s",
-                username,
-                subscriber_id,
-            )
-            return credential
-        except Exception as exc:
-            db.rollback()
-            if "unique" not in str(exc).lower() and "duplicate" not in str(exc).lower():
-                raise
-            logger.warning(
-                "PPPoE username %s already exists (attempt %d/%d), generating next",
-                username,
-                attempt + 1,
-                max_retries,
-            )
-            # Generate a new username for the next attempt
-            username = _generate_pppoe_username(db)
-            if not username:
-                logger.error(
-                    "PPPoE username generation exhausted for subscriber %s",
-                    subscriber_id,
-                )
-                return None
 
-    logger.error(
-        "Failed to generate unique PPPoE username after %d attempts for subscriber %s",
-        max_retries,
+    credential.secret_hash = encrypted_password
+    credential.is_active = True
+    credential.connection_type = ConnectionType.pppoe
+    if radius_profile_id:
+        credential.radius_profile_id = radius_profile_id
+
+    db.flush()
+    logger.info(
+        "Auto-generated PPPoE credential %s for subscriber %s",
+        username,
         subscriber_id,
     )
-    return None
+    return credential

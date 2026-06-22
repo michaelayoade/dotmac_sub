@@ -42,6 +42,7 @@ def ip_management(
     page: int = 1,
     search: str | None = None,
     pool_filter: str | None = None,
+    tab: str | None = None,
     notice: str | None = None,
     warning: str | None = None,
 ):
@@ -61,6 +62,7 @@ def ip_management(
             **state,
             "notice": notice,
             "warning": warning,
+            "tab": tab if tab in {"overview", "addresses", "assignments", "calculator"} else "overview",
             "activities": web_network_ip_actions_service.activity_for_types(
                 db,
                 ["ip_pool", "ip_block"],
