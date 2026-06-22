@@ -1,0 +1,44 @@
+# Keep the build context (and baked image) lean and free of secrets/non-runtime data.
+# The Dockerfile does `COPY . .`, so anything not excluded here is baked in.
+
+# VCS / tooling
+.git
+.gitignore
+.github
+.claude
+.vscode
+.idea
+
+# Secrets & local env (provided at runtime via compose env_file, never baked)
+.env
+.env.*
+!.env.example
+
+# Large / non-backend-runtime trees
+mobile
+node_modules
+db_snapshots
+*.dump
+*.sql.gz
+
+# Python caches & build artifacts
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+coverage.xml
+dist
+build
+*.egg-info
+
+# Frontend build caches (compiled assets under static/ are still baked)
+.parcel-cache
+
+# Test / report artifacts
+playwright-report
+test-results
