@@ -190,59 +190,46 @@ class TestCollectionsTask:
 
                     mock_session.close.assert_called_once()
 
-    def test_run_prepaid_enforcement_success(self):
-        """Test successful prepaid enforcement run returns the real metrics."""
-        from datetime import UTC, datetime
+    def test_run_prepaid_enforcement_is_retired_noop(self):
+        """Prepaid enforcement is retired: the task never suspends and never
+        invokes the enforcement service — due-date dunning is the sole enforcer."""
+        with patch(
+            "app.tasks.collections.collections_service.prepaid_enforcement.run"
+        ) as mock_run:
+            from app.tasks.collections import run_prepaid_enforcement
 
-        from app.schemas.collections import PrepaidEnforcementRunResponse
+            result = run_prepaid_enforcement()
 
+            mock_run.assert_not_called()
+            assert result == {"skipped": "prepaid_enforcement_retired"}
+
+    def test_run_retired_lock_reconcile(self):
+        """The reconcile task resolves retired-reason locks and returns the summary."""
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch("app.tasks.collections.billing_enabled", return_value=True):
-                with patch(
-                    "app.tasks.collections.collections_service.prepaid_enforcement.run"
-                ) as mock_run:
-                    mock_run.return_value = PrepaidEnforcementRunResponse(
-                        run_at=datetime.now(UTC),
-                        accounts_scanned=9,
-                        accounts_warned=4,
-                        accounts_suspended=2,
-                        accounts_deactivated=1,
-                        skipped=2,
-                    )
-                    from app.tasks.collections import run_prepaid_enforcement
+            with patch(
+                "app.tasks.collections.collections_service."
+                "reconcile_retired_enforcement_locks",
+                return_value={
+                    "resolved": 5,
+                    "restored": 4,
+                    "still_locked": 1,
+                    "errors": 0,
+                },
+            ) as mock_reconcile:
+                from app.tasks.collections import run_retired_lock_reconcile
 
-                    result = run_prepaid_enforcement()
+                result = run_retired_lock_reconcile()
 
-                    mock_run.assert_called_once()
-                    args = mock_run.call_args
-                    assert args[0][0] == mock_session
-                    mock_session.close.assert_called_once()
-                    assert result == {
-                        "accounts_scanned": 9,
-                        "accounts_warned": 4,
-                        "accounts_suspended": 2,
-                        "accounts_deactivated": 1,
-                        "skipped": 2,
-                    }
-
-    def test_run_prepaid_enforcement_exception_closes_session(self):
-        """Test prepaid enforcement exception still closes session."""
-        mock_session = MagicMock()
-
-        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch("app.tasks.collections.billing_enabled", return_value=True):
-                with patch(
-                    "app.tasks.collections.collections_service.prepaid_enforcement.run",
-                    side_effect=Exception("Prepaid error"),
-                ):
-                    from app.tasks.collections import run_prepaid_enforcement
-
-                    with pytest.raises(Exception, match="Prepaid error"):
-                        run_prepaid_enforcement()
-
-                    mock_session.close.assert_called_once()
+                mock_reconcile.assert_called_once_with(mock_session)
+                mock_session.close.assert_called_once()
+                assert result == {
+                    "resolved": 5,
+                    "restored": 4,
+                    "still_locked": 1,
+                    "errors": 0,
+                }
 
 
 class TestBillingMasterSwitchGates:
