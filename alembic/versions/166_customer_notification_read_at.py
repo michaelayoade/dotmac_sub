@@ -1,15 +1,17 @@
 """Add read tracking for customer notifications.
 
-Revision ID: 151_customer_notification_read_at
-Revises: 152_subscriber_additional_routes
+Revision ID: 166_customer_notification_read_at
+Revises: 165_payment_method_reseller_owner
 Create Date: 2026-06-15
 
-Re-parented onto 152 (main's head) instead of 150: this migration was orphaned
-when prod moved to a main-current branch, and 152 also chains off 150, so
-keeping 151 on 150 would create two alembic heads. Re-chaining it linearly
-avoids the multi-head deploy stall. The add_column ops are guarded by
-``_has_column``, so this is a clean no-op against the prod DB where the columns
-already exist.
+Re-parented onto 165 (main's head) instead of its original parent 150: this
+migration was orphaned when prod moved to a main-current branch, and the head
+had since advanced to 165, so keeping it on 150 would create two alembic heads.
+Re-chaining it linearly onto 165 avoids the multi-head deploy stall. It was
+also renumbered from 151 to 166 so the filename order matches its real position
+in the chain (it now runs *after* 165, not before 152). The add_column ops are
+guarded by ``_has_column``, so this is a clean no-op against the prod DB where
+the columns already exist.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision = "151_customer_notification_read_at"
+revision = "166_customer_notification_read_at"
 down_revision = "165_payment_method_reseller_owner"
 branch_labels = None
 depends_on = None
