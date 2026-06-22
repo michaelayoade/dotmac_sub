@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
@@ -93,6 +94,182 @@ Future<bool> runResellerPay(
   }
 }
 
+/// Bottom sheet to record a reseller bulk bank transfer, optionally net of
+/// withholding tax. The account is credited the gross on staff verification and
+/// the withheld tax is tracked as a receivable. Returns true on submit.
+class _ResellerTransferSheet extends ConsumerStatefulWidget {
+  const _ResellerTransferSheet();
+
+  @override
+  ConsumerState<_ResellerTransferSheet> createState() =>
+      _ResellerTransferSheetState();
+}
+
+class _ResellerTransferSheetState
+    extends ConsumerState<_ResellerTransferSheet> {
+  final _net = TextEditingController();
+  final _rate = TextEditingController();
+  final _bank = TextEditingController();
+  final _reference = TextEditingController();
+  XFile? _file;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _net.dispose();
+    _rate.dispose();
+    _bank.dispose();
+    _reference.dispose();
+    super.dispose();
+  }
+
+  double get _netValue => double.tryParse(_net.text.trim()) ?? 0;
+  double get _rateValue => double.tryParse(_rate.text.trim()) ?? 0;
+  double get _gross => (_rateValue > 0 && _rateValue < 100)
+      ? _netValue / (1 - _rateValue / 100)
+      : _netValue;
+  double get _wht => _gross - _netValue;
+
+  Future<void> _pick() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (picked != null) setState(() => _file = picked);
+  }
+
+  Future<void> _submit() async {
+    if (_netValue <= 0 || _file == null) {
+      setState(() =>
+          _error = 'Enter the amount transferred and choose a receipt image.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ref.read(resellerRepositoryProvider).submitConsolidatedProof(
+            amount: _net.text.trim(),
+            whtRate: _rate.text.trim(),
+            bankName: _bank.text.trim(),
+            reference: _reference.text.trim(),
+            filePath: _file!.path,
+            fileName: _file!.name,
+          );
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (_) {
+      setState(() {
+        _busy = false;
+        _error = 'Could not submit — check the details and try again.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Pay by bank transfer', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Transfer to our account, then upload the receipt. We verify it '
+              'and credit your balance.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _net,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: 'Amount transferred (NGN) *',
+                helperText: 'Net cash you sent (after WHT)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _rate,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: 'Withholding tax %',
+                helperText: 'Leave blank if none',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_netValue > 0) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Credited (gross): ${Fmt.money(_gross, 'NGN')}'
+                '${_wht > 0 ? '  ·  WHT receivable: ${Fmt.money(_wht, 'NGN')}' : ''}',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.primary),
+              ),
+            ],
+            const SizedBox(height: 8),
+            TextField(
+              controller: _bank,
+              decoration: const InputDecoration(
+                labelText: 'From bank (optional)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _reference,
+              decoration: const InputDecoration(
+                labelText: 'Transfer reference (optional)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _pick,
+              icon: const Icon(Icons.photo_library_outlined, size: 18),
+              label: Text(_file == null ? 'Choose receipt image *' : _file!.name),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: _busy ? null : () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _busy ? null : _submit,
+                  child: Text(_busy ? 'Uploading…' : 'Submit receipt'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Reseller consolidated billing: outstanding/unallocated totals, recent
 /// payments, and a pay flow through the shared gateway webview
 /// (GET /reseller/billing + pay intent/verify).
@@ -113,6 +290,22 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
       await runResellerPay(context, ref, prefillAmount: prefillAmount);
     } finally {
       if (mounted) setState(() => _paying = false);
+    }
+  }
+
+  Future<void> _payByTransfer() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const _ResellerTransferSheet(),
+    );
+    if (ok == true) {
+      ref.invalidate(resellerBillingProvider);
+      messenger.showSnackBar(const SnackBar(
+        content: Text(
+            'Receipt submitted — we will verify it and credit your account.'),
+      ));
     }
   }
 
@@ -226,6 +419,12 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                 icon: const Icon(Icons.payments_outlined, size: 18),
                 label:
                     Text(_paying ? 'Starting payment…' : 'Pay another amount'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _paying ? null : _payByTransfer,
+                icon: const Icon(Icons.account_balance_outlined, size: 18),
+                label: const Text('Pay by bank transfer'),
               ),
               const SizedBox(height: 16),
               Text('Activity', style: Theme.of(context).textTheme.titleSmall),

@@ -129,6 +129,66 @@ async def submit_account_payment_proof(
     )
 
 
+@router.post("/reseller/consolidated")
+async def submit_reseller_consolidated_proof(
+    amount: str = Form(...),
+    gross_amount: str | None = Form(default=None),
+    wht_rate: str | None = Form(default=None),
+    bank_name: str | None = Form(default=None),
+    reference: str | None = Form(default=None),
+    paid_at: str | None = Form(default=None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """A reseller uploads a bulk bank-transfer receipt for their consolidated
+    billing account, optionally net of withholding tax.
+
+    ``amount`` is the net cash transferred; pass ``gross_amount`` (billed value)
+    and/or ``wht_rate`` when tax was withheld at source.
+    """
+    from app.api.reseller import _reseller_id
+    from app.services import billing as billing_service
+    from app.services import payment_proofs
+
+    reseller_id = _reseller_id(db, principal)
+    ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    path = await payment_proofs.save_proof_file(file)
+    return payment_proofs.submit_proof(
+        db,
+        None,
+        submitted_by=principal.get("subscriber_id"),
+        amount=amount,
+        currency=ba.currency,
+        bank_name=bank_name,
+        reference=reference,
+        paid_at=_parse_dt(paid_at),
+        file_path=path,
+        billing_account_id=str(ba.id),
+        gross_amount=gross_amount,
+        wht_rate=wht_rate,
+    )
+
+
+@router.get("/reseller/consolidated")
+def reseller_consolidated_proofs(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """A reseller's own consolidated bank-transfer receipts."""
+    from app.api.reseller import _reseller_id
+    from app.services import billing as billing_service
+    from app.services import payment_proofs
+
+    reseller_id = _reseller_id(db, principal)
+    ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    return {
+        "items": payment_proofs.list_for_billing_account(db, str(ba.id), limit, offset)
+    }
+
+
 @router.get("/admin", dependencies=[Depends(require_permission("billing:read"))])
 def list_payment_proofs(
     status: str | None = "submitted",
