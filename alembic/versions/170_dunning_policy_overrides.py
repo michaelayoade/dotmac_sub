@@ -8,14 +8,14 @@ specific first): account -> reseller -> offer/offer_version -> general default
 Seeds the two general-default policies and wires them via collections settings:
   - prepaid:            suspend on day 0 (due-on-issue, pay-in-advance)
     -> default_prepaid_policy_set_id
-  - postpaid/recurring: notify d3, notify d14, suspend d30
+  - postpaid/recurring: notify d7, notify d30, suspend d60
     -> default_postpaid_policy_set_id
 
 All seed inserts are idempotent (fixed ids + WHERE NOT EXISTS / ON CONFLICT), so
 re-runs are no-ops. Adding two nullable FK columns is non-locking on Postgres.
 
-Revision ID: 169_dunning_policy_overrides
-Revises: 168_scheduled_task_crontab
+Revision ID: 170_dunning_policy_overrides
+Revises: 169_drop_splynx_sync_state_tables
 Create Date: 2026-06-22
 """
 
@@ -27,8 +27,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "169_dunning_policy_overrides"
-down_revision = "168_scheduled_task_crontab"
+revision = "170_dunning_policy_overrides"
+down_revision = "169_drop_splynx_sync_state_tables"
 branch_labels = None
 depends_on = None
 
@@ -47,23 +47,23 @@ _STEPS = [
     (
         "0d000000-0000-4000-8000-0000000d0201",
         POSTPAID_POLICY_ID,
-        3,
+        7,
         "notify",
         "Payment reminder.",
     ),
     (
         "0d000000-0000-4000-8000-0000000d0202",
         POSTPAID_POLICY_ID,
-        14,
+        30,
         "notify",
         "Final overdue warning.",
     ),
     (
         "0d000000-0000-4000-8000-0000000d0203",
         POSTPAID_POLICY_ID,
-        30,
+        60,
         "suspend",
-        "Suspend at 30 days overdue.",
+        "Suspend at 60 days overdue.",
     ),
 ]
 
@@ -116,7 +116,7 @@ def upgrade() -> None:
         )
 
     _seed_policy(PREPAID_POLICY_ID, "Default — Prepaid (immediate suspend)")
-    _seed_policy(POSTPAID_POLICY_ID, "Default — Postpaid (suspend at 30 days)")
+    _seed_policy(POSTPAID_POLICY_ID, "Default — Postpaid (suspend at 60 days)")
 
     for step_id, policy_id, day_offset, action, note in _STEPS:
         op.execute(
