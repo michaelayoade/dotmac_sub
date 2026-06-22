@@ -16,7 +16,7 @@ window comparisons here use the ``scheduler.timezone`` setting (local TZ).
 
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -122,6 +122,49 @@ def within_send_window(db: Session, run_at: datetime) -> bool:
             local_run_at,
             start_time=time(hour, 0),
             end_time=time((hour + 1) % 24, 0),
+        )
+        is None
+    )
+
+
+def within_enforcement_window(db: Session, run_at: datetime | None = None) -> bool:
+    """Whether state-changing enforcement (suspend/block) is allowed now.
+
+    Gated by ``collections.enforcement_window_start`` / ``enforcement_window_end``
+    ("HH:MM", local ``scheduler.timezone``) plus
+    ``enforcement_skip_weekends`` / ``enforcement_skip_holidays``. Returns
+    ``True`` (no gate) when nothing is configured, so callers stay
+    backwards-compatible until an operator sets a window.
+    """
+    start_raw = settings_spec.resolve_value(
+        db, SettingDomain.collections, "enforcement_window_start"
+    )
+    end_raw = settings_spec.resolve_value(
+        db, SettingDomain.collections, "enforcement_window_end"
+    )
+    start = parse_time(str(start_raw) if start_raw is not None else None)
+    end = parse_time(str(end_raw) if end_raw is not None else None)
+    skip_weekends = bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "enforcement_skip_weekends"
+        )
+    )
+    skip_holidays = (
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "enforcement_skip_holidays"
+        )
+        or []
+    )
+    if start is None and end is None and not skip_weekends and not skip_holidays:
+        return True
+    local_run_at = to_local(db, run_at or datetime.now(UTC))
+    return (
+        window_block_reason(
+            local_run_at,
+            start_time=start,
+            end_time=end,
+            skip_weekends=skip_weekends,
+            skip_holidays=skip_holidays if isinstance(skip_holidays, list) else None,
         )
         is None
     )
