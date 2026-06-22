@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/addon.dart';
 import '../models/contact.dart';
 import '../models/invoice.dart';
+import '../models/service_status.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
 import '../models/payment_method.dart';
@@ -190,6 +191,15 @@ final autopayStatusProvider =
     FutureProvider.autoDispose<AutopayStatus>((ref) async {
   cacheFor(ref);
   return ref.watch(billingRepositoryProvider).autopayStatus();
+});
+
+/// Truthful account/service health (GET /me/service-status): balance, grace,
+/// deactivation, dunning. Drives the renew/top-up banner with the real cut date
+/// instead of guessing from a billing date.
+final serviceStatusProvider =
+    FutureProvider.autoDispose<ServiceStatus>((ref) async {
+  cacheFor(ref);
+  return ref.watch(catalogRepositoryProvider).serviceStatus();
 });
 
 final subscriptionsProvider =
