@@ -300,11 +300,18 @@ def _suspend_account(
     account_id: str,
     reason: EnforcementReason = EnforcementReason.overdue,
     source: str = "dunning",
+    only_billing_mode: BillingMode | None = None,
 ) -> bool:
-    """Suspend account via enforcement locks on all active subscriptions.
+    """Suspend account via enforcement locks on its active subscriptions.
 
     Delegates to ``account_lifecycle.suspend_subscription`` per subscription
     and lets ``compute_account_status`` derive the subscriber status.
+
+    ``only_billing_mode`` restricts which subscriptions are suspended. Prepaid
+    *balance* enforcement passes ``BillingMode.prepaid`` so it never cuts a
+    postpaid service on the same account (postpaid lapses only via dunning) —
+    mirrors the scoping already in ``_deactivate_prepaid_subscriptions``.
+    Dunning leaves it ``None`` to suspend the whole account on arrears.
 
     Returns True if any subscription was suspended, False otherwise.
     """
@@ -319,7 +326,7 @@ def _suspend_account(
         logger.info("Account %s is canceled, skipping suspension", account_id)
         return False
 
-    subscriptions = (
+    query = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account.id)
         .filter(
@@ -327,8 +334,10 @@ def _suspend_account(
                 [SubscriptionStatus.active, SubscriptionStatus.pending]
             )
         )
-        .all()
     )
+    if only_billing_mode is not None:
+        query = query.filter(Subscription.billing_mode == only_billing_mode)
+    subscriptions = query.all()
     suspended_count = 0
     for sub in subscriptions:
         try:
@@ -1774,6 +1783,9 @@ class PrepaidEnforcement(ListResponseMixin):
                     str(account_id),
                     reason=EnforcementReason.prepaid,
                     source="prepaid_enforcement",
+                    # Prepaid balance enforcement must only cut prepaid services;
+                    # a postpaid service on the same account lapses via dunning.
+                    only_billing_mode=BillingMode.prepaid,
                 )
             accounts_suspended += 1
 
