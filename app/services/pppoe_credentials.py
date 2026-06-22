@@ -191,7 +191,7 @@ def auto_generate_pppoe_credential(
     if radius_profile_id:
         # The column's GUID type coerces str/UUID; assign raw so a malformed
         # profile id doesn't turn into an activation-blocking ValueError here.
-        credential.radius_profile_id = radius_profile_id
+        credential.radius_profile_id = radius_profile_id  # type: ignore[assignment]
 
     db.flush()
     logger.info(

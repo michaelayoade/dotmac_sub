@@ -44,7 +44,6 @@ from collections import defaultdict
 from app.db import SessionLocal
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
 
-
 CATEGORIES = ("CONSISTENT", "BACKFILLABLE", "AMBIGUOUS", "NO_CREDENTIAL", "STALE")
 
 
@@ -124,14 +123,22 @@ def main() -> int:
             "NO_CREDENTIAL": "login empty, no active cred -> provisioning gap",
             "STALE": "login set but matches no active cred -> drift",
         }
-        for name in ("CONSISTENT", "BACKFILLABLE", "AMBIGUOUS", "STALE", "NO_CREDENTIAL"):
+        for name in (
+            "CONSISTENT",
+            "BACKFILLABLE",
+            "AMBIGUOUS",
+            "STALE",
+            "NO_CREDENTIAL",
+        ):
             print(f"{name:<14} {len(buckets[name]):>7}  {descriptions[name]}")
 
         for name in ("BACKFILLABLE", "STALE", "AMBIGUOUS", "NO_CREDENTIAL"):
             rows = buckets[name]
             if not rows:
                 continue
-            print(f"\n--- {name} (showing {min(args.sample, len(rows))} of {len(rows)}) ---")
+            print(
+                f"\n--- {name} (showing {min(args.sample, len(rows))} of {len(rows)}) ---"
+            )
             for row in rows[: args.sample]:
                 target = (
                     f"  -> {row['would_set_login_to']}"

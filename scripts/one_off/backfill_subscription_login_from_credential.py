@@ -68,8 +68,10 @@ def main() -> int:
             backfillable = backfillable[: args.limit]
 
         if not backfillable:
-            print("Nothing to backfill — no active subscription has an empty login "
-                  "with exactly one active credential.")
+            print(
+                "Nothing to backfill — no active subscription has an empty login "
+                "with exactly one active credential."
+            )
             return 0
 
         mode = "APPLY" if args.apply else "DRY-RUN"
@@ -100,8 +102,10 @@ def main() -> int:
             session.commit()
             print(f"\nApplied: {changed} updated, {skipped} skipped.")
         else:
-            print(f"\nDry-run: {changed} would be updated, {skipped} skipped. "
-                  f"Re-run with --apply to write.")
+            print(
+                f"\nDry-run: {changed} would be updated, {skipped} skipped. "
+                f"Re-run with --apply to write."
+            )
         return 0
     finally:
         session.close()
