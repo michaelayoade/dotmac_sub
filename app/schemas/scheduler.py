@@ -11,6 +11,7 @@ class ScheduledTaskBase(BaseModel):
     task_name: str = Field(min_length=1, max_length=200)
     schedule_type: ScheduleType = ScheduleType.interval
     interval_seconds: int = 3600
+    cron_expr: str | None = Field(default=None, max_length=120)
     args_json: list | None = None
     kwargs_json: dict | None = None
     enabled: bool = True
@@ -25,6 +26,7 @@ class ScheduledTaskUpdate(BaseModel):
     task_name: str | None = Field(default=None, min_length=1, max_length=200)
     schedule_type: ScheduleType | None = None
     interval_seconds: int | None = None
+    cron_expr: str | None = Field(default=None, max_length=120)
     args_json: list | None = None
     kwargs_json: dict | None = None
     enabled: bool | None = None
