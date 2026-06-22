@@ -628,6 +628,32 @@ def build_beat_schedule() -> dict:
             enabled=overdue_enabled,
             interval_seconds=overdue_interval,
         )
+        # Dedicated hourly billing-notifications runner. Default OFF: when
+        # enabled it owns the reminder/escalation emits and honours the
+        # configured send window (billing_notif_send_hour); the daily invoice
+        # cycle then skips them. See docs/designs/BILLING_ENFORCEMENT_WINDOW.md.
+        billing_notif_hourly_enabled = _effective_bool(
+            session,
+            SettingDomain.collections,
+            "billing_notifications_hourly_enabled",
+            "BILLING_NOTIFICATIONS_HOURLY_ENABLED",
+            False,
+        )
+        billing_notif_interval = _effective_int(
+            session,
+            SettingDomain.collections,
+            "billing_notifications_interval_seconds",
+            "BILLING_NOTIFICATIONS_INTERVAL_SECONDS",
+            3600,
+        )
+        billing_notif_interval = max(billing_notif_interval, 300)
+        _sync_scheduled_task(
+            session,
+            name="billing_notifications_runner",
+            task_name="app.tasks.billing.run_billing_notifications",
+            enabled=billing_notif_hourly_enabled,
+            interval_seconds=billing_notif_interval,
+        )
         dunning_enabled = _effective_bool(
             session,
             SettingDomain.collections,

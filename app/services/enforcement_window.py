@@ -95,3 +95,33 @@ def window_block_reason(
     if skip_holidays and local_run_at.date().isoformat() in skip_holidays:
         return "holiday"
     return None
+
+
+def within_send_window(db: Session, run_at: datetime) -> bool:
+    """Whether billing/dunning notifications may be sent at ``run_at``.
+
+    Gated by ``collections.billing_notif_send_hour`` (0-23) evaluated in
+    ``scheduler.timezone``: sends are allowed only during the
+    ``[send_hour, send_hour+1)`` local hour, so an hourly notifications runner
+    emits once per day at the configured hour. Returns ``True`` (no gate) when
+    the hour is unset or invalid — callers stay backwards-compatible until an
+    operator configures a send hour.
+    """
+    hour_value = settings_spec.resolve_value(
+        db, SettingDomain.collections, "billing_notif_send_hour"
+    )
+    try:
+        hour = int(str(hour_value))
+    except (TypeError, ValueError):
+        return True
+    if not (0 <= hour <= 23):
+        return True
+    local_run_at = to_local(db, run_at)
+    return (
+        window_block_reason(
+            local_run_at,
+            start_time=time(hour, 0),
+            end_time=time((hour + 1) % 24, 0),
+        )
+        is None
+    )
