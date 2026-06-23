@@ -28,6 +28,8 @@ from app.services.customer_identity_resolution import resolve_customer_identity
 logger = logging.getLogger(__name__)
 
 MAX_EXTENSION_DAYS = 30
+PREVIEW_SAMPLE_LIMIT = 50
+APPLY_BATCH_SIZE = 500
 # Postgres int4 ceiling: digit strings above this aren't splynx_customer_ids
 # (e.g. phone numbers) and would overflow the column comparison.
 _MAX_INT4 = 2_147_483_647
@@ -128,28 +130,23 @@ def resolve_subscriber_identifiers(
     return resolved
 
 
-def resolve_scope_subscriptions(
+def _scope_filters(
     db: Session,
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
     subscriber_ids: list[str] | None = None,
-) -> list[Subscription]:
-    """Active subscriptions in scope, with subscriber eagerly loaded."""
-    stmt = (
-        select(Subscription)
-        .options(joinedload(Subscription.subscriber))
-        .where(Subscription.status == SubscriptionStatus.active)
-    )
+) -> list:
+    filters = [Subscription.status == SubscriptionStatus.active]
     if scope_type == ServiceExtensionScope.nas_device:
         if not scope_id:
             raise HTTPException(status_code=400, detail="NAS device is required")
-        stmt = stmt.where(
+        filters.append(
             Subscription.provisioning_nas_device_id == coerce_uuid(scope_id)
         )
     elif scope_type == ServiceExtensionScope.pop_site:
         if not scope_id:
             raise HTTPException(status_code=400, detail="POP site is required")
-        stmt = stmt.where(
+        filters.append(
             Subscription.provisioning_nas_device.has(
                 NasDevice.pop_site_id == coerce_uuid(scope_id)
             )
@@ -160,8 +157,95 @@ def resolve_scope_subscriptions(
             raise HTTPException(
                 status_code=400, detail="At least one subscriber is required"
             )
-        stmt = stmt.where(Subscription.subscriber_id.in_(ids))
+        filters.append(Subscription.subscriber_id.in_(ids))
+    return filters
+
+
+def _scope_subscription_counts(
+    db: Session,
+    scope_type: ServiceExtensionScope,
+    scope_id: str | None = None,
+    subscriber_ids: list[str] | None = None,
+) -> tuple[int, int]:
+    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    total = db.scalar(select(func.count(Subscription.id)).where(*filters)) or 0
+    extendable = (
+        db.scalar(
+            select(func.count(Subscription.id)).where(
+                *filters, Subscription.next_billing_at.is_not(None)
+            )
+        )
+        or 0
+    )
+    return int(total), int(extendable)
+
+
+def _scope_subscription_sample(
+    db: Session,
+    scope_type: ServiceExtensionScope,
+    scope_id: str | None = None,
+    subscriber_ids: list[str] | None = None,
+    *,
+    limit: int = PREVIEW_SAMPLE_LIMIT,
+) -> list[Subscription]:
+    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    stmt = (
+        select(Subscription)
+        .options(joinedload(Subscription.subscriber))
+        .where(*filters)
+        .order_by(Subscription.created_at.desc(), Subscription.id)
+        .limit(limit)
+    )
     return list(db.scalars(stmt).all())
+
+
+def resolve_scope_subscriptions(
+    db: Session,
+    scope_type: ServiceExtensionScope,
+    scope_id: str | None = None,
+    subscriber_ids: list[str] | None = None,
+) -> list[Subscription]:
+    """Active subscriptions in scope, with subscriber eagerly loaded."""
+    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    stmt = (
+        select(Subscription)
+        .options(joinedload(Subscription.subscriber))
+        .where(*filters)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def _iter_scope_subscriptions(
+    db: Session,
+    scope_type: ServiceExtensionScope,
+    scope_id: str | None = None,
+    subscriber_ids: list[str] | None = None,
+    *,
+    batch_size: int = APPLY_BATCH_SIZE,
+):
+    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    offset = 0
+    while True:
+        ids = list(
+            db.scalars(
+                select(Subscription.id)
+                .where(*filters)
+                .order_by(Subscription.id)
+                .limit(batch_size)
+                .offset(offset)
+            ).all()
+        )
+        if not ids:
+            break
+        subscriptions = list(
+            db.scalars(
+                select(Subscription)
+                .where(Subscription.id.in_(ids))
+                .order_by(Subscription.id)
+            ).all()
+        )
+        yield from subscriptions
+        offset += len(ids)
 
 
 def _validated_days(days: int) -> int:
@@ -198,8 +282,9 @@ def create_extension(
         if scope_type == ServiceExtensionScope.subscribers
         else None
     )
-    # Validates scope inputs (raises on missing scope_id / empty list).
-    resolve_scope_subscriptions(db, scope_type, scope_id, resolved_subscriber_ids)
+    # Validates scope inputs (raises on missing scope_id / empty list) without
+    # materializing every active subscription for network-wide extensions.
+    _scope_subscription_counts(db, scope_type, scope_id, resolved_subscriber_ids)
 
     extension = ServiceExtension(
         reason=reason.strip(),
@@ -227,17 +312,25 @@ def get_extension(db: Session, extension_id: str) -> ServiceExtension:
 
 def preview_extension(db: Session, extension: ServiceExtension) -> dict:
     """Affected subscriptions as of now (recomputed at apply time too)."""
-    subscriptions = resolve_scope_subscriptions(
+    scope_id = str(extension.scope_id) if extension.scope_id else None
+    total_count, extendable_count = _scope_subscription_counts(
         db,
         extension.scope_type,
-        str(extension.scope_id) if extension.scope_id else None,
+        scope_id,
         extension.scope_subscriber_ids,
     )
-    extendable = [s for s in subscriptions if s.next_billing_at is not None]
+    sample = _scope_subscription_sample(
+        db,
+        extension.scope_type,
+        scope_id,
+        extension.scope_subscriber_ids,
+    )
     return {
-        "subscriptions": subscriptions,
-        "extendable_count": len(extendable),
-        "skipped_count": len(subscriptions) - len(extendable),
+        "subscriptions": sample,
+        "sample": sample,
+        "total_count": total_count,
+        "extendable_count": extendable_count,
+        "skipped_count": total_count - extendable_count,
     }
 
 
@@ -272,21 +365,23 @@ def apply_extension(
             status_code=409, detail="Extension has already been applied or canceled"
         )
 
-    subscriptions = resolve_scope_subscriptions(
-        db,
-        extension.scope_type,
-        str(extension.scope_id) if extension.scope_id else None,
-        extension.scope_subscriber_ids,
-    )
-
     now = datetime.now(UTC)
     delta = timedelta(days=extension.days)
     applied = 0
     skipped = 0
-    for subscription in subscriptions:
+    processed = 0
+    for subscription in _iter_scope_subscriptions(
+        db,
+        extension.scope_type,
+        str(extension.scope_id) if extension.scope_id else None,
+        extension.scope_subscriber_ids,
+    ):
         previous = subscription.next_billing_at
         if previous is None:
             skipped += 1
+            processed += 1
+            if processed % APPLY_BATCH_SIZE == 0:
+                db.flush()
             continue
         subscription.next_billing_at = previous + delta
         db.add(
@@ -313,6 +408,9 @@ def apply_extension(
             account_id=subscription.subscriber_id,
         )
         applied += 1
+        processed += 1
+        if processed % APPLY_BATCH_SIZE == 0:
+            db.flush()
 
     extension.status = ServiceExtensionStatus.applied
     extension.affected_count = applied

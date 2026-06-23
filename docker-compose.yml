@@ -10,7 +10,7 @@ services:
     image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_app
     restart: unless-stopped
-    mem_limit: 3072m
+    mem_limit: 5g
     mem_reservation: 512m
     cpus: 4.0
     pids_limit: 256

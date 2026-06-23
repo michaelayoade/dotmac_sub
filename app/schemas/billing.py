@@ -401,6 +401,7 @@ class BankTransferAccount(BaseModel):
     bank_name: str
     account_name: str
     account_number: str
+    sort_code: str | None = None
 
 
 class DirectBankTransferConfig(BaseModel):

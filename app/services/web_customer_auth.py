@@ -51,6 +51,18 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
         return default
 
 
+def _record_customer_local_login_failure(
+    db: Session, credential: UserCredential, *, now: datetime | None = None
+) -> None:
+    now = now or datetime.now(UTC)
+    credential.failed_login_attempts += 1
+    max_attempts = _setting_int(db, SettingDomain.auth, "customer_login_max_attempts", 5)
+    lockout_minutes = _setting_int(db, SettingDomain.auth, "customer_lockout_minutes", 15)
+    if credential.failed_login_attempts >= max_attempts:
+        credential.locked_until = now + timedelta(minutes=lockout_minutes)
+    db.commit()
+
+
 def _customer_mfa_context_token(
     db: Session,
     *,
@@ -271,6 +283,7 @@ def customer_login_submit(
         subscriber_id = None
         subscription_id = None
         authenticated_locally = False
+        local_password_failed = False
 
         # Case-insensitive: usernames are email addresses (the invite flow
         # stores the subscriber email verbatim, which may be mixed-case).
@@ -287,35 +300,28 @@ def customer_login_submit(
             if local_credential.locked_until and local_credential.locked_until > now:
                 raise ValueError("Account locked. Please try again later.")
             if not verify_password(password, local_credential.password_hash):
-                local_credential.failed_login_attempts += 1
-                max_attempts = _setting_int(
-                    db, SettingDomain.auth, "customer_login_max_attempts", 5
-                )
-                lockout_minutes = _setting_int(
-                    db, SettingDomain.auth, "customer_lockout_minutes", 15
-                )
-                if local_credential.failed_login_attempts >= max_attempts:
-                    local_credential.locked_until = now + timedelta(
-                        minutes=lockout_minutes
-                    )
+                local_password_failed = True
+            else:
+                if local_credential.must_change_password:
+                    raise ValueError("Password reset required. Please contact support.")
+
+                local_credential.failed_login_attempts = 0
+                local_credential.locked_until = None
+                local_credential.last_login_at = now
                 db.commit()
-                raise ValueError("Invalid username or password")
+                authenticated_locally = True
 
-            if local_credential.must_change_password:
-                raise ValueError("Password reset required. Please contact support.")
-
-            local_credential.failed_login_attempts = 0
-            local_credential.locked_until = None
-            local_credential.last_login_at = now
-            db.commit()
-            authenticated_locally = True
-
-            subscriber = db.get(Subscriber, local_credential.subscriber_id)
-            if subscriber:
-                subscriber_id = subscriber.id
-                account_id = subscriber.id
+                subscriber = db.get(Subscriber, local_credential.subscriber_id)
+                if subscriber:
+                    subscriber_id = subscriber.id
+                    account_id = subscriber.id
 
         if not authenticated_locally:
+            def raise_invalid_login() -> None:
+                if local_credential and local_password_failed:
+                    _record_customer_local_login_failure(db, local_credential)
+                raise ValueError("Invalid username or password")
+
             # The RADIUS/PPPoE path has no per-credential lockout columns, so
             # throttle total attempts per username instead (in-memory,
             # per-worker — a backstop against online brute force, not a
@@ -401,9 +407,9 @@ def customer_login_submit(
                             normalized_username,
                         )
                     else:
-                        raise ValueError("Invalid username or password")
+                        raise_invalid_login()
                 else:
-                    raise ValueError("Invalid username or password")
+                    raise_invalid_login()
 
         if not account_id or not subscriber_id:
             raise ValueError("Customer account not found. Please contact support.")
