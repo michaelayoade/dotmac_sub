@@ -29,6 +29,7 @@ from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import email as email_service
+from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import numbering
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import (
@@ -786,6 +787,9 @@ def load_invoice_detail_data(
         "activities": build_invoice_activities(db, invoice_id=invoice_id),
         "pdf_export": pdf_export,
         "is_proforma": is_proforma_invoice(invoice),
+        "invoice_bank_details": invoice_bank_details_service.get_invoice_bank_details(
+            db
+        ),
     }
 
 

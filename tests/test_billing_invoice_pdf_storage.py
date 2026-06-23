@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -12,6 +13,8 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as pdf_service
+from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import web_system_config as web_system_config_service
 from app.services.file_storage import file_uploads
 from app.services.object_storage import StreamResult
 
@@ -259,6 +262,111 @@ def test_render_invoice_html_includes_branding_and_company_info(
     assert "data:image/png;base64,ZmFrZS1sb2dv" in html
     assert "--green-900" in html
     assert "--red-700" in html
+    assert "background: var(--green-900)" in html
+    assert "customer-name" in html
+    assert "margin: 42px 0 0" in html
+    assert "billed-name" in html
+    assert "text-overflow: ellipsis" in html
+    assert "company-name" not in html
+    assert "company-copy" not in html
+
+
+def test_direct_bank_transfer_config_preserves_sort_code(db_session):
+    web_system_config_service.save_direct_bank_transfer_config(
+        db_session,
+        {
+            "direct_bank_transfer_enabled": "true",
+            "direct_bank_transfer_instructions": "Use invoice number as reference.",
+            "account_id": ["account-1"],
+            "account_enabled": ["account-1"],
+            "account_bank_name": ["Dotmac Bank"],
+            "account_account_name": ["Dotmac Technologies Ltd"],
+            "account_account_number": ["0123456789"],
+            "account_sort_code": ["12-34-56"],
+        },
+    )
+
+    context = web_system_config_service.get_direct_bank_transfer_context(db_session)
+
+    account = context["direct_bank_transfer_accounts"][0]
+    assert account["sort_code"] == "12-34-56"
+    assert (
+        context["direct_bank_transfer"]["direct_bank_transfer_sort_code"]
+        == "12-34-56"
+    )
+
+
+def test_invoice_detail_context_includes_bank_details(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="direct_bank_transfer_accounts",
+            value_text=json.dumps(
+                [
+                    {
+                        "id": "invoice-bank",
+                        "enabled": "true",
+                        "bank_name": "Dotmac Bank",
+                        "account_name": "Dotmac Technologies Ltd",
+                        "account_number": "0123456789",
+                        "sort_code": "12-34-56",
+                    }
+                ]
+            ),
+            value_type=SettingValueType.string,
+        )
+    )
+    db_session.commit()
+
+    detail = web_billing_invoices_service.load_invoice_detail_data(
+        db_session,
+        invoice_id=str(invoice.id),
+    )
+
+    assert detail is not None
+    assert detail["invoice_bank_details"] == {
+        "bank_name": "Dotmac Bank",
+        "account_name": "Dotmac Technologies Ltd",
+        "account_number": "0123456789",
+        "sort_code": "12-34-56",
+    }
+
+
+def test_render_invoice_outputs_bank_details(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="direct_bank_transfer_accounts",
+            value_text=json.dumps(
+                [
+                    {
+                        "id": "invoice-bank",
+                        "enabled": "true",
+                        "bank_name": "Dotmac Bank",
+                        "account_name": "Dotmac Technologies Ltd",
+                        "account_number": "0123456789",
+                        "sort_code": "12-34-56",
+                    }
+                ]
+            ),
+            value_type=SettingValueType.string,
+        )
+    )
+    db_session.commit()
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+    text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
+
+    assert "Bank Details" in html
+    assert "Dotmac Bank" in html
+    assert "Dotmac Technologies Ltd" in html
+    assert "0123456789" in html
+    assert "12-34-56" in html
+    assert "Bank Details:" in text_lines
+    assert "Bank Name: Dotmac Bank" in text_lines
+    assert "Sort Code: 12-34-56" in text_lines
 
 
 def _add_lines(db_session, invoice, count):

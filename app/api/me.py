@@ -609,6 +609,7 @@ def my_topup_page(
             bank_name=acct["bank_name"],
             account_name=acct["account_name"],
             account_number=acct["account_number"],
+            sort_code=acct.get("sort_code") or None,
         )
         for acct in customer_payments.enabled_direct_bank_transfer_accounts(db)
     ]

@@ -143,6 +143,7 @@ def direct_bank_transfer_settings(db: Session) -> dict[str, str]:
         "direct_bank_transfer_bank_name",
         "direct_bank_transfer_account_name",
         "direct_bank_transfer_account_number",
+        "direct_bank_transfer_sort_code",
         "direct_bank_transfer_instructions",
         "direct_bank_transfer_accounts",
     ]
@@ -185,6 +186,7 @@ def direct_bank_transfer_accounts(
                     "bank_name": str(item.get("bank_name") or "").strip(),
                     "account_name": str(item.get("account_name") or "").strip(),
                     "account_number": str(item.get("account_number") or "").strip(),
+                    "sort_code": str(item.get("sort_code") or "").strip(),
                 }
                 if (
                     account["bank_name"]
@@ -198,6 +200,7 @@ def direct_bank_transfer_accounts(
     bank_name = (settings.get("direct_bank_transfer_bank_name") or "").strip()
     account_name = (settings.get("direct_bank_transfer_account_name") or "").strip()
     account_number = (settings.get("direct_bank_transfer_account_number") or "").strip()
+    sort_code = (settings.get("direct_bank_transfer_sort_code") or "").strip()
     if bank_name and account_name and account_number:
         accounts.append(
             {
@@ -206,6 +209,7 @@ def direct_bank_transfer_accounts(
                 "bank_name": bank_name,
                 "account_name": account_name,
                 "account_number": account_number,
+                "sort_code": sort_code,
             }
         )
     return accounts

@@ -39,7 +39,7 @@
         {% endcall %}
 
         {% call card("Add Account", color="teal") %}
-        <div class="grid gap-4 lg:grid-cols-[1fr,1fr,1fr,auto]">
+        <div class="grid gap-4 lg:grid-cols-[1fr,1fr,1fr,0.8fr,auto]">
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Bank Name</label>
                 <input type="text" id="new-account-bank-name" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
@@ -51,6 +51,10 @@
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Account Number</label>
                 <input type="text" id="new-account-account-number" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Sort Code</label>
+                <input type="text" id="new-account-sort-code" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
             </div>
             <div class="flex items-end">
                 <button type="button" id="add-direct-transfer-account" class="w-full rounded-lg bg-teal-600 px-5 py-3 text-sm font-medium text-white shadow-sm transition hover:bg-teal-700 lg:w-auto">Add Account</button>
@@ -67,6 +71,7 @@
                         <th class="px-4 py-3">Bank</th>
                         <th class="px-4 py-3">Account Name</th>
                         <th class="px-4 py-3">Account Number</th>
+                        <th class="px-4 py-3">Sort Code</th>
                         <th class="px-4 py-3 text-right">Action</th>
                     </tr>
                 </thead>
@@ -86,13 +91,16 @@
                         <td class="px-4 py-3 align-top">
                             <input type="text" name="account_account_number" value="{{ account.account_number }}" class="block w-full rounded-lg border-0 bg-slate-100 px-3 py-2 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-800 dark:text-white dark:ring-slate-700">
                         </td>
+                        <td class="px-4 py-3 align-top">
+                            <input type="text" name="account_sort_code" value="{{ account.sort_code or '' }}" class="block w-full rounded-lg border-0 bg-slate-100 px-3 py-2 font-mono text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-800 dark:text-white dark:ring-slate-700">
+                        </td>
                         <td class="px-4 py-3 text-right align-top">
                             <button type="button" data-remove-direct-transfer-account class="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-900/20">Remove</button>
                         </td>
                     </tr>
                     {% endfor %}
                     <tr id="direct-transfer-accounts-empty" {% if direct_bank_transfer_accounts %}hidden{% endif %}>
-                        <td colspan="5" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No bank accounts saved.</td>
+                        <td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No bank accounts saved.</td>
                     </tr>
                 </tbody>
             </table>
@@ -153,6 +161,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const bankNameInput = document.getElementById('new-account-bank-name');
     const accountNameInput = document.getElementById('new-account-account-name');
     const accountNumberInput = document.getElementById('new-account-account-number');
+    const sortCodeInput = document.getElementById('new-account-sort-code');
 
     function newAccountId() {
         if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -180,12 +189,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const bankCell = document.createElement('td');
         const nameCell = document.createElement('td');
         const numberCell = document.createElement('td');
+        const sortCodeCell = document.createElement('td');
         const actionCell = document.createElement('td');
 
         enabledCell.className = 'px-4 py-3 align-top';
         bankCell.className = 'px-4 py-3 align-top';
         nameCell.className = 'px-4 py-3 align-top';
         numberCell.className = 'px-4 py-3 align-top';
+        sortCodeCell.className = 'px-4 py-3 align-top';
         actionCell.className = 'px-4 py-3 text-right align-top';
 
         const idInput = document.createElement('input');
@@ -203,6 +214,7 @@ document.addEventListener('DOMContentLoaded', function () {
         bankCell.appendChild(createTextInput('account_bank_name', account.bankName, inputClass('text-sm')));
         nameCell.appendChild(createTextInput('account_account_name', account.accountName, inputClass('text-sm')));
         numberCell.appendChild(createTextInput('account_account_number', account.accountNumber, inputClass('font-mono text-sm')));
+        sortCodeCell.appendChild(createTextInput('account_sort_code', account.sortCode || '', inputClass('font-mono text-sm')));
 
         const removeButton = document.createElement('button');
         removeButton.type = 'button';
@@ -211,7 +223,7 @@ document.addEventListener('DOMContentLoaded', function () {
         removeButton.textContent = 'Remove';
         actionCell.appendChild(removeButton);
 
-        row.append(enabledCell, bankCell, nameCell, numberCell, actionCell);
+        row.append(enabledCell, bankCell, nameCell, numberCell, sortCodeCell, actionCell);
         table.insertBefore(row, emptyRow);
         emptyRow.hidden = true;
     }
@@ -221,6 +233,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const bankName = bankNameInput.value.trim();
             const accountName = accountNameInput.value.trim();
             const accountNumber = accountNumberInput.value.trim();
+            const sortCode = sortCodeInput.value.trim();
             if (!bankName || !accountName || !accountNumber) {
                 [bankNameInput, accountNameInput, accountNumberInput].find((input) => !input.value.trim())?.focus();
                 return;
@@ -230,10 +243,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 bankName,
                 accountName,
                 accountNumber,
+                sortCode,
             });
             bankNameInput.value = '';
             accountNameInput.value = '';
             accountNumberInput.value = '';
+            sortCodeInput.value = '';
             bankNameInput.focus();
         });
 
