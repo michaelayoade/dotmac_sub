@@ -5,6 +5,7 @@ from cryptography.fernet import Fernet
 from starlette.requests import Request
 
 from app.models.auth import AuthProvider, UserCredential
+from app.models.catalog import AccessCredential
 from app.services import customer_portal
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services.auth_flow import AuthFlow, hash_password
@@ -27,6 +28,7 @@ def _request(cookies: dict[str, str] | None = None) -> Request:
         "type": "http",
         "method": "GET",
         "path": "/portal",
+        "query_string": b"",
         "headers": headers,
     }
     request = Request(scope)
@@ -106,6 +108,86 @@ def test_customer_session_can_store_impersonation_marker(db_session, subscriber)
     assert session is not None
     assert session["is_impersonation"] is True
     assert session["return_to"] == "/reseller/accounts"
+
+
+def test_customer_login_allows_pppoe_when_local_credential_password_differs(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setattr(
+        web_customer_auth_service.radius_auth,
+        "authenticate",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
+    )
+    local_credential = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username="100024880",
+        password_hash=hash_password("portal-secret"),
+        is_active=True,
+        must_change_password=True,
+    )
+    access_credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="100024880",
+        secret_hash="plain:pppoe-secret",
+        is_active=True,
+    )
+    db_session.add_all([local_credential, access_credential])
+    db_session.commit()
+
+    response = web_customer_auth_service.customer_login_submit(
+        _request(),
+        db_session,
+        "100024880",
+        "pppoe-secret",
+        False,
+        "/portal/dashboard",
+    )
+
+    db_session.refresh(local_credential)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/portal/dashboard"
+    assert customer_portal.SESSION_COOKIE_NAME in _response_cookies(response)
+    assert local_credential.failed_login_attempts == 0
+
+
+def test_customer_login_records_local_failure_when_pppoe_fallback_fails(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setattr(
+        web_customer_auth_service.radius_auth,
+        "authenticate",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
+    )
+    local_credential = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username="100024881",
+        password_hash=hash_password("portal-secret"),
+        is_active=True,
+    )
+    access_credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="100024881",
+        secret_hash="plain:pppoe-secret",
+        is_active=True,
+    )
+    db_session.add_all([local_credential, access_credential])
+    db_session.commit()
+
+    response = web_customer_auth_service.customer_login_submit(
+        _request(),
+        db_session,
+        "100024881",
+        "wrong-secret",
+        False,
+        "/portal/dashboard",
+    )
+
+    db_session.refresh(local_credential)
+    assert response.status_code == 401
+    assert customer_portal.SESSION_COOKIE_NAME not in _response_cookies(response)
+    assert local_credential.failed_login_attempts == 1
 
 
 def test_customer_login_redirects_to_mfa_when_enabled(

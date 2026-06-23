@@ -35,7 +35,7 @@ class TestRadreplyAdditionalRoutes:
         }
         assert all(a[1] == "+=" for a in routes)
 
-    def test_blocked_subscriber_walled_garden_no_routes(self):
+    def test_blocked_subscriber_default_reject_no_routes(self):
         attrs = _radreply_attrs(
             _sub(),
             None,
@@ -44,7 +44,7 @@ class TestRadreplyAdditionalRoutes:
             additional_routes=[("203.0.113.8/29", 1)],
         )
         assert _routes(attrs) == []
-        assert any(a[0] == "Mikrotik-Address-List" for a in attrs)
+        assert not any(a[0] == "Mikrotik-Address-List" for a in attrs)
 
     def test_suspended_subscription_no_routes(self):
         attrs = _radreply_attrs(

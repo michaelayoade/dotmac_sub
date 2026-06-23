@@ -403,8 +403,14 @@ def evaluate_rules(
     current_usage_gb: float,
     current_time: datetime | None = None,
     fired_rule_ids: set | None = None,
+    usage_by_period: dict | None = None,
 ) -> list[dict]:
     """Evaluate FUP rules for an offer against current usage.
+
+    ``usage_by_period`` (optional) maps a consumption_period -> FupUsageWindow so
+    each rule is compared against usage over ITS own window (daily/weekly/
+    monthly). When omitted, every rule uses ``current_usage_gb`` (the legacy
+    monthly figure) — preserving the simulation/preview path unchanged.
 
     Returns a list of rule evaluation results (in sort_order):
     - rule_id, name, sort_order
@@ -442,6 +448,19 @@ def evaluate_rules(
             continue
 
         threshold = _threshold_gb(rule)
+
+        # Per-period usage: each rule is measured over its own consumption
+        # window when usage_by_period is supplied; else the legacy monthly value.
+        from app.services.fup_usage import period_value
+
+        usage_window = (
+            usage_by_period.get(period_value(rule.consumption_period))
+            if usage_by_period
+            else None
+        )
+        rule_usage_gb = (
+            usage_window.used_gb if usage_window is not None else current_usage_gb
+        )
 
         # Check chaining: does this rule require a prior rule to have fired?
         if (
@@ -513,8 +532,8 @@ def evaluate_rules(
             )
             continue
 
-        # Check threshold
-        triggered = current_usage_gb >= threshold
+        # Check threshold (against this rule's own consumption window)
+        triggered = rule_usage_gb >= threshold
 
         if triggered:
             fired_rule_ids.add(str(rule.id))
@@ -525,25 +544,35 @@ def evaluate_rules(
                 "name": rule.name,
                 "sort_order": rule.sort_order,
                 "threshold_gb": threshold,
-                "current_usage_gb": round(current_usage_gb, 2),
+                "current_usage_gb": round(rule_usage_gb, 2),
                 "triggered": triggered,
                 "action": rule.action.value if triggered else None,
                 "speed_reduction_percent": rule.speed_reduction_percent
                 if triggered
                 else None,
                 "reason": (
-                    f"Usage {current_usage_gb:.1f} GB >= threshold {threshold:.1f} GB"
+                    f"Usage {rule_usage_gb:.1f} GB >= threshold {threshold:.1f} GB"
                     if triggered
-                    else f"Usage {current_usage_gb:.1f} GB < threshold {threshold:.1f} GB"
+                    else f"Usage {rule_usage_gb:.1f} GB < threshold {threshold:.1f} GB"
                 ),
                 "status": "triggered" if triggered else "ok",
-                "usage_percent": round(current_usage_gb / threshold * 100, 1)
+                "usage_percent": round(rule_usage_gb / threshold * 100, 1)
                 if threshold > 0
                 else 0,
                 "consumption_period": (
                     rule.consumption_period.value
                     if rule.consumption_period
                     else "monthly"
+                ),
+                "window_start": (
+                    usage_window.window.start.isoformat() if usage_window else None
+                ),
+                "window_end": (
+                    usage_window.window.end.isoformat() if usage_window else None
+                ),
+                "usage_source": usage_window.source if usage_window else None,
+                "is_authoritative": (
+                    usage_window.is_authoritative if usage_window else None
                 ),
                 "cooldown_minutes": rule.cooldown_minutes or 0,
             }

@@ -29,6 +29,27 @@ VICTORIAMETRICS_WRITE_FAILURES = Counter(
     ["adapter", "operation"],
 )
 
+# Connectivity state-machine observability (CONNECTIVITY_STATE_MACHINE.md step 2c).
+# Direct (legacy) writes of connectivity-derived state, labelled by field and
+# the write source. ``source=reconciler`` is the legitimate single writer;
+# any other source is a legacy direct write we want to drive to zero before
+# absorbing/deleting that writer. The reconciler marks its own writes via
+# ``connectivity_reconciler.reconciler_write_scope`` so they are NOT counted as
+# legacy.
+CONNECTIVITY_DIRECT_WRITE = Counter(
+    "connectivity_direct_write_total",
+    "Writes of reconciler-owned connectivity state, by field and source",
+    ["field", "source"],
+)
+# Shadow-mode disagreement between the desired connectivity state (derived) and
+# the actual stored state, by dimension. Non-zero while shadowing means the
+# grown reconciler would change something — inspect before flipping apply=True.
+CONNECTIVITY_SHADOW_DIFF = Counter(
+    "connectivity_shadow_diff_total",
+    "Desired-vs-actual connectivity disagreements observed in shadow, by dimension",
+    ["dimension"],
+)
+
 
 class _SuspensionAuditCollector(Collector):
     """Exports the latest suspension-audit result at scrape time.

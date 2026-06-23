@@ -58,6 +58,7 @@ def _radreply_attrs(
     offer: CatalogOffer,
     profile: RadiusProfile | None,
     subscriber_blocked: bool = False,
+    captive_redirect_enabled: bool = False,
     additional_routes: list[tuple[str, int | None]] | None = None,
     framed_ipv4: str | None = None,
 ) -> list[tuple[str, str, str]]:
@@ -65,7 +66,12 @@ def _radreply_attrs(
 
     `subscriber_blocked`: customer-level block.
     Customer-level block dominates: even if subscription is active, the customer
-    gets walled-garden RADIUS treatment.
+    gets blocked RADIUS treatment.
+
+    `captive_redirect_enabled`: per-customer opt-in for the soft walled-garden
+    captive redirect. Only opted-in blocked subscribers get the
+    Mikrotik-Address-List=suspended attribute; non-opted blocked subscribers are
+    hard-rejected in radcheck (see populate()), so they get no captive radreply.
 
     `additional_routes`: extra routed IP blocks (subscriber_additional_routes) as
     (cidr, metric) tuples. Emitted as Framed-Route for non-walled-garden subs only
@@ -101,13 +107,16 @@ def _radreply_attrs(
     if profile and profile.idle_timeout:
         attrs.append(("Idle-Timeout", ":=", str(profile.idle_timeout)))
 
-    # Walled-garden: customer-level block OR subscription-level block/suspension
-    if subscriber_blocked or sub.status in (
+    # Soft captive walled-garden — only for blocked subscribers who OPTED IN
+    # (per-customer captive_redirect_enabled). Non-opted blocked subscribers get
+    # a hard reject in radcheck instead, so they never reach this radreply.
+    is_blocked = subscriber_blocked or sub.status in (
         SubscriptionStatus.blocked,
         SubscriptionStatus.suspended,
-    ):
+    )
+    if is_blocked and captive_redirect_enabled:
         attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
-    elif additional_routes:
+    elif additional_routes and not is_blocked:
         # Additional routed IP blocks -> one Framed-Route each (+= so multiple
         # coexist; gateway 0.0.0.0 = via this session, since primaries are CGNAT).
         # Not for walled-garden subs: a captive customer must not route extra IPs.
@@ -193,8 +202,23 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             ).all()
         }
         logger.info(
-            "%d subscribers in blocked state (walled-garden treatment)",
+            "%d subscribers in blocked state",
             len(blocked_subscriber_ids),
+        )
+
+        # Per-customer opt-in for the soft captive redirect. Blocked subscribers
+        # NOT in this set are hard-rejected (Auth-Type := Reject) instead of
+        # walled-gardened — the captive redirect is opt-in, not every account.
+        captive_optin_ids: set = {
+            sid
+            for (sid,) in db.execute(
+                select(Subscriber.id).where(
+                    Subscriber.captive_redirect_enabled.is_(True)
+                )
+            ).all()
+        }
+        logger.info(
+            "%d subscribers opted into captive redirect", len(captive_optin_ids)
         )
 
         # Pre-fetch additional routed IP blocks,
@@ -236,7 +260,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
         # idle-in-transaction timeout on large fleets.
-        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus]] = {}
+        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus, str]] = {}
         for sub in rows:
             login = cast(str | None, sub.login)
             if not login:
@@ -260,6 +284,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 continue
 
             sub_blocked = sub.subscriber_id in blocked_subscriber_ids
+            captive = sub.subscriber_id in captive_optin_ids
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
                 eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
@@ -268,16 +293,27 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 sub.offer,
                 sub.radius_profile,
                 sub_blocked,
-                routes_by_subscriber.get(sub.subscriber_id),
+                captive_redirect_enabled=captive,
+                additional_routes=routes_by_subscriber.get(sub.subscriber_id),
                 framed_ipv4=eff_ipv4,
             )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,
                 SubscriptionStatus.suspended,
             )
-            # Duplicate logins: the ACTIVE sub wins the slot. Subscriber-level
-            # block still dominates via sub_blocked, so a blocked customer stays
-            # walled-gardened either way.
+            # Enforcement mode for the radcheck write: active subs and opted-in
+            # blocked subs keep a usable password (captive subs are walled via
+            # the radreply Address-List); non-opted blocked subs are hard
+            # rejected (Auth-Type := Reject, offline).
+            if blocked_flag and not captive:
+                mode = "reject"
+            elif blocked_flag:
+                mode = "captive"
+            else:
+                mode = "active"
+            # Duplicate logins (Splynx-migration dups): the ACTIVE sub wins the
+            # slot — subscriber-level block still dominates via sub_blocked,
+            # so a blocked customer stays enforced either way.
             existing = by_login.get(login)
             if existing is not None and existing[4] == SubscriptionStatus.active:
                 continue
@@ -287,6 +323,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 attrs,
                 blocked_flag,
                 sub.status,
+                mode,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -297,6 +334,8 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     stats["radcheck_upserts"] = len(work)
     stats["radreply_upserts"] = sum(len(w[2]) for w in work)
     stats["blocked_users_written"] = sum(1 for w in work if w[3])
+    stats["captive_users_written"] = sum(1 for w in work if w[5] == "captive")
+    stats["rejected_users_written"] = sum(1 for w in work if w[5] == "reject")
 
     if dry_run:
         logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
@@ -309,16 +348,35 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         with rconn.cursor() as cur:
             usernames = [w[0] for w in work]
             cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
-            cur.executemany(
-                "INSERT INTO radcheck (username, attribute, op, value) "
-                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                [(w[0], w[1]) for w in work],
-            )
+            # Non-rejected users authenticate with their Cleartext-Password
+            # (active normally, opted-in-blocked into the captive walled-garden
+            # via radreply). Hard-rejected users get a single Auth-Type := Reject
+            # row so FreeRADIUS refuses them — no password, fully offline.
+            password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
+            reject_rows = [(w[0],) for w in work if w[5] == "reject"]
+            if password_rows:
+                cur.executemany(
+                    "INSERT INTO radcheck (username, attribute, op, value) "
+                    "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+                    password_rows,
+                )
+            if reject_rows:
+                cur.executemany(
+                    "INSERT INTO radcheck (username, attribute, op, value) "
+                    "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
+                    reject_rows,
+                )
             cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
+            # Hard-rejected users get no radreply (they never authenticate).
             cur.executemany(
                 "INSERT INTO radreply (username, attribute, op, value) "
                 "VALUES (%s, %s, %s, %s)",
-                [(w[0], a, o, v) for w in work for (a, o, v) in w[2]],
+                [
+                    (w[0], a, o, v)
+                    for w in work
+                    if w[5] != "reject"
+                    for (a, o, v) in w[2]
+                ],
             )
 
             # --- orphan cleanup: drop radcheck/radreply rows whose username ---
@@ -359,6 +417,208 @@ if __name__ == "__main__":
     else:
         populate(dry_run=True)
         print("\nTo execute: python -m app.services.radius_population --execute")
+
+
+# ---------------------------------------------------------------------------
+# Staff device-login RADIUS projection
+# ---------------------------------------------------------------------------
+
+
+def effective_roles(db, system_user_id) -> set[str]:
+    """Return the set of active role names held by a SystemUser.
+
+    Mirrors the SystemUser branch in auth_dependencies.has_permission:
+    join system_user_roles → roles and collect Role.name where Role.is_active.
+    """
+    from app.models.rbac import Role, SystemUserRole
+
+    rows = (
+        db.query(Role.name)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == system_user_id)
+        .filter(Role.is_active.is_(True))
+        .all()
+    )
+    return {row[0] for row in rows}
+
+
+def effective_perms(db, system_user_id) -> set[str]:
+    """Return the set of active permission keys held by a SystemUser.
+
+    Mirrors the SystemUser branch in auth_dependencies.has_permission:
+    collects keys from (a) role-via-system_user_roles and (b) direct
+    SystemUserPermission grants, both filtered by Permission.is_active.
+    """
+    from app.models.rbac import (
+        Permission,
+        Role,
+        RolePermission,
+        SystemUserPermission,
+        SystemUserRole,
+    )
+
+    # (a) role-derived permissions
+    role_perm_keys = (
+        db.query(Permission.key)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(Role, RolePermission.role_id == Role.id)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == system_user_id)
+        .filter(Role.is_active.is_(True))
+        .filter(Permission.is_active.is_(True))
+        .all()
+    )
+
+    # (b) direct grants
+    direct_perm_keys = (
+        db.query(Permission.key)
+        .join(SystemUserPermission, SystemUserPermission.permission_id == Permission.id)
+        .filter(SystemUserPermission.system_user_id == system_user_id)
+        .filter(Permission.is_active.is_(True))
+        .all()
+    )
+
+    return {row[0] for row in role_perm_keys} | {row[0] for row in direct_perm_keys}
+
+
+def populate_device_login(
+    db,
+    *,
+    dry_run: bool = False,
+    _conn_factory=None,
+) -> dict[str, int]:
+    """Project device-login-enabled staff into the admin RADIUS auth set.
+
+    Writes ONLY to radcheck_admin / radreply_admin — never touches radcheck /
+    radreply (subscriber auth).
+
+    Per-user DELETE+INSERT pattern (idempotent): same as populate().  Eligible
+    users get:
+      radcheck_admin:  Cleartext-Password := <decrypted secret>
+      radreply_admin:  Mikrotik-Group := <tier>
+                       Service-Type   := Administrative-User
+
+    Args:
+        db: SQLAlchemy session (dotmac_sub app DB — SystemUser side).
+        dry_run: If True, compute stats and issue SQL but rollback; no writes.
+        _conn_factory: Optional zero-arg callable that returns a DB-API 2
+            connection to the RADIUS DB.  Used by tests to inject an in-memory
+            SQLite connection in place of the real psycopg Postgres connection.
+            When None (production), opens psycopg.connect(RADIUS_DB_DSN).
+
+    Returns:
+        dict with keys: considered, radcheck_upserts, radreply_upserts,
+        removed, skipped_ineligible.
+    """
+    from app.models.system_user import SystemUser
+    from app.services.credential_crypto import decrypt_credential
+    from app.services.device_login import derive_router_tier
+
+    stats: dict[str, int] = {
+        "considered": 0,
+        "radcheck_upserts": 0,
+        "radreply_upserts": 0,
+        "removed": 0,
+        "skipped_ineligible": 0,
+    }
+
+    # Fetch all active SystemUsers from the app DB while we still hold the
+    # session; compute work list in memory before opening the RADIUS connection
+    # (avoids holding the app transaction open during RADIUS writes).
+    staff = db.query(SystemUser).filter(SystemUser.is_active.is_(True)).all()
+
+    # Build work list: (username, cleartext|None, tier|None, eligible)
+    # tier=None + eligible=True  → skipped_ineligible
+    # tier=None + eligible=False → removed
+    # tier set               → upsert
+    work: list[tuple[str, str | None, str | None, bool]] = []
+    for u in staff:
+        stats["considered"] += 1
+        eligible = bool(
+            u.device_login_enabled
+            and u.device_login_revoked_at is None
+            and u.device_login_secret
+        )
+        if not eligible:
+            work.append((u.email, None, None, False))
+            continue
+
+        roles = effective_roles(db, u.id)
+        perms = effective_perms(db, u.id)
+        tier = derive_router_tier(roles, perms)
+
+        if tier is None:
+            work.append((u.email, None, None, True))
+            continue
+
+        try:
+            cleartext = decrypt_credential(u.device_login_secret)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "populate_device_login: decrypt failed for %s — skipping", u.email
+            )
+            work.append((u.email, None, None, True))
+            continue
+
+        if not cleartext:
+            work.append((u.email, None, None, True))
+            continue
+
+        work.append((u.email, cleartext, tier, True))
+
+    # Open RADIUS connection
+    if _conn_factory is not None:
+        conn = _conn_factory()
+    else:
+        radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+        if not radius_dsn:
+            raise RuntimeError("RADIUS_DB_DSN not set")
+        conn = psycopg.connect(radius_dsn)
+        conn.autocommit = False
+
+    try:
+        cur = conn.cursor()
+        for uname, cleartext, tier, ineligible_flag in work:
+            # Always clean old rows first — idempotent regardless of outcome.
+            cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
+            cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
+
+            if tier is None:
+                if ineligible_flag:
+                    # Also counts enabled-but-unusable users (decrypt failure / empty secret), not only permission-ineligible ones
+                    stats["skipped_ineligible"] += 1
+                else:
+                    stats["removed"] += 1
+                continue
+
+            # Upsert
+            cur.execute(
+                "INSERT INTO radcheck_admin (username, attribute, op, value) "
+                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+                (uname, cleartext),
+            )
+            cur.execute(
+                "INSERT INTO radreply_admin (username, attribute, op, value) "
+                "VALUES (%s, 'Mikrotik-Group', ':=', %s)",
+                (uname, tier),
+            )
+            cur.execute(
+                "INSERT INTO radreply_admin (username, attribute, op, value) "
+                "VALUES (%s, 'Service-Type', ':=', 'Administrative-User')",
+                (uname,),
+            )
+            stats["radcheck_upserts"] += 1
+            stats["radreply_upserts"] += 2
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    finally:
+        conn.close()
+
+    logger.info("populate_device_login done (dry_run=%s): %s", dry_run, stats)
+    return stats
 
 
 # -----------------------------------------------------------------------------

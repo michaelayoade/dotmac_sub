@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
@@ -22,6 +23,7 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(currentUserProvider);
     final subs = ref.watch(subscriptionsProvider);
+    final serviceStatus = ref.watch(serviceStatusProvider).asData?.value;
     final invoices = ref.watch(invoicesProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final notifications = ref.watch(notificationsProvider);
@@ -63,16 +65,18 @@ class DashboardScreen extends ConsumerWidget {
     final sessItems = sessions.asData?.value.items;
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
-    final dataToday = todaySummary?.totalBytes;
     final fup = todaySummary?.fup;
-    // Unlimited-with-FUP plans have no quota bucket; their "remaining" is the
-    // distance to the fair-use slowdown, which the API reports even at full
-    // speed.
-    final fupHeadroom = fup?.gbUntilThrottle;
-    // Yesterday's total gives "77.3 GB" a point of reference; 0/unavailable
-    // just keeps the plain label.
-    final dataYesterday =
-        ref.watch(usageSummaryProvider('yesterday')).asData?.value.totalBytes;
+    // Data the current service has consumed this billing cycle — the headline
+    // data figure on Home: meaningful for capped AND unlimited plans, unlike
+    // "data left" which reads as 0/empty on an unlimited plan. Falls back to
+    // today's total when the cycle aggregate isn't populated yet, so the card
+    // is never a misleading empty 0.
+    final dataUsedCycle =
+        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    final dataToday = todaySummary?.totalBytes;
+    final dataUsed = (dataUsedCycle != null && dataUsedCycle > 0)
+        ? dataUsedCycle
+        : dataToday;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -92,19 +96,31 @@ class DashboardScreen extends ConsumerWidget {
 
     // Expiry urgency: lift a renew prompt to the banner area when the current
     // service is within 3 days of lapsing (the payment banner takes priority).
+    // An *active* service is never "expired" — a momentarily-stale billing date
+    // must not nag a running service; genuine lapses surface via [isExpired]
+    // (a non-active current service). Postpaid has no date expiry at all.
     final daysLeft = currentService?.daysUntilExpiry;
+    // Third stat card: expiry countdown for date-expiry plans, else next-bill.
+    final (expiryStatLabel, expiryStatValue) =
+        _expiryOrBillingStat(subList, currentService);
     String? renewMessage;
-    if (currentService != null &&
-        needsPayment.isEmpty &&
-        daysLeft != null &&
-        daysLeft <= 3) {
+    if (currentService != null && needsPayment.isEmpty) {
       final name = currentService.displayName;
-      renewMessage = switch (daysLeft) {
-        < 0 => '$name has expired — renew now',
-        0 => '$name expires today — renew now',
-        1 => '$name expires tomorrow — renew now',
-        final d => '$name expires in $d days — renew now',
-      };
+      if (currentService.isExpired) {
+        renewMessage = '$name has expired — renew now';
+      } else if (serviceStatus?.needsRenewal ?? false) {
+        // The real, balance/dunning-driven nudge: a running service heading for
+        // a cut the customer can prevent by paying. The cut date (if known)
+        // comes from the prepaid grace timer — never from a billing date.
+        renewMessage = _renewFromServiceStatus(serviceStatus!);
+      } else if (daysLeft != null && daysLeft >= 0 && daysLeft <= 3) {
+        // Contract end approaching (the only genuine date-based expiry).
+        renewMessage = switch (daysLeft) {
+          0 => '$name expires today — renew now',
+          1 => '$name expires tomorrow — renew now',
+          final d => '$name expires in $d days — renew now',
+        };
+      }
     }
 
     // Connection status: an open RADIUS accounting session (no end) means the
@@ -154,6 +170,7 @@ class DashboardScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(subscriptionsProvider);
+          ref.invalidate(serviceStatusProvider);
           ref.invalidate(invoicesProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(usageSummaryProvider('today'));
@@ -198,10 +215,11 @@ class DashboardScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               _RenewBanner(
                 message: renewMessage,
-                expired: (daysLeft ?? 0) < 0,
-                // Straight to the pay/add-funds flow (renewal = top-up in the
-                // prepaid model), not the invoices list.
-                onTap: () => context.push('/topup'),
+                expired: currentService?.isExpired ?? false,
+                // Prepaid renewal = top-up; postpaid overdue = pay the bill.
+                onTap: () => context.push(
+                  (serviceStatus?.isPrepaid ?? true) ? '/topup' : '/billing',
+                ),
               ),
             ],
             Consumer(builder: (context, ref, _) {
@@ -242,22 +260,11 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Plan-type-aware: capped -> what's LEFT; unlimited with
-                    // a fair-use rule -> headroom to the slowdown (proactive,
-                    // not only when approaching); truly unlimited -> today's
-                    // usage with yesterday for scale.
-                    label: currentQuota != null
-                        ? 'Data left'
-                        : fupHeadroom != null
-                            ? 'To slowdown'
-                            : (dataYesterday ?? 0) > 0
-                                ? 'Today · yest ${Fmt.bytes(dataYesterday!)}'
-                                : 'Data today',
-                    value: currentQuota != null
-                        ? Fmt.gb(currentQuota.remainingGb ?? 0)
-                        : fupHeadroom != null
-                            ? Fmt.gb(fupHeadroom)
-                            : (dataToday == null ? null : Fmt.bytes(dataToday)),
+                    // Data used on the current service this billing cycle —
+                    // meaningful for capped and unlimited plans alike (replaces
+                    // the old "data left", which read as 0 on unlimited plans).
+                    label: 'Data used',
+                    value: dataUsed == null ? null : Fmt.bytes(dataUsed),
                     highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
@@ -269,10 +276,12 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.hourglass_bottom_outlined,
-                    label: 'Days left',
-                    value: _daysLeftLabel(subList, currentService),
-                    // Urgent when expiring within 3 days or already expired.
-                    highlight: (currentService?.daysUntilExpiry ?? 99) <= 3,
+                    label: expiryStatLabel,
+                    value: expiryStatValue,
+                    // Urgent when expiring within 3 days or genuinely expired
+                    // (never for an active service with a stale billing date).
+                    highlight: (currentService?.expiresSoon ?? false) ||
+                        (currentService?.isExpired ?? false),
                     onTap: () => context.go('/billing'),
                   ),
                 ),
@@ -347,15 +356,39 @@ class DashboardScreen extends ConsumerWidget {
 /// Days-left figure for the stat row: null while loading (renders a
 /// skeleton), '—' when the service has no known expiry, otherwise the
 /// (urgency-worded) day count.
-String? _daysLeftLabel(List<Subscription>? subList, Subscription? service) {
-  if (subList == null) return null;
-  final days = service?.daysUntilExpiry;
-  return switch (days) {
-    null => '—',
-    < 0 => 'Expired',
-    0 => 'Today',
-    _ => '$days',
-  };
+/// Third stat card: a genuine expiry countdown for date-expiry plans, else the
+/// next-bill date for postpaid/unlimited (which has no expiry) so the card is
+/// meaningful instead of a bare "—". Returns (label, value).
+(String, String?) _expiryOrBillingStat(
+  List<Subscription>? subList,
+  Subscription? service,
+) {
+  if (subList == null) return ('Days left', null);
+  if (service == null) return ('Days left', '—');
+  if (service.isExpired) return ('Days left', 'Expired');
+  final days = service.daysUntilExpiry;
+  if (days != null && days >= 0) {
+    return ('Days left', days == 0 ? 'Today' : '$days');
+  }
+  // No date-based expiry (postpaid/unlimited): show the next bill instead of a
+  // confusing empty "Days left".
+  if (service.nextBillingAt != null) {
+    return ('Next bill', Fmt.date(service.nextBillingAt));
+  }
+  return ('Days left', '—');
+}
+
+/// Renewal nudge for a *running* service heading for a cut the customer can
+/// prevent by paying — driven by real balance/dunning state, not a billing
+/// date. Prepaid surfaces the grace cut-off date when known.
+String _renewFromServiceStatus(ServiceStatus s) {
+  if (s.isPrepaid) {
+    final when = s.graceUntil;
+    return when != null
+        ? 'Balance low — top up by ${Fmt.date(when)} to keep your service'
+        : 'Balance low — top up to keep your service';
+  }
+  return 'Payment overdue — pay now to avoid suspension';
 }
 
 /// Status-banner copy when service(s) are blocked/suspended: names the plan
@@ -797,13 +830,31 @@ class _CurrentServiceCard extends StatelessWidget {
     final s = service;
     final theme = Theme.of(context);
     final days = s.daysUntilExpiry;
-    final (expiryColor, expiryText) = switch (days) {
-      null => (theme.colorScheme.outline, null),
-      < 0 => (theme.colorScheme.error, 'Expired'),
-      0 => (theme.colorScheme.error, 'Expires today'),
-      <= 3 => (Colors.orange.shade800, '$days day${days == 1 ? '' : 's'} left'),
-      _ => (Colors.green.shade700, '$days days left'),
-    };
+    // The validity stat sits next to the IP address; it must never show a red
+    // "Expired" for a running (active) service, or it reads as "the IP expired".
+    final (expiryColor, expiryLabel, expiryText) = s.isExpired
+        ? (theme.colorScheme.error, 'Validity', 'Expired')
+        : switch (days) {
+            // Postpaid / no date expiry: show the next bill date, not a
+            // (meaningless) validity countdown.
+            null => s.nextBillingAt != null
+                ? (
+                    theme.colorScheme.outline,
+                    'Next bill',
+                    Fmt.date(s.nextBillingAt)
+                  )
+                : (theme.colorScheme.outline, null, null),
+            0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
+            // Active service with a momentarily-stale billing date: running, not
+            // expired — show nothing rather than alarm next to the IP.
+            < 0 => (theme.colorScheme.outline, null, null),
+            <= 3 => (
+                Colors.orange.shade800,
+                'Validity',
+                '$days day${days == 1 ? '' : 's'} left'
+              ),
+            _ => (Colors.green.shade700, 'Validity', '$days days left'),
+          };
 
     return Card(
       child: InkWell(
@@ -847,7 +898,7 @@ class _CurrentServiceCard extends StatelessWidget {
                     Expanded(
                       child: _MiniStat(
                         icon: Icons.schedule,
-                        label: 'Validity',
+                        label: expiryLabel ?? 'Validity',
                         value: expiryText,
                         color: expiryColor,
                       ),

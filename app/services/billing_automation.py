@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 
@@ -23,6 +24,7 @@ from app.models.catalog import (
     AddOnPrice,
     BillingCycle,
     BillingMode,
+    CatalogOffer,
     DiscountType,
     OfferPrice,
     OfferVersionPrice,
@@ -33,7 +35,7 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
-from app.services import settings_spec
+from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
@@ -704,6 +706,42 @@ def subscription_invoice_eligible(
     return subscription.billing_mode != BillingMode.prepaid
 
 
+def _hourly_notifications_enabled(db: Session) -> bool:
+    """Whether the dedicated hourly billing-notifications runner owns the emits."""
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "billing_notifications_hourly_enabled"
+        )
+    )
+
+
+def run_billing_notifications(
+    db: Session,
+    run_at: datetime | None = None,
+) -> dict[str, int | bool]:
+    """Emit invoice reminders + dunning escalations, gated by the send window.
+
+    Intended to run hourly: the send-window gate (``billing_notif_send_hour``)
+    restricts the actual sends to the configured local hour, while the existing
+    per-invoice metadata markers keep them idempotent across the hourly fires.
+    """
+    run_at = run_at or datetime.now(UTC)
+    if not enforcement_window.within_send_window(db, run_at):
+        return {
+            "invoice_reminders_sent": 0,
+            "dunning_escalations_sent": 0,
+            "skipped_outside_window": True,
+        }
+    reminders = _emit_invoice_reminders(db, run_at)
+    escalations = _emit_dunning_escalations(db, run_at)
+    db.commit()
+    return {
+        "invoice_reminders_sent": reminders,
+        "dunning_escalations_sent": escalations,
+        "skipped_outside_window": False,
+    }
+
+
 def run_invoice_cycle(
     db: Session,
     run_at: datetime | None = None,
@@ -790,15 +828,31 @@ def run_invoice_cycle(
         SubscriberStatus.suspended,
         SubscriberStatus.delinquent,
     )
-    # Prepaid subscriptions draw down a deposit and must never be invoiced
-    # (see subscription_invoice_eligible); excluding them here is the single
-    # source of the postpaid-only rule for the scheduled cycle.
+    # Postpaid subscriptions are always invoiced. ``prepaid_monthly`` accounts
+    # (prepaid billing_mode on a MONTHLY-cycle offer) are invoiced too — billed
+    # in advance, due on issue — but ONLY when the cutover flag is enabled;
+    # default OFF keeps the scheduled cycle postpaid-only (no behaviour change),
+    # so this is safe to deploy before the prepaid-monthly migration runs.
+    # Genuine daily/balance prepaid stays off-invoice regardless.
+    include_prepaid_monthly = _setting_truthy(
+        db, "prepaid_monthly_invoicing_enabled", default=False
+    )
+    mode_filter = Subscription.billing_mode != BillingMode.prepaid
+    if include_prepaid_monthly:
+        monthly_offer_ids = select(CatalogOffer.id).where(
+            CatalogOffer.billing_cycle == BillingCycle.monthly
+        )
+        mode_filter = or_(
+            Subscription.billing_mode != BillingMode.prepaid,
+            Subscription.offer_id.in_(monthly_offer_ids),
+        )
+
     active_subscriptions = (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
         .filter(Subscriber.status.in_(billable_account_statuses))
-        .filter(Subscription.billing_mode != BillingMode.prepaid)
+        .filter(mode_filter)
         .all()
     )
 
@@ -810,7 +864,7 @@ def run_invoice_cycle(
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .filter(Subscription.status == SubscriptionStatus.pending)
             .filter(Subscriber.status == SubscriberStatus.active)
-            .filter(Subscription.billing_mode != BillingMode.prepaid)
+            .filter(mode_filter)
             .all()
         )
 
@@ -973,6 +1027,10 @@ def run_invoice_cycle(
                 if account
                 else global_due_days
             )
+            # prepaid_monthly is billed in advance: the invoice is due on issue
+            # (a short grace lives in dunning) so non-payment enforces promptly.
+            if subscription.billing_mode == BillingMode.prepaid:
+                due_days = 0
             invoice = Invoice(
                 account_id=subscription.subscriber_id,
                 invoice_number=next_invoice_number(db),
@@ -1172,8 +1230,15 @@ def run_invoice_cycle(
                     event_exc,
                 )
 
-        summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
-        summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
+        # When the dedicated hourly notifications runner is enabled it owns the
+        # reminder/escalation emits (so they honour the configured send window);
+        # the daily cycle then skips them to avoid an off-hours duplicate path.
+        if _hourly_notifications_enabled(db):
+            summary["invoice_reminders_sent"] = 0
+            summary["dunning_escalations_sent"] = 0
+        else:
+            summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
+            summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
         db.commit()
 
         summary["run_id"] = run_id_str

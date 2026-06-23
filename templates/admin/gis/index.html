@@ -466,6 +466,34 @@
                     {% if item.review_note %}
                     <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Review note: {{ item.review_note }}</p>
                     {% endif %}
+                    {% if item.reviewed_by_actor_name %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Reviewed by: <span class="font-medium text-slate-700 dark:text-slate-300">{{ item.reviewed_by_actor_name }}</span></p>
+                    {% endif %}
+                    {% set auto = item.metadata_.get('auto_decision') if item.metadata_ else None %}
+                    {% if auto %}
+                    <div class="mt-2 rounded-lg border px-3 py-2 text-xs
+                        {% if auto.shadow %}border-sky-200 bg-sky-50 dark:border-sky-900/40 dark:bg-sky-900/20
+                        {% elif auto.approved %}border-emerald-200 bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-900/20
+                        {% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-700/30{% endif %}">
+                        <span class="font-semibold
+                            {% if auto.shadow %}text-sky-700 dark:text-sky-300
+                            {% elif auto.approved %}text-emerald-700 dark:text-emerald-300
+                            {% else %}text-slate-600 dark:text-slate-300{% endif %}">
+                            {% if auto.shadow %}Shadow — would {{ 'auto-approve' if auto.would_approve else 'hold for review' }}
+                            {% elif auto.approved %}Auto-approved (system)
+                            {% else %}Auto-check: manual review{% endif %}
+                        </span>
+                        {% if auto.reason %}<span class="text-slate-500 dark:text-slate-400"> · {{ auto.reason }}</span>{% endif %}
+                        {% if auto.signals %}
+                        <div class="mt-1 text-slate-500 dark:text-slate-400">
+                            {% if auto.signals.move_distance_m is defined %}moved {{ auto.signals.move_distance_m }} m{% if auto.signals.radius_m is defined %} (limit {{ auto.signals.radius_m }} m){% endif %}{% endif %}
+                            {% if auto.signals.in_coverage is defined %} · coverage: {{ 'yes' if auto.signals.in_coverage else 'no' }}{% endif %}
+                            {% if auto.signals.recent_auto_approvals is defined %} · prior auto in window: {{ auto.signals.recent_auto_approvals }}{% endif %}
+                            {% if auto.signals.first_pin %} · first pin (no baseline){% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
                     {% if item.status.value == 'pending' %}
                     <div class="mt-4 flex flex-wrap items-end gap-3">
                         <form method="POST" action="/admin/gis/location-requests/{{ item.id }}/approve" class="flex flex-wrap items-end gap-2">

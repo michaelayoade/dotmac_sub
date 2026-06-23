@@ -64,6 +64,20 @@ module.exports = {
       colors: {
         // Distinctive teal-cyan palette with warmth
         primary: {
+          50: '#edf3eb',
+          100: '#dbe7d7',
+          200: '#b8cfb0',
+          300: '#90b483',
+          400: '#5a9147',
+          500: '#367920',
+          600: '#206a07',
+          700: '#1a5706',
+          800: '#154605',
+          900: '#103504',
+          950: '#0a2503',
+        },
+        // Brand secondary cyan
+        accent: {
           50: '#ecfeff',
           100: '#cffafe',
           200: '#a5f3fc',
@@ -75,20 +89,6 @@ module.exports = {
           800: '#155e75',
           900: '#164e63',
           950: '#083344',
-        },
-        // Warm accent for contrast
-        accent: {
-          50: '#fff7ed',
-          100: '#ffedd5',
-          200: '#fed7aa',
-          300: '#fdba74',
-          400: '#fb923c',
-          500: '#f97316',
-          600: '#ea580c',
-          700: '#c2410c',
-          800: '#9a3412',
-          900: '#7c2d12',
-          950: '#431407',
         }
       },
       animation: {

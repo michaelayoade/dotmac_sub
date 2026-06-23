@@ -37,7 +37,7 @@
             <tbody>
             {% for row in incidents %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
-                    <td class="py-2 text-slate-700 dark:text-slate-200">{{ row.target }}</td>
+                    <td class="py-2 text-slate-700 dark:text-slate-200">{{ row.target }}{% if row.stale %} <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Open longer than 36h — review and resolve if the outage is over">stale</span>{% endif %}</td>
                     <td class="font-semibold text-slate-900 dark:text-white">{{ row.incident.affected_count }}</td>
                     <td class="text-slate-500">{{ row.incident.started_at.strftime('%Y-%m-%d %H:%M') if row.incident.started_at else '—' }}</td>
                     <td class="text-slate-500">{{ row.incident.declared_by or '—' }}</td>

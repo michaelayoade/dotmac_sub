@@ -77,6 +77,10 @@ class Settings:
     crm_password: str = os.getenv("CRM_PASSWORD", "")
     # Shared secret for inbound CRM webhook deliveries (HMAC-SHA256).
     crm_webhook_secret: str = os.getenv("CRM_WEBHOOK_SECRET", "")
+    # Dedicated bearer token for CRM server-to-server pull/write-back API.
+    # This is intentionally separate from CRM_WEBHOOK_SECRET, which protects
+    # inbound HMAC-signed webhook deliveries.
+    selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
 
     # Mono lookup API
     mono_secret_key: str = os.getenv("MONO_SECRET_KEY", "")
@@ -117,6 +121,14 @@ class Settings:
     enforce_credential_encryption: bool = os.getenv(
         "ENFORCE_CREDENTIAL_ENCRYPTION",
         "true" if app_env in {"prod", "production"} else "false",
+    ).lower() in ("true", "1", "yes")
+
+    # Layer 3 (identity/email decoupling): allow reseller portal logins to
+    # authenticate as a first-class ResellerUser principal instead of a fake
+    # Subscriber. Default OFF — the dual-read auth code is inert until flipped,
+    # and a backfill must repoint reseller credentials before cutover.
+    reseller_user_principal_enabled: bool = os.getenv(
+        "RESELLER_USER_PRINCIPAL_ENABLED", "false"
     ).lower() in ("true", "1", "yes")
 
 

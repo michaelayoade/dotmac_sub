@@ -1,0 +1,51 @@
+# -*- text -*-
+# FreeRADIUS admin-login virtual server
+# Listens on dedicated ports 1822 (auth) / 1823 (acct) and authenticates
+# staff credentials ONLY against the *_admin tables via the sql_admin module.
+# The subscriber default server (port 1812/1813) is completely separate.
+
+server admin-login {
+    listen {
+        type = auth
+        ipaddr = *
+        port = 1822
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 1823
+    }
+
+    authorize {
+        filter_username
+        preprocess
+        chap
+        mschap
+        sql_admin            # ONLY the staff auth set
+        pap
+    }
+
+    authenticate {
+        Auth-Type PAP {
+            pap
+        }
+        Auth-Type CHAP {
+            chap
+        }
+        Auth-Type MS-CHAP {
+            mschap
+        }
+    }
+
+    post-auth {
+        sql_admin
+        Post-Auth-Type REJECT {
+            sql_admin
+        }
+    }
+
+    accounting {
+        sql_admin            # -> radacct_admin
+    }
+}

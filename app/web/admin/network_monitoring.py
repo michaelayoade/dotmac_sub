@@ -1,6 +1,6 @@
 """Admin network monitoring and alarms web routes."""
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -38,11 +38,24 @@ def _base_context(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
-def topology_gaps_page(request: Request, db: Session = Depends(get_db)):
+def topology_gaps_page(
+    request: Request,
+    node_page: int = Query(1, ge=1),
+    node_per_page: int = Query(50, ge=10, le=200),
+    gap_page: int = Query(1, ge=1),
+    gap_per_page: int = Query(50, ge=10, le=200),
+    db: Session = Depends(get_db),
+):
     from app.services.topology.gaps import topology_gaps
 
     context = _base_context(request, db, active_page="monitoring")
-    context["gaps"] = topology_gaps(db)
+    context["gaps"] = topology_gaps(
+        db,
+        node_page=node_page,
+        node_per_page=node_per_page,
+        gap_page=gap_page,
+        gap_per_page=gap_per_page,
+    )
     return templates.TemplateResponse("admin/network/topology_gaps.html", context)
 
 
@@ -119,7 +132,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     incidents. No auto-detection, no notification sending."""
     from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.topology.affected import list_basestations
-    from app.services.topology.outage import list_open_incidents
+    from app.services.topology.outage import is_stale_open, list_open_incidents
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
@@ -133,7 +146,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
             target = f"Node: {node.name}" if node else "Node"
         else:
             target = "—"
-        rows.append({"incident": inc, "target": target})
+        rows.append({"incident": inc, "target": target, "stale": is_stale_open(inc)})
     context["incidents"] = rows
     return templates.TemplateResponse("admin/network/outages.html", context)
 

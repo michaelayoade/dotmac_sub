@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    computed_field,
     model_validator,
 )
 
@@ -524,6 +525,19 @@ class SubscriptionUpdate(BaseModel):
         return self
 
 
+# Statuses where the service has genuinely ended (vs. merely needing a payment,
+# which is blocked/suspended). The one authoritative definition for is_expired.
+_ENDED_SUBSCRIPTION_STATUSES = frozenset(
+    {
+        SubscriptionStatus.expired,
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.disabled,
+        SubscriptionStatus.archived,
+        SubscriptionStatus.hidden,
+    }
+)
+
+
 class SubscriptionRead(SubscriptionBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -532,6 +546,41 @@ class SubscriptionRead(SubscriptionBase):
     updated_at: datetime
     offer: OfferSummary | None = None
     add_ons: list[SubscriptionAddOnRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def expires_at(self) -> datetime | None:
+        """The date the service genuinely lapses, or null when it has none.
+
+        This is an explicit contract end only. ``next_billing_at`` is the next
+        *charge* date (prepaid) / next invoice date (postpaid), NOT an expiry —
+        clients must not treat it as one. Prepaid service lapses on balance
+        exhaustion (a consumption-driven event, not a date); the real pending
+        lapse date in that case is exposed by ``GET /me/service-status``.
+        """
+        return self.end_at
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_expired(self) -> bool:
+        """Whether the service has genuinely ended.
+
+        An active/pending service is never expired — ``status`` is the source of
+        truth, so a momentarily-stale billing date can't override a running
+        service. Otherwise: an ended status, or a contract end in the past.
+        """
+        if self.status in (
+            SubscriptionStatus.active,
+            SubscriptionStatus.pending,
+        ):
+            return False
+        if self.status in _ENDED_SUBSCRIPTION_STATUSES:
+            return True
+        end = self.end_at
+        if end is None:
+            return False
+        end = end if end.tzinfo else end.replace(tzinfo=UTC)
+        return end <= datetime.now(UTC)
 
 
 class OfferVersionBase(BaseModel):

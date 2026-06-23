@@ -406,6 +406,40 @@ def delete_user_records(db: Session, *, user_id: str) -> SystemUser:
     return system_user
 
 
+def set_device_login(
+    db: Session, *, user_id: str, enabled: bool, secret: str | None
+) -> SystemUser:
+    """Enable/disable device login and optionally set/rotate the secret."""
+    from app.services.credential_crypto import encrypt_credential
+
+    u = db.get(SystemUser, coerce_uuid(user_id))
+    if not u:
+        raise ValueError("User not found")
+    u.device_login_enabled = enabled
+    if enabled:
+        u.device_login_revoked_at = None
+    if secret:
+        u.device_login_secret = encrypt_credential(secret)
+        u.device_login_secret_set_at = datetime.now(UTC)
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
+
+
+def revoke_device_login(db: Session, *, user_id: str) -> SystemUser:
+    """Revoke device login access: disable and timestamp revocation."""
+    u = db.get(SystemUser, coerce_uuid(user_id))
+    if not u:
+        raise ValueError("User not found")
+    u.device_login_enabled = False
+    u.device_login_revoked_at = datetime.now(UTC)
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
+
+
 def bulk_delete_user_records(db: Session, *, user_ids: list[str]) -> tuple[int, int]:
     """Delete inactive system users that have no linked records.
 

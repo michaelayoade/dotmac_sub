@@ -728,6 +728,29 @@ def has_active_lock(
     return db.scalars(stmt).first() is not None
 
 
+def reactivation_blocked_by_active_login(db: Session, subscription) -> bool:
+    """True if reactivating ``subscription`` would collide with an existing
+    active service on the same login.
+
+    Enforces the ``uniq_subs_login_active_per_subscriber`` partial unique index
+    (login, subscriber_id WHERE status='active' AND login IS NOT NULL): a
+    suspended sub whose subscriber already holds another active sub on the same
+    login is a superseded duplicate and must NOT be flipped back to active.
+    Used by the lock-repair tools to skip such rows instead of hitting an
+    IntegrityError mid-restore.
+    """
+    if not subscription.login:
+        return False
+    stmt = (
+        select(Subscription.id)
+        .where(Subscription.subscriber_id == subscription.subscriber_id)
+        .where(Subscription.login == subscription.login)
+        .where(Subscription.status == SubscriptionStatus.active)
+        .where(Subscription.id != subscription.id)
+    )
+    return db.scalars(stmt).first() is not None
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

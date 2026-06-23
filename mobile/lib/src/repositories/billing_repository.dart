@@ -169,13 +169,17 @@ class BillingRepository {
   /// When [paymentMethodId] is given the server charges that saved card
   /// directly (one-tap) and returns `charged: true`; [idempotencyKey] makes
   /// that charge safe against a double-submit.
+  /// [provider] picks the online gateway ('paystack'/'flutterwave') for a
+  /// new-card checkout; ignored for saved-card charges.
   Future<TopupInitiation> initiateTopup(
     num amount, {
+    String? provider,
     String? paymentMethodId,
     String? idempotencyKey,
   }) async {
     final data = await guard(() => dio.post('/me/topup/initiate', data: {
           'amount': amount,
+          if (provider != null) 'provider': provider,
           if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
           if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
         }));

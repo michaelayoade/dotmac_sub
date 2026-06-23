@@ -2,6 +2,8 @@ from pathlib import Path
 
 from starlette.routing import Match
 
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.network_monitoring import (
     DeviceInterface,
     DeviceRole,
@@ -12,7 +14,10 @@ from app.models.network_monitoring import (
     TopologyLinkMedium,
     TopologyLinkRole,
 )
+from app.models.subscriber import Address
 from app.services import network_topology as topology_service
+from app.services.topology.customer_path import GAP_NO_NODE
+from app.services.topology.gaps import topology_gaps
 from app.web.admin import network_weathermap as topology_routes
 
 
@@ -198,6 +203,88 @@ def test_topology_graph_falls_back_to_active_inventory_when_no_links(db_session)
     assert str(inactive.id) not in node_ids
     assert graph["edges"] == []
     assert graph["stats"]["node_count"] == 2
+
+
+def test_topology_gaps_respects_subscription_service_address(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    address_a = Address(
+        subscriber_id=subscriber.id,
+        label="Site A",
+        address_line1="1 Fiber Way",
+    )
+    address_b = Address(
+        subscriber_id=subscriber.id,
+        label="Site B",
+        address_line1="2 Fiber Way",
+    )
+    db_session.add_all([address_a, address_b])
+    db_session.flush()
+
+    sub_a = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        service_address_id=address_a.id,
+        status=SubscriptionStatus.active,
+    )
+    sub_b = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        service_address_id=address_b.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add_all([sub_a, sub_b])
+
+    pop = PopSite(name="POP A", is_active=True)
+    complete_olt = OLTDevice(name="OLT Complete", hostname="complete-olt.local")
+    broken_olt = OLTDevice(name="OLT Broken", hostname="broken-olt.local")
+    db_session.add_all([pop, complete_olt, broken_olt])
+    db_session.flush()
+
+    complete_ont = OntUnit(
+        serial_number="TOPO-COMPLETE-001",
+        olt_device_id=complete_olt.id,
+    )
+    broken_ont = OntUnit(
+        serial_number="TOPO-BROKEN-001",
+        olt_device_id=broken_olt.id,
+    )
+    db_session.add_all([complete_ont, broken_ont])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OntAssignment(
+                subscriber_id=subscriber.id,
+                service_address_id=address_a.id,
+                ont_unit_id=complete_ont.id,
+                active=True,
+            ),
+            OntAssignment(
+                subscriber_id=subscriber.id,
+                service_address_id=address_b.id,
+                ont_unit_id=broken_ont.id,
+                active=True,
+            ),
+            NetworkDevice(
+                name="Complete OLT node",
+                matched_device_type="olt",
+                matched_device_id=complete_olt.id,
+                pop_site_id=pop.id,
+                role=DeviceRole.edge,
+                status=DeviceStatus.online,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    gaps = topology_gaps(db_session)
+    gaps_by_subscription = {row["id"]: row["gap"] for row in gaps.subscription_gaps}
+
+    assert sub_a.id not in gaps_by_subscription
+    assert gaps_by_subscription[sub_b.id] == GAP_NO_NODE
 
 
 def test_node_summary_includes_device_interfaces(db_session):

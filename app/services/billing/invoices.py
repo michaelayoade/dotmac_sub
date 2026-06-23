@@ -48,6 +48,29 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
+def _restore_service_after_settlement(db: Session, account_id, invoice_id=None) -> None:
+    """Lift overdue enforcement after a non-payment settlement clears the debt.
+
+    Write-off / void zero an invoice's balance without a Payment, so they never
+    hit the restore-on-payment path in ``payments._finalize_invoice_payment_effects``.
+    Without this, an overdue invoice that is written off or voided clears the debt
+    but leaves the ``overdue`` enforcement lock active — the service stays
+    suspended on a stale lock. Mirror the payment path: if the account no longer
+    owes overdue debt, restore eligible service and re-derive account status.
+    Caller commits.
+    """
+    from app.services import collections as collections_service
+    from app.services.account_lifecycle import compute_account_status
+
+    if not collections_service.has_overdue_balance(db, str(account_id)):
+        collections_service.restore_account_services(
+            db,
+            str(account_id),
+            invoice_id=str(invoice_id) if invoice_id else None,
+        )
+    compute_account_status(db, str(account_id))
+
+
 def next_invoice_number(db: Session) -> str | None:
     """Generate the next sequential invoice number (None when disabled)."""
     return numbering.generate_number(
@@ -414,6 +437,8 @@ class Invoices(ListResponseMixin):
             # above is the financial record of the loss.
             invoice.balance_due = Decimal("0.00")
             invoice.status = InvoiceStatus.written_off
+            db.flush()  # persist the cleared balance before the overdue-debt check
+            _restore_service_after_settlement(db, invoice.account_id, invoice.id)
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -476,6 +501,8 @@ class Invoices(ListResponseMixin):
         invoice.balance_due = Decimal("0.00")
         if memo:
             invoice.memo = memo
+        db.flush()  # persist the cleared balance before the overdue-debt check
+        _restore_service_after_settlement(db, invoice.account_id, invoice.id)
         db.commit()
         db.refresh(invoice)
         return invoice
@@ -515,6 +542,11 @@ class Invoices(ListResponseMixin):
                 # write_off — not the recalc-derived 'paid' (no cash collected).
                 invoice.balance_due = Decimal("0.00")
                 invoice.status = InvoiceStatus.written_off
+            db.flush()
+            # Lift overdue enforcement once per affected account (debt cleared
+            # without a payment — same gap as the single write_off path).
+            for account_id in {inv.account_id for inv in affected_invoices}:
+                _restore_service_after_settlement(db, account_id)
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -539,6 +571,7 @@ class Invoices(ListResponseMixin):
                 status_code=404, detail="One or more invoices not found"
             )
         skipped = 0
+        affected_accounts: set = set()
         for invoice in invoices:
             # Don't void a paid or already-void invoice — the single-invoice
             # void() rejects this, but bulk_void previously voided paid
@@ -575,6 +608,12 @@ class Invoices(ListResponseMixin):
             invoice.balance_due = Decimal("0.00")
             if payload.memo:
                 invoice.memo = payload.memo
+            affected_accounts.add(invoice.account_id)
+        db.flush()
+        # Lift overdue enforcement once per affected account (debt cleared
+        # without a payment — same gap as the single void path).
+        for account_id in affected_accounts:
+            _restore_service_after_settlement(db, account_id)
         db.commit()
         return len(invoices) - skipped
 

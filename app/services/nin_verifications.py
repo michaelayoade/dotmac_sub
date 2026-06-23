@@ -29,7 +29,25 @@ def get_or_create_pending_nin_verification(
     db: Session,
     subscriber_id: uuid.UUID,
     nin: str,
+    *,
+    allow_reverify: bool = False,
 ) -> SubscriberNINVerification:
+    # Lock once verified: a subscriber with a prior `success` is treated as
+    # final — return it instead of spawning another (paid) Mono lookup or
+    # letting a different NIN overwrite a confirmed identity. Genuine
+    # corrections go through an explicit admin path (allow_reverify=True).
+    if not allow_reverify:
+        verified = db.scalars(
+            select(SubscriberNINVerification)
+            .where(
+                SubscriberNINVerification.subscriber_id == subscriber_id,
+                SubscriberNINVerification.status == NINVerificationStatus.success,
+            )
+            .order_by(SubscriberNINVerification.created_at.desc())
+        ).first()
+        if verified is not None:
+            return verified
+
     stmt = (
         select(SubscriberNINVerification)
         .where(

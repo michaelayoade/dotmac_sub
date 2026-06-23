@@ -2,6 +2,7 @@
 import 'package:latlong2/latlong.dart';
 
 import '../core/parsers.dart';
+import 'topup.dart';
 
 /// Money fields come back as JSON **strings** (serialized `Decimal`, e.g.
 /// "749012363.52"); counts come back as numbers. Parse defensively so a String
@@ -398,11 +399,15 @@ class ResellerBillingSummary {
     required this.totalOutstanding,
     required this.unallocatedBalance,
     this.recentPayments = const [],
-  });
+    BankTransferConfig? bankTransfer,
+  }) : bankTransfer = bankTransfer ?? BankTransferConfig();
 
   final double totalOutstanding;
   final double unallocatedBalance;
   final List<ResellerPaymentSummary> recentPayments;
+
+  /// Admin bank account(s) for the bank-transfer pay option (shown inline).
+  final BankTransferConfig bankTransfer;
 
   factory ResellerBillingSummary.fromJson(Map<String, dynamic> json) =>
       ResellerBillingSummary(
@@ -412,6 +417,8 @@ class ResellerBillingSummary {
             .cast<Map<String, dynamic>>()
             .map(ResellerPaymentSummary.fromJson)
             .toList(),
+        bankTransfer: BankTransferConfig.fromJson(
+            json['direct_bank_transfer'] as Map<String, dynamic>?),
       );
 }
 

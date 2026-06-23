@@ -11,9 +11,11 @@ from __future__ import annotations
 import logging
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import httpx
 from sqlalchemy import delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import (
@@ -148,8 +150,11 @@ def cleanup_old_device_metrics(db: Session, retention_days: int = 90) -> int:
             .limit(batch_size)
             .subquery()
         )
-        result = db.execute(
-            delete(DeviceMetric).where(DeviceMetric.id.in_(select(subq.c.id)))
+        result = cast(
+            CursorResult[Any],
+            db.execute(
+                delete(DeviceMetric).where(DeviceMetric.id.in_(select(subq.c.id)))
+            ),
         )
         deleted = result.rowcount
         db.commit()

@@ -218,7 +218,10 @@ class CreditNoteApplyRequest(BaseModel):
 
 
 class PaymentMethodBase(BaseModel):
-    account_id: UUID
+    # Exactly one owner: customer subscriber (account_id) or reseller org
+    # (reseller_id, for subscriber-less reseller_user logins — Layer 3).
+    account_id: UUID | None = None
+    reseller_id: UUID | None = None
     payment_channel_id: UUID | None = None
     method_type: PaymentMethodType = PaymentMethodType.card
     label: str | None = Field(default=None, max_length=120)
@@ -387,6 +390,28 @@ class PaymentVerifyResponse(BaseModel):
 # --- Prepaid account top-up (hosted checkout) -----------------------------
 
 
+class PaymentProviderOption(BaseModel):
+    """An online checkout option (Paystack/Flutterwave) for the pay selector."""
+
+    provider_type: str
+    label: str
+
+
+class BankTransferAccount(BaseModel):
+    bank_name: str
+    account_name: str
+    account_number: str
+    sort_code: str | None = None
+
+
+class DirectBankTransferConfig(BaseModel):
+    """Admin-configured bank account(s) for the direct-transfer pay option."""
+
+    enabled: bool = False
+    instructions: str | None = None
+    accounts: list[BankTransferAccount] = Field(default_factory=list)
+
+
 class TopupPageResponse(BaseModel):
     provider_type: str
     provider_public_key: str | None = None
@@ -396,10 +421,18 @@ class TopupPageResponse(BaseModel):
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
     customer_email: str | None = None
+    # The full pay-with selector: online gateways (Paystack/Flutterwave) and the
+    # direct-bank-transfer option, mirroring the web top-up chooser. Mobile
+    # renders one row per online option plus a bank-transfer + saved-card flow.
+    payment_options: list[PaymentProviderOption] = Field(default_factory=list)
+    direct_bank_transfer: DirectBankTransferConfig | None = None
 
 
 class TopupInitiateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
+    # Which online gateway to checkout with when paying by a new card. Defaults
+    # to the configured provider when omitted; ignored for saved-card charges.
+    provider: str | None = None
     # When set, charge this saved card server-side (one-tap repeat pay) instead
     # of opening the gateway checkout. idempotency_key makes that charge safe
     # against a double-tap (a replay returns the original intent).

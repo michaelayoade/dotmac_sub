@@ -140,6 +140,11 @@ class Reseller(Base):
     code: Mapped[str | None] = mapped_column(String(60), unique=True)
     contact_email: Mapped[str | None] = mapped_column(String(255))
     contact_phone: Mapped[str | None] = mapped_column(String(40))
+    # Reseller-level dunning policy override (applies to the reseller's accounts
+    # unless an account sets its own). See Subscriber.policy_set_id.
+    policy_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_sets.id")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_house: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
@@ -201,7 +206,11 @@ class Subscriber(Base):
     domain: Mapped[str | None] = mapped_column(String(120))
     website: Mapped[str | None] = mapped_column(String(255))
 
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # Email is *contact information*, not an identity. It is intentionally
+    # non-unique: many customers under one reseller legitimately share a
+    # contact address (e.g. the reseller owner's email). Login identity lives
+    # in UserCredential.username (and RADIUS); ownership in reseller_id.
+    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     phone: Mapped[str | None] = mapped_column(String(40))
 
@@ -249,6 +258,11 @@ class Subscriber(Base):
     # === Billing Fields (from SubscriberAccount) ===
     tax_rate_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tax_rates.id")
+    )
+    # Account-level dunning policy override. Resolution order for an account is
+    # account -> reseller -> offer -> general default (by billing mode).
+    policy_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_sets.id")
     )
     billing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     captive_redirect_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -637,6 +651,13 @@ class ResellerUser(Base):
         UUID(as_uuid=True), ForeignKey("resellers.id", ondelete="CASCADE")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Layer 3: a reseller portal login as a first-class identity rather than a
+    # fake Subscriber. These carry the login's own contact/display info so no
+    # subscriber row is needed; subscriber_id (person_id) above is kept only for
+    # historical linkage during the transition and is now optional.
+    email: Mapped[str | None] = mapped_column(String(255))
+    full_name: Mapped[str | None] = mapped_column(String(160))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

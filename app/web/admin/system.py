@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from base64 import b64encode
 from datetime import UTC, datetime
 from io import BytesIO
@@ -1518,6 +1519,9 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
+    from app.services.auth_dependencies import has_permission
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
     from app.web.admin import get_current_user, get_sidebar_stats
 
     edit_data = web_system_profiles_service.get_user_edit_data(db, user_id)
@@ -1528,24 +1532,38 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
             status_code=404,
         )
 
-    return templates.TemplateResponse(
-        "admin/system/users/edit.html",
-        {
-            "request": request,
-            "user": edit_data["user"],
-            "roles": edit_data["roles"],
-            "current_role_ids": edit_data["current_role_ids"],
-            "all_permissions": edit_data["all_permissions"],
-            "direct_permission_ids": edit_data["direct_permission_ids"],
-            "audit_items": _system_user_audit_items(db, user_id),
-            "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
-            "can_update_password": web_system_common_service.is_admin_request(request),
-            "active_page": "users",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-        },
-    )
+    # Device-login panel: only expose to admins with router:admin
+    auth = getattr(request.state, "auth", None) or {}
+    can_manage_device_login = bool(auth) and has_permission(auth, db, "router:admin")
+    device_login_tier: str | None = None
+    if can_manage_device_login:
+        try:
+            target_user = edit_data["user"]
+            roles = effective_roles(db, target_user.id)
+            perms = effective_perms(db, target_user.id)
+            device_login_tier = derive_router_tier(roles, perms)
+        except Exception:
+            device_login_tier = None
+
+    ctx: dict = {
+        "request": request,
+        "user": edit_data["user"],
+        "roles": edit_data["roles"],
+        "current_role_ids": edit_data["current_role_ids"],
+        "all_permissions": edit_data["all_permissions"],
+        "direct_permission_ids": edit_data["direct_permission_ids"],
+        "audit_items": _system_user_audit_items(db, user_id),
+        "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
+        "can_update_password": web_system_common_service.is_admin_request(request),
+        "active_page": "users",
+        "active_menu": "system",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+    if can_manage_device_login:
+        ctx["device_login_tier"] = device_login_tier
+
+    return templates.TemplateResponse("admin/system/users/edit.html", ctx)
 
 
 @router.post(
@@ -1789,6 +1807,101 @@ def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_d
 def user_send_invite_get_fallback(user_id: str):
     """Fallback for auth-refresh GET redirect on invite action URLs."""
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+
+
+@router.post(
+    "/users/{user_id}/device-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:admin"))],
+)
+def user_device_login_set(
+    request: Request,
+    user_id: str,
+    form_data=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    """Enable/disable device login and set/rotate the router secret."""
+    from app.tasks.radius_population import sync_device_login
+
+    action = form_data.get("device_login_action", "set")
+    note: str
+    try:
+        if action == "revoke":
+            web_system_user_mutations_service.revoke_device_login(db, user_id=user_id)
+            note = "Device login revoked."
+        else:
+            enabled = bool(form_data.get("device_login_enabled"))
+            secret = form_data.get("device_login_secret") or None
+            web_system_user_mutations_service.set_device_login(
+                db, user_id=user_id, enabled=enabled, secret=secret
+            )
+            note = "Device login updated."
+        _log_system_user_event(
+            db,
+            request,
+            action=f"device_login_{action}",
+            user_id=user_id,
+            metadata={"action": action},
+        )
+        sync_device_login.delay()
+    except ValueError as exc:
+        db.rollback()
+        note = str(exc)
+        trigger = {
+            "showToast": {
+                "type": "error",
+                "title": "Device login",
+                "message": note,
+                "duration": 8000,
+            }
+        }
+        if request.headers.get("HX-Request"):
+            return Response(
+                status_code=400, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
+    except Exception:
+        db.rollback()
+        note = "Device-login update failed"
+        trigger = {
+            "showToast": {
+                "type": "error",
+                "title": "Device login",
+                "message": note,
+                "duration": 8000,
+            }
+        }
+        if request.headers.get("HX-Request"):
+            return Response(
+                status_code=400, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
+
+    trigger = {
+        "showToast": {
+            "type": "success",
+            "title": "Device login",
+            "message": note,
+            "duration": 6000,
+        }
+    }
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Trigger": json.dumps(trigger)})
+    return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
+
+
+@router.get(
+    "/users/{user_id}/device-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:admin"))],
+)
+def user_device_login_get_fallback(user_id: str):
+    """Fallback for auth-refresh GET redirect on device-login action URLs."""
+    return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
 
 
 @router.post(
@@ -2643,6 +2756,7 @@ def scheduler_task_detail(
             "request": request,
             "task": detail_data["task"],
             "next_run": detail_data["next_run"],
+            "active_timezone": detail_data["active_timezone"],
             "runs": detail_data["runs"],
             "active_page": "scheduler",
             "active_menu": "system",
@@ -2650,6 +2764,48 @@ def scheduler_task_detail(
             "sidebar_stats": get_sidebar_stats(db),
         },
     )
+
+
+@router.post(
+    "/scheduler/{task_id}/schedule",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_update_schedule(
+    request: Request,
+    task_id: str,
+    schedule_type: str = Form(...),
+    interval_seconds: str = Form(default=""),
+    cron_expr: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    """Update a scheduled task's cadence (interval seconds or cron expression)."""
+    from app.models.scheduler import ScheduleType
+    from app.schemas.scheduler import ScheduledTaskUpdate
+    from app.services import scheduler_config
+
+    base = f"/admin/system/scheduler/{task_id}"
+    if schedule_type == "crontab":
+        expr = cron_expr.strip()
+        if not scheduler_config.is_valid_cron(expr):
+            return RedirectResponse(url=f"{base}?error=invalid_cron", status_code=303)
+        update = ScheduledTaskUpdate(schedule_type=ScheduleType.crontab, cron_expr=expr)
+    else:
+        try:
+            seconds = int(interval_seconds)
+            if seconds < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return RedirectResponse(
+                url=f"{base}?error=invalid_interval", status_code=303
+            )
+        update = ScheduledTaskUpdate(
+            schedule_type=ScheduleType.interval,
+            interval_seconds=seconds,
+            cron_expr=None,
+        )
+    scheduler_service.scheduled_tasks.update(db, task_id, update)
+    return RedirectResponse(url=f"{base}?saved=1", status_code=303)
 
 
 @router.post(
@@ -2796,6 +2952,17 @@ def settings_branding_update(
     main_logo_file: UploadFile | None = File(None),
     dark_logo_file: UploadFile | None = File(None),
     favicon_file: UploadFile | None = File(None),
+    brand_primary_color: str | None = Form(None),
+    brand_secondary_color: str | None = Form(None),
+    login_hero_customer_url: str | None = Form(None),
+    login_hero_reseller_url: str | None = Form(None),
+    login_hero_admin_url: str | None = Form(None),
+    remove_login_hero_customer: str | None = Form(None),
+    remove_login_hero_reseller: str | None = Form(None),
+    remove_login_hero_admin: str | None = Form(None),
+    login_hero_customer_file: UploadFile | None = File(None),
+    login_hero_reseller_file: UploadFile | None = File(None),
+    login_hero_admin_file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
     """Update sidebar branding assets via URL or file upload."""
@@ -2913,6 +3080,30 @@ def settings_branding_update(
                 "favicon",
                 "favicon",
             ),
+            (
+                "login_hero_customer_url",
+                login_hero_customer_url,
+                web_system_common_service.form_bool(remove_login_hero_customer),
+                login_hero_customer_file,
+                "login",
+                "login_hero_customer",
+            ),
+            (
+                "login_hero_reseller_url",
+                login_hero_reseller_url,
+                web_system_common_service.form_bool(remove_login_hero_reseller),
+                login_hero_reseller_file,
+                "login",
+                "login_hero_reseller",
+            ),
+            (
+                "login_hero_admin_url",
+                login_hero_admin_url,
+                web_system_common_service.form_bool(remove_login_hero_admin),
+                login_hero_admin_file,
+                "login",
+                "login_hero_admin",
+            ),
         ]
 
         updates: list[tuple[str, str, str]] = []
@@ -2939,6 +3130,24 @@ def settings_branding_update(
             if _is_local_branding_path(current_value):
                 upload = file_upload_service.get_branding_upload()
                 upload.delete_by_url(current_value, "/static/branding/")
+
+        color_candidate = (brand_primary_color or "").strip()
+        if color_candidate:
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", color_candidate):
+                raise ValueError(
+                    "Brand colour must be a 6-digit hex value, e.g. #206a07."
+                )
+            normalised = color_candidate.lstrip("#").lower()
+            _persist_setting("brand_primary_color", f"#{normalised}")
+
+        secondary_candidate = (brand_secondary_color or "").strip()
+        if secondary_candidate:
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", secondary_candidate):
+                raise ValueError(
+                    "Brand colour must be a 6-digit hex value, e.g. #06b6d4."
+                )
+            normalised_secondary = secondary_candidate.lstrip("#").lower()
+            _persist_setting("brand_secondary_color", f"#{normalised_secondary}")
 
         return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:

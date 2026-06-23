@@ -352,6 +352,8 @@ from app.models.payment_arrangement import (  # noqa: F401
 from app.models.payment_proof import (  # noqa: F401
     PaymentProof,
     PaymentProofStatus,
+    WithholdingTaxRecord,
+    WithholdingTaxStatus,
 )
 from app.models.portal_message import (  # noqa: F401
     PortalMessage,

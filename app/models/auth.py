@@ -45,7 +45,13 @@ class UserCredential(Base):
             name="ck_user_credentials_local_requires_username_password",
         ),
         CheckConstraint(
-            "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
+            # Exactly one principal: subscriber (customer), system_user (admin),
+            # or reseller_user (Layer 3 — reseller portal login as its own
+            # identity, not a fake subscriber). CASE-sum form works on both
+            # Postgres and the SQLite test DB.
+            "(CASE WHEN subscriber_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN system_user_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN reseller_user_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_user_credentials_exactly_one_principal",
         ),
         Index(
@@ -65,6 +71,9 @@ class UserCredential(Base):
     )
     system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=True
+    )
+    reseller_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reseller_users.id"), nullable=True
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
@@ -97,6 +106,7 @@ class UserCredential(Base):
 
     subscriber = relationship("Subscriber")
     system_user = relationship("SystemUser")
+    reseller_user = relationship("ResellerUser")
     radius_server = relationship("RadiusServer")
 
 
@@ -117,8 +127,17 @@ class MFAMethod(Base):
             postgresql_where=text("is_primary"),
             sqlite_where=text("is_primary"),
         ),
+        Index(
+            "ix_mfa_methods_primary_per_reseller_user",
+            "reseller_user_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+            sqlite_where=text("is_primary"),
+        ),
         CheckConstraint(
-            "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
+            "(CASE WHEN subscriber_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN system_user_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN reseller_user_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_mfa_methods_exactly_one_principal",
         ),
     )
@@ -131,6 +150,9 @@ class MFAMethod(Base):
     )
     system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=True
+    )
+    reseller_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reseller_users.id"), nullable=True
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
@@ -162,13 +184,16 @@ class MFAMethod(Base):
 
     subscriber = relationship("Subscriber")
     system_user = relationship("SystemUser")
+    reseller_user = relationship("ResellerUser")
 
 
 class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = (
         CheckConstraint(
-            "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
+            "(CASE WHEN subscriber_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN system_user_id IS NOT NULL THEN 1 ELSE 0 END"
+            " + CASE WHEN reseller_user_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_sessions_exactly_one_principal",
         ),
         Index("ux_sessions_token_hash", "token_hash", unique=True),
@@ -187,6 +212,9 @@ class Session(Base):
     )
     system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=True
+    )
+    reseller_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reseller_users.id"), nullable=True
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID] = synonym("subscriber_id")

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 
 from app.celery_app import celery_app
 from app.models.network_operation import NetworkOperation, NetworkOperationStatus
@@ -67,7 +69,7 @@ def cleanup_old_operations() -> dict[str, int]:
             NetworkOperation.completed_at < cutoff,
             ~has_active_children,
         )
-        purge_result = db.execute(purge_stmt)
+        purge_result = cast(CursorResult[Any], db.execute(purge_stmt))
         purged = purge_result.rowcount
 
         # Mark stale running/pending/waiting operations as failed.

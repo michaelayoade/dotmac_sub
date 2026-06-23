@@ -8,9 +8,9 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscriber import SubscriberStatus as AccountStatus
+from app.services import enforcement_window, settings_spec
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
-from app.services import settings_spec
 from app.services.enforcement import (
     _resolve_effective_profile,
     _setting_bool,
@@ -371,27 +371,38 @@ class EnforcementHandler:
         cap_resets_at_raw = event.payload.get("cap_resets_at")
 
         if action == "block":
-            try:
-                disconnect_subscription_sessions(
-                    db, str(subscription_id), reason="fup_block"
-                )
-                apply_subscription_address_list_block(db, str(subscription_id))
-                self._persist_fup_state(
-                    db,
-                    str(subscription_id),
-                    offer_id,
-                    rule_id,
-                    action_status="blocked",
-                    cap_resets_at=cap_resets_at_raw,
-                    notes="FUP block applied",
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to apply FUP block for subscription %s: %s",
-                    subscription_id,
-                    exc,
-                )
-            return
+            # The soft captive walled-garden is opt-in per customer. A blocked
+            # customer who hasn't opted in gets a hard block (offline), not a
+            # captive redirect — fall through to the suspend path, which routes
+            # to Auth-Type := Reject via derive_access_state/populate.
+            from app.models.subscriber import Subscriber
+
+            subscriber = db.get(Subscriber, account_id)
+            captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
+            if not captive:
+                action = "suspend"
+            else:
+                try:
+                    disconnect_subscription_sessions(
+                        db, str(subscription_id), reason="fup_block"
+                    )
+                    apply_subscription_address_list_block(db, str(subscription_id))
+                    self._persist_fup_state(
+                        db,
+                        str(subscription_id),
+                        offer_id,
+                        rule_id,
+                        action_status="blocked",
+                        cap_resets_at=cap_resets_at_raw,
+                        notes="FUP captive redirect applied",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to apply FUP captive redirect for subscription %s: %s",
+                        subscription_id,
+                        exc,
+                    )
+                return
         if action == "suspend":
             from app.models.enforcement_lock import EnforcementReason
             from app.services.account_lifecycle import suspend_subscription
@@ -708,6 +719,23 @@ class EnforcementHandler:
                     shield_reason,
                 )
                 return
+
+            # Phase 6 (audit-first): record whether this overdue auto-suspension
+            # would be deferred by the enforcement time-of-day window — WITHOUT
+            # skipping yet. Flip to actually gating once the would_gate logs
+            # confirm the window config (docs/designs/BILLING_ENFORCEMENT_WINDOW.md).
+            if not enforcement_window.within_enforcement_window(db):
+                logger.info(
+                    "enforcement_window_audit",
+                    extra={
+                        "event": "enforcement_window_audit",
+                        "path": "overdue_event",
+                        "action": "auto_suspend",
+                        "account_id": str(account_id),
+                        "would_gate": True,
+                        "timezone": enforcement_window.resolve_timezone_name(db),
+                    },
+                )
 
             # Past grace period — suspend via lifecycle enforcement locks.
             # Use emit=False to prevent re-entrant event dispatch (this handler

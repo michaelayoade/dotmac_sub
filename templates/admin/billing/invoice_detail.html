@@ -222,6 +222,32 @@
                 </div>
             {% endcall %}
 
+            {# Bank Details #}
+            {% if invoice_bank_details %}
+            {% call card("Bank Details", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M4 10h16M5 10l7-7 7 7M6 10v11m4-11v11m4-11v11m4-11v11"/></svg>', color="emerald") %}
+                <div class="space-y-3 text-sm">
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Bank Name</p>
+                        <p class="mt-1 font-medium text-slate-900 dark:text-white">{{ invoice_bank_details.bank_name }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Account Name</p>
+                        <p class="mt-1 font-medium text-slate-900 dark:text-white">{{ invoice_bank_details.account_name }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Account Number</p>
+                        <p class="mt-1 font-mono font-semibold tabular-nums text-slate-900 dark:text-white">{{ invoice_bank_details.account_number }}</p>
+                    </div>
+                    {% if invoice_bank_details.sort_code %}
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Sort Code</p>
+                        <p class="mt-1 font-mono font-semibold tabular-nums text-slate-900 dark:text-white">{{ invoice_bank_details.sort_code }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+            {% endcall %}
+            {% endif %}
+
             {# Apply Credit #}
             {% call card("Apply Credit", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald") %}
                 {% if credit_notes %}

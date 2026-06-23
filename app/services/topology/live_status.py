@@ -98,8 +98,12 @@ def warm_topology_status(session: Session, client) -> dict:
         if hid is None:  # filtered in the query; narrows for the type checker
             continue
         status = _derive(avail.get(hid, UNKNOWN), hid in problems)
-        n.live_status = status
-        n.live_status_at = now
+        # Stamp live_status_at only when the state CHANGES, so it marks when the
+        # node entered its current state — the dwell clock the customer-facing
+        # connection-status debounce relies on (see topology.selfcare).
+        if n.live_status != status:
+            n.live_status = status
+            n.live_status_at = now
         counts[status] += 1
     session.flush()
     return {"nodes": len(nodes), **counts}

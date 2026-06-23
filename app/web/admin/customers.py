@@ -619,11 +619,31 @@ def person_detail(
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
+    notification_context = web_notifications_service.bulk_notification_setup_context(db)
     pppoe_access = detail_data.get("pppoe_access") or {
         "has_credential": False,
         "credential_id": None,
         "login": None,
         "has_password": False,
+    }
+    customer = detail_data["customer"]
+    customer_type = str(detail_data.get("customer_type") or "person")
+    notification_channels = notification_context.get("bulk_notification_channels") or []
+    notification_templates = (
+        notification_context.get("bulk_notification_templates") or []
+    )
+    detail_config = {
+        "statsUrl": (
+            f"/admin/customers/person/{customer.id}/stats"
+            f"?usage_period={usage_period}"
+            f"&usage_page={usage_page}"
+            f"&usage_per_page={usage_per_page}"
+        ),
+        "detailUrl": f"/admin/customers/person/{customer.id}",
+        "customerId": str(customer.id),
+        "customerType": customer_type,
+        "notificationChannels": notification_channels,
+        "notificationTemplates": notification_templates,
     }
 
     return templates.TemplateResponse(
@@ -635,7 +655,10 @@ def person_detail(
             "usage_period": usage_period,
             "usage_page": usage_page,
             "usage_per_page": usage_per_page,
-            **web_notifications_service.bulk_notification_setup_context(db),
+            "customer_type": customer_type,
+            "detail_config": detail_config,
+            "bulk_notification_channels": notification_channels,
+            "bulk_notification_templates": notification_templates,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1957,6 +1980,26 @@ def bulk_send_customer_message(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get(
+    "/bulk/whatsapp-template",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def bulk_whatsapp_template_details(
+    name: str = Query(..., min_length=1),
+    language: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Fetch Meta WhatsApp template component details for the broadcast modal."""
+    try:
+        return web_customer_actions_service.whatsapp_template_details(
+            db=db,
+            name=name,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(

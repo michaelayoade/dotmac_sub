@@ -25,15 +25,15 @@ def test_notification_template_test_uses_whatsapp_and_substitution(
     )
     captured = {}
 
-    def _fake_send_text_message(*, db, recipient, body, dry_run):
+    def _fake_send_template_message(*, db, recipient, template_name, dry_run):
         captured["recipient"] = recipient
-        captured["body"] = body
+        captured["template_name"] = template_name
         captured["dry_run"] = dry_run
         return {"ok": True, "response": "ok"}
 
     monkeypatch.setattr(
-        "app.services.integrations.connectors.whatsapp.send_text_message",
-        _fake_send_text_message,
+        "app.services.integrations.connectors.whatsapp.send_template_message",
+        _fake_send_template_message,
     )
 
     response = notifications_web.notification_template_test(
@@ -45,9 +45,11 @@ def test_notification_template_test_uses_whatsapp_and_substitution(
     )
 
     assert response.status_code == 303
+    # WhatsApp business sends go through approved Meta templates (by code), not
+    # free text, so the test-send now invokes send_template_message.
     assert captured["recipient"] == "+2348000000000"
     assert captured["dry_run"] is False
-    assert captured["body"] == "Hello Ada, amount due is 12500.00"
+    assert captured["template_name"] == "wa_invoice"
 
 
 def test_notification_template_preview_renders_variables(db_session):

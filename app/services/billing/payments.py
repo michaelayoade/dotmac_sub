@@ -99,12 +99,25 @@ _ALLOWED_PAYMENT_TRANSITIONS: dict[PaymentStatus, set[PaymentStatus]] = {
 class PaymentMethods(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentMethodCreate):
-        _validate_account(db, str(payload.account_id))
+        # Exactly one owner: account (customer subscriber) or reseller org
+        # (Layer 3 #329). Validate the account only when account-owned.
+        if (payload.account_id is None) == (payload.reseller_id is None):
+            raise HTTPException(
+                status_code=400,
+                detail="Exactly one of account_id or reseller_id is required",
+            )
+        if payload.account_id is not None:
+            _validate_account(db, str(payload.account_id))
         if payload.payment_channel_id:
             _validate_payment_channel(db, str(payload.payment_channel_id))
         if payload.is_default:
+            owner_filter = (
+                PaymentMethod.account_id == payload.account_id
+                if payload.account_id is not None
+                else PaymentMethod.reseller_id == payload.reseller_id
+            )
             db.query(PaymentMethod).filter(
-                PaymentMethod.account_id == payload.account_id,
+                owner_filter,
                 PaymentMethod.is_default.is_(True),
             ).update({"is_default": False})
         data = payload.model_dump()
@@ -167,15 +180,23 @@ class PaymentMethods(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Payment method not found")
         data = payload.model_dump(exclude_unset=True)
         account_id = data.get("account_id", method.account_id)
-        _validate_account(db, str(account_id))
+        # Reseller-org-owned methods (Layer 3 #329) have no account_id; only
+        # validate/scope by account when account-owned, else by reseller.
+        if account_id is not None:
+            _validate_account(db, str(account_id))
         if "payment_channel_id" in data:
             _validate_payment_channel(
                 db,
                 str(data["payment_channel_id"]) if data["payment_channel_id"] else None,
             )
         if data.get("is_default"):
+            owner_filter = (
+                PaymentMethod.account_id == account_id
+                if account_id is not None
+                else PaymentMethod.reseller_id == method.reseller_id
+            )
             db.query(PaymentMethod).filter(
-                PaymentMethod.account_id == account_id,
+                owner_filter,
                 PaymentMethod.id != method.id,
                 PaymentMethod.is_default.is_(True),
             ).update({"is_default": False})

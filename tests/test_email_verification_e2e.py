@@ -181,10 +181,11 @@ def test_set_subscriber_email_unchanged_is_noop(
     assert _capture_email == []
 
 
-def test_set_subscriber_email_rejects_duplicate(
+def test_set_subscriber_email_allows_duplicate(
     db_session, subscriber, _no_audit, _capture_email
 ):
-    """The email column is unique — a clash with another subscriber is a 409."""
+    """Email is non-unique contact info — sharing another subscriber's address
+    is allowed (no 409) and re-arms verification."""
     from app.models.subscriber import Subscriber
 
     other = Subscriber(
@@ -195,12 +196,12 @@ def test_set_subscriber_email_rejects_duplicate(
     db_session.add(other)
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        auth_flow_service.set_subscriber_email(
-            db_session, str(subscriber.id), other.email
-        )
-    assert exc.value.status_code == 409
-    assert _capture_email == []
+    changed = auth_flow_service.set_subscriber_email(
+        db_session, str(subscriber.id), other.email
+    )
+    assert changed is True
+    db_session.refresh(subscriber)
+    assert subscriber.email == other.email
 
 
 def test_me_update_can_add_email_and_verify(

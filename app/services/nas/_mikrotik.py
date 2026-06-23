@@ -338,6 +338,58 @@ def _mikrotik_routeros_query(
         pool.disconnect()
 
 
+def disconnect_mikrotik_pppoe_bulk(device: NasDevice, logins: set[str]) -> set[str]:
+    """Remove live PPPoE sessions for ``logins`` via the RouterOS API and verify.
+
+    Opens ONE API connection to ``device``, removes every ``/ppp/active`` entry
+    whose name is in ``logins``, then re-reads ``/ppp/active`` to confirm. Returns
+    the set of logins confirmed gone (removed, or already absent — idempotent).
+
+    Unlike CoA, the API confirms its own work via read-back: a lost CoA reply
+    looks like failure even when it succeeded, whereas here a session still
+    present after the remove is unambiguously NOT dropped. Raises if the API is
+    unreachable or has no usable credentials, so the caller can fall back.
+    """
+    from routeros_api import RouterOsApiPool
+
+    wanted = {str(lg or "").strip() for lg in logins if str(lg or "").strip()}
+    if not wanted:
+        return set()
+    host, port, username, password = _mikrotik_routeros_auth(device)
+    use_ssl = port == 8729
+    pool = RouterOsApiPool(
+        host,
+        username=username,
+        password=password,
+        port=port,
+        plaintext_login=not use_ssl,
+        use_ssl=use_ssl,
+        ssl_verify=False,
+        ssl_verify_hostname=False,
+    )
+    try:
+        api = pool.get_api()
+        res = cast(Any, api.get_resource("/ppp/active"))
+        for row in _as_dict_list(res.get()):
+            if str(row.get("name") or "").strip() in wanted:
+                rid = row.get("id") or row.get(".id")
+                if rid:
+                    try:
+                        res.remove(id=rid)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "API kick: remove failed for %s on %s: %s",
+                            row.get("name"),
+                            getattr(device, "name", "?"),
+                            exc,
+                        )
+        # Read-back: any wanted login still present was NOT dropped.
+        still = {str(row.get("name") or "").strip() for row in _as_dict_list(res.get())}
+        return {login for login in wanted if login not in still}
+    finally:
+        pool.disconnect()
+
+
 def _float_value(value: object) -> float:
     if value is None:
         return 0.0
@@ -381,6 +433,7 @@ def get_mikrotik_pppoe_live_bandwidth(
         raise HTTPException(status_code=400, detail="Subscription has no PPPoE login.")
 
     from routeros_api import RouterOsApiPool
+    from routeros_api.exceptions import RouterOsApiError
 
     from app.services.bandwidth import to_subscriber_directions
 
@@ -459,6 +512,31 @@ def get_mikrotik_pppoe_live_bandwidth(
             "framed_ip_address": session.get("address"),
             "caller_id": session.get("caller-id") or session.get("caller_id"),
             "uptime": session.get("uptime"),
+        }
+    except (RouterOsApiError, OSError) as exc:
+        # The NAS is unreachable / slow (RouterOS API connect or read timeout).
+        # This is a live operator read of an external device, not a server
+        # fault — return a graceful "unavailable" payload (same shape as the
+        # no-session case) instead of letting the timeout bubble up to a 500.
+        logger.warning(
+            "mikrotik live bandwidth read failed (device=%s login=%s): %s",
+            device.id,
+            login,
+            exc,
+        )
+        return {
+            "online": False,
+            "available": False,
+            "login": login,
+            "source": "mikrotik_routeros_api",
+            "nas_device_id": str(device.id),
+            "nas_device_name": device.name,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "current_rx_bps": 0.0,
+            "current_tx_bps": 0.0,
+            "download_bps": 0.0,
+            "upload_bps": 0.0,
+            "error": "nas_unreachable",
         }
     finally:
         pool.disconnect()

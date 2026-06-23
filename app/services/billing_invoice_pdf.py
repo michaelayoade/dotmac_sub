@@ -29,6 +29,7 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import branding_storage as branding_storage_service
 from app.services import domain_settings as domain_settings_service
+from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import settings_spec
 from app.services import web_system_company_info as company_info_service
 from app.services.db_session_adapter import db_session_adapter
@@ -69,6 +70,13 @@ def _display_account_name(invoice: Invoice) -> str:
     if account_name:
         return account_name
     return "Account"
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3].rstrip()}..."
 
 
 def _money(value: Decimal | None) -> str:
@@ -223,9 +231,6 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     company_name = html.escape(
         (company_info.get("company_name") or "").strip() or get_brand()["legal_name"]
     )
-    company_block = "<br>".join(
-        html.escape(line) for line in _company_lines(company_info)
-    )
     accent_invoice_id = invoice.invoice_number or str(invoice.id)
     tax_label = "Tax"
     vat_number = html.escape((company_info.get("company_vat_number") or "").strip())
@@ -236,6 +241,32 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         if logo_src
         else f'<div class="logo-fallback">{company_name[:1].upper()}</div>'
     )
+    bank_details = invoice_bank_details_service.get_invoice_bank_details(db)
+    bank_markup = ""
+    if bank_details:
+        bank_rows = [
+            ("Bank Name", bank_details.get("bank_name", "")),
+            ("Account Name", bank_details.get("account_name", "")),
+            ("Account Number", bank_details.get("account_number", "")),
+            ("Sort Code", bank_details.get("sort_code", "")),
+        ]
+        bank_markup = "".join(
+            (
+                '<div class="bank-row">'
+                f"<span>{html.escape(label)}</span>"
+                f"<strong>{html.escape(value)}</strong>"
+                "</div>"
+            )
+            for label, value in bank_rows
+            if value
+        )
+        if bank_markup:
+            bank_markup = (
+                '<div class="bank-card">'
+                '<p class="card-title">Bank Details</p>'
+                f'<div class="bank-grid">{bank_markup}</div>'
+                "</div>"
+            )
 
     return f"""
 <!doctype html>
@@ -264,18 +295,16 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
   body {{ font-family: DejaVu Sans, Arial, sans-serif; color: var(--slate-900); font-size: 12px; margin: 0; background: var(--white); }}
   .page {{ border: 1px solid var(--slate-200); border-radius: 18px; overflow: hidden; }}
   .hero {{
-    background: linear-gradient(135deg, var(--green-900), var(--green-700));
+    background: var(--green-900);
     color: var(--white);
     padding: 22px 24px 18px;
   }}
   .hero-top {{ display: flex; justify-content: space-between; align-items: flex-start; width: 100%; }}
   .hero-top > * + * {{ margin-left: 24px; }}
-  .brand {{ display: flex; align-items: center; max-width: 58%; }}
-  .brand > * + * {{ margin-left: 14px; }}
+  .brand {{ display: flex; align-items: flex-start; max-width: 58%; }}
   .logo {{ max-height: 52px; max-width: 150px; display: block; object-fit: contain; background: var(--white); border-radius: 12px; padding: 6px 10px; }}
   .logo-fallback {{ width: 54px; height: 54px; border-radius: 14px; background: rgba(255,255,255,0.16); color: var(--white); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; }}
-  .company-name {{ margin: 0 0 6px; font-size: 24px; font-weight: 700; }}
-  .company-copy {{ margin: 0; font-size: 10.5px; line-height: 1.6; opacity: 0.95; }}
+  .customer-name {{ margin: 42px 0 0; max-width: 360px; color: var(--white); font-size: 20px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; text-align: left; }}
   .invoice-panel {{ min-width: 220px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.22); border-radius: 16px; padding: 14px 16px; }}
   .eyebrow {{ margin: 0 0 4px; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.82; }}
   .invoice-title {{ margin: 0; font-size: 28px; font-weight: 800; }}
@@ -287,6 +316,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
   .card {{ background: var(--white); border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; min-height: 100px; }}
   .card-title {{ margin: 0 0 8px; color: var(--green-900); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }}
   .card-copy {{ margin: 0; color: var(--slate-700); line-height: 1.7; }}
+  .billed-name {{ display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
   .highlight-card {{ border-color: var(--green-700); background: linear-gradient(180deg, var(--white), var(--green-50)); }}
   .highlight-value {{ margin: 0; font-size: 22px; font-weight: 800; color: var(--green-900); }}
   .alert-card {{ border-color: var(--red-100); }}
@@ -309,6 +339,12 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
   .totals-card {{ width: 320px; border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; background: var(--white); }}
   .totals-card table td {{ border: none; padding: 5px 0; }}
   .totals-card .grand-total td {{ color: var(--green-900); font-size: 15px; font-weight: 800; padding-top: 10px; border-top: 1px solid var(--slate-200); }}
+  .bank-card {{ margin-top: 16px; border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; background: var(--white); }}
+  .bank-grid {{ display: table; width: 100%; }}
+  .bank-row {{ display: table-row; }}
+  .bank-row span, .bank-row strong {{ display: table-cell; padding: 4px 0; line-height: 1.5; }}
+  .bank-row span {{ color: var(--slate-500); width: 34%; }}
+  .bank-row strong {{ color: var(--slate-900); font-weight: 700; }}
   .memo {{ margin-top: 18px; border-left: 4px solid var(--red-700); background: #fff8f8; border-radius: 0 14px 14px 0; padding: 14px 16px; }}
   .memo strong {{ color: var(--red-700); }}
   .footer {{ margin-top: 18px; color: var(--slate-500); font-size: 10px; display: flex; justify-content: space-between; }}
@@ -321,10 +357,6 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
       <div class=\"hero-top\">
         <div class=\"brand\">
           {logo_markup}
-          <div>
-            <p class=\"company-name\">{company_name}</p>
-            <p class=\"company-copy\">{company_block or company_name}</p>
-          </div>
         </div>
         <div class=\"invoice-panel\">
           <p class=\"eyebrow\">Invoice</p>
@@ -337,6 +369,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <div class=\"status-pill\">{status}</div>
         </div>
       </div>
+      <p class=\"customer-name\">{account_name}</p>
     </div>
 
     <div class=\"body\">
@@ -345,7 +378,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <td style=\"width: 40%;\">
             <div class=\"card\">
               <p class=\"card-title\">Billed To</p>
-              <p class=\"card-copy\">{account_name}<br>{account_email}</p>
+              <p class=\"card-copy\"><span class=\"billed-name\">{account_name}</span><br>{account_email}</p>
             </div>
           </td>
           <td style=\"width: 30%;\">
@@ -388,6 +421,8 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           </table>
         </div>
       </div>
+
+      {bank_markup}
 
       <div class=\"memo\">
         <strong>Memo:</strong> {memo}
@@ -466,7 +501,9 @@ def _truncation_marker(hidden_count: int) -> str:
     return f"... and {hidden_count} more line items (see itemised statement)"
 
 
-def _render_invoice_text_lines(invoice: Invoice) -> list[str]:
+def _render_invoice_text_lines(
+    invoice: Invoice, db: Session | None = None
+) -> list[str]:
     # The minimal text PDF is encoded latin-1, so use "NGN" (no naira glyph).
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
     out = [
@@ -496,9 +533,24 @@ def _render_invoice_text_lines(invoice: Invoice) -> list[str]:
             f"Tax: NGN {_money(invoice.tax_total)}",
             f"Total: NGN {_money(invoice.total)}",
             f"Balance Due: NGN {_money(invoice.balance_due)}",
-            f"Memo: {(invoice.memo or '').strip() or '-'}",
         ]
     )
+    if db is not None:
+        bank_details = invoice_bank_details_service.get_invoice_bank_details(db)
+        if bank_details:
+            out.extend(
+                [
+                    "",
+                    "Bank Details:",
+                    f"Bank Name: {bank_details.get('bank_name', '')}",
+                    f"Account Name: {bank_details.get('account_name', '')}",
+                    f"Account Number: {bank_details.get('account_number', '')}",
+                ]
+            )
+            sort_code = (bank_details.get("sort_code") or "").strip()
+            if sort_code:
+                out.append(f"Sort Code: {sort_code}")
+    out.append(f"Memo: {(invoice.memo or '').strip() or '-'}")
     return out
 
 
@@ -506,7 +558,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except Exception:
-        return _build_simple_pdf(_render_invoice_text_lines(invoice))
+        return _build_simple_pdf(_render_invoice_text_lines(invoice, db))
 
     def _font_path(bold: bool) -> str | None:
         candidates = [
@@ -560,11 +612,11 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         fill="#ffffff",
     )
     draw.rounded_rectangle((36, 36, width - 36, 350), radius=28, fill=green_900)
-    draw.rectangle((36, 220, width - 36, 350), fill=green_700)
+    draw.rectangle((36, 220, width - 36, 350), fill=green_900)
 
     company_info = company_info_service.get_company_info(db)
     company_name = (company_info.get("company_name") or "").strip() or "Your Company"
-    company_lines = _company_lines(company_info) or [company_name]
+    customer_name = _display_account_name(invoice)
     logo_image = _decode_logo_image(db)
     if logo_image is not None:
         logo = logo_image.copy()
@@ -574,7 +626,6 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         )
         page.paste(logo_bg.convert("RGB"), (margin_x - 10, 78))
         page.paste(logo, (margin_x + 4, 88), logo)
-        company_x = margin_x + logo_bg.width + 26
     else:
         draw.rounded_rectangle(
             (margin_x, 78, margin_x + 88, 166), radius=22, fill="#ffffff"
@@ -585,13 +636,6 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
             font=title_font,
             fill=green_900,
         )
-        company_x = margin_x + 118
-
-    draw.text((company_x, 84), company_name, font=title_font, fill="#ffffff")
-    line_y = 138
-    for line in company_lines[:5]:
-        draw.text((company_x, line_y), line, font=small_font, fill="#f8fafc")
-        line_y += 26
 
     panel_x = width - 380
     draw.rounded_rectangle((panel_x, 82, width - 84, 252), radius=22, fill="#ffffff")
@@ -612,6 +656,13 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         font=small_font,
         fill=slate_700,
     )
+    customer_name = _truncate_text(customer_name, 42)
+    draw.text(
+        (margin_x, 292),
+        customer_name,
+        font=heading_font,
+        fill="#ffffff",
+    )
 
     y = 390
     card_height = 138
@@ -620,7 +671,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     cards = [
         (
             "Billed To",
-            _display_account_name(invoice),
+            _truncate_text(_display_account_name(invoice), 28),
             getattr(invoice.account, "email", None) or "N/A",
             "#ffffff",
             slate_900,
@@ -767,6 +818,39 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
             font=value_font if label == "Total" else body_font,
             fill=green_900 if label == "Total" else slate_900,
         )
+
+    bank_details = invoice_bank_details_service.get_invoice_bank_details(db)
+    if bank_details:
+        bank_left = margin_x
+        bank_top = totals_top
+        bank_right = totals_left - 28
+        draw.rounded_rectangle(
+            (bank_left, bank_top, bank_right, bank_top + 172),
+            radius=20,
+            fill="#ffffff",
+            outline=slate_200,
+        )
+        draw.text(
+            (bank_left + 22, bank_top + 18),
+            "BANK DETAILS",
+            font=label_font,
+            fill=green_900,
+        )
+        bank_lines = [
+            f"Bank: {bank_details.get('bank_name', '')}",
+            f"Account Name: {bank_details.get('account_name', '')}",
+            f"Account Number: {bank_details.get('account_number', '')}",
+        ]
+        sort_code = (bank_details.get("sort_code") or "").strip()
+        if sort_code:
+            bank_lines.append(f"Sort Code: {sort_code}")
+        for index, line in enumerate(bank_lines[:4]):
+            draw.text(
+                (bank_left + 22, bank_top + 54 + (index * 28)),
+                line,
+                font=small_font,
+                fill=slate_700,
+            )
 
     memo_top = 1388
     draw.rounded_rectangle(

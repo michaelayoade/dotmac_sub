@@ -262,6 +262,7 @@ DIRECT_BANK_TRANSFER_KEYS = [
     "direct_bank_transfer_bank_name",
     "direct_bank_transfer_account_name",
     "direct_bank_transfer_account_number",
+    "direct_bank_transfer_sort_code",
     "direct_bank_transfer_instructions",
     "direct_bank_transfer_accounts",
 ]
@@ -313,6 +314,7 @@ def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> No
         "direct_bank_transfer_bank_name": primary.get("bank_name", ""),
         "direct_bank_transfer_account_name": primary.get("account_name", ""),
         "direct_bank_transfer_account_number": primary.get("account_number", ""),
+        "direct_bank_transfer_sort_code": primary.get("sort_code", ""),
     }
     _save_settings(db, SettingDomain.billing, payload, DIRECT_BANK_TRANSFER_KEYS)
 
@@ -340,6 +342,7 @@ def _parse_direct_transfer_accounts(
                     "bank_name": str(item.get("bank_name") or "").strip(),
                     "account_name": str(item.get("account_name") or "").strip(),
                     "account_number": str(item.get("account_number") or "").strip(),
+                    "sort_code": str(item.get("sort_code") or "").strip(),
                 }
                 if (
                     account["bank_name"]
@@ -353,6 +356,7 @@ def _parse_direct_transfer_accounts(
     bank_name = (settings.get("direct_bank_transfer_bank_name") or "").strip()
     account_name = (settings.get("direct_bank_transfer_account_name") or "").strip()
     account_number = (settings.get("direct_bank_transfer_account_number") or "").strip()
+    sort_code = (settings.get("direct_bank_transfer_sort_code") or "").strip()
     if bank_name and account_name and account_number:
         accounts.append(
             {
@@ -361,6 +365,7 @@ def _parse_direct_transfer_accounts(
                 "bank_name": bank_name,
                 "account_name": account_name,
                 "account_number": account_number,
+                "sort_code": sort_code,
             }
         )
     return accounts
@@ -386,8 +391,15 @@ def _direct_transfer_accounts_from_form(
     bank_names = _form_list(data, "account_bank_name")
     account_names = _form_list(data, "account_account_name")
     account_numbers = _form_list(data, "account_account_number")
+    sort_codes = _form_list(data, "account_sort_code")
     accounts: list[dict[str, str]] = []
-    row_count = max(len(ids), len(bank_names), len(account_names), len(account_numbers))
+    row_count = max(
+        len(ids),
+        len(bank_names),
+        len(account_names),
+        len(account_numbers),
+        len(sort_codes),
+    )
     for index in range(row_count):
         account_id = (
             ids[index] if index < len(ids) else ""
@@ -399,6 +411,7 @@ def _direct_transfer_accounts_from_form(
         account_number = (
             account_numbers[index] if index < len(account_numbers) else ""
         ).strip()
+        sort_code = (sort_codes[index] if index < len(sort_codes) else "").strip()
         if not (bank_name and account_name and account_number):
             continue
         accounts.append(
@@ -408,6 +421,7 @@ def _direct_transfer_accounts_from_form(
                 "bank_name": bank_name,
                 "account_name": account_name,
                 "account_number": account_number,
+                "sort_code": sort_code,
             }
         )
     return accounts
