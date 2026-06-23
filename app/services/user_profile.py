@@ -143,6 +143,22 @@ def update_me(
 
     db.flush()
 
+    # Back-fill service-location coordinates from a self-service address edit so
+    # the typed address lands on the map (best-effort; never blocks the save).
+    if principal_type != "system_user":
+        _address_fields = {
+            "address_line1",
+            "address_line2",
+            "city",
+            "region",
+            "postal_code",
+            "country_code",
+        }
+        if _address_fields & set(update_data.keys()):
+            from app.services import customer_location_requests as location_service
+
+            location_service.geocode_service_address(db, person)
+
     if email_change is not None:
         from app.services import auth_flow
 

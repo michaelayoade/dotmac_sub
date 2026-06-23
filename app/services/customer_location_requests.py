@@ -1,26 +1,37 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
-from math import isclose
+from math import asin, cos, isclose, radians, sin, sqrt
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.gis import (
     CustomerLocationChangeRequest,
     CustomerLocationChangeRequestStatus,
+    GeoArea,
+    GeoAreaType,
     GeoLocation,
     GeoLocationType,
 )
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
+from app.services import geocoding as geocoding_service
 from app.services import gis as gis_service
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MAP_CENTER = [9.06, 7.49]
+
+# Coverage area types that count as "serviceable" for pin auto-approval.
+_COVERAGE_AREA_TYPES = (GeoAreaType.coverage, GeoAreaType.service_area)
 
 
 def _validate_coordinates(latitude: float, longitude: float) -> tuple[float, float]:
@@ -386,6 +397,29 @@ def submit_request(
             "customer_note": location_request.customer_note,
         },
     )
+
+    # Auto-verify safe pin nudges; everything else stays in the manual queue.
+    approved, reason, signals = evaluate_auto_approval(
+        db,
+        current_latitude=current_latitude,
+        current_longitude=current_longitude,
+        requested_latitude=lat,
+        requested_longitude=lon,
+    )
+    location_request.metadata_ = {
+        **(location_request.metadata_ or {}),
+        "auto_decision": {"approved": approved, "reason": reason, "signals": signals},
+    }
+    db.commit()
+    if approved:
+        return approve_request(
+            db,
+            request_id=str(location_request.id),
+            actor_id=None,
+            actor_name="Auto-verification (system)",
+            review_note=reason,
+        )
+    db.refresh(location_request)
     return location_request
 
 
@@ -573,3 +607,185 @@ def reject_request(
         },
     )
     return location_request
+
+
+# --- Address geocoding on customer self-service save ----------------------------
+#
+# Customer profile edits write the typed address onto the Subscriber, but
+# coordinates live on the service Address (same place staff geocoding and the
+# approved map pin write). This best-effort helper resolves the typed address to
+# coordinates and back-fills them so a self-service address actually lands on the
+# map and can be serviceability-checked — WITHOUT overwriting an existing pin.
+
+
+def geocode_service_address(
+    db: Session, subscriber: Subscriber, *, force: bool = False
+) -> dict[str, Any] | None:
+    """Geocode the subscriber's typed service address and back-fill coordinates.
+
+    Best-effort and never raises — geocoding is advisory, and many addresses
+    (especially in Nigeria) won't resolve cleanly. Skips when the service
+    Address already has coordinates so an approved/manual map pin is never
+    silently moved (pass ``force=True`` to re-pin from the typed address).
+    Returns ``{latitude, longitude, display_name}`` when it set coordinates,
+    else ``None``.
+    """
+    composed = {
+        "address_line1": subscriber.address_line1,
+        "address_line2": subscriber.address_line2,
+        "city": subscriber.city,
+        "region": subscriber.region,
+        "postal_code": subscriber.postal_code,
+        "country_code": subscriber.country_code,
+    }
+    if not (composed["address_line1"] or "").strip():
+        return None
+    try:
+        address = _resolve_service_address(db, str(subscriber.id))
+        if address is None:
+            address = Address(
+                subscriber_id=subscriber.id,
+                address_type=AddressType.service,
+                label="Primary service",
+                is_primary=True,
+                **composed,
+            )
+            db.add(address)
+            db.flush()
+        elif (
+            not force and address.latitude is not None and address.longitude is not None
+        ):
+            return None  # preserve the existing pin
+
+        result = geocoding_service.geocode_address(db, dict(composed))
+        lat = result.get("latitude")
+        lon = result.get("longitude")
+        if lat is None or lon is None:
+            return None
+        address.latitude = float(lat)
+        address.longitude = float(lon)
+        # Match approve_request's existing arg order for Address.geom.
+        address.geom = gis_service._point_wkt(address.longitude, address.latitude)
+        _upsert_geo_location_for_address(db, address)
+        db.flush()
+        return {
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "display_name": _address_label(address, subscriber),
+        }
+    except Exception:  # noqa: BLE001 - geocoding is advisory, never block a save
+        logger.warning(
+            "address geocode-on-save skipped for subscriber %s",
+            subscriber.id,
+            exc_info=True,
+        )
+        return None
+
+
+# --- Pin auto-approval ----------------------------------------------------------
+#
+# A small pin nudge from an already-approved location is inherently safe and is
+# the bulk of correction requests ("move my pin to my actual rooftop"). Those
+# are auto-approved; first pins, large moves, and (optionally) pins outside
+# coverage are left in the manual review queue.
+
+
+def _gis_setting_raw(db: Session, key: str) -> str | None:
+    row = db.scalars(
+        select(DomainSetting)
+        .where(DomainSetting.domain == SettingDomain.gis)
+        .where(DomainSetting.key == key)
+        .where(DomainSetting.is_active.is_(True))
+    ).first()
+    if not row:
+        return None
+    if row.value_text is not None:
+        return row.value_text
+    if row.value_json is not None:
+        return str(row.value_json)
+    return None
+
+
+def _gis_setting_bool(db: Session, key: str, default: bool) -> bool:
+    raw = _gis_setting_raw(db, key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _gis_setting_int(db: Session, key: str, default: int) -> int:
+    raw = _gis_setting_raw(db, key)
+    if raw is None:
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in metres between two lat/lon points."""
+    r = 6371000.0
+    p1, p2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlmb = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(p1) * cos(p2) * sin(dlmb / 2) ** 2
+    return 2 * r * asin(sqrt(a))
+
+
+def _coverage_areas_exist(db: Session) -> bool:
+    return (
+        db.query(GeoArea.id)
+        .filter(GeoArea.is_active.is_(True))
+        .filter(GeoArea.area_type.in_(_COVERAGE_AREA_TYPES))
+        .first()
+        is not None
+    )
+
+
+def evaluate_auto_approval(
+    db: Session,
+    *,
+    current_latitude: float | None,
+    current_longitude: float | None,
+    requested_latitude: float,
+    requested_longitude: float,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Decide whether a pin correction can be auto-approved.
+
+    Returns ``(approved, reason, signals)``. Conservative by design: only a
+    small move from an existing approved pin auto-approves; first pins and large
+    moves go to manual review. When ``location_auto_require_coverage`` is on and
+    coverage polygons exist, the pin must fall inside one.
+    """
+    signals: dict[str, Any] = {}
+    if not _gis_setting_bool(db, "location_auto_approve_enabled", True):
+        return False, "auto-approval disabled", signals
+
+    if current_latitude is None or current_longitude is None:
+        signals["first_pin"] = True
+        return False, "first pin has no baseline to verify against", signals
+
+    radius_m = _gis_setting_int(db, "location_auto_approve_radius_m", 250)
+    distance_m = _haversine_m(
+        current_latitude, current_longitude, requested_latitude, requested_longitude
+    )
+    signals["move_distance_m"] = round(distance_m, 1)
+    signals["radius_m"] = radius_m
+    if distance_m > radius_m:
+        return False, f"pin moved {distance_m:.0f} m (over {radius_m} m)", signals
+
+    try:
+        containing = gis_service.GeoAreas.find_containing(
+            db, requested_latitude, requested_longitude
+        )
+        in_coverage = any(a.area_type in _COVERAGE_AREA_TYPES for a in containing)
+    except Exception:  # noqa: BLE001 - spatial backend may be unavailable
+        logger.debug("coverage containment check failed", exc_info=True)
+        in_coverage = False
+    signals["in_coverage"] = in_coverage
+    if _gis_setting_bool(db, "location_auto_require_coverage", False):
+        if _coverage_areas_exist(db) and not in_coverage:
+            return False, "pin falls outside service coverage", signals
+
+    return True, f"auto-approved: pin moved {distance_m:.0f} m", signals
