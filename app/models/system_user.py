@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
+import sqlalchemy as sa
 from sqlalchemy import Boolean, DateTime, Enum, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,6 +27,17 @@ class SystemUser(Base):
         Enum(UserType), default=UserType.system_user, nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    device_login_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=sa.false(), nullable=False
+    )
+    device_login_secret: Mapped[str | None] = mapped_column(String(512))
+    device_login_secret_set_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    device_login_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
