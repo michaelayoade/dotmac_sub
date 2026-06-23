@@ -2029,7 +2029,9 @@ def seed_network_policy_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_FIBER_STRAND_STATUS", "available"),
     )
-    api_kick_enabled_raw = os.getenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "false")
+    api_kick_enabled_raw = os.getenv(
+        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "false"
+    )
     network_settings.ensure_by_key(
         db,
         key="mikrotik_api_session_kick_enabled",
