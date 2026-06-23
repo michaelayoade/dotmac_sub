@@ -1,7 +1,7 @@
 """Add device-login (RADIUS) fields to system_users.
 
 Revision ID: 164_system_user_device_login
-Revises: 163_newsletter_subscription_list
+Revises: 162_drop_olt_circuit_breaker_schema
 Create Date: 2026-06-22
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "164_system_user_device_login"
-down_revision = "163_newsletter_subscription_list"
+down_revision = "162_drop_olt_circuit_breaker_schema"
 branch_labels = None
 depends_on = None
 
