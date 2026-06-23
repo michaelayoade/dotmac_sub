@@ -411,12 +411,22 @@ def submit_request(
         requested_latitude=lat,
         requested_longitude=lon,
     )
+    # Shadow mode records what auto-approval WOULD have done but still routes to
+    # manual review — lets ops watch the decisions before trusting automation.
+    shadow = _gis_setting_bool(db, "location_auto_approve_shadow", False)
+    effective_approved = approved and not shadow
     location_request.metadata_ = {
         **(location_request.metadata_ or {}),
-        "auto_decision": {"approved": approved, "reason": reason, "signals": signals},
+        "auto_decision": {
+            "approved": effective_approved,
+            "would_approve": approved,
+            "shadow": shadow,
+            "reason": reason,
+            "signals": signals,
+        },
     }
     db.commit()
-    if approved:
+    if effective_approved:
         return approve_request(
             db,
             request_id=str(location_request.id),
@@ -817,7 +827,7 @@ def evaluate_auto_approval(
         signals["first_pin"] = True
         return False, "first pin has no baseline to verify against", signals
 
-    radius_m = _gis_setting_int(db, "location_auto_approve_radius_m", 250)
+    radius_m = _gis_setting_int(db, "location_auto_approve_radius_m", 100)
     distance_m = _haversine_m(
         current_latitude, current_longitude, requested_latitude, requested_longitude
     )

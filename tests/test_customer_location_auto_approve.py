@@ -165,6 +165,22 @@ def test_rate_limit_blocks_second_small_move_in_window(db_session):
     assert decision["signals"]["recent_auto_approvals"] >= 1
 
 
+def test_shadow_mode_records_would_approve_but_stays_pending(db_session):
+    # Shadow on: evaluate + record the would-be decision, but never auto-approve.
+    _set_gis(db_session, "location_auto_approve_shadow", "true")
+    subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
+    result = _submit(db_session, subscriber, 9.0605, 7.49)
+
+    assert result.status == CustomerLocationChangeRequestStatus.pending
+    decision = (result.metadata_ or {})["auto_decision"]
+    assert decision["shadow"] is True
+    assert decision["would_approve"] is True
+    assert decision["approved"] is False
+    # The pin is NOT moved while shadowing.
+    db_session.refresh(address)
+    assert abs(float(address.latitude) - 9.06) < 1e-6
+
+
 def test_geocode_force_overrides_existing_pin(db_session, monkeypatch):
     subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
     monkeypatch.setattr(
