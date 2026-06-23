@@ -1,0 +1,239 @@
+# -*- text -*-
+# FreeRADIUS SQL module configuration — admin (staff) authentication only
+# This is a second instance of the sql module that queries *_admin tables
+# exclusively. It is bound to the admin-login virtual server (port 1822/1823)
+# and MUST NOT be referenced from the default subscriber server.
+
+sql sql_admin {
+	dialect = "postgresql"
+	driver = "rlm_sql_postgresql"
+
+	# Connection parameters from environment variables (same DB, staff tables)
+	server = "$ENV{RADIUS_DB_HOST}"
+	port = 5432
+	login = "$ENV{RADIUS_DB_USER}"
+	password = "$ENV{RADIUS_DB_PASS}"
+	radius_db = "$ENV{RADIUS_DB_NAME}"
+
+	# SQL username from RADIUS User-Name attribute
+	sql_user_name = "%{User-Name}"
+
+	# Restrict character set in interpolated values to prevent
+	# SQL injection through usernames / station IDs. Any character
+	# outside this set causes the module to return notfound.
+	safe_characters = "@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /"
+
+	# Table configuration — all pointing to _admin variants
+	acct_table1 = "radacct_admin"
+	acct_table2 = "radacct_admin"
+	postauth_table = "radpostauth"
+	authcheck_table = "radcheck_admin"
+	authreply_table = "radreply_admin"
+
+	# No group tables for staff auth — simple per-user check/reply only
+	groupcheck_table = "radgroupcheck"
+	groupreply_table = "radgroupreply"
+	usergroup_table = "radusergroup"
+
+	# Do not pre-delete open sessions
+	delete_stale_sessions = no
+
+	# Do NOT read NAS clients from the database — admin server only
+	read_clients = no
+
+	# Smaller pool is appropriate for staff-only traffic
+	pool {
+		start = 2
+		min = 1
+		max = 5
+		spare = 2
+		uses = 1000
+		lifetime = 3600
+		idle_timeout = 60
+	}
+
+	# Authorization queries — target radcheck_admin / radreply_admin
+	authorize_check_query = "\
+		SELECT id, username, attribute, value, op \
+		FROM radcheck_admin \
+		WHERE username = '%{SQL-User-Name}' \
+		ORDER BY id"
+
+	authorize_reply_query = "\
+		SELECT id, username, attribute, value, op \
+		FROM radreply_admin \
+		WHERE username = '%{SQL-User-Name}' \
+		ORDER BY id"
+
+	authorize_group_check_query = "\
+		SELECT id, groupname, attribute, value, op \
+		FROM ${groupcheck_table} \
+		WHERE groupname = '%{SQL-Group}' \
+		ORDER BY id"
+
+	authorize_group_reply_query = "\
+		SELECT id, groupname, attribute, value, op \
+		FROM ${groupreply_table} \
+		WHERE groupname = '%{SQL-Group}' \
+		ORDER BY id"
+
+	# Simultaneous-Use enforcement against radacct_admin
+	simul_count_query = "\
+		SELECT COUNT(*) \
+		FROM ${acct_table1} \
+		WHERE username = '%{SQL-User-Name}' \
+		  AND acctstoptime IS NULL"
+
+	simul_verify_query = "\
+		SELECT radacctid, acctsessionid, username, \
+		       nasipaddress, nasportid, framedipaddress, \
+		       callingstationid, framedprotocol \
+		FROM ${acct_table1} \
+		WHERE username = '%{SQL-User-Name}' \
+		  AND acctstoptime IS NULL"
+
+	accounting {
+		reference = "%{tolower:type.%{%{Acct-Status-Type}:-%{Request-Processing-Stage}}.query}"
+
+		type {
+				accounting-on {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctstoptime = NOW(), \
+						    acctsessiontime = COALESCE(EXTRACT(EPOCH FROM (NOW() - acctstarttime))::integer, 0), \
+						    acctterminatecause = 'NAS-Reboot' \
+						WHERE acctstoptime IS NULL \
+						  AND nasipaddress = '%{NAS-IP-Address}'"
+			}
+
+				accounting-off {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctstoptime = NOW(), \
+						    acctsessiontime = COALESCE(EXTRACT(EPOCH FROM (NOW() - acctstarttime))::integer, 0), \
+						    acctterminatecause = 'NAS-Shutdown' \
+						WHERE acctstoptime IS NULL \
+						  AND nasipaddress = '%{NAS-IP-Address}'"
+			}
+
+				start {
+					query = "\
+						INSERT INTO ${....acct_table1} \
+							(acctsessionid, acctuniqueid, username, nasipaddress, nasportid, nasporttype, \
+						 acctstarttime, acctupdatetime, acctstoptime, acctsessiontime, acctauthentic, \
+						 connectinfo_start, calledstationid, callingstationid, servicetype, framedprotocol, \
+						 framedipaddress, framedipv6address, framedipv6prefix, framedinterfaceid, delegatedipv6prefix, class) \
+					VALUES \
+						('%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{SQL-User-Name}', \
+						 NULLIF('%{NAS-IP-Address}', '')::inet, '%{NAS-Port-ID}', '%{NAS-Port-Type}', \
+						 NOW(), NOW(), NULL, 0, '%{Acct-Authentic}', \
+						 '%{Connect-Info}', '%{Called-Station-Id}', '%{Calling-Station-Id}', '%{Service-Type}', \
+						 '%{Framed-Protocol}', NULLIF('%{Framed-IP-Address}', '')::inet, '%{Framed-IPv6-Address}', \
+						 '%{Framed-IPv6-Prefix}', '%{Framed-Interface-Id}', '%{Delegated-IPv6-Prefix}', \
+						 '%{Class}') \
+					ON CONFLICT (acctuniqueid) DO UPDATE \
+					SET nasportid = EXCLUDED.nasportid, \
+					    nasporttype = EXCLUDED.nasporttype, \
+					    acctupdatetime = EXCLUDED.acctupdatetime, \
+					    connectinfo_start = EXCLUDED.connectinfo_start, \
+					    framedipaddress = EXCLUDED.framedipaddress, \
+					    framedipv6address = EXCLUDED.framedipv6address, \
+					    framedipv6prefix = EXCLUDED.framedipv6prefix, \
+					    framedinterfaceid = EXCLUDED.framedinterfaceid, \
+					    delegatedipv6prefix = EXCLUDED.delegatedipv6prefix \
+					WHERE ${....acct_table1}.acctstoptime IS NULL"
+			}
+
+				interim-update {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctupdatetime = NOW(), \
+					    acctinterval = NULLIF('%{%{Acct-Interim-Interval}:-0}', '')::integer, \
+					    acctsessiontime = NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
+					    acctinputoctets = ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+					    acctoutputoctets = ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
+					    framedipaddress = NULLIF('%{Framed-IP-Address}', '')::inet, \
+					    framedipv6address = '%{Framed-IPv6-Address}', \
+					    framedipv6prefix = '%{Framed-IPv6-Prefix}', \
+					    framedinterfaceid = '%{Framed-Interface-Id}', \
+					    delegatedipv6prefix = '%{Delegated-IPv6-Prefix}', \
+					    callingstationid = '%{Calling-Station-Id}' \
+					WHERE acctuniqueid = '%{Acct-Unique-Session-Id}'"
+
+				# Fallback INSERT if the Start packet was lost and this
+				# Interim-Update arrived first. Backfills the row so the
+				# stop event can later close it cleanly.
+				query = "\
+					INSERT INTO ${....acct_table1} \
+						(acctsessionid, acctuniqueid, username, nasipaddress, nasportid, nasporttype, \
+						 acctstarttime, acctupdatetime, acctsessiontime, acctinputoctets, acctoutputoctets, \
+						 acctauthentic, calledstationid, callingstationid, servicetype, framedprotocol, \
+						 framedipaddress, framedipv6address, framedipv6prefix, framedinterfaceid, delegatedipv6prefix, class) \
+					VALUES \
+						('%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{SQL-User-Name}', \
+						 NULLIF('%{NAS-IP-Address}', '')::inet, '%{NAS-Port-ID}', '%{NAS-Port-Type}', \
+						 NOW() - '%{%{Acct-Session-Time}:-0} seconds'::interval, NOW(), \
+						 NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
+						 ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+						 ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
+						 '%{Acct-Authentic}', '%{Called-Station-Id}', '%{Calling-Station-Id}', \
+						 '%{Service-Type}', '%{Framed-Protocol}', \
+						 NULLIF('%{Framed-IP-Address}', '')::inet, '%{Framed-IPv6-Address}', \
+						 '%{Framed-IPv6-Prefix}', '%{Framed-Interface-Id}', '%{Delegated-IPv6-Prefix}', \
+						 '%{Class}') \
+					ON CONFLICT (acctuniqueid) DO NOTHING"
+			}
+
+				stop {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctstoptime = NOW(), \
+					    acctsessiontime = NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
+					    acctinputoctets = ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+					    acctoutputoctets = ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
+					    acctterminatecause = '%{Acct-Terminate-Cause}', \
+					    connectinfo_stop = '%{Connect-Info}', \
+					    framedipaddress = NULLIF('%{Framed-IP-Address}', '')::inet, \
+					    framedipv6address = '%{Framed-IPv6-Address}', \
+					    framedipv6prefix = '%{Framed-IPv6-Prefix}', \
+					    framedinterfaceid = '%{Framed-Interface-Id}', \
+					    delegatedipv6prefix = '%{Delegated-IPv6-Prefix}', \
+					    callingstationid = '%{Calling-Station-Id}' \
+					WHERE acctuniqueid = '%{Acct-Unique-Session-Id}'"
+
+				# Fallback INSERT if Stop arrives without a prior Start.
+				query = "\
+					INSERT INTO ${....acct_table1} \
+						(acctsessionid, acctuniqueid, username, nasipaddress, nasportid, nasporttype, \
+						 acctstarttime, acctupdatetime, acctstoptime, acctsessiontime, acctinputoctets, \
+						 acctoutputoctets, acctauthentic, connectinfo_stop, calledstationid, callingstationid, \
+						 servicetype, framedprotocol, framedipaddress, framedipv6address, framedipv6prefix, \
+						 framedinterfaceid, delegatedipv6prefix, acctterminatecause, class) \
+					VALUES \
+						('%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{SQL-User-Name}', \
+						 NULLIF('%{NAS-IP-Address}', '')::inet, '%{NAS-Port-ID}', '%{NAS-Port-Type}', \
+						 NOW() - '%{%{Acct-Session-Time}:-0} seconds'::interval, NOW(), NOW(), \
+						 NULLIF('%{%{Acct-Session-Time}:-0}', '')::bigint, \
+						 ((COALESCE(NULLIF('%{%{Acct-Input-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint), \
+						 ((COALESCE(NULLIF('%{%{Acct-Output-Gigawords}:-0}', ''), '0')::bigint << 32) + NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint), \
+						 '%{Acct-Authentic}', '%{Connect-Info}', '%{Called-Station-Id}', \
+						 '%{Calling-Station-Id}', '%{Service-Type}', '%{Framed-Protocol}', \
+						 NULLIF('%{Framed-IP-Address}', '')::inet, '%{Framed-IPv6-Address}', \
+						 '%{Framed-IPv6-Prefix}', '%{Framed-Interface-Id}', '%{Delegated-IPv6-Prefix}', \
+						 '%{Acct-Terminate-Cause}', '%{Class}') \
+					ON CONFLICT (acctuniqueid) DO NOTHING"
+			}
+		}
+	}
+
+	# Post-auth logs NAS + station context. Password never logged.
+	post-auth {
+		query = "\
+			INSERT INTO ${..postauth_table} \
+				(username, pass, reply, authdate, nasipaddress, calledstationid, callingstationid) \
+			VALUES \
+				('%{SQL-User-Name}', '', '%{reply:Packet-Type}', NOW(), \
+				 NULLIF('%{NAS-IP-Address}', '')::inet, \
+				 '%{Called-Station-Id}', '%{Calling-Station-Id}')"
+	}
+}
