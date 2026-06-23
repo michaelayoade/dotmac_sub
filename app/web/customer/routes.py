@@ -688,10 +688,16 @@ def customer_bandwidth_live(
     subscription = resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse({"detail": "No active subscription found"}, status_code=404)
+    subscription_id = subscription.id
+    # Streaming responses keep dependencies alive until disconnect. Release the
+    # lookup session now; the SSE helper opens short read sessions only when it
+    # needs a Postgres fallback sample.
+    db.rollback()
+    db.close()
 
     return EventSourceResponse(
         customer_portal_bandwidth_service.live_bandwidth_events(
-            subscription_id=subscription.id,
+            subscription_id=subscription_id,
             is_disconnected=request.is_disconnected,
         ),
         headers={
