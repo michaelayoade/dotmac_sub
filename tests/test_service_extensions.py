@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.catalog import NasVendor, SubscriptionStatus
+from app.models.sequence import DocumentSequence  # noqa: F401
 from app.models.service_extension import (
     ServiceExtensionEntry,
     ServiceExtensionScope,
@@ -258,6 +259,43 @@ def test_subscribers_scope_resolves_customer_identifiers(
     }
     preview = svc.preview_extension(db_session, ext)
     assert preview["extendable_count"] == 2
+
+
+def test_subscriber_uuid_scope_skips_identity_resolution(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    subscription = _sub(
+        db_session,
+        subscriber,
+        catalog_offer,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+
+    def fail_identity_resolution(*_args, **_kwargs):
+        raise AssertionError("stored subscriber UUID scopes must not be re-resolved")
+
+    monkeypatch.setattr(svc, "resolve_customer_identity", fail_identity_resolution)
+
+    ext = svc.create_extension(
+        db_session,
+        reason="outage",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=1,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+    )
+
+    assert ext.scope_subscriber_ids == [str(subscriber.id)]
+
+    preview = svc.preview_extension(db_session, ext)
+    assert preview["total_count"] == 1
+    assert preview["extendable_count"] == 1
+
+    applied = svc.apply_extension(db_session, str(ext.id))
+    assert applied.affected_count == 1
+    db_session.refresh(subscription)
+    assert _naive(subscription.next_billing_at) == datetime(2026, 7, 2)
 
 
 def test_subscribers_scope_reports_unknown_customer(
