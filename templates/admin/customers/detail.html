@@ -12,8 +12,16 @@
 {% endblock %}
 
 {% block content %}
-<div x-data="customerDetail({ statsUrl: '/admin/customers/person/{{ customer.id }}/stats?usage_period={{ usage_period }}&usage_page={{ usage_page }}&usage_per_page={{ usage_per_page }}' })" class="space-y-6">
-    {% set send_email_link = "/admin/customers?send_message_id=" ~ customer.id ~ "&send_message_type=" ~ customer_type ~ "&send_message_channel=email" %}
+{% set detail_config = {
+    "statsUrl": "/admin/customers/person/" ~ customer.id ~ "/stats?usage_period=" ~ usage_period ~ "&usage_page=" ~ usage_page ~ "&usage_per_page=" ~ usage_per_page,
+    "detailUrl": "/admin/customers/person/" ~ customer.id,
+    "customerId": customer.id|string,
+    "customerType": customer_type,
+    "notificationChannels": bulk_notification_channels,
+    "notificationTemplates": bulk_notification_templates
+} %}
+<script type="application/json" id="customer-detail-config">{{ detail_config | tojson }}</script>
+<div x-data="customerDetail()" class="space-y-6">
     {% if map_data %}
     <!-- Leaflet CSS for mini-map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -102,10 +110,10 @@
                     </div>
                     <div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
                         {% if customer.email %}
-                        <a href="{{ send_email_link }}" class="flex items-center gap-1.5 hover:text-amber-600 dark:hover:text-amber-400 transition">
+                        <button type="button" @click.prevent.stop="openSendMessageModal('email')" class="flex items-center gap-1.5 text-left hover:text-amber-600 dark:hover:text-amber-400 transition">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                             {{ customer.email }}
-                        </a>
+                        </button>
                         {% endif %}
                         {% if customer.phone %}
                         <a href="tel:{{ customer.phone }}" class="flex items-center gap-1.5 hover:text-amber-600 dark:hover:text-amber-400 transition">
@@ -392,12 +400,12 @@
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                             </div>
                             <div class="flex-1 min-w-0">
-	                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Email</p>
-	                                {% if customer.email %}
-	                                <a href="{{ send_email_link }}" class="text-sm font-medium text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 truncate block">{{ customer.email }}</a>
-	                                {% else %}
-	                                <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
-	                                {% endif %}
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Email</p>
+                                {% if customer.email %}
+                                <button type="button" @click.prevent.stop="openSendMessageModal('email')" class="block truncate text-left text-sm font-medium text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ customer.email }}</button>
+                                {% else %}
+                                <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
+                                {% endif %}
                             </div>
                         </div>
                         <div class="flex items-start gap-3">
@@ -2150,17 +2158,119 @@
     </div>
 </div>
 
+<!-- Send Message Modal -->
+<div x-show="sendMessageModal"
+     x-transition.opacity
+     x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 p-4 backdrop-blur-sm"
+     @click.self.prevent.stop="closeSendMessageModal($event)">
+    <div class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800" @click.stop>
+        <div class="mb-5 flex items-start justify-between gap-4">
+            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            </div>
+            <div class="min-w-0 flex-1">
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Send Message</h3>
+                <p class="truncate text-sm text-slate-500 dark:text-slate-400">{{ customer_name }}</p>
+            </div>
+            <button type="button" @click.prevent.stop="closeSendMessageModal($event)" class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div class="space-y-4">
+            <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-sm dark:border-slate-700 dark:bg-slate-900/60">
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Channel</label>
+                        <select x-model="sendMessageForm.channel" @change="$nextTick(() => syncTemplateForChannel())" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <template x-for="channel in notificationChannels" :key="channel.id">
+                                <option :value="channel.id" x-text="channel.label"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Template</label>
+                        <select x-model="sendMessageForm.templateId" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <option value="">Select a template</option>
+                            <template x-for="template in templatesForSelectedChannel()" :key="template.id">
+                                <option :value="template.id" x-text="template.name"></option>
+                            </template>
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-950">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Channel Readiness</p>
+                            <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedChannelMeta().label"></p>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400" x-text="selectedChannelMeta().message"></p>
+                        </div>
+                        <span class="rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide" :class="selectedChannelMeta().ready ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'" x-text="selectedChannelMeta().ready ? 'Ready' : 'Needs setup'"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-900">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Selected Template</p>
+                <template x-if="selectedTemplate()">
+                    <div class="mt-2 space-y-2">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedTemplate().name"></p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400" x-text="selectedTemplate().code"></p>
+                        <p class="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300" x-show="selectedTemplate().subject" x-text="selectedTemplate().subject"></p>
+                    </div>
+                </template>
+                <template x-if="!selectedTemplate()">
+                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Choose a template to queue the message for this customer.</p>
+                </template>
+            </div>
+        </div>
+        <div class="mt-6 flex items-center justify-end gap-3">
+            <button type="button" @click.prevent.stop="closeSendMessageModal($event)" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
+            <button type="button" @click.prevent.stop="queueMessage($event)" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || messageLoading">
+                <span x-show="!messageLoading">Queue Message</span>
+                <span x-show="messageLoading" class="flex items-center gap-2">
+                    <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                    Queueing...
+                </span>
+            </button>
+        </div>
+    </div>
+</div>
+
 </div>
 
 <script>
 function customerDetail(config = {}) {
+    if (!Object.keys(config).length) {
+        const configElement = document.getElementById('customer-detail-config');
+        if (configElement) {
+            try {
+                config = JSON.parse(configElement.textContent || '{}');
+            } catch (error) {
+                console.error('Customer detail config could not be parsed:', error);
+                config = {};
+            }
+        }
+    }
+
     return {
         statsUrl: config.statsUrl || '',
+        canonicalDetailUrl: config.detailUrl || window.location.pathname,
+        detailUrl: config.detailUrl || window.location.pathname,
+        customerId: config.customerId || '',
+        customerType: config.customerType || 'person',
+        notificationChannels: config.notificationChannels || [],
+        notificationTemplates: config.notificationTemplates || [],
         statsLoaded: false,
         statsLoading: false,
         activeTab: 'overview',
         showAddressModal: false,
         showContactModal: false,
+        sendMessageModal: false,
+        messageLoading: false,
+        sendMessageForm: {
+            channel: 'email',
+            templateId: ''
+        },
         convertOpen: false,
         convertId: null,
         convertName: "",
@@ -2169,6 +2279,124 @@ function customerDetail(config = {}) {
             this.convertId = id;
             this.convertName = name || "this customer";
             this.convertOpen = true;
+        },
+
+        currentUrl() {
+            return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        },
+
+        openSendMessageModal(channel = 'email') {
+            const currentUrl = this.currentUrl();
+            this.detailUrl = currentUrl.startsWith(this.canonicalDetailUrl)
+                ? currentUrl
+                : this.canonicalDetailUrl;
+            if (currentUrl !== this.detailUrl) {
+                window.history.replaceState({}, '', this.detailUrl);
+            }
+            this.resetSendMessageForm(channel);
+            this.sendMessageModal = true;
+            this.$nextTick(() => this.syncTemplateForChannel());
+        },
+
+        closeSendMessageModal(event = null) {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            this.sendMessageModal = false;
+            this.messageLoading = false;
+            if (this.detailUrl && this.currentUrl() !== this.detailUrl) {
+                window.history.replaceState({}, '', this.detailUrl);
+            }
+        },
+
+        resetSendMessageForm(preferredChannel = '') {
+            const firstChannel = this.notificationChannels[0];
+            const requestedChannel = this.notificationChannels.find(
+                (channel) => channel.id === preferredChannel
+            );
+            this.sendMessageForm = {
+                channel: requestedChannel ? requestedChannel.id : (firstChannel ? firstChannel.id : 'email'),
+                templateId: ''
+            };
+            this.syncTemplateForChannel();
+        },
+
+        templatesForSelectedChannel() {
+            return this.notificationTemplates.filter(
+                (template) => template.channel === this.sendMessageForm.channel
+            );
+        },
+
+        selectedTemplate() {
+            return this.notificationTemplates.find(
+                (template) => template.id === this.sendMessageForm.templateId
+                    && template.channel === this.sendMessageForm.channel
+            );
+        },
+
+        selectedChannelMeta() {
+            return this.notificationChannels.find(
+                (channel) => channel.id === this.sendMessageForm.channel
+            ) || {
+                id: this.sendMessageForm.channel,
+                label: this.sendMessageForm.channel,
+                ready: false,
+                message: 'Channel setup information is unavailable.'
+            };
+        },
+
+        syncTemplateForChannel() {
+            const matching = this.templatesForSelectedChannel();
+            if (!matching.find((template) => template.id === this.sendMessageForm.templateId)) {
+                this.sendMessageForm.templateId = matching[0] ? matching[0].id : '';
+            }
+        },
+
+        async queueMessage(event = null) {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            if (!this.customerId || !this.sendMessageForm.templateId) return;
+            const template = this.selectedTemplate();
+            if (!template) {
+                this.syncTemplateForChannel();
+                return;
+            }
+
+            this.messageLoading = true;
+            try {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                const response = await fetch('/admin/customers/bulk/send-message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+                    },
+                    body: JSON.stringify({
+                        customer_ids: [{ id: this.customerId, type: this.customerType }],
+                        filters: {},
+                        channel: this.sendMessageForm.channel,
+                        template_id: template.id
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    const dispatch = result.delivery_dispatch || {};
+                    const deliveryMessage = dispatch.queued
+                        ? ' Delivery has been started.'
+                        : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
+                    this.closeSendMessageModal();
+                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${result.suppressed_count ? ` ${result.suppressed_count} were suppressed by customer preferences.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                } else {
+                    const error = await response.json().catch(() => ({}));
+                    alert(error.detail || 'Failed to queue the message. Please try again.');
+                }
+            } catch (error) {
+                console.error('Customer message send failed:', error);
+                alert('An error occurred. Please try again.');
+            } finally {
+                this.messageLoading = false;
+            }
         },
 
         ensureStatsLoaded() {
