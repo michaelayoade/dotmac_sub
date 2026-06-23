@@ -4,9 +4,11 @@ Revision ID: 171_system_user_device_login
 Revises: 170_dunning_policy_overrides
 Create Date: 2026-06-22
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "171_system_user_device_login"
@@ -30,13 +32,13 @@ def upgrade() -> None:
     )
     op.add_column(
         "system_users",
-        sa.Column("device_login_secret_set_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "device_login_secret_set_at", sa.DateTime(timezone=True), nullable=True
+        ),
     )
     op.add_column(
         "system_users",
-        sa.Column(
-            "device_login_revoked_at", sa.DateTime(timezone=True), nullable=True
-        ),
+        sa.Column("device_login_revoked_at", sa.DateTime(timezone=True), nullable=True),
     )
 
 
