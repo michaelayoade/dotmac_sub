@@ -27,6 +27,7 @@ from app.services.bandwidth import (
     bandwidth_samples,
     live_event_payload,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.metrics_store import get_metrics_store
 from app.services.nas import get_mikrotik_pppoe_live_bandwidth
 
@@ -180,6 +181,11 @@ def get_live_bandwidth(
     Sends bandwidth updates approximately every second.
     """
     bandwidth_samples.check_subscription_access(db, subscription_id, current_user)
+    # Streaming responses outlive the route function. Release the request-scoped
+    # session before the SSE loop starts so a live viewer does not hold a pooled
+    # DB connection idle in transaction for the lifetime of the stream.
+    db.rollback()
+    db.close()
 
     async def event_generator():
         metrics_store = get_metrics_store()
@@ -230,14 +236,15 @@ def get_live_bandwidth(
                     # Fallback source: latest PostgreSQL sample (recent only)
                     if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
                         cutoff = datetime.now(UTC) - timedelta(minutes=2)
-                        latest_sample = bandwidth_samples.get_latest_recent_sample(
-                            db, subscription_id, cutoff
-                        )
-                        if latest_sample:
-                            current = {
-                                "rx_bps": float(latest_sample.rx_bps or 0),
-                                "tx_bps": float(latest_sample.tx_bps or 0),
-                            }
+                        with db_session_adapter.read_session() as sse_db:
+                            latest_sample = bandwidth_samples.get_latest_recent_sample(
+                                sse_db, subscription_id, cutoff
+                            )
+                            if latest_sample:
+                                current = {
+                                    "rx_bps": float(latest_sample.rx_bps or 0),
+                                    "tx_bps": float(latest_sample.tx_bps or 0),
+                                }
                 except Exception as e:
                     logger.warning(
                         "Live bandwidth DB fallback failed for %s: %s",

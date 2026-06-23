@@ -40,8 +40,7 @@ async def live_bandwidth_events(
 
         try:
             if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
-                sse_db = db_session_adapter.create_session()
-                try:
+                with db_session_adapter.read_session() as sse_db:
                     cutoff = datetime.now(UTC) - timedelta(minutes=2)
                     latest_sample = (
                         sse_db.query(BandwidthSample)
@@ -57,8 +56,6 @@ async def live_bandwidth_events(
                             "rx_bps": float(latest_sample.rx_bps or 0),
                             "tx_bps": float(latest_sample.tx_bps or 0),
                         }
-                finally:
-                    sse_db.close()
         except Exception:
             logger.debug(
                 "Failed to enrich SSE bandwidth stream for subscription %s",
