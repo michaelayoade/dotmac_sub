@@ -1519,7 +1519,8 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
 )
 def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.services.auth_dependencies import has_permission
-    from app.services.radius_population import derive_router_tier, effective_perms, effective_roles
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
     from app.web.admin import get_current_user, get_sidebar_stats
 
     edit_data = web_system_profiles_service.get_user_edit_data(db, user_id)
@@ -1532,7 +1533,7 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
 
     # Device-login panel: only expose to admins with router:admin
     auth = getattr(request.state, "auth", None) or {}
-    can_manage_device_login = has_permission(auth, db, "router:admin")
+    can_manage_device_login = bool(auth) and has_permission(auth, db, "router:admin")
     device_login_tier: str | None = None
     if can_manage_device_login:
         try:
@@ -1819,7 +1820,8 @@ def user_device_login_set(
     db: Session = Depends(get_db),
 ):
     """Enable/disable device login and set/rotate the router secret."""
-    from app.services.radius_population import derive_router_tier, effective_perms, effective_roles
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
     from app.tasks.radius_population import sync_device_login
 
     action = form_data.get("device_login_action", "set")
@@ -1843,9 +1845,23 @@ def user_device_login_set(
             metadata={"action": action},
         )
         sync_device_login.delay()
-    except Exception as exc:
+    except ValueError as exc:
         db.rollback()
         note = str(exc)
+        trigger = {
+            "showToast": {
+                "type": "error",
+                "title": "Device login",
+                "message": note,
+                "duration": 8000,
+            }
+        }
+        if request.headers.get("HX-Request"):
+            return Response(status_code=400, headers={"HX-Trigger": json.dumps(trigger)})
+        return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
+    except Exception:
+        db.rollback()
+        note = "Device-login update failed"
         trigger = {
             "showToast": {
                 "type": "error",

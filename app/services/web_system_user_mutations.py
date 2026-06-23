@@ -416,10 +416,11 @@ def set_device_login(
     if not u:
         raise ValueError("User not found")
     u.device_login_enabled = enabled
+    if enabled:
+        u.device_login_revoked_at = None
     if secret:
         u.device_login_secret = encrypt_credential(secret)
         u.device_login_secret_set_at = datetime.now(UTC)
-        u.device_login_revoked_at = None
     db.add(u)
     db.commit()
     db.refresh(u)
