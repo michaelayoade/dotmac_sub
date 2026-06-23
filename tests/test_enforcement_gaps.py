@@ -576,3 +576,102 @@ class TestDisconnectZeroKillLogging:
         messages = " ".join(r.message for r in caplog.records)
         assert "no NAS device" in messages
         assert "Failed to disconnect any" in messages
+
+
+class TestDisconnectRouterOsApiGate:
+    def _session_context(self):
+        db = MagicMock()
+        subscription = MagicMock(spec=Subscription)
+        subscription.id = uuid4()
+        subscription.login = "pppoe-user"
+        subscription.ipv4_address = "10.0.0.10"
+        credential = MagicMock(spec=AccessCredential)
+        credential.username = "pppoe-user"
+        db.get.side_effect = [subscription, credential]
+
+        session = MagicMock()
+        session.session_id = "sid-1"
+        session.access_credential_id = uuid4()
+        db.query.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = [
+            session
+        ]
+
+        nas_device = MagicMock(spec=NasDevice)
+        nas_device.id = uuid4()
+        nas_device.name = "BNG-1"
+        return db, subscription, nas_device
+
+    def test_routeros_api_kick_default_disabled_uses_ssh_fallback(self):
+        from app.services.enforcement import disconnect_subscription_sessions
+
+        db, subscription, nas_device = self._session_context()
+        ssh = MagicMock()
+        ssh_cm = MagicMock()
+        ssh_cm.__enter__.return_value = ssh
+        ssh_cm.__exit__.return_value = False
+
+        with (
+            patch(
+                "app.services.enforcement._open_radacct_sessions_for_username",
+                return_value=[],
+            ),
+            patch(
+                "app.services.enforcement._resolve_nas_device",
+                return_value=nas_device,
+            ),
+            patch("app.services.enforcement._send_coa_disconnect", return_value=False),
+            patch(
+                "app.services.enforcement._mikrotik_api_session_kick_enabled",
+                return_value=False,
+            ),
+            patch(
+                "app.services.nas._mikrotik.disconnect_mikrotik_pppoe_bulk"
+            ) as api_kick,
+            patch(
+                "app.services.enforcement.DeviceProvisioner.ssh_session",
+                return_value=ssh_cm,
+            ),
+            patch(
+                "app.services.enforcement._disconnect_mikrotik_session",
+                return_value=True,
+            ),
+        ):
+            count = disconnect_subscription_sessions(db, str(subscription.id))
+
+        assert count == 1
+        api_kick.assert_not_called()
+
+    def test_routeros_api_kick_enabled_calls_api_fallback(self):
+        from app.services.enforcement import disconnect_subscription_sessions
+
+        db, subscription, nas_device = self._session_context()
+
+        with (
+            patch(
+                "app.services.enforcement._open_radacct_sessions_for_username",
+                return_value=[],
+            ),
+            patch(
+                "app.services.enforcement._resolve_nas_device",
+                return_value=nas_device,
+            ),
+            patch("app.services.enforcement._send_coa_disconnect", return_value=False),
+            patch(
+                "app.services.enforcement._mikrotik_api_session_kick_enabled",
+                return_value=True,
+            ),
+            patch(
+                "app.services.enforcement._nas_with_api_creds",
+                return_value=nas_device,
+            ),
+            patch(
+                "app.services.nas._mikrotik.disconnect_mikrotik_pppoe_bulk",
+                return_value={"pppoe-user"},
+            ) as api_kick,
+            patch("app.services.enforcement.DeviceProvisioner.ssh_session") as ssh,
+        ):
+            count = disconnect_subscription_sessions(db, str(subscription.id))
+
+        assert count == 1
+        api_kick.assert_called_once_with(nas_device, {"pppoe-user"})
+        ssh.assert_not_called()

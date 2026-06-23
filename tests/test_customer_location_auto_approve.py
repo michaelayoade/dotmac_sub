@@ -25,6 +25,10 @@ def _set_gis(db, key, value):
     db.commit()
 
 
+def _enable_live_auto_approval(db):
+    _set_gis(db, "location_auto_approve_shadow", "false")
+
+
 def _subscriber(db, *, lat=None, lon=None):
     subscriber = Subscriber(
         first_name="Pin",
@@ -70,8 +74,9 @@ def _submit(db, subscriber, lat, lon):
 
 
 def test_small_move_auto_approves_and_updates_address(db_session):
+    _enable_live_auto_approval(db_session)
     subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
-    # ~55 m north — well within the default 250 m radius.
+    # ~55 m north — well within the default 100 m radius.
     result = _submit(db_session, subscriber, 9.0605, 7.49)
 
     assert result.status == CustomerLocationChangeRequestStatus.approved
@@ -151,6 +156,7 @@ def test_geocode_skips_when_pin_already_set(db_session, monkeypatch):
 
 
 def test_rate_limit_blocks_second_small_move_in_window(db_session):
+    _enable_live_auto_approval(db_session)
     # First small move auto-approves; a second small move within the window must
     # fall to manual review (bounds incremental hop-drift).
     subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
@@ -166,8 +172,8 @@ def test_rate_limit_blocks_second_small_move_in_window(db_session):
 
 
 def test_shadow_mode_records_would_approve_but_stays_pending(db_session):
-    # Shadow on: evaluate + record the would-be decision, but never auto-approve.
-    _set_gis(db_session, "location_auto_approve_shadow", "true")
+    # Shadow defaults on: evaluate + record the would-be decision, but never
+    # auto-approve, even before startup seed rows exist.
     subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
     result = _submit(db_session, subscriber, 9.0605, 7.49)
 
@@ -195,6 +201,7 @@ def test_geocode_force_overrides_existing_pin(db_session, monkeypatch):
 
 
 def test_require_coverage_with_no_areas_still_auto_approves(db_session):
+    _enable_live_auto_approval(db_session)
     # require_coverage on, but no coverage polygons configured -> the gate is
     # skipped (don't block customers where the map is just incomplete).
     _set_gis(db_session, "location_auto_require_coverage", "true")

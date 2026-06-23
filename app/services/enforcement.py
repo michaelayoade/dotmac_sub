@@ -134,6 +134,12 @@ def _mikrotik_kill_enabled(db: Session) -> bool:
     )
 
 
+def _mikrotik_api_session_kick_enabled(db: Session) -> bool:
+    return _setting_bool(
+        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", False
+    )
+
+
 def _address_list_block_enabled(db: Session) -> bool:
     return _setting_bool(db, SettingDomain.network, "address_list_block_enabled", True)
 
@@ -848,7 +854,11 @@ def disconnect_subscription_sessions(
             if idx not in coa_ok and username
         }
         api_confirmed: set[str] = set()
-        api_dev = _nas_with_api_creds(db, nas_device)
+        api_dev = (
+            _nas_with_api_creds(db, nas_device)
+            if _mikrotik_api_session_kick_enabled(db)
+            else None
+        )
         if api_dev is not None and fallback:
             try:
                 from app.services.nas._mikrotik import (

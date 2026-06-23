@@ -413,7 +413,7 @@ def submit_request(
     )
     # Shadow mode records what auto-approval WOULD have done but still routes to
     # manual review — lets ops watch the decisions before trusting automation.
-    shadow = _gis_setting_bool(db, "location_auto_approve_shadow", False)
+    shadow = _gis_setting_bool(db, "location_auto_approve_shadow", True)
     effective_approved = approved and not shadow
     location_request.metadata_ = {
         **(location_request.metadata_ or {}),

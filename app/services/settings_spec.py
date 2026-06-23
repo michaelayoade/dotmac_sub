@@ -1856,6 +1856,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="mikrotik_api_session_kick_enabled",
+        env_var="NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Enable MikroTik API Session Kick",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="address_list_block_enabled",
         env_var="NETWORK_ADDRESS_LIST_BLOCK_ENABLED",
         value_type=SettingValueType.boolean,
