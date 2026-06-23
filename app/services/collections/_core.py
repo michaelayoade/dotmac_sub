@@ -1867,14 +1867,9 @@ class PrepaidEnforcement(ListResponseMixin):
         accounts_deactivated = 0
         skipped = 0
 
-        if not payload.dry_run and db.get_bind().dialect.name == "postgresql":
-            # Each account is enforced and committed independently (below), so a
-            # transient row-lock (e.g. a poller holding a subscription row) only
-            # skips that one account instead of aborting the whole run. A short
-            # lock_timeout makes a contended FOR UPDATE fail fast into the
-            # per-account skip path rather than block the run. Postgres-only;
-            # SQLite (tests) has no statement-level lock timeout.
-            db.execute(text("SET lock_timeout = '5s'"))
+        use_account_lock_timeout = (
+            not payload.dry_run and db.get_bind().dialect.name == "postgresql"
+        )
 
         for (account_id,) in prepaid_accounts:
             accounts_scanned += 1
@@ -1884,6 +1879,10 @@ class PrepaidEnforcement(ListResponseMixin):
             # Per-account transaction: on any error (lock timeout, etc.) roll
             # back just this account and continue; the hourly cadence retries it.
             try:
+                if use_account_lock_timeout:
+                    # Transaction-local so the shorter timeout cannot leak back
+                    # into the pooled connection after this run.
+                    db.execute(text("SET LOCAL lock_timeout = '5s'"))
                 account = db.get(Subscriber, account_id)
                 if not account:
                     skipped += 1
