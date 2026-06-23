@@ -136,6 +136,21 @@ def test_geocode_skips_when_pin_already_set(db_session, monkeypatch):
     assert abs(float(address.latitude) - 9.06) < 1e-6
 
 
+def test_rate_limit_blocks_second_small_move_in_window(db_session):
+    # First small move auto-approves; a second small move within the window must
+    # fall to manual review (bounds incremental hop-drift).
+    subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
+
+    first = _submit(db_session, subscriber, 9.0605, 7.49)
+    assert first.status == CustomerLocationChangeRequestStatus.approved
+
+    second = _submit(db_session, subscriber, 9.0608, 7.49)  # another ~33 m hop
+    assert second.status == CustomerLocationChangeRequestStatus.pending
+    decision = (second.metadata_ or {})["auto_decision"]
+    assert decision["approved"] is False
+    assert decision["signals"]["recent_auto_approvals"] >= 1
+
+
 def test_geocode_force_overrides_existing_pin(db_session, monkeypatch):
     subscriber, address = _subscriber(db_session, lat=9.06, lon=7.49)
     monkeypatch.setattr(

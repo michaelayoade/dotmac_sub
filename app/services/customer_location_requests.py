@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from math import asin, cos, isclose, radians, sin, sqrt
 from typing import Any
 
@@ -32,6 +32,10 @@ DEFAULT_MAP_CENTER = [9.06, 7.49]
 
 # Coverage area types that count as "serviceable" for pin auto-approval.
 _COVERAGE_AREA_TYPES = (GeoAreaType.coverage, GeoAreaType.service_area)
+
+# Stamped as the reviewer on auto-approved requests — also how the rate-limit
+# guard recognises prior auto-approvals (vs manual ones).
+AUTO_VERIFICATION_ACTOR_NAME = "Auto-verification (system)"
 
 
 def _validate_coordinates(latitude: float, longitude: float) -> tuple[float, float]:
@@ -401,6 +405,7 @@ def submit_request(
     # Auto-verify safe pin nudges; everything else stays in the manual queue.
     approved, reason, signals = evaluate_auto_approval(
         db,
+        subscriber_id=subscriber.id,
         current_latitude=current_latitude,
         current_longitude=current_longitude,
         requested_latitude=lat,
@@ -416,7 +421,7 @@ def submit_request(
             db,
             request_id=str(location_request.id),
             actor_id=None,
-            actor_name="Auto-verification (system)",
+            actor_name=AUTO_VERIFICATION_ACTOR_NAME,
             review_note=reason,
         )
     db.refresh(location_request)
@@ -743,9 +748,31 @@ def _coverage_areas_exist(db: Session) -> bool:
     )
 
 
+def _recent_auto_approvals(db: Session, subscriber_id, cutoff: datetime) -> int:
+    """Count this subscriber's prior *auto*-approved pin moves since ``cutoff``.
+
+    Identified by the system reviewer name so manual approvals don't count. This
+    is what bounds incremental drift: many small hops can't each auto-approve."""
+    return (
+        db.query(CustomerLocationChangeRequest)
+        .filter(CustomerLocationChangeRequest.subscriber_id == subscriber_id)
+        .filter(
+            CustomerLocationChangeRequest.status
+            == CustomerLocationChangeRequestStatus.approved
+        )
+        .filter(
+            CustomerLocationChangeRequest.reviewed_by_actor_name
+            == AUTO_VERIFICATION_ACTOR_NAME
+        )
+        .filter(CustomerLocationChangeRequest.reviewed_at >= cutoff)
+        .count()
+    )
+
+
 def evaluate_auto_approval(
     db: Session,
     *,
+    subscriber_id,
     current_latitude: float | None,
     current_longitude: float | None,
     requested_latitude: float,
@@ -756,7 +783,9 @@ def evaluate_auto_approval(
     Returns ``(approved, reason, signals)``. Conservative by design: only a
     small move from an existing approved pin auto-approves; first pins and large
     moves go to manual review. When ``location_auto_require_coverage`` is on and
-    coverage polygons exist, the pin must fall inside one.
+    coverage polygons exist, the pin must fall inside one. A rolling-window rate
+    limit bounds cumulative drift, so repeated small hops can't auto-approve
+    their way across town.
     """
     signals: dict[str, Any] = {}
     if not _gis_setting_bool(db, "location_auto_approve_enabled", True):
@@ -787,5 +816,21 @@ def evaluate_auto_approval(
     if _gis_setting_bool(db, "location_auto_require_coverage", False):
         if _coverage_areas_exist(db) and not in_coverage:
             return False, "pin falls outside service coverage", signals
+
+    # Rate limit: cap auto-approvals per rolling window so a customer can't drift
+    # their pin across town in repeated small hops (each ≤ radius).
+    window_days = _gis_setting_int(db, "location_auto_approve_window_days", 30)
+    max_per_window = _gis_setting_int(db, "location_auto_approve_max_per_window", 1)
+    if window_days > 0 and max_per_window > 0:
+        cutoff = datetime.now(UTC) - timedelta(days=window_days)
+        recent = _recent_auto_approvals(db, subscriber_id, cutoff)
+        signals["recent_auto_approvals"] = recent
+        if recent >= max_per_window:
+            return (
+                False,
+                f"auto-approval limit reached ({recent} in {window_days}d) — "
+                "needs manual review",
+                signals,
+            )
 
     return True, f"auto-approved: pin moved {distance_m:.0f} m", signals
