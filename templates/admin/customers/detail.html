@@ -12,14 +12,6 @@
 {% endblock %}
 
 {% block content %}
-{% set detail_config = {
-    "statsUrl": "/admin/customers/person/" ~ customer.id ~ "/stats?usage_period=" ~ usage_period ~ "&usage_page=" ~ usage_page ~ "&usage_per_page=" ~ usage_per_page,
-    "detailUrl": "/admin/customers/person/" ~ customer.id,
-    "customerId": customer.id|string,
-    "customerType": customer_type,
-    "notificationChannels": bulk_notification_channels,
-    "notificationTemplates": bulk_notification_templates
-} %}
 <script type="application/json" id="customer-detail-config">{{ detail_config | tojson }}</script>
 <div x-data="customerDetail()" class="space-y-6">
     {% if map_data %}
