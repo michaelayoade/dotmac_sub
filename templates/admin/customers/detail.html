@@ -13,6 +13,7 @@
 
 {% block content %}
 <div x-data="customerDetail({ statsUrl: '/admin/customers/person/{{ customer.id }}/stats?usage_period={{ usage_period }}&usage_page={{ usage_page }}&usage_per_page={{ usage_per_page }}' })" class="space-y-6">
+    {% set send_email_link = "/admin/customers?send_message_id=" ~ customer.id ~ "&send_message_type=" ~ customer_type ~ "&send_message_channel=email" %}
     {% if map_data %}
     <!-- Leaflet CSS for mini-map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -101,7 +102,7 @@
                     </div>
                     <div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
                         {% if customer.email %}
-                        <a href="mailto:{{ customer.email }}" class="flex items-center gap-1.5 hover:text-amber-600 dark:hover:text-amber-400 transition">
+                        <a href="{{ send_email_link }}" class="flex items-center gap-1.5 hover:text-amber-600 dark:hover:text-amber-400 transition">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                             {{ customer.email }}
                         </a>
@@ -144,13 +145,20 @@
                         </button>
                         <div x-show="openQuickActions" x-cloak @click.outside="openQuickActions = false"
                              class="absolute left-0 z-20 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800">
-                            <a href="{{ invoice_link }}"
-                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
-                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                Create Invoice
-                            </a>
-                            <a href="/admin/billing/payments/new?account={{ customer.id }}"
-                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+	                            <a href="{{ invoice_link }}"
+	                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+	                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+	                                Create Invoice
+	                            </a>
+	                            {% if customer.email %}
+	                            <a href="{{ send_email_link }}"
+	                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+	                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+	                                Send Email
+	                            </a>
+	                            {% endif %}
+	                            <a href="/admin/billing/payments/new?account={{ customer.id }}"
+	                               class="flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
                                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                                 Record Payment
                             </a>
@@ -384,12 +392,12 @@
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                             </div>
                             <div class="flex-1 min-w-0">
-                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Email</p>
-                                {% if customer.email %}
-                                <a href="mailto:{{ customer.email }}" class="text-sm font-medium text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 truncate block">{{ customer.email }}</a>
-                                {% else %}
-                                <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
-                                {% endif %}
+	                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Email</p>
+	                                {% if customer.email %}
+	                                <a href="{{ send_email_link }}" class="text-sm font-medium text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 truncate block">{{ customer.email }}</a>
+	                                {% else %}
+	                                <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
+	                                {% endif %}
                             </div>
                         </div>
                         <div class="flex items-start gap-3">

@@ -676,6 +676,7 @@ function customersPage() {
             this.syncFiltersFromForm();
             this.syncTableState();
             this.bindLiveFilters();
+            this.openSendMessageFromUrl();
 
             document.addEventListener('customer-selected', (e) => {
                 const { id, checked, type } = e.detail;
@@ -698,9 +699,9 @@ function customersPage() {
             });
 
             document.addEventListener('customer-send-message', (e) => {
-                const { id, type } = e.detail;
+                const { id, type, channel } = e.detail;
                 this.selectedIds = [{ id, type }];
-                this.resetSendMessageForm();
+                this.resetSendMessageForm(channel);
                 this.sendMessageModal = true;
             });
 
@@ -1025,9 +1026,32 @@ function customersPage() {
             this.sendMessageModal = true;
         },
 
-        resetSendMessageForm() {
+        openSendMessageFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const id = params.get('send_message_id');
+            if (!id) return;
+
+            const type = params.get('send_message_type') || 'person';
+            const channel = params.get('send_message_channel') || 'email';
+            this.actionsOpen = false;
+            this.selectedIds = [{ id, type }];
+            this.resetSendMessageForm(channel);
+            this.sendMessageModal = true;
+
+            params.delete('send_message_id');
+            params.delete('send_message_type');
+            params.delete('send_message_channel');
+            const nextQuery = params.toString();
+            const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`;
+            window.history.replaceState({}, '', nextUrl);
+        },
+
+        resetSendMessageForm(channel = '') {
+            const selectedChannel = this.availableNotificationChannels.find(
+                (item) => item.id === channel
+            ) ? channel : this.preferredMessageChannel();
             this.sendMessageForm = {
-                channel: this.preferredMessageChannel(),
+                channel: selectedChannel,
                 templateId: '',
                 templateVariables: {}
             };
@@ -1147,11 +1171,22 @@ function customersPage() {
                     language: template.language || ''
                 });
                 const response = await fetch(`/admin/customers/bulk/whatsapp-template?${params.toString()}`, {
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
                 });
-                const data = await response.json();
+                const raw = await response.text();
+                let data = {};
+                try {
+                    data = raw ? JSON.parse(raw) : {};
+                } catch (_parseError) {
+                    throw new Error(response.ok
+                        ? 'Could not parse WhatsApp template details.'
+                        : `Could not load WhatsApp template details (HTTP ${response.status}).`);
+                }
                 if (!response.ok) {
-                    throw new Error(data.detail || 'Could not load WhatsApp template details');
+                    throw new Error(data.detail || data.message || 'Could not load WhatsApp template details');
                 }
                 this.whatsappTemplateBody = this.templateBodyFromComponents(data.components || []);
                 this.whatsappTemplateVariables = data.variables || [];
