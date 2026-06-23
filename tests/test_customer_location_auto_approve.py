@@ -212,7 +212,9 @@ def test_require_coverage_with_no_areas_still_auto_approves(db_session):
 
 def test_require_coverage_blocks_when_outside_coverage(db_session):
     # require_coverage on AND a coverage area exists, but the pin isn't inside it
-    # -> manual review.
+    # -> manual review. Run live (not shadow) so the pending result is
+    # attributable to the coverage gate, not shadow mode.
+    _enable_live_auto_approval(db_session)
     _set_gis(db_session, "location_auto_require_coverage", "true")
     db_session.add(
         GeoArea(name="Lagos coverage", area_type=GeoAreaType.coverage, is_active=True)
