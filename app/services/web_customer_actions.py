@@ -2264,4 +2264,12 @@ def update_customer_profile(
                 subscriber_id,
                 exc_info=True,
             )
+
+    # Back-fill service-location coordinates from the typed address (best-effort;
+    # skips when a pin already exists so it never overwrites an approved pin).
+    if updated is not None:
+        from app.services import customer_location_requests as location_service
+
+        location_service.geocode_service_address(db, updated)
+        db.commit()
     return updated
