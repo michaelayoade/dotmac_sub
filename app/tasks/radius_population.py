@@ -52,3 +52,53 @@ def refresh_radius_from_subs() -> dict[str, int]:
         lock_db.close()
     logger.info("RADIUS refresh-from-subs complete: %s", result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Staff device-login sync task
+# ---------------------------------------------------------------------------
+
+_DEVICE_LOGIN_LOCK_KEY = 778_002
+
+
+@celery_app.task(name="app.tasks.radius_population.sync_device_login")
+def sync_device_login() -> dict[str, int]:
+    """Rebuild radcheck_admin + radreply_admin from active SystemUser device-login state.
+
+    Runs the same advisory-lock guard as refresh_radius_from_subs so a
+    concurrently-enqueued sync doesn't race the periodic one.
+    """
+    from sqlalchemy import func, select
+
+    from app.db import SessionLocal
+    from app.services.radius_population import populate_device_login
+
+    logger.info("RADIUS device-login sync starting")
+    lock_db = SessionLocal()
+    try:
+        bind = lock_db.bind
+        is_pg = bind is not None and bind.dialect.name == "postgresql"
+        if is_pg:
+            acquired = lock_db.execute(
+                select(func.pg_try_advisory_lock(_DEVICE_LOGIN_LOCK_KEY))
+            ).scalar()
+            lock_db.commit()
+            if not acquired:
+                logger.info(
+                    "RADIUS device-login sync: another run holds the lock; skipping"
+                )
+                return {"skipped_locked": 1}
+        try:
+            db = SessionLocal()
+            try:
+                result = populate_device_login(db, dry_run=False)
+            finally:
+                db.close()
+        finally:
+            if is_pg:
+                lock_db.execute(select(func.pg_advisory_unlock(_DEVICE_LOGIN_LOCK_KEY)))
+                lock_db.commit()
+    finally:
+        lock_db.close()
+    logger.info("RADIUS device-login sync complete: %s", result)
+    return result
