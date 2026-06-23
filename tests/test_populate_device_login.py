@@ -210,6 +210,14 @@ def test_eligible_staff_projected(db_session, radius_admin_engine, conn_factory,
         ).scalar()
     assert n == 1
 
+    # Verify the decrypt roundtrip: stored Cleartext-Password should equal the seeded plaintext secret
+    with radius_admin_engine.connect() as conn:
+        stored_secret = conn.execute(
+            text("SELECT value FROM radcheck_admin WHERE username=:u AND attribute='Cleartext-Password'"),
+            {"u": "tess@dotmac"},
+        ).scalar()
+    assert stored_secret == "s3cr3t"
+
 
 def test_disabled_staff_removed(db_session, radius_admin_engine, conn_factory):
     """A staff member with device_login_enabled=False must have no admin RADIUS rows."""
@@ -219,7 +227,7 @@ def test_disabled_staff_removed(db_session, radius_admin_engine, conn_factory):
 
     assert stats["considered"] >= 1
     # removed counts the disabled user (enabled=False → treated as removed not skipped_ineligible)
-    assert stats["removed"] >= 0
+    assert stats["removed"] == 1
 
     with radius_admin_engine.connect() as conn:
         n = conn.execute(

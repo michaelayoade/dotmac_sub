@@ -526,6 +526,7 @@ def populate_device_login(
 
             if tier is None:
                 if ineligible_flag:
+                    # Also counts enabled-but-unusable users (decrypt failure / empty secret), not only permission-ineligible ones
                     stats["skipped_ineligible"] += 1
                 else:
                     stats["removed"] += 1
