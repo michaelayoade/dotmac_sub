@@ -145,7 +145,7 @@ def update_me(
 
     # Back-fill service-location coordinates from a self-service address edit so
     # the typed address lands on the map (best-effort; never blocks the save).
-    if principal_type != "system_user":
+    if isinstance(person, Subscriber):
         _address_fields = {
             "address_line1",
             "address_line2",
