@@ -423,6 +423,7 @@ if __name__ == "__main__":
 # Staff device-login RADIUS projection
 # ---------------------------------------------------------------------------
 
+
 def effective_roles(db, system_user_id) -> set[str]:
     """Return the set of active role names held by a SystemUser.
 

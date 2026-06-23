@@ -252,7 +252,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         ]
         bank_markup = "".join(
             (
-                "<div class=\"bank-row\">"
+                '<div class="bank-row">'
                 f"<span>{html.escape(label)}</span>"
                 f"<strong>{html.escape(value)}</strong>"
                 "</div>"
@@ -262,9 +262,9 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         )
         if bank_markup:
             bank_markup = (
-                "<div class=\"bank-card\">"
-                "<p class=\"card-title\">Bank Details</p>"
-                f"<div class=\"bank-grid\">{bank_markup}</div>"
+                '<div class="bank-card">'
+                '<p class="card-title">Bank Details</p>'
+                f'<div class="bank-grid">{bank_markup}</div>'
                 "</div>"
             )
 
@@ -501,7 +501,9 @@ def _truncation_marker(hidden_count: int) -> str:
     return f"... and {hidden_count} more line items (see itemised statement)"
 
 
-def _render_invoice_text_lines(invoice: Invoice, db: Session | None = None) -> list[str]:
+def _render_invoice_text_lines(
+    invoice: Invoice, db: Session | None = None
+) -> list[str]:
     # The minimal text PDF is encoded latin-1, so use "NGN" (no naira glyph).
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
     out = [

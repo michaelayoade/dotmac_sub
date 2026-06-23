@@ -28,7 +28,9 @@ def system_user(db_session):
 
 
 def test_set_device_login_encrypts_secret(db_session, system_user):
-    u = set_device_login(db_session, user_id=str(system_user.id), enabled=True, secret="P@ss")
+    u = set_device_login(
+        db_session, user_id=str(system_user.id), enabled=True, secret="P@ss"
+    )
     assert u.device_login_enabled is True
     assert u.device_login_secret and u.device_login_secret != "P@ss"
     assert decrypt_credential(u.device_login_secret) == "P@ss"
@@ -36,7 +38,9 @@ def test_set_device_login_encrypts_secret(db_session, system_user):
 
 
 def test_revoke_sets_timestamp_and_disables(db_session, system_user):
-    set_device_login(db_session, user_id=str(system_user.id), enabled=True, secret="P@ss")
+    set_device_login(
+        db_session, user_id=str(system_user.id), enabled=True, secret="P@ss"
+    )
     u = revoke_device_login(db_session, user_id=str(system_user.id))
     assert u.device_login_enabled is False
     assert u.device_login_revoked_at is not None
@@ -45,11 +49,15 @@ def test_revoke_sets_timestamp_and_disables(db_session, system_user):
 def test_reenable_without_secret_clears_revoked(db_session, system_user):
     """Re-enabling without supplying a new secret must clear device_login_revoked_at."""
     # Step 1: enable with a secret
-    set_device_login(db_session, user_id=str(system_user.id), enabled=True, secret="P@ss")
+    set_device_login(
+        db_session, user_id=str(system_user.id), enabled=True, secret="P@ss"
+    )
     # Step 2: revoke (sets device_login_revoked_at)
     revoke_device_login(db_session, user_id=str(system_user.id))
     # Step 3: re-enable without a new secret
-    u = set_device_login(db_session, user_id=str(system_user.id), enabled=True, secret=None)
+    u = set_device_login(
+        db_session, user_id=str(system_user.id), enabled=True, secret=None
+    )
     # Both conditions must hold
     assert u.device_login_enabled is True
     assert u.device_login_revoked_at is None

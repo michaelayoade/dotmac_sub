@@ -1856,8 +1856,12 @@ def user_device_login_set(
             }
         }
         if request.headers.get("HX-Request"):
-            return Response(status_code=400, headers={"HX-Trigger": json.dumps(trigger)})
-        return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
+            return Response(
+                status_code=400, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
     except Exception:
         db.rollback()
         note = "Device-login update failed"
@@ -1870,8 +1874,12 @@ def user_device_login_set(
             }
         }
         if request.headers.get("HX-Request"):
-            return Response(status_code=400, headers={"HX-Trigger": json.dumps(trigger)})
-        return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
+            return Response(
+                status_code=400, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
 
     trigger = {
         "showToast": {

@@ -189,6 +189,7 @@ def search_subscribers(
             "Invalid query parameters.",
             {"q": ["Search query is required."]},
         )
+    assert q is not None
     page, per_page, meta = _pagination(request)
     subscribers, total = crm_api.search_subscribers(db, q, page=page, per_page=per_page)
     sessions = crm_api.latest_session_by_subscriber(

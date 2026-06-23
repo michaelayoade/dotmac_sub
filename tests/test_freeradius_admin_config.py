@@ -11,7 +11,7 @@ def _read(p):
 def test_admin_site_listens_on_dedicated_ports():
     s = _read("config/freeradius/sites-enabled/admin-login")
     assert "1822" in s and "1823" in s
-    assert "sql_admin" in s          # uses the admin sql instance, not the subscriber one
+    assert "sql_admin" in s  # uses the admin sql instance, not the subscriber one
 
 
 def test_admin_sql_targets_admin_tables():
@@ -23,7 +23,9 @@ def test_admin_sql_targets_admin_tables():
     assert "radgroupcheck_admin" in s
     assert "radgroupreply_admin" in s
     assert "radusergroup_admin" in s
-    assert "radcheck " not in s.replace("radcheck_admin", "")  # never the subscriber table
+    assert "radcheck " not in s.replace(
+        "radcheck_admin", ""
+    )  # never the subscriber table
 
 
 def test_admin_sql_has_no_bare_subscriber_tables():

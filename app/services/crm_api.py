@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.billing import (
@@ -453,7 +454,7 @@ def subscriber_payload(
             SubscriptionStatus.archived,
         },
     )
-    row = {
+    row: dict[str, Any] = {
         "id": str(subscriber.id),
         "subscriber_number": subscriber.subscriber_number or subscriber.account_number,
         "name": subscriber_name(subscriber),
@@ -637,7 +638,10 @@ def transaction_rows(
     count_stmt = select(func.count(InvoiceLine.id)).join(
         Invoice, InvoiceLine.invoice_id == Invoice.id
     )
-    predicates = [InvoiceLine.is_active.is_(True), Invoice.is_active.is_(True)]
+    predicates: list[ColumnElement[bool]] = [
+        InvoiceLine.is_active.is_(True),
+        Invoice.is_active.is_(True),
+    ]
     if customer_id:
         predicates.append(Invoice.account_id == customer_id)
     if date_from:

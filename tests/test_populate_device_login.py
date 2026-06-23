@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS radreply_admin (
 # SQLite DB-API 2 adapter
 # ---------------------------------------------------------------------------
 
+
 class _SQLiteConn:
     """Wrap a SQLAlchemy in-memory SQLite engine as a minimal DB-API 2 connection.
 
@@ -113,6 +114,7 @@ class _SQLiteCursor:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def radius_admin_engine():
     """Fresh in-memory SQLite engine with radcheck_admin / radreply_admin tables."""
@@ -135,14 +137,17 @@ def radius_admin_db(radius_admin_engine):
 @pytest.fixture()
 def conn_factory(radius_admin_engine):
     """Returns a zero-arg callable that produces a _SQLiteConn over the shared engine."""
+
     def _factory():
         return _SQLiteConn(radius_admin_engine)
+
     return _factory
 
 
 # ---------------------------------------------------------------------------
 # Seed helper
 # ---------------------------------------------------------------------------
+
 
 def _seed_staff(
     db_session,
@@ -172,7 +177,10 @@ def _seed_staff(
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_eligible_staff_projected(db_session, radius_admin_engine, conn_factory, monkeypatch):
+
+def test_eligible_staff_projected(
+    db_session, radius_admin_engine, conn_factory, monkeypatch
+):
     """An enabled staff member with router:admin permission gets Mikrotik-Group=full."""
     user = _seed_staff(db_session, email="tess@dotmac", enabled=True)
 
@@ -212,7 +220,9 @@ def test_eligible_staff_projected(db_session, radius_admin_engine, conn_factory,
     # Verify the decrypt roundtrip: stored Cleartext-Password should equal the seeded plaintext secret
     with radius_admin_engine.connect() as conn:
         stored_secret = conn.execute(
-            text("SELECT value FROM radcheck_admin WHERE username=:u AND attribute='Cleartext-Password'"),
+            text(
+                "SELECT value FROM radcheck_admin WHERE username=:u AND attribute='Cleartext-Password'"
+            ),
             {"u": "tess@dotmac"},
         ).scalar()
     assert stored_secret == "s3cr3t"
@@ -262,7 +272,9 @@ def test_ineligible_skipped(db_session, radius_admin_engine, conn_factory, monke
     assert n == 0
 
 
-def test_dry_run_makes_no_writes(db_session, radius_admin_engine, conn_factory, monkeypatch):
+def test_dry_run_makes_no_writes(
+    db_session, radius_admin_engine, conn_factory, monkeypatch
+):
     """dry_run=True must not persist any rows."""
     _seed_staff(db_session, email="dryrun@dotmac", enabled=True)
 

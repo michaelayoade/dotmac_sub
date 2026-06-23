@@ -1,4 +1,5 @@
 """Derive RouterOS privilege tier from a staff member's existing RBAC."""
+
 from __future__ import annotations
 
 
