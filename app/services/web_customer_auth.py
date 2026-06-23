@@ -56,8 +56,12 @@ def _record_customer_local_login_failure(
 ) -> None:
     now = now or datetime.now(UTC)
     credential.failed_login_attempts += 1
-    max_attempts = _setting_int(db, SettingDomain.auth, "customer_login_max_attempts", 5)
-    lockout_minutes = _setting_int(db, SettingDomain.auth, "customer_lockout_minutes", 15)
+    max_attempts = _setting_int(
+        db, SettingDomain.auth, "customer_login_max_attempts", 5
+    )
+    lockout_minutes = _setting_int(
+        db, SettingDomain.auth, "customer_lockout_minutes", 15
+    )
     if credential.failed_login_attempts >= max_attempts:
         credential.locked_until = now + timedelta(minutes=lockout_minutes)
     db.commit()
@@ -317,6 +321,7 @@ def customer_login_submit(
                     account_id = subscriber.id
 
         if not authenticated_locally:
+
             def raise_invalid_login() -> None:
                 if local_credential and local_password_failed:
                     _record_customer_local_login_failure(db, local_credential)

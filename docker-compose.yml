@@ -374,9 +374,13 @@ services:
     ports:
     - 1812:1812/udp
     - 1813:1813/udp
+    - 1822:1822/udp
+    - 1823:1823/udp
     volumes:
-    - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql
-    - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default
+    - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
+    - ./config/freeradius/mods-enabled/sql_admin:/etc/raddb/mods-enabled/sql_admin:ro
+    - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default:ro
+    - ./config/freeradius/sites-enabled/admin-login:/etc/raddb/sites-enabled/admin-login:ro
     - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
     - ./config/freeradius/dictionary:/etc/raddb/dictionary
     environment:

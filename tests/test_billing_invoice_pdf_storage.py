@@ -291,8 +291,7 @@ def test_direct_bank_transfer_config_preserves_sort_code(db_session):
     account = context["direct_bank_transfer_accounts"][0]
     assert account["sort_code"] == "12-34-56"
     assert (
-        context["direct_bank_transfer"]["direct_bank_transfer_sort_code"]
-        == "12-34-56"
+        context["direct_bank_transfer"]["direct_bank_transfer_sort_code"] == "12-34-56"
     )
 
 

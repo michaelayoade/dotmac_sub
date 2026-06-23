@@ -1519,6 +1519,9 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
+    from app.services.auth_dependencies import has_permission
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
     from app.web.admin import get_current_user, get_sidebar_stats
 
     edit_data = web_system_profiles_service.get_user_edit_data(db, user_id)
@@ -1529,24 +1532,38 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
             status_code=404,
         )
 
-    return templates.TemplateResponse(
-        "admin/system/users/edit.html",
-        {
-            "request": request,
-            "user": edit_data["user"],
-            "roles": edit_data["roles"],
-            "current_role_ids": edit_data["current_role_ids"],
-            "all_permissions": edit_data["all_permissions"],
-            "direct_permission_ids": edit_data["direct_permission_ids"],
-            "audit_items": _system_user_audit_items(db, user_id),
-            "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
-            "can_update_password": web_system_common_service.is_admin_request(request),
-            "active_page": "users",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-        },
-    )
+    # Device-login panel: only expose to admins with router:admin
+    auth = getattr(request.state, "auth", None) or {}
+    can_manage_device_login = bool(auth) and has_permission(auth, db, "router:admin")
+    device_login_tier: str | None = None
+    if can_manage_device_login:
+        try:
+            target_user = edit_data["user"]
+            roles = effective_roles(db, target_user.id)
+            perms = effective_perms(db, target_user.id)
+            device_login_tier = derive_router_tier(roles, perms)
+        except Exception:
+            device_login_tier = None
+
+    ctx: dict = {
+        "request": request,
+        "user": edit_data["user"],
+        "roles": edit_data["roles"],
+        "current_role_ids": edit_data["current_role_ids"],
+        "all_permissions": edit_data["all_permissions"],
+        "direct_permission_ids": edit_data["direct_permission_ids"],
+        "audit_items": _system_user_audit_items(db, user_id),
+        "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
+        "can_update_password": web_system_common_service.is_admin_request(request),
+        "active_page": "users",
+        "active_menu": "system",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+    if can_manage_device_login:
+        ctx["device_login_tier"] = device_login_tier
+
+    return templates.TemplateResponse("admin/system/users/edit.html", ctx)
 
 
 @router.post(
@@ -1790,6 +1807,101 @@ def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_d
 def user_send_invite_get_fallback(user_id: str):
     """Fallback for auth-refresh GET redirect on invite action URLs."""
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+
+
+@router.post(
+    "/users/{user_id}/device-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:admin"))],
+)
+def user_device_login_set(
+    request: Request,
+    user_id: str,
+    form_data=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    """Enable/disable device login and set/rotate the router secret."""
+    from app.tasks.radius_population import sync_device_login
+
+    action = form_data.get("device_login_action", "set")
+    note: str
+    try:
+        if action == "revoke":
+            web_system_user_mutations_service.revoke_device_login(db, user_id=user_id)
+            note = "Device login revoked."
+        else:
+            enabled = bool(form_data.get("device_login_enabled"))
+            secret = form_data.get("device_login_secret") or None
+            web_system_user_mutations_service.set_device_login(
+                db, user_id=user_id, enabled=enabled, secret=secret
+            )
+            note = "Device login updated."
+        _log_system_user_event(
+            db,
+            request,
+            action=f"device_login_{action}",
+            user_id=user_id,
+            metadata={"action": action},
+        )
+        sync_device_login.delay()
+    except ValueError as exc:
+        db.rollback()
+        note = str(exc)
+        trigger = {
+            "showToast": {
+                "type": "error",
+                "title": "Device login",
+                "message": note,
+                "duration": 8000,
+            }
+        }
+        if request.headers.get("HX-Request"):
+            return Response(
+                status_code=400, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
+    except Exception:
+        db.rollback()
+        note = "Device-login update failed"
+        trigger = {
+            "showToast": {
+                "type": "error",
+                "title": "Device login",
+                "message": note,
+                "duration": 8000,
+            }
+        }
+        if request.headers.get("HX-Request"):
+            return Response(
+                status_code=400, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
+
+    trigger = {
+        "showToast": {
+            "type": "success",
+            "title": "Device login",
+            "message": note,
+            "duration": 6000,
+        }
+    }
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Trigger": json.dumps(trigger)})
+    return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
+
+
+@router.get(
+    "/users/{user_id}/device-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:admin"))],
+)
+def user_device_login_get_fallback(user_id: str):
+    """Fallback for auth-refresh GET redirect on device-login action URLs."""
+    return RedirectResponse(url=f"/admin/system/users/{user_id}/edit", status_code=303)
 
 
 @router.post(

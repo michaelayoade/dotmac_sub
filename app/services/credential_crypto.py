@@ -52,6 +52,7 @@ ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
     "WebhookEndpoint": ("secret",),
     "PaymentMethod": ("token",),
     "BankAccount": ("token",),
+    "SystemUser": ("device_login_secret",),
 }
 
 

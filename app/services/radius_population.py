@@ -419,6 +419,208 @@ if __name__ == "__main__":
         print("\nTo execute: python -m app.services.radius_population --execute")
 
 
+# ---------------------------------------------------------------------------
+# Staff device-login RADIUS projection
+# ---------------------------------------------------------------------------
+
+
+def effective_roles(db, system_user_id) -> set[str]:
+    """Return the set of active role names held by a SystemUser.
+
+    Mirrors the SystemUser branch in auth_dependencies.has_permission:
+    join system_user_roles → roles and collect Role.name where Role.is_active.
+    """
+    from app.models.rbac import Role, SystemUserRole
+
+    rows = (
+        db.query(Role.name)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == system_user_id)
+        .filter(Role.is_active.is_(True))
+        .all()
+    )
+    return {row[0] for row in rows}
+
+
+def effective_perms(db, system_user_id) -> set[str]:
+    """Return the set of active permission keys held by a SystemUser.
+
+    Mirrors the SystemUser branch in auth_dependencies.has_permission:
+    collects keys from (a) role-via-system_user_roles and (b) direct
+    SystemUserPermission grants, both filtered by Permission.is_active.
+    """
+    from app.models.rbac import (
+        Permission,
+        Role,
+        RolePermission,
+        SystemUserPermission,
+        SystemUserRole,
+    )
+
+    # (a) role-derived permissions
+    role_perm_keys = (
+        db.query(Permission.key)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(Role, RolePermission.role_id == Role.id)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == system_user_id)
+        .filter(Role.is_active.is_(True))
+        .filter(Permission.is_active.is_(True))
+        .all()
+    )
+
+    # (b) direct grants
+    direct_perm_keys = (
+        db.query(Permission.key)
+        .join(SystemUserPermission, SystemUserPermission.permission_id == Permission.id)
+        .filter(SystemUserPermission.system_user_id == system_user_id)
+        .filter(Permission.is_active.is_(True))
+        .all()
+    )
+
+    return {row[0] for row in role_perm_keys} | {row[0] for row in direct_perm_keys}
+
+
+def populate_device_login(
+    db,
+    *,
+    dry_run: bool = False,
+    _conn_factory=None,
+) -> dict[str, int]:
+    """Project device-login-enabled staff into the admin RADIUS auth set.
+
+    Writes ONLY to radcheck_admin / radreply_admin — never touches radcheck /
+    radreply (subscriber auth).
+
+    Per-user DELETE+INSERT pattern (idempotent): same as populate().  Eligible
+    users get:
+      radcheck_admin:  Cleartext-Password := <decrypted secret>
+      radreply_admin:  Mikrotik-Group := <tier>
+                       Service-Type   := Administrative-User
+
+    Args:
+        db: SQLAlchemy session (dotmac_sub app DB — SystemUser side).
+        dry_run: If True, compute stats and issue SQL but rollback; no writes.
+        _conn_factory: Optional zero-arg callable that returns a DB-API 2
+            connection to the RADIUS DB.  Used by tests to inject an in-memory
+            SQLite connection in place of the real psycopg Postgres connection.
+            When None (production), opens psycopg.connect(RADIUS_DB_DSN).
+
+    Returns:
+        dict with keys: considered, radcheck_upserts, radreply_upserts,
+        removed, skipped_ineligible.
+    """
+    from app.models.system_user import SystemUser
+    from app.services.credential_crypto import decrypt_credential
+    from app.services.device_login import derive_router_tier
+
+    stats: dict[str, int] = {
+        "considered": 0,
+        "radcheck_upserts": 0,
+        "radreply_upserts": 0,
+        "removed": 0,
+        "skipped_ineligible": 0,
+    }
+
+    # Fetch all active SystemUsers from the app DB while we still hold the
+    # session; compute work list in memory before opening the RADIUS connection
+    # (avoids holding the app transaction open during RADIUS writes).
+    staff = db.query(SystemUser).filter(SystemUser.is_active.is_(True)).all()
+
+    # Build work list: (username, cleartext|None, tier|None, eligible)
+    # tier=None + eligible=True  → skipped_ineligible
+    # tier=None + eligible=False → removed
+    # tier set               → upsert
+    work: list[tuple[str, str | None, str | None, bool]] = []
+    for u in staff:
+        stats["considered"] += 1
+        eligible = bool(
+            u.device_login_enabled
+            and u.device_login_revoked_at is None
+            and u.device_login_secret
+        )
+        if not eligible:
+            work.append((u.email, None, None, False))
+            continue
+
+        roles = effective_roles(db, u.id)
+        perms = effective_perms(db, u.id)
+        tier = derive_router_tier(roles, perms)
+
+        if tier is None:
+            work.append((u.email, None, None, True))
+            continue
+
+        try:
+            cleartext = decrypt_credential(u.device_login_secret)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "populate_device_login: decrypt failed for %s — skipping", u.email
+            )
+            work.append((u.email, None, None, True))
+            continue
+
+        if not cleartext:
+            work.append((u.email, None, None, True))
+            continue
+
+        work.append((u.email, cleartext, tier, True))
+
+    # Open RADIUS connection
+    if _conn_factory is not None:
+        conn = _conn_factory()
+    else:
+        radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+        if not radius_dsn:
+            raise RuntimeError("RADIUS_DB_DSN not set")
+        conn = psycopg.connect(radius_dsn)
+        conn.autocommit = False
+
+    try:
+        cur = conn.cursor()
+        for uname, cleartext, tier, ineligible_flag in work:
+            # Always clean old rows first — idempotent regardless of outcome.
+            cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
+            cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
+
+            if tier is None:
+                if ineligible_flag:
+                    # Also counts enabled-but-unusable users (decrypt failure / empty secret), not only permission-ineligible ones
+                    stats["skipped_ineligible"] += 1
+                else:
+                    stats["removed"] += 1
+                continue
+
+            # Upsert
+            cur.execute(
+                "INSERT INTO radcheck_admin (username, attribute, op, value) "
+                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+                (uname, cleartext),
+            )
+            cur.execute(
+                "INSERT INTO radreply_admin (username, attribute, op, value) "
+                "VALUES (%s, 'Mikrotik-Group', ':=', %s)",
+                (uname, tier),
+            )
+            cur.execute(
+                "INSERT INTO radreply_admin (username, attribute, op, value) "
+                "VALUES (%s, 'Service-Type', ':=', 'Administrative-User')",
+                (uname,),
+            )
+            stats["radcheck_upserts"] += 1
+            stats["radreply_upserts"] += 2
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    finally:
+        conn.close()
+
+    logger.info("populate_device_login done (dry_run=%s): %s", dry_run, stats)
+    return stats
+
+
 # -----------------------------------------------------------------------------
 # TODO — Celery change-driven handler
 #

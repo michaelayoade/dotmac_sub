@@ -140,9 +140,7 @@ def _scope_filters(
     if scope_type == ServiceExtensionScope.nas_device:
         if not scope_id:
             raise HTTPException(status_code=400, detail="NAS device is required")
-        filters.append(
-            Subscription.provisioning_nas_device_id == coerce_uuid(scope_id)
-        )
+        filters.append(Subscription.provisioning_nas_device_id == coerce_uuid(scope_id))
     elif scope_type == ServiceExtensionScope.pop_site:
         if not scope_id:
             raise HTTPException(status_code=400, detail="POP site is required")
