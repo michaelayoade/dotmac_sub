@@ -423,6 +423,7 @@ def submit_request(
             actor_id=None,
             actor_name=AUTO_VERIFICATION_ACTOR_NAME,
             review_note=reason,
+            actor_type=AuditActorType.system,
         )
     db.refresh(location_request)
     return location_request
@@ -525,6 +526,7 @@ def approve_request(
     actor_id: str | None,
     actor_name: str | None,
     review_note: str | None,
+    actor_type: AuditActorType = AuditActorType.user,
 ) -> CustomerLocationChangeRequest:
     location_request = db.get(CustomerLocationChangeRequest, request_id)
     if not location_request:
@@ -560,7 +562,7 @@ def approve_request(
     _audit(
         db,
         actor_id=actor_id,
-        actor_type=AuditActorType.user,
+        actor_type=actor_type,
         action="customer_location_change_approved",
         entity_id=str(location_request.id),
         metadata={
@@ -661,6 +663,26 @@ def geocode_service_address(
             not force and address.latitude is not None and address.longitude is not None
         ):
             return None  # preserve the existing pin
+
+        # Back-off: an address that won't resolve shouldn't hit the geocoder on
+        # every profile save. Stamp each attempt and skip if one was made within
+        # the retry window (0 disables the back-off; force bypasses it).
+        retry_days = _gis_setting_int(db, "location_geocode_retry_days", 7)
+        meta = dict(subscriber.metadata_ or {})
+        if not force and retry_days > 0:
+            last = meta.get("geocode_attempted_at")
+            if last:
+                try:
+                    last_dt = datetime.fromisoformat(str(last))
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=UTC)
+                    if datetime.now(UTC) - last_dt < timedelta(days=retry_days):
+                        return None
+                except ValueError:
+                    pass
+        meta["geocode_attempted_at"] = datetime.now(UTC).isoformat()
+        subscriber.metadata_ = meta
+        db.flush()
 
         result = geocoding_service.geocode_address(db, dict(composed))
         lat = result.get("latitude")
