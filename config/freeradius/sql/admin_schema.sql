@@ -49,3 +49,46 @@ CREATE TABLE IF NOT EXISTS radacct_admin (
 );
 CREATE INDEX IF NOT EXISTS radacct_admin_username ON radacct_admin (username);
 CREATE INDEX IF NOT EXISTS radacct_admin_active ON radacct_admin (username) WHERE acctstoptime IS NULL;
+
+-- Post-auth logging (mirrors radpostauth from schema.sql)
+CREATE TABLE IF NOT EXISTS radpostauth_admin (
+    id BIGSERIAL PRIMARY KEY,
+    username VARCHAR(64) NOT NULL,
+    pass VARCHAR(64),
+    reply VARCHAR(32),
+    authdate TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    nasipaddress INET,
+    calledstationid VARCHAR(50),
+    callingstationid VARCHAR(50)
+);
+CREATE INDEX IF NOT EXISTS radpostauth_admin_username ON radpostauth_admin (username);
+CREATE INDEX IF NOT EXISTS radpostauth_admin_authdate ON radpostauth_admin (authdate);
+
+-- Group check attributes (mirrors radgroupcheck from schema.sql)
+CREATE TABLE IF NOT EXISTS radgroupcheck_admin (
+    id SERIAL PRIMARY KEY,
+    groupname VARCHAR(64) NOT NULL,
+    attribute VARCHAR(64) NOT NULL,
+    op VARCHAR(2) DEFAULT ':=',
+    value VARCHAR(253) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS radgroupcheck_admin_groupname ON radgroupcheck_admin (groupname);
+
+-- Group reply attributes (mirrors radgroupreply from schema.sql)
+CREATE TABLE IF NOT EXISTS radgroupreply_admin (
+    id SERIAL PRIMARY KEY,
+    groupname VARCHAR(64) NOT NULL,
+    attribute VARCHAR(64) NOT NULL,
+    op VARCHAR(2) DEFAULT ':=',
+    value VARCHAR(253) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS radgroupreply_admin_groupname ON radgroupreply_admin (groupname);
+
+-- User group membership (mirrors radusergroup from schema.sql)
+CREATE TABLE IF NOT EXISTS radusergroup_admin (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(64) NOT NULL,
+    groupname VARCHAR(64) NOT NULL,
+    priority INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS radusergroup_admin_username ON radusergroup_admin (username);

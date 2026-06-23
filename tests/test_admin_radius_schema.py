@@ -10,7 +10,15 @@ def _load_ddl():
 
 def test_admin_tables_have_required_columns():
     ddl = _load_ddl()
-    for tbl in ("radcheck_admin", "radreply_admin", "radacct_admin"):
+    for tbl in (
+        "radcheck_admin",
+        "radreply_admin",
+        "radacct_admin",
+        "radpostauth_admin",
+        "radgroupcheck_admin",
+        "radgroupreply_admin",
+        "radusergroup_admin",
+    ):
         assert re.search(rf"create table[^;]*{tbl}", ddl, re.I), f"{tbl} missing"
     assert "username" in ddl and "attribute" in ddl and "value" in ddl
     assert "acctsessionid" in ddl and "nasipaddress" in ddl

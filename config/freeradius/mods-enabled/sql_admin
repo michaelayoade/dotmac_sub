@@ -26,14 +26,14 @@ sql sql_admin {
 	# Table configuration — all pointing to _admin variants
 	acct_table1 = "radacct_admin"
 	acct_table2 = "radacct_admin"
-	postauth_table = "radpostauth"
+	postauth_table = "radpostauth_admin"
 	authcheck_table = "radcheck_admin"
 	authreply_table = "radreply_admin"
 
-	# No group tables for staff auth — simple per-user check/reply only
-	groupcheck_table = "radgroupcheck"
-	groupreply_table = "radgroupreply"
-	usergroup_table = "radusergroup"
+	# Group tables for staff auth — all pointing to _admin variants
+	groupcheck_table = "radgroupcheck_admin"
+	groupreply_table = "radgroupreply_admin"
+	usergroup_table = "radusergroup_admin"
 
 	# Do not pre-delete open sessions
 	delete_stale_sessions = no
