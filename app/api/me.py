@@ -32,9 +32,12 @@ from app.schemas.billing import (
     AccountBalanceResponse,
     AutopayEnableRequest,
     AutopayStatusResponse,
+    BankTransferAccount,
+    DirectBankTransferConfig,
     InvoiceRead,
     LedgerEntryRead,
     MyPaymentMethodRead,
+    PaymentProviderOption,
     PaymentRead,
     TopupInitiateRequest,
     TopupInitiateResponse,
@@ -64,6 +67,7 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
+from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
     SubscriberContactCreate,
     SubscriberContactRead,
@@ -310,6 +314,24 @@ def my_subscriptions(
     return catalog_service.subscriptions.list_response(
         db, subscriber_id, None, status, order_by, order_dir, limit, offset
     )
+
+
+@router.get("/service-status", response_model=ServiceStatusResponse)
+def my_service_status(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Truthful "is my service good, and when does it lapse" view.
+
+    Service expiry is not date-driven: prepaid lapses on balance exhaustion
+    (balance + grace/deactivation timers below), postpaid only via dunning on
+    overdue invoices. `next_charge_at` is the next charge/invoice date, never an
+    expiry — clients should read this endpoint (and `status`) rather than infer
+    expiry from `next_billing_at`.
+    """
+    from app.services.service_status import build_service_status
+
+    return build_service_status(db, _subscriber_id(principal))
 
 
 @router.get("/quota-buckets", response_model=ListResponse[QuotaBucketRead])
@@ -570,8 +592,34 @@ def my_topup_page(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Top-up page context: current balance, amount limits, presets, provider."""
+    """Top-up page context: balance, limits, presets, and the pay-with selector.
+
+    ``payment_options`` mirrors the web chooser (online gateways + a direct
+    bank-transfer option) and ``direct_bank_transfer`` carries the admin bank
+    account(s) so the customer can transfer and upload a receipt in-app.
+    """
     ctx = customer_payments.get_topup_page(db, _customer(db, principal))
+    options = [
+        PaymentProviderOption(provider_type=opt["provider_type"], label=opt["label"])
+        for opt in ctx.get("payment_options", [])
+        if opt.get("provider_type") != "direct_bank_transfer"
+    ]
+    accounts = [
+        BankTransferAccount(
+            bank_name=acct["bank_name"],
+            account_name=acct["account_name"],
+            account_number=acct["account_number"],
+        )
+        for acct in customer_payments.enabled_direct_bank_transfer_accounts(db)
+    ]
+    transfer_settings = customer_payments.direct_bank_transfer_settings(db)
+    direct_transfer = DirectBankTransferConfig(
+        enabled=customer_payments.direct_bank_transfer_enabled(db),
+        instructions=(
+            transfer_settings.get("direct_bank_transfer_instructions") or None
+        ),
+        accounts=accounts,
+    )
     return TopupPageResponse(
         provider_type=ctx["provider_type"],
         provider_public_key=ctx.get("provider_public_key"),
@@ -580,6 +628,8 @@ def my_topup_page(
         max_amount=ctx["max_amount"],
         preset_amounts=ctx.get("preset_amounts", []),
         customer_email=ctx.get("customer_email"),
+        payment_options=options,
+        direct_bank_transfer=direct_transfer,
     )
 
 
@@ -596,6 +646,7 @@ def my_topup_initiate(
             db,
             customer,
             payload.amount,
+            provider=payload.provider,
             payment_method_id=(
                 str(payload.payment_method_id) if payload.payment_method_id else None
             ),
@@ -718,7 +769,7 @@ async def my_usage_summary(
     """
     subscriber_id = _subscriber_id(principal)
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
-    summary["fup"] = usage_summary_service.fup_summary(db, subscriber_id)
+    summary["fup"] = await usage_summary_service.fup_summary(db, subscriber_id)
     return summary
 
 

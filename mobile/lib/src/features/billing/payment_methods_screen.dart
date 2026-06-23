@@ -207,6 +207,22 @@ class PaymentMethodsScreen extends ConsumerWidget {
     );
   }
 
+  /// Primary CTA linking to the unified pay selector (card / Paystack /
+  /// Flutterwave / bank transfer) so this page drives the Pay / Top-up flow.
+  Widget _payTile(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: ListTile(
+        leading: const Icon(Icons.add_card_outlined),
+        title: const Text('Pay or add funds'),
+        subtitle: const Text('Card, Paystack, Flutterwave or bank transfer'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => context.push('/topup'),
+      ),
+    );
+  }
+
   /// Bank-transfer method entry — always available, alongside saved cards.
   Widget _bankTransferTile(BuildContext context) {
     return Card(
@@ -248,6 +264,8 @@ class PaymentMethodsScreen extends ConsumerWidget {
               return ListView(
                 padding: const EdgeInsets.all(12),
                 children: [
+                  _payTile(context),
+                  const SizedBox(height: 8),
                   _bankTransferTile(context),
                   const SizedBox(height: 24),
                   const EmptyState(
@@ -269,6 +287,8 @@ class PaymentMethodsScreen extends ConsumerWidget {
             return ListView(
               padding: const EdgeInsets.all(12),
               children: [
+                _payTile(context),
+                const SizedBox(height: 8),
                 const _AutopayTile(),
                 const SizedBox(height: 8),
                 _bankTransferTile(context),

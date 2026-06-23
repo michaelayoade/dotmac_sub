@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from base64 import b64encode
 from datetime import UTC, datetime
 from io import BytesIO
@@ -1820,8 +1821,6 @@ def user_device_login_set(
     db: Session = Depends(get_db),
 ):
     """Enable/disable device login and set/rotate the router secret."""
-    from app.services.device_login import derive_router_tier
-    from app.services.radius_population import effective_perms, effective_roles
     from app.tasks.radius_population import sync_device_login
 
     action = form_data.get("device_login_action", "set")
@@ -2749,6 +2748,7 @@ def scheduler_task_detail(
             "request": request,
             "task": detail_data["task"],
             "next_run": detail_data["next_run"],
+            "active_timezone": detail_data["active_timezone"],
             "runs": detail_data["runs"],
             "active_page": "scheduler",
             "active_menu": "system",
@@ -2756,6 +2756,48 @@ def scheduler_task_detail(
             "sidebar_stats": get_sidebar_stats(db),
         },
     )
+
+
+@router.post(
+    "/scheduler/{task_id}/schedule",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_update_schedule(
+    request: Request,
+    task_id: str,
+    schedule_type: str = Form(...),
+    interval_seconds: str = Form(default=""),
+    cron_expr: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    """Update a scheduled task's cadence (interval seconds or cron expression)."""
+    from app.models.scheduler import ScheduleType
+    from app.schemas.scheduler import ScheduledTaskUpdate
+    from app.services import scheduler_config
+
+    base = f"/admin/system/scheduler/{task_id}"
+    if schedule_type == "crontab":
+        expr = cron_expr.strip()
+        if not scheduler_config.is_valid_cron(expr):
+            return RedirectResponse(url=f"{base}?error=invalid_cron", status_code=303)
+        update = ScheduledTaskUpdate(schedule_type=ScheduleType.crontab, cron_expr=expr)
+    else:
+        try:
+            seconds = int(interval_seconds)
+            if seconds < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return RedirectResponse(
+                url=f"{base}?error=invalid_interval", status_code=303
+            )
+        update = ScheduledTaskUpdate(
+            schedule_type=ScheduleType.interval,
+            interval_seconds=seconds,
+            cron_expr=None,
+        )
+    scheduler_service.scheduled_tasks.update(db, task_id, update)
+    return RedirectResponse(url=f"{base}?saved=1", status_code=303)
 
 
 @router.post(
@@ -2902,6 +2944,17 @@ def settings_branding_update(
     main_logo_file: UploadFile | None = File(None),
     dark_logo_file: UploadFile | None = File(None),
     favicon_file: UploadFile | None = File(None),
+    brand_primary_color: str | None = Form(None),
+    brand_secondary_color: str | None = Form(None),
+    login_hero_customer_url: str | None = Form(None),
+    login_hero_reseller_url: str | None = Form(None),
+    login_hero_admin_url: str | None = Form(None),
+    remove_login_hero_customer: str | None = Form(None),
+    remove_login_hero_reseller: str | None = Form(None),
+    remove_login_hero_admin: str | None = Form(None),
+    login_hero_customer_file: UploadFile | None = File(None),
+    login_hero_reseller_file: UploadFile | None = File(None),
+    login_hero_admin_file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
     """Update sidebar branding assets via URL or file upload."""
@@ -3019,6 +3072,30 @@ def settings_branding_update(
                 "favicon",
                 "favicon",
             ),
+            (
+                "login_hero_customer_url",
+                login_hero_customer_url,
+                web_system_common_service.form_bool(remove_login_hero_customer),
+                login_hero_customer_file,
+                "login",
+                "login_hero_customer",
+            ),
+            (
+                "login_hero_reseller_url",
+                login_hero_reseller_url,
+                web_system_common_service.form_bool(remove_login_hero_reseller),
+                login_hero_reseller_file,
+                "login",
+                "login_hero_reseller",
+            ),
+            (
+                "login_hero_admin_url",
+                login_hero_admin_url,
+                web_system_common_service.form_bool(remove_login_hero_admin),
+                login_hero_admin_file,
+                "login",
+                "login_hero_admin",
+            ),
         ]
 
         updates: list[tuple[str, str, str]] = []
@@ -3045,6 +3122,24 @@ def settings_branding_update(
             if _is_local_branding_path(current_value):
                 upload = file_upload_service.get_branding_upload()
                 upload.delete_by_url(current_value, "/static/branding/")
+
+        color_candidate = (brand_primary_color or "").strip()
+        if color_candidate:
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", color_candidate):
+                raise ValueError(
+                    "Brand colour must be a 6-digit hex value, e.g. #206a07."
+                )
+            normalised = color_candidate.lstrip("#").lower()
+            _persist_setting("brand_primary_color", f"#{normalised}")
+
+        secondary_candidate = (brand_secondary_color or "").strip()
+        if secondary_candidate:
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", secondary_candidate):
+                raise ValueError(
+                    "Brand colour must be a 6-digit hex value, e.g. #06b6d4."
+                )
+            normalised_secondary = secondary_candidate.lstrip("#").lower()
+            _persist_setting("brand_secondary_color", f"#{normalised_secondary}")
 
         return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:

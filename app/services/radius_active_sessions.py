@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.models.radius_active_session import RadiusActiveSession
@@ -88,9 +90,9 @@ class RadiusActiveSessionManager:
         if nas_device_id:
             stmt = stmt.where(RadiusActiveSession.nas_device_id == nas_device_id)
         stmt = stmt.values(**values)
-        result = db.execute(stmt)
+        result = cast(CursorResult[Any], db.execute(stmt))
         db.flush()
-        return result.rowcount  # type: ignore[return-value]
+        return result.rowcount
 
     @staticmethod
     def on_acct_stop(
@@ -105,9 +107,9 @@ class RadiusActiveSessionManager:
         )
         if nas_device_id:
             stmt = stmt.where(RadiusActiveSession.nas_device_id == nas_device_id)
-        result = db.execute(stmt)
+        result = cast(CursorResult[Any], db.execute(stmt))
         db.flush()
-        return result.rowcount  # type: ignore[return-value]
+        return result.rowcount
 
     @staticmethod
     def list_online(
@@ -151,7 +153,7 @@ class RadiusActiveSessionManager:
         stmt = delete(RadiusActiveSession).where(
             RadiusActiveSession.last_update < older_than,
         )
-        result = db.execute(stmt)
+        result = cast(CursorResult[Any], db.execute(stmt))
         db.flush()
         count = result.rowcount or 0
         if count:

@@ -119,5 +119,13 @@ class Settings:
         "true" if app_env in {"prod", "production"} else "false",
     ).lower() in ("true", "1", "yes")
 
+    # Layer 3 (identity/email decoupling): allow reseller portal logins to
+    # authenticate as a first-class ResellerUser principal instead of a fake
+    # Subscriber. Default OFF — the dual-read auth code is inert until flipped,
+    # and a backfill must repoint reseller credentials before cutover.
+    reseller_user_principal_enabled: bool = os.getenv(
+        "RESELLER_USER_PRINCIPAL_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+
 
 settings = Settings()

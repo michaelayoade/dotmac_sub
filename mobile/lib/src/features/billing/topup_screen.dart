@@ -13,6 +13,7 @@ import '../../models/topup.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import 'payment_webview_screen.dart';
+import 'transfer_proofs_screen.dart';
 
 /// Prepaid account top-up: pick/enter an amount, complete the provider checkout
 /// in a WebView, then verify and credit the account.
@@ -36,9 +37,26 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   bool _busy = false;
   late bool _saveCard = widget.saveCardInitial;
 
-  /// When set, charge this saved card directly (one-tap) instead of opening the
-  /// gateway checkout. Null = pay with a new card via the provider webview.
-  String? _selectedCardId;
+  /// The selected pay method, encoded as one of:
+  ///  - `card:<id>`   — charge a saved card server-side (one-tap)
+  ///  - `gw:<type>`   — new card via a gateway ('paystack'/'flutterwave')
+  ///  - `transfer`    — direct bank transfer + upload receipt
+  /// Null until the page + saved cards load and a default is chosen.
+  String? _selection;
+
+  /// Pull the saved-card id out of a `card:<id>` selection (else null).
+  String? get _selectedCardId =>
+      _selection != null && _selection!.startsWith('card:')
+          ? _selection!.substring('card:'.length)
+          : null;
+
+  /// The gateway type for a `gw:<type>` selection (else null).
+  String? get _selectedGateway =>
+      _selection != null && _selection!.startsWith('gw:')
+          ? _selection!.substring('gw:'.length)
+          : null;
+
+  bool get _isTransfer => _selection == 'transfer';
 
   @override
   void initState() {
@@ -59,7 +77,15 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     });
     try {
       final page = await ref.read(billingRepositoryProvider).topupPage();
-      if (mounted) setState(() => _page = page);
+      if (mounted) {
+        setState(() {
+          _page = page;
+          // Default to the configured online gateway (listed first by the API).
+          _selection ??= page.providers.isNotEmpty
+              ? 'gw:${page.providers.first.providerType}'
+              : 'gw:${page.providerType}';
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _loadError = e);
     } finally {
@@ -68,6 +94,15 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   }
 
   int? get _amount => int.tryParse(_custom.text.trim().replaceAll(',', ''));
+
+  bool get _amountValid {
+    final page = _page;
+    final amount = _amount;
+    return page != null &&
+        amount != null &&
+        amount >= page.minAmount &&
+        amount <= page.maxAmount;
+  }
 
   Future<void> _submit() async {
     final page = _page!;
@@ -82,12 +117,33 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
       ));
       return;
     }
+
+    // Bank transfer: show the account(s) + collect the receipt; staff verify
+    // and credit the wallet. No gateway / verify round-trip here.
+    if (_isTransfer) {
+      final ok = await showSubmitProofSheet(
+        context,
+        initialAmount: amount.toString(),
+        accounts: page.bankTransfer.accounts,
+        instructions: page.bankTransfer.instructions,
+      );
+      if (ok == true && mounted) {
+        ref.invalidate(paymentProofsProvider);
+        messenger.showSnackBar(const SnackBar(
+          content: Text(
+              'Receipt submitted — we will verify it and credit your account.'),
+        ));
+      }
+      return;
+    }
+
     setState(() => _busy = true);
     try {
       final cardId = _selectedCardId;
       final initiation =
           await ref.read(billingRepositoryProvider).initiateTopup(
                 amount,
+                provider: cardId == null ? _selectedGateway : null,
                 paymentMethodId: cardId,
                 // One key per attempt makes a saved-card charge safe against a
                 // Dio retry; the button busy-guard covers double-taps.
@@ -113,8 +169,9 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
 
       final result = await ref.read(billingRepositoryProvider).verifyTopup(
             reference,
-            // "Save this card" only applies to a brand-new card.
-            saveCard: cardId == null && _saveCard,
+            // "Save this card" only applies to a brand-new Paystack card.
+            saveCard:
+                cardId == null && _selectedGateway == 'paystack' && _saveCard,
           );
       // Top-up credits the wallet — refresh balance + ledger + invoices.
       ref.invalidate(invoicesProvider);
@@ -164,10 +221,36 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
   }
 
   String _payLabel(TopupPage page) {
+    if (_isTransfer) {
+      return _amount == null
+          ? 'Pay by transfer'
+          : 'Pay ${Fmt.money(_amount!, page.currency)} by transfer';
+    }
     final verb = _selectedCardId == null ? 'Top up' : 'Pay';
     return _amount == null
         ? verb
         : '$verb ${Fmt.money(_amount!, page.currency)}';
+  }
+
+  Widget _methodTile({
+    required String value,
+    required IconData icon,
+    required String title,
+    String? subtitle,
+  }) {
+    final theme = Theme.of(context);
+    final selected = _selection == value;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: subtitle == null ? null : Text(subtitle),
+      trailing: selected
+          ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
+          : const Icon(Icons.radio_button_unchecked),
+      selected: selected,
+      onTap: _busy ? null : () => setState(() => _selection = value),
+    );
   }
 
   Widget _form(TopupPage page) {
@@ -214,40 +297,34 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
                 '${Fmt.money(page.minAmount, page.currency)} – ${Fmt.money(page.maxAmount, page.currency)}',
           ),
         ),
-        // --- Pay with: one-tap saved card, or a new card via the gateway ---
-        if (savedCards.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text('Pay with', style: theme.textTheme.titleSmall),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.add_card_outlined),
-            title: const Text('New card'),
-            trailing: _selectedCardId == null
-                ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
+        // --- Pay with: saved card (one-tap), an online gateway, or transfer ---
+        const SizedBox(height: 8),
+        Text('Pay with', style: theme.textTheme.titleSmall),
+        for (final c in savedCards)
+          _methodTile(
+            value: 'card:${c.id}',
+            icon: Icons.credit_card,
+            title: c.label ?? '${c.brand ?? 'Card'} •••• ${c.last4 ?? ''}',
+            subtitle: (c.expiresMonth != null && c.expiresYear != null)
+                ? 'Expires '
+                    '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}'
                 : null,
-            selected: _selectedCardId == null,
-            onTap: _busy ? null : () => setState(() => _selectedCardId = null),
           ),
-          for (final c in savedCards)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.credit_card),
-              title:
-                  Text(c.label ?? '${c.brand ?? 'Card'} •••• ${c.last4 ?? ''}'),
-              subtitle: (c.expiresMonth != null && c.expiresYear != null)
-                  ? Text('Expires '
-                      '${c.expiresMonth!.toString().padLeft(2, '0')}/${c.expiresYear}')
-                  : null,
-              trailing: _selectedCardId == c.id
-                  ? Icon(Icons.check_circle, color: theme.colorScheme.primary)
-                  : null,
-              selected: _selectedCardId == c.id,
-              onTap:
-                  _busy ? null : () => setState(() => _selectedCardId = c.id),
-            ),
-        ],
-        // "Save this card" only matters when paying with a brand-new card.
-        if (page.providerType == 'paystack' && _selectedCardId == null)
+        for (final p in page.providers)
+          _methodTile(
+            value: 'gw:${p.providerType}',
+            icon: Icons.add_card_outlined,
+            title: p.label,
+          ),
+        if (page.bankTransfer.hasAccounts)
+          _methodTile(
+            value: 'transfer',
+            icon: Icons.account_balance_outlined,
+            title: 'Bank transfer',
+            subtitle: 'Show account details and upload your receipt',
+          ),
+        // "Save this card" only matters for a brand-new Paystack card.
+        if (_selectedGateway == 'paystack')
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Save this card'),
@@ -257,15 +334,18 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
           ),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed: _busy || _amount == null ? null : _submit,
+          onPressed:
+              _busy || !_amountValid || _selection == null ? null : _submit,
           icon: _busy
               ? const SizedBox(
                   height: 18,
                   width: 18,
                   child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(_selectedCardId == null
-                  ? Icons.add_card_outlined
-                  : Icons.bolt_outlined),
+              : Icon(_isTransfer
+                  ? Icons.account_balance_outlined
+                  : _selectedCardId == null
+                      ? Icons.add_card_outlined
+                      : Icons.bolt_outlined),
           label: Text(_payLabel(page)),
         ),
       ],

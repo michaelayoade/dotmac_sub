@@ -25,6 +25,32 @@ logger = logging.getLogger(__name__)
 
 _SERVICEABLE_RADIUS_KM = 1.5
 
+# Legal status transitions. ``completed`` and ``rejected`` are terminal — a
+# request there cannot be reopened or flipped (open a new request instead);
+# this stops a replayed/admin call from resurrecting a closed request and
+# re-firing the reseller notification. Re-setting the same status is a no-op.
+_ALLOWED_STATUS_TRANSITIONS: dict[ServiceRequestStatus, set[ServiceRequestStatus]] = {
+    ServiceRequestStatus.new: {
+        ServiceRequestStatus.reviewing,
+        ServiceRequestStatus.scheduled,
+        ServiceRequestStatus.completed,
+        ServiceRequestStatus.rejected,
+    },
+    ServiceRequestStatus.reviewing: {
+        ServiceRequestStatus.new,
+        ServiceRequestStatus.scheduled,
+        ServiceRequestStatus.completed,
+        ServiceRequestStatus.rejected,
+    },
+    ServiceRequestStatus.scheduled: {
+        ServiceRequestStatus.reviewing,
+        ServiceRequestStatus.completed,
+        ServiceRequestStatus.rejected,
+    },
+    ServiceRequestStatus.completed: set(),
+    ServiceRequestStatus.rejected: set(),
+}
+
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
@@ -182,6 +208,16 @@ def update_status(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid status") from None
     old_status = req.status
+    if new_status != old_status and (
+        new_status not in _ALLOWED_STATUS_TRANSITIONS.get(old_status, set())
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Illegal service-request status transition: "
+                f"{old_status.value} -> {new_status.value}"
+            ),
+        )
     req.status = new_status
     if admin_notes is not None:
         req.admin_notes = admin_notes.strip() or None

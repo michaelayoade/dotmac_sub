@@ -2,8 +2,8 @@
 
 from app.services.credential_crypto import (
     ENCRYPTED_MODEL_FIELDS,
-    encrypt_credential,
     decrypt_credential,
+    encrypt_credential,
 )
 
 

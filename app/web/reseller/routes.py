@@ -1,6 +1,6 @@
 """Reseller portal routes."""
 
-from fastapi import APIRouter, Body, Depends, Form, Query, Request
+from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -287,6 +287,7 @@ def reseller_billing_allocate_subscriber(
 def reseller_billing_pay_intent(
     request: Request,
     amount: str = Form(...),
+    provider: str = Form(""),
     payment_method_id: str = Form(""),
     save_card: bool = Form(False),
     db: Session = Depends(get_db),
@@ -295,8 +296,33 @@ def reseller_billing_pay_intent(
         request,
         db,
         amount,
+        provider=provider or None,
         payment_method_id=payment_method_id or None,
         save_card=save_card,
+    )
+
+
+@router.post("/billing/pay/transfer", response_class=HTMLResponse)
+async def reseller_billing_pay_transfer(
+    request: Request,
+    amount: str = Form(...),
+    gross_amount: str = Form(""),
+    wht_rate: str = Form(""),
+    bank_name: str = Form(""),
+    reference: str = Form(""),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Reseller bulk bank-transfer receipt (optionally net of withholding tax)."""
+    return await web_reseller_billing_service.billing_submit_transfer_proof(
+        request,
+        db,
+        file=file,
+        amount=amount,
+        gross_amount=gross_amount or None,
+        wht_rate=wht_rate or None,
+        bank_name=bank_name or None,
+        reference=reference or None,
     )
 
 

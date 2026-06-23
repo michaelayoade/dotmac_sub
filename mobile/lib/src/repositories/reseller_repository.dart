@@ -122,6 +122,31 @@ class ResellerRepository {
         .post('/reseller/billing/pay/verify', data: {'reference': reference}));
   }
 
+  /// POST /payment-proofs/reseller/consolidated — upload a bulk bank-transfer
+  /// receipt. [amount] is the net cash sent; [grossAmount]/[whtRate] capture
+  /// any withholding tax. Verified by staff, then credited to the account.
+  Future<void> submitConsolidatedProof({
+    required String amount,
+    String? grossAmount,
+    String? whtRate,
+    String? bankName,
+    String? reference,
+    required String filePath,
+    required String fileName,
+  }) async {
+    final form = FormData.fromMap({
+      'amount': amount,
+      if (grossAmount != null && grossAmount.isNotEmpty)
+        'gross_amount': grossAmount,
+      if (whtRate != null && whtRate.isNotEmpty) 'wht_rate': whtRate,
+      if (bankName != null && bankName.isNotEmpty) 'bank_name': bankName,
+      if (reference != null && reference.isNotEmpty) 'reference': reference,
+      'file': await MultipartFile.fromFile(filePath, filename: fileName),
+    });
+    await guard(
+        () => dio.post('/payment-proofs/reseller/consolidated', data: form));
+  }
+
   /// GET /reseller/payment-methods — the reseller's saved cards.
   Future<List<SavedCard>> paymentMethods() async {
     final data = await guard(() => dio.get('/reseller/payment-methods'));

@@ -39,11 +39,14 @@ from app.services.audit_helpers import (
 from app.services.auth_dependencies import require_permission
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
+from app.services.queue_adapter import enqueue_task
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
+
+_NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
 
 
 def _safe_form_error(exc: Exception) -> str:
@@ -59,6 +62,35 @@ def _safe_form_error(exc: Exception) -> str:
         return str(exc)
     logger.exception("Admin customer form action failed")
     return "Something went wrong. Please try again or contact support if it persists."
+
+
+def _kick_notification_delivery(result: dict[str, object]) -> dict[str, object]:
+    """Ask Celery to drain the notification queue after an operator bulk send.
+
+    Celery beat normally runs this task every minute. Triggering it here makes
+    the customer-list send action behave immediately even if beat is down or has
+    not picked up the schedule yet.
+    """
+    queued_count = result.get("queued_count")
+    if not isinstance(queued_count, int) or queued_count <= 0:
+        return result
+
+    dispatch = enqueue_task(
+        _NOTIFICATION_QUEUE_TASK,
+        queue="celery",
+        source="admin_customers_bulk_send",
+    )
+    result["delivery_dispatch"] = {
+        "queued": dispatch.queued,
+        "task_id": dispatch.task_id,
+        "error": dispatch.error,
+    }
+    if not dispatch.queued:
+        logger.warning(
+            "Failed to dispatch notification queue after customer bulk send: %s",
+            dispatch.error,
+        )
+    return result
 
 
 contacts_router = APIRouter(prefix="/contacts", tags=["web-admin-contacts"])
@@ -603,6 +635,7 @@ def person_detail(
             "usage_period": usage_period,
             "usage_page": usage_page,
             "usage_per_page": usage_per_page,
+            **web_notifications_service.bulk_notification_setup_context(db),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1916,13 +1949,34 @@ def bulk_send_customer_message(
 ):
     """Queue a bulk notification for selected or filtered customers."""
     try:
-        return web_customer_actions_service.queue_bulk_message_from_payload(
+        result = web_customer_actions_service.queue_bulk_message_from_payload(
             db=db, payload=data
         )
+        return _kick_notification_delivery(result)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get(
+    "/bulk/whatsapp-template",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def bulk_whatsapp_template_details(
+    name: str = Query(..., min_length=1),
+    language: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Fetch Meta WhatsApp template component details for the broadcast modal."""
+    try:
+        return web_customer_actions_service.whatsapp_template_details(
+            db=db,
+            name=name,
+            language=language,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(

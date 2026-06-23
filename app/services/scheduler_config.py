@@ -1,7 +1,7 @@
 import logging
 import os
 from collections.abc import Iterable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from celery.schedules import crontab
 
@@ -395,6 +395,89 @@ def _interval_to_beat_schedule(task_id, interval_seconds: int):
     return timedelta(seconds=interval_seconds)
 
 
+def _cron_to_beat_schedule(cron_expr: str | None):
+    """Parse a standard 5-field cron expression into a celery ``crontab``.
+
+    Fields are ``minute hour day-of-month month day-of-week``. Returns ``None``
+    for a missing/malformed expression (celery validates each field and raises
+    on bad syntax), so callers skip the entry rather than crash the scheduler.
+    """
+    if not cron_expr:
+        return None
+    fields = str(cron_expr).split()
+    if len(fields) != 5:
+        return None
+    minute, hour, day_of_month, month_of_year, day_of_week = fields
+    try:
+        return crontab(
+            minute=minute,
+            hour=hour,
+            day_of_month=day_of_month,
+            month_of_year=month_of_year,
+            day_of_week=day_of_week,
+        )
+    except Exception:
+        return None
+
+
+def is_valid_cron(cron_expr: str | None) -> bool:
+    """Whether ``cron_expr`` is a usable 5-field cron expression."""
+    return _cron_to_beat_schedule(cron_expr) is not None
+
+
+def next_cron_run(cron_expr: str | None):
+    """Best-effort next fire time (UTC) from now for a cron expr, or None.
+
+    Uses celery's ``crontab.remaining_estimate`` which is relative to the real
+    current time, so this is a live preview, not a pure function of an argument.
+    """
+    sched = _cron_to_beat_schedule(cron_expr)
+    if sched is None:
+        return None
+    try:
+        now = datetime.now(UTC)
+        return now + sched.remaining_estimate(now)
+    except Exception:
+        return None
+
+
+def _scheduled_row_to_entry(task) -> tuple[str, dict] | None:
+    """Build a beat-schedule (key, entry) for a ScheduledTask row, or None to skip.
+
+    Honours ``schedule_type``: ``crontab`` rows use ``cron_expr`` (skipped with a
+    warning if malformed); ``interval`` rows use the interval anchoring. Pure (no
+    DB) so it can be unit-tested against in-memory rows.
+    """
+    options: dict = {}
+    if task.task_name in TR069_TASK_QUEUE_NAMES:
+        options["queue"] = "acs"
+    if task.schedule_type == ScheduleType.crontab:
+        task_schedule = _cron_to_beat_schedule(task.cron_expr)
+        if task_schedule is None:
+            logger.warning(
+                "scheduled_task_invalid_cron",
+                extra={
+                    "task_id": str(task.id),
+                    "task_name": task.task_name,
+                    "cron_expr": task.cron_expr,
+                },
+            )
+            return None
+    elif task.schedule_type == ScheduleType.interval:
+        interval_seconds = max(task.interval_seconds or 0, 1)
+        options["expires"] = _entry_expires_seconds(interval_seconds)
+        task_schedule = _interval_to_beat_schedule(task.id, interval_seconds)
+    else:
+        return None
+    return f"scheduled_task_{task.id}", {
+        "task": task.task_name,
+        "schedule": task_schedule,
+        "args": task.args_json or [],
+        "kwargs": task.kwargs_json or {},
+        "options": options,
+    }
+
+
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
@@ -628,6 +711,32 @@ def build_beat_schedule() -> dict:
             enabled=overdue_enabled,
             interval_seconds=overdue_interval,
         )
+        # Dedicated hourly billing-notifications runner. Default OFF: when
+        # enabled it owns the reminder/escalation emits and honours the
+        # configured send window (billing_notif_send_hour); the daily invoice
+        # cycle then skips them. See docs/designs/BILLING_ENFORCEMENT_WINDOW.md.
+        billing_notif_hourly_enabled = _effective_bool(
+            session,
+            SettingDomain.collections,
+            "billing_notifications_hourly_enabled",
+            "BILLING_NOTIFICATIONS_HOURLY_ENABLED",
+            False,
+        )
+        billing_notif_interval = _effective_int(
+            session,
+            SettingDomain.collections,
+            "billing_notifications_interval_seconds",
+            "BILLING_NOTIFICATIONS_INTERVAL_SECONDS",
+            3600,
+        )
+        billing_notif_interval = max(billing_notif_interval, 300)
+        _sync_scheduled_task(
+            session,
+            name="billing_notifications_runner",
+            task_name="app.tasks.billing.run_billing_notifications",
+            enabled=billing_notif_hourly_enabled,
+            interval_seconds=billing_notif_interval,
+        )
         dunning_enabled = _effective_bool(
             session,
             SettingDomain.collections,
@@ -650,51 +759,36 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=dunning_interval_seconds,
         )
-        prepaid_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "prepaid_enforcement_enabled",
-            "PREPAID_ENFORCEMENT_ENABLED",
-            True,
-        )
-        prepaid_interval_seconds = _effective_int(
-            session,
-            SettingDomain.collections,
-            "prepaid_enforcement_interval_seconds",
-            "PREPAID_ENFORCEMENT_INTERVAL_SECONDS",
-            3600,
-        )
-        prepaid_interval_seconds = max(prepaid_interval_seconds, 300)
+        # RETIRED: deposit-based prepaid enforcement suspended paid customers on a
+        # stale Splynx deposit / derived balance. Due-date dunning is the sole
+        # enforcer now. Forced OFF here (hardcoded) so it can never be re-enabled
+        # by a setting/env default. See run_prepaid_enforcement (no-op) and
+        # run_retired_lock_reconcile (clears the obsolete prepaid locks).
         _sync_scheduled_task(
             session,
             name="prepaid_enforcement_runner",
             task_name="app.tasks.collections.run_prepaid_enforcement",
-            enabled=prepaid_enabled,
-            interval_seconds=prepaid_interval_seconds,
+            enabled=False,
+            interval_seconds=3600,
         )
-        # Prepaid drawdown charges (per-period debit; cadence/idempotency live
-        # in the service; ultimately gated by billing_enabled in the task).
-        prepaid_charges_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "prepaid_charges_enabled",
-            "PREPAID_CHARGES_ENABLED",
-            True,
-        )
-        prepaid_charges_interval_seconds = _effective_int(
-            session,
-            SettingDomain.billing,
-            "prepaid_charges_interval_seconds",
-            "PREPAID_CHARGES_INTERVAL_SECONDS",
-            86400,
-        )
-        prepaid_charges_interval_seconds = max(prepaid_charges_interval_seconds, 3600)
+        # RETIRED: prepaid drawdown charges drove balances negative against the
+        # stale deposit. Forced OFF.
         _sync_scheduled_task(
             session,
             name="prepaid_charges_runner",
             task_name="app.tasks.prepaid_billing.run_prepaid_charges",
-            enabled=prepaid_charges_enabled,
-            interval_seconds=prepaid_charges_interval_seconds,
+            enabled=False,
+            interval_seconds=86400,
+        )
+        # Resolves obsolete enforcement locks from retired reasons (prepaid) and
+        # restores service via the normal restore path. Idempotent; no-op once
+        # none remain.
+        _sync_scheduled_task(
+            session,
+            name="retired_lock_reconcile_runner",
+            task_name="app.tasks.collections.run_retired_lock_reconcile",
+            enabled=True,
+            interval_seconds=86400,
         )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
@@ -1693,19 +1787,9 @@ def build_beat_schedule() -> dict:
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
         )
         for task in tasks:
-            if task.schedule_type != ScheduleType.interval:
-                continue
-            interval_seconds = max(task.interval_seconds or 0, 1)
-            options: dict = {"expires": _entry_expires_seconds(interval_seconds)}
-            if task.task_name in TR069_TASK_QUEUE_NAMES:
-                options["queue"] = "acs"
-            schedule[f"scheduled_task_{task.id}"] = {
-                "task": task.task_name,
-                "schedule": _interval_to_beat_schedule(task.id, interval_seconds),
-                "args": task.args_json or [],
-                "kwargs": task.kwargs_json or {},
-                "options": options,
-            }
+            entry = _scheduled_row_to_entry(task)
+            if entry is not None:
+                schedule[entry[0]] = entry[1]
     except Exception:
         logger.exception("Failed to build Celery beat schedule.")
     finally:

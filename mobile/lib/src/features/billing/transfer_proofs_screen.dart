@@ -1,11 +1,33 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/formatters.dart';
 import '../../models/payment_proof.dart';
+import '../../models/topup.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+
+/// Open the "upload transfer receipt" sheet. Returns true when a receipt was
+/// submitted. [accounts]/[instructions] show where to transfer (top-up flow);
+/// [initialAmount] prefills the amount field.
+Future<bool?> showSubmitProofSheet(
+  BuildContext context, {
+  String? initialAmount,
+  List<BankAccount> accounts = const [],
+  String? instructions,
+}) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => SubmitProofSheet(
+      initialAmount: initialAmount,
+      accounts: accounts,
+      instructions: instructions,
+    ),
+  );
+}
 
 /// Pay by bank transfer: upload the receipt, track verification. Verified
 /// transfers are credited to the account (and applied to open invoices) by
@@ -30,11 +52,7 @@ class TransferProofsScreen extends ConsumerWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
-          final ok = await showModalBottomSheet<bool>(
-            context: context,
-            isScrollControlled: true,
-            builder: (_) => const _SubmitProofSheet(),
-          );
+          final ok = await showSubmitProofSheet(context);
           if (ok == true) {
             ref.invalidate(paymentProofsProvider);
             if (context.mounted) {
@@ -136,15 +154,70 @@ class _ProofTile extends StatelessWidget {
   }
 }
 
-class _SubmitProofSheet extends ConsumerStatefulWidget {
-  const _SubmitProofSheet();
+/// A copyable bank-account row (bank, account name, number) for transfers.
+class _BankAccountCard extends StatelessWidget {
+  const _BankAccountCard({required this.account});
+
+  final BankAccount account;
 
   @override
-  ConsumerState<_SubmitProofSheet> createState() => _SubmitProofSheetState();
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 6),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(account.bankName,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                  Text(account.accountNumber,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  Text(account.accountName, style: theme.textTheme.bodyMedium),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy_outlined, size: 20),
+              tooltip: 'Copy account number',
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: account.accountNumber));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Account number copied')),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _SubmitProofSheetState extends ConsumerState<_SubmitProofSheet> {
-  final _amount = TextEditingController();
+class SubmitProofSheet extends ConsumerStatefulWidget {
+  const SubmitProofSheet({
+    super.key,
+    this.initialAmount,
+    this.accounts = const [],
+    this.instructions,
+  });
+
+  final String? initialAmount;
+  final List<BankAccount> accounts;
+  final String? instructions;
+
+  @override
+  ConsumerState<SubmitProofSheet> createState() => _SubmitProofSheetState();
+}
+
+class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
+  late final _amount = TextEditingController(text: widget.initialAmount ?? '');
   final _bank = TextEditingController();
   final _reference = TextEditingController();
   XFile? _file;
@@ -211,6 +284,30 @@ class _SubmitProofSheetState extends ConsumerState<_SubmitProofSheet> {
               'Upload transfer receipt',
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            if (widget.accounts.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Transfer to',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 6),
+              for (final acct in widget.accounts)
+                _BankAccountCard(account: acct),
+              if (widget.instructions != null &&
+                  widget.instructions!.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 4),
+                  child: Text(
+                    widget.instructions!,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              const Divider(height: 24),
+              Text(
+                'Then upload your receipt below',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 12),
             TextField(
               controller: _amount,

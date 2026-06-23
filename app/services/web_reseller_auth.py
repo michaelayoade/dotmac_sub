@@ -24,16 +24,15 @@ _HTTP_ERROR_PREFIX_RE = re.compile(r"^\d{3}:\s*")
 
 
 def _password_reset_email_for_identifier(db: Session, identifier: str) -> str:
+    # Resellers identify by their credential username. Subscriber email is
+    # non-unique contact info, never a login key, so it is not matched here.
     normalized_identifier = identifier.strip().lower()
     email = (
         db.query(Subscriber.email)
         .join(UserCredential, Subscriber.id == UserCredential.subscriber_id)
         .filter(UserCredential.provider == AuthProvider.local)
         .filter(UserCredential.is_active.is_(True))
-        .filter(
-            (func.lower(UserCredential.username) == normalized_identifier)
-            | (func.lower(Subscriber.email) == normalized_identifier)
-        )
+        .filter(func.lower(UserCredential.username) == normalized_identifier)
         .order_by(UserCredential.created_at.desc())
         .scalar()
     )

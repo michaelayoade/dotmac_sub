@@ -7,7 +7,7 @@ x-observability-extra-hosts: &observability_extra_hosts
 - observability.dotmac.io:75.119.128.247
 services:
   app:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_app
     restart: unless-stopped
     mem_limit: 3072m
@@ -59,14 +59,7 @@ services:
       net.ipv4.ip_forward: '1'
     volumes:
     - /etc/wireguard:/etc/wireguard
-    - ./app:/app/app
-    - ./VERSION:/app/VERSION:ro
-    - ./templates:/app/templates
-    - ./static:/app/static
-    - ./alembic:/app/alembic
-    - ./scripts:/app/scripts
     - ./uploads:/app/uploads
-    - ./tests:/app/tests
     # Migrations are NOT run on boot: a half-applied / multi-head migration
     # state must never crash-loop the live app. Apply them as a controlled,
     # pre-deploy step instead: `make docker-migrate` (or `make prod-migrate`).
@@ -134,7 +127,7 @@ services:
       retries: 5
 
   celery-worker:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_celery_worker
     restart: unless-stopped
     mem_limit: 2g
@@ -171,9 +164,7 @@ services:
     env_file:
     - .env
     volumes:
-    - ./app:/app/app
     - ./uploads:/app/uploads
-    - ./scripts:/app/scripts
     command:
     - celery
     - -A
@@ -188,7 +179,7 @@ services:
     - -Q
     - celery,nin,crm
   celery-worker-tr069:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_celery_worker_tr069
     restart: unless-stopped
     mem_limit: 1g
@@ -223,7 +214,6 @@ services:
     env_file:
     - .env
     volumes:
-    - ./app:/app/app
     - ./uploads:/app/uploads
     command:
     - celery
@@ -236,7 +226,7 @@ services:
     - -Q
     - tr069,acs
   celery-worker-bandwidth:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_celery_worker_bandwidth
     restart: unless-stopped
     mem_limit: 768m
@@ -267,7 +257,6 @@ services:
       victoriametrics:
         condition: service_started
     volumes:
-    - ./app:/app/app
     - ./uploads:/app/uploads
     command:
     - celery
@@ -287,7 +276,7 @@ services:
   # gated by `billing_enabled` and no-op until cutover; this worker simply
   # ensures the queue is consumed (previously it had no consumer → all dropped).
   celery-worker-billing:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_celery_worker_billing
     restart: unless-stopped
     mem_limit: 768m
@@ -310,9 +299,7 @@ services:
     env_file:
     - .env
     volumes:
-    - ./app:/app/app
     - ./uploads:/app/uploads
-    - ./scripts:/app/scripts
     command:
     - celery
     - -A
@@ -324,7 +311,7 @@ services:
     - -Q
     - billing
   celery-beat:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_celery_beat
     restart: unless-stopped
     mem_limit: 512m
@@ -351,8 +338,7 @@ services:
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    volumes:
-    - ./app:/app/app
+    volumes: []
     command:
     - celery
     - -A
@@ -482,7 +468,7 @@ services:
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: -config.file=/etc/promtail/config.yml
   bandwidth-poller:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_bandwidth_poller
     restart: unless-stopped
     mem_limit: 512m
@@ -517,14 +503,13 @@ services:
     privileged: true
     pid: host
     volumes:
-    - ./app:/app/app
     - /etc/wireguard:/etc/wireguard
     command:
     - python
     - -m
     - app.poller
   syslog-listener:
-    build: .
+    image: ${APP_IMAGE:-dotmac_sub:latest}
     container_name: dotmac_sub_syslog_listener
     restart: unless-stopped
     mem_limit: 256m
@@ -549,8 +534,7 @@ services:
     - .env
     ports:
     - 514:514/udp
-    volumes:
-    - ./app:/app/app
+    volumes: []
     command:
     - python
     - -m

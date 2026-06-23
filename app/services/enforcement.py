@@ -134,6 +134,12 @@ def _mikrotik_kill_enabled(db: Session) -> bool:
     )
 
 
+def _mikrotik_api_session_kick_enabled(db: Session) -> bool:
+    return _setting_bool(
+        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", False
+    )
+
+
 def _address_list_block_enabled(db: Session) -> bool:
     return _setting_bool(db, SettingDomain.network, "address_list_block_enabled", True)
 
@@ -198,6 +204,29 @@ def _resolve_nas_device(
         if client and client.nas_device_id:
             return db.get(NasDevice, client.nas_device_id)
     return None
+
+
+def _nas_with_api_creds(db: Session, nas_device: NasDevice) -> NasDevice | None:
+    """Return a NAS row with usable RouterOS API creds for this device.
+
+    ``nas_devices`` has duplicate rows per BNG IP and only some carry API
+    credentials, so the row resolved from a session may be a credential-less
+    duplicate. Prefer the device itself; otherwise a sibling row on the same IP
+    that has API creds.
+    """
+    if nas_device.api_username and nas_device.api_password:
+        return nas_device
+    ip = nas_device.nas_ip or nas_device.ip_address
+    if not ip:
+        return None
+    return (
+        db.query(NasDevice)
+        .filter((NasDevice.nas_ip == ip) | (NasDevice.ip_address == ip))
+        .filter(NasDevice.api_username.isnot(None))
+        .filter(NasDevice.api_password.isnot(None))
+        .filter(NasDevice.vendor == NasVendor.mikrotik)
+        .first()
+    )
 
 
 def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
@@ -815,11 +844,50 @@ def disconnect_subscription_sessions(
         if not needs_ssh_kick:
             continue
 
-        # Only open SSH if at least one session needs the fallback.
+        # CoA could not confirm these — disconnect via the RouterOS API. The API
+        # is reachable and credentialed fleet-wide (SSH creds are absent on
+        # nearly all NAS), and its read-back VERIFIES the drop, which CoA cannot
+        # (a lost CoA reply is indistinguishable from a real failure).
+        fallback = {
+            username
+            for idx, (_, username, _sid, _fip) in enumerate(entries)
+            if idx not in coa_ok and username
+        }
+        api_confirmed: set[str] = set()
+        api_dev = (
+            _nas_with_api_creds(db, nas_device)
+            if _mikrotik_api_session_kick_enabled(db)
+            else None
+        )
+        if api_dev is not None and fallback:
+            try:
+                from app.services.nas._mikrotik import (
+                    disconnect_mikrotik_pppoe_bulk,
+                )
+
+                api_confirmed = disconnect_mikrotik_pppoe_bulk(api_dev, fallback)
+                count += len(api_confirmed)
+                logger.info(
+                    "API-kicked %s/%s sessions on %s (verified via read-back).",
+                    len(api_confirmed),
+                    len(fallback),
+                    getattr(api_dev, "name", "?"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "API kick failed on %s: %s — trying SSH.",
+                    getattr(nas_device, "name", "?"),
+                    exc,
+                )
+
+        # SSH last resort, only for sessions the API did not confirm gone.
+        remaining = fallback - api_confirmed
+        if not remaining:
+            continue
         try:
             with DeviceProvisioner.ssh_session(nas_device) as ssh:
                 for idx, (_, username, _session_id, _framed_ip) in enumerate(entries):
-                    if idx in coa_ok:
+                    if idx in coa_ok or username not in remaining:
                         continue
                     if _disconnect_mikrotik_session(db, nas_device, username, ssh=ssh):
                         count += 1

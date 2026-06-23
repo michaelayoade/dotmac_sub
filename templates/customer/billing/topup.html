@@ -231,6 +231,7 @@ function topupPage() {
         showTopupHelp: false,
         saveCard: {{ 'true' if add_card else 'false' }},
         selectedPaymentChoice: 'provider:{{ provider_type }}',
+        idempotencyKey: null,
         minAmount: {{ min_amount | int }},
         maxAmount: {{ max_amount | int }},
         syncCustomAmount() {
@@ -307,47 +308,30 @@ function topupPage() {
             this.validationError = '';
             this.clearProviderErrors();
             const self = this;
-            let intent;
             const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
             const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
             const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
-            // Saved-card charges go server-side immediately, so guard against a
-            // double-submit with an Idempotency-Key (one per charge attempt).
-            const idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
+            // One idempotency key per page session (not per click): a saved-card
+            // charge that succeeded but lost its response replays on re-click
+            // instead of charging twice.
+            if (!this.idempotencyKey) {
+                this.idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random();
+            }
 
+            let result;
             try {
-                const response = await fetch('/portal/billing/topup/intent', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': this.csrfToken(),
-                        'Idempotency-Key': idempotencyKey,
-                    },
-                    body: JSON.stringify({
+                result = await submitPaymentIntent({
+                    endpoint: '/portal/billing/topup/intent',
+                    verifyPath: '/portal/billing/topup/verify',
+                    csrfToken: this.csrfToken(),
+                    idempotencyKey: this.idempotencyKey,
+                    body: {
                         amount: amount,
                         provider: requestProvider,
                         payment_method_id: selectedPaymentMethodId,
-                    }),
+                    },
                 });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Unable to start payment.');
-                }
-                intent = payload;
-                this.liveReference = intent.reference || '';
-                if (intent.redirect_url) {
-                    window.location.href = intent.redirect_url;
-                    return;
-                }
-                if (intent.charged) {
-                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(intent.reference) + '&provider=paystack';
-                    return;
-                }
-                if (intent.checkout_url) {
-                    window.location.href = intent.checkout_url;
-                    return;
-                }
             } catch (error) {
                 this.processing = false;
                 if (selectedProvider) {
@@ -360,15 +344,11 @@ function topupPage() {
                 }
                 return;
             }
-
-            if (intent.provider_type === 'flutterwave') {
-                this.processing = false;
-                this.providerErrors = {
-                    ...this.providerErrors,
-                    flutterwave: 'Unable to start Flutterwave checkout.',
-                };
+            if (result.handled) {
                 return;
             }
+            const intent = result.intent;
+            this.liveReference = intent.reference || '';
 
             const handler = PaystackPop.setup({
                 key: intent.provider_public_key,
@@ -390,6 +370,7 @@ function topupPage() {
 }
 </script>
 
+{% include "customer/billing/_payment_intent_js.html" %}
 {% set topup_provider_types = topup_options|map(attribute="provider_type")|list %}
 {% if "paystack" in topup_provider_types %}
 <script src="https://js.paystack.co/v1/inline.js"></script>

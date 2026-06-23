@@ -367,15 +367,19 @@ def _update_person(db, subscriber, **overrides):
     )
 
 
-def test_update_person_rejects_email_collision(db_session, subscriber):
+def test_update_person_allows_shared_email(db_session, subscriber):
+    # Email is non-unique contact info: editing a customer to use an address
+    # another customer already has is allowed (customers under one reseller
+    # often share a contact email), not a collision error.
     other = Subscriber(
         first_name="Other", last_name="Person", email="taken@example.com"
     )
     db_session.add(other)
     db_session.commit()
 
-    with pytest.raises(ValueError, match="already exists"):
-        _update_person(db_session, subscriber, email="taken@example.com")
+    _update_person(db_session, subscriber, email="taken@example.com")
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed.email == "taken@example.com"
 
 
 def test_update_person_allows_keeping_own_email(db_session, subscriber):

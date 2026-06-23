@@ -256,6 +256,54 @@ def seed_gis_settings(db: Session) -> None:
         value_type=SettingValueType.boolean,
         value_text="false",
     )
+    # Customer pin auto-approval — seeded conservatively: enabled but in SHADOW
+    # (evaluate + record, never auto-approve) until ops reviews and turns shadow
+    # off; tight 100 m radius; rate-limited to one auto-approval per 30 days.
+    gis_settings.ensure_by_key(
+        db,
+        key="location_auto_approve_enabled",
+        value_type=SettingValueType.boolean,
+        value_text="true",
+        value_json=True,
+    )
+    gis_settings.ensure_by_key(
+        db,
+        key="location_auto_approve_shadow",
+        value_type=SettingValueType.boolean,
+        value_text="true",
+        value_json=True,
+    )
+    gis_settings.ensure_by_key(
+        db,
+        key="location_auto_approve_radius_m",
+        value_type=SettingValueType.integer,
+        value_text="100",
+    )
+    gis_settings.ensure_by_key(
+        db,
+        key="location_auto_require_coverage",
+        value_type=SettingValueType.boolean,
+        value_text="false",
+        value_json=False,
+    )
+    gis_settings.ensure_by_key(
+        db,
+        key="location_auto_approve_window_days",
+        value_type=SettingValueType.integer,
+        value_text="30",
+    )
+    gis_settings.ensure_by_key(
+        db,
+        key="location_auto_approve_max_per_window",
+        value_type=SettingValueType.integer,
+        value_text="1",
+    )
+    gis_settings.ensure_by_key(
+        db,
+        key="location_geocode_retry_days",
+        value_type=SettingValueType.integer,
+        value_text="7",
+    )
 
 
 def seed_usage_settings(db: Session) -> None:
@@ -1980,6 +2028,16 @@ def seed_network_policy_settings(db: Session) -> None:
         key="default_fiber_strand_status",
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_FIBER_STRAND_STATUS", "available"),
+    )
+    api_kick_enabled_raw = os.getenv(
+        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "false"
+    )
+    network_settings.ensure_by_key(
+        db,
+        key="mikrotik_api_session_kick_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=api_kick_enabled_raw,
+        value_json=api_kick_enabled_raw.lower() in {"1", "true", "yes", "on"},
     )
     network_settings.ensure_by_key(
         db,

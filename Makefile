@@ -1,6 +1,14 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
 
-PROD_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.prod.yml
+# Production runs IMMUTABLE images: the base docker-compose.yml has no source
+# bind-mounts and pulls code only from the baked image (built by `prod-build`).
+# `-f docker-compose.yml` deliberately EXCLUDES docker-compose.override.yml (the
+# dev-only overlay that re-adds build:/bind-mounts), so prod never runs from this
+# working tree. Plain `docker compose` (dev) auto-loads the override.
+PROD_COMPOSE = docker compose -f docker-compose.yml
+# Image tag baked/run by the prod stack. Override per-deploy, e.g.
+#   make prod-build APP_IMAGE=dotmac_sub:$(git rev-parse --short HEAD)
+APP_IMAGE ?= dotmac_sub:latest
 
 # Default target
 help: ## Show this help
@@ -106,22 +114,39 @@ docker-shell: ## Open shell in app container
 docker-migrate: ## Run migrations inside Docker
 	docker exec dotmac_sub_app alembic upgrade head
 
-prod-up: ## Start production-style Docker containers from immutable images
+prod-build: ## Build + tag the immutable prod image from a CLEAN checkout of HEAD (working-tree edits are NOT baked)
+	@set -eu; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "WARNING: working tree has uncommitted changes — building committed HEAD only; they will NOT be in the image."; \
+	fi; \
+	sha=$$(git rev-parse --short HEAD); \
+	wt=$$(mktemp -d "$${TMPDIR:-/tmp}/dotmac-prod-build.XXXXXX"); \
+	trap 'git worktree remove --force "$$wt" >/dev/null 2>&1 || rm -rf "$$wt"' EXIT INT TERM; \
+	git worktree add --detach --quiet "$$wt" HEAD; \
+	echo "Building $(APP_IMAGE) (+ dotmac_sub:latest, dotmac_sub:$$sha) from clean HEAD $$sha"; \
+	docker build -t $(APP_IMAGE) -t dotmac_sub:latest -t "dotmac_sub:$$sha" "$$wt"
+
+prod-deploy: ## Full deploy: build image, apply migrations, recreate app+workers from it
+	$(MAKE) prod-build
+	$(MAKE) prod-migrate
+	$(MAKE) prod-restart
+
+prod-up: ## Start the production (immutable-image) Docker stack
 	$(PROD_COMPOSE) up -d
 
-prod-down: ## Stop production-style Docker containers
+prod-down: ## Stop the production Docker stack
 	$(PROD_COMPOSE) down
 
-prod-logs: ## Tail production-style Docker logs
+prod-logs: ## Tail production Docker logs
 	$(PROD_COMPOSE) logs -f --tail=100
 
-prod-restart: ## Restart production-style app and worker services
-	$(PROD_COMPOSE) up -d app celery-worker celery-worker-nin celery-worker-tr069 celery-worker-acs celery-worker-bandwidth celery-worker-ingestion celery-beat
+prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
+	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
-prod-migrate: ## Run migrations explicitly in the production-style stack
+prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
 	$(PROD_COMPOSE) run --rm app alembic upgrade head
 
-prod-check: ## Run deployment reconciliation checks in the production-style stack
+prod-check: ## Run deployment reconciliation checks in the production stack
 	$(PROD_COMPOSE) run --rm app python scripts/setup/deploy_reconcile.py
 
 # ─── Credentials ──────────────────────────────────────────

@@ -281,7 +281,7 @@ document.addEventListener('DOMContentLoaded', function() {
             data: {
                 labels: {{ trend["labels"] | tojson | safe }},
                 datasets: [
-                    { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)' },
+                    { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: '#206a07', backgroundColor: 'rgba(32, 106, 7, 0.1)' },
                     { label: 'Collected', data: {{ trend["collected"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)' }
                 ]
             },

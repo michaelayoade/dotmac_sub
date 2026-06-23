@@ -22,7 +22,6 @@ import sqlalchemy as sa
 from sqlalchemy import create_engine, text
 
 from app.models.system_user import SystemUser
-from app.services import device_login as dl
 from app.services.credential_crypto import encrypt_credential
 from app.services.radius_population import populate_device_login
 
@@ -150,7 +149,7 @@ def _seed_staff(
     *,
     email: str,
     enabled: bool,
-    secret: str = "s3cr3t",
+    secret: str = "s3cr3t",  # noqa: S107 - deliberate test credential.
 ) -> SystemUser:
     """Create a minimal active SystemUser with device-login fields set."""
     user = SystemUser(
