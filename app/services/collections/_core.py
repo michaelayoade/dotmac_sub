@@ -1867,12 +1867,13 @@ class PrepaidEnforcement(ListResponseMixin):
         accounts_deactivated = 0
         skipped = 0
 
-        if not payload.dry_run:
+        if not payload.dry_run and db.get_bind().dialect.name == "postgresql":
             # Each account is enforced and committed independently (below), so a
             # transient row-lock (e.g. a poller holding a subscription row) only
             # skips that one account instead of aborting the whole run. A short
             # lock_timeout makes a contended FOR UPDATE fail fast into the
-            # per-account skip path rather than block the run.
+            # per-account skip path rather than block the run. Postgres-only;
+            # SQLite (tests) has no statement-level lock timeout.
             db.execute(text("SET lock_timeout = '5s'"))
 
         for (account_id,) in prepaid_accounts:
@@ -1894,9 +1895,7 @@ class PrepaidEnforcement(ListResponseMixin):
                     account.min_balance
                     if account.min_balance is not None
                     else (
-                        default_threshold
-                        if default_threshold is not None
-                        else "0.00"
+                        default_threshold if default_threshold is not None else "0.00"
                     )
                 )
                 threshold = Decimal(str(threshold_value))
@@ -1941,9 +1940,7 @@ class PrepaidEnforcement(ListResponseMixin):
                 deactivation_at = account.prepaid_deactivation_at
                 if deactivation_at and run_at >= deactivation_at:
                     if not payload.dry_run:
-                        _deactivate_prepaid_subscriptions(
-                            db, str(account_id), run_at
-                        )
+                        _deactivate_prepaid_subscriptions(db, str(account_id), run_at)
                         db.commit()
                     accounts_deactivated += 1
                     continue
