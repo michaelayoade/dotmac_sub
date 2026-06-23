@@ -314,6 +314,11 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
         "build_customer_detail_snapshot",
         lambda db, customer_id: {"customer": SimpleNamespace(id=customer_id)},
     )
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "bulk_notification_setup_context",
+        lambda db: {},
+    )
 
     import app.web.admin as admin_module
 
@@ -338,6 +343,21 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
         "has_password": False,
     }
     assert captured["context"]["usage_period"] == "last"
+    assert captured["context"]["customer_type"] == "person"
+    assert captured["context"]["bulk_notification_channels"] == []
+    assert captured["context"]["bulk_notification_templates"] == []
+    assert captured["context"]["detail_config"] == {
+        "statsUrl": (
+            "/admin/customers/person/cust-123/stats"
+            "?usage_period=last&usage_page=2&usage_per_page=50"
+        ),
+        "detailUrl": "/admin/customers/person/cust-123",
+        "customerId": "cust-123",
+        "customerType": "person",
+        "notificationChannels": [],
+        "notificationTemplates": [],
+    }
+    json.dumps(captured["context"]["detail_config"])
 
 
 def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
