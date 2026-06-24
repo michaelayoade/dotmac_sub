@@ -279,6 +279,67 @@ class _BillingHealthCollector(Collector):
 
 REGISTRY.register(_BillingHealthCollector())
 
+
+class _ConnectivityShadowCollector(Collector):
+    """Exports the latest full-base connectivity shadow-audit result at scrape
+    time (worker runs the sweep, stores Redis; web scrapes — same pattern as the
+    suspension/IP audits). ``connectivity_shadow_drift{dimension}`` is the
+    cutover-readiness gauge: a point-in-time count of subscribers whose
+    connectivity dimension disagrees with the desired state. When every
+    dimension reads ~0 the connectivity reconciler can be promoted from shadow
+    to sole-writer.
+    """
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.connectivity_reconciler import (
+                load_connectivity_shadow_result,
+            )
+
+            data = load_connectivity_shadow_result()
+        except Exception:
+            return
+        if not data:
+            return
+
+        drift = GaugeMetricFamily(
+            "connectivity_shadow_drift",
+            "Subscribers whose connectivity dimension disagrees with desired",
+            labels=["dimension"],
+        )
+        for dim, count in (data.get("counts") or {}).items():
+            drift.add_metric([dim], float(count or 0))
+        yield drift
+
+        population = GaugeMetricFamily(
+            "connectivity_shadow_population",
+            "Subscribers swept by the connectivity shadow audit",
+        )
+        population.add_metric([], float(data.get("population") or 0))
+        yield population
+
+        ran_at = data.get("ran_at")
+        if ran_at:
+            from datetime import UTC, datetime
+
+            try:
+                age = (
+                    datetime.now(UTC) - datetime.fromisoformat(ran_at)
+                ).total_seconds()
+            except ValueError:
+                return
+            age_metric = GaugeMetricFamily(
+                "connectivity_shadow_audit_age_seconds",
+                "Seconds since the last completed connectivity shadow audit",
+            )
+            age_metric.add_metric([], max(age, 0))
+            yield age_metric
+
+
+REGISTRY.register(_ConnectivityShadowCollector())
+
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     "genieacs_identity_recovery_events_total",
     "Total GenieACS identity recovery events",
