@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -156,6 +156,31 @@ class UsageSummaryResponse(BaseModel):
     series: list[UsageSeriesPoint] = Field(default_factory=list)
     # Fair-Usage status for the caller (None when no FUP applies / unknown).
     fup: FupSummary | None = None
+
+
+class DailyUsagePoint(BaseModel):
+    """One day's upload/download volume (bytes), summed across the caller's
+    subscriptions."""
+
+    date: date
+    upload_bytes: int
+    download_bytes: int
+    total_bytes: int
+
+
+class DailyUsageHistoryResponse(BaseModel):
+    """Long-history daily usage for GET /me/usage-history.
+
+    Sourced from the historical daily rollup (Splynx ``traffic_counter``
+    backfill), which reaches years further back than per-session accounting.
+    """
+
+    start: date
+    end: date
+    total_upload_bytes: int
+    total_download_bytes: int
+    total_bytes: int
+    points: list[DailyUsagePoint] = Field(default_factory=list)
 
 
 class UsageRecordBase(BaseModel):

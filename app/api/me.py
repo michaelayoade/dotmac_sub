@@ -86,6 +86,7 @@ from app.schemas.support import (
     TicketRead,
 )
 from app.schemas.usage import (
+    DailyUsageHistoryResponse,
     QuotaBucketRead,
     RadiusAccountingSessionRead,
     UsageSummaryResponse,
@@ -802,6 +803,22 @@ async def my_usage_summary(
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
     summary["fup"] = await usage_summary_service.fup_summary(db, subscriber_id)
     return summary
+
+
+@router.get("/usage-history", response_model=DailyUsageHistoryResponse)
+def my_usage_history(
+    days: int = Query(default=365, ge=1, le=3660),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Long-history daily upload/download series for the caller.
+
+    Sourced from the historical daily rollup (back to 2018 for migrated
+    accounts), which reaches years further than per-session accounting. Default
+    window is the last 365 days; raise ``days`` for the full archive.
+    """
+    subscriber_id = _subscriber_id(principal)
+    return usage_summary_service.get_daily_usage_history(db, subscriber_id, days=days)
 
 
 # --- Support tickets (self-scoped) ---------------------------------------------
