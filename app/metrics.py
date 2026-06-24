@@ -167,6 +167,80 @@ class _IpConsistencyAuditCollector(Collector):
 
 REGISTRY.register(_IpConsistencyAuditCollector())
 
+
+class _BillingHealthCollector(Collector):
+    """Exports billing liveness/anomaly signals at scrape time.
+
+    Cheap, indexed aggregate queries computed on scrape (no worker needed).
+    Wrapped so a transient DB hiccup yields no metrics rather than breaking the
+    whole /metrics endpoint. See app/services/billing_health.py. Alert on:
+    billing_paid_invoices_with_balance > 0; billing_invoice_scan_ratio low;
+    billing_payment_volume_collapsed == 1.
+    """
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.billing_health import billing_health_snapshot
+            from app.services.db_session_adapter import db_session_adapter
+
+            with db_session_adapter.session() as db:
+                snap = billing_health_snapshot(db)
+        except Exception:
+            return
+
+        def gauge(name: str, help_text: str, value: float):
+            g = GaugeMetricFamily(name, help_text)
+            g.add_metric([], float(value))
+            return g
+
+        yield gauge(
+            "billing_paid_invoices_with_balance",
+            "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
+            snap.paid_with_balance_count,
+        )
+        yield gauge(
+            "billing_invoice_last_scanned",
+            "subscriptions_scanned of the most recent billing run",
+            snap.last_scanned or 0,
+        )
+        yield gauge(
+            "billing_active_subscriptions",
+            "Active subscriptions (invoice-cycle eligibility denominator)",
+            snap.eligible_active_subs,
+        )
+        if snap.scan_ratio is not None:
+            yield gauge(
+                "billing_invoice_scan_ratio",
+                "last_scanned / active_subscriptions (low = cohort silently skipped)",
+                snap.scan_ratio,
+            )
+        yield gauge(
+            "billing_payments_succeeded_24h",
+            "Succeeded payments in the last 24h",
+            snap.payments_24h,
+        )
+        yield gauge(
+            "billing_payments_succeeded_7d_daily_avg",
+            "Trailing 7-day daily average of succeeded payments (baseline)",
+            snap.payments_7d_daily_avg,
+        )
+        if snap.payment_volume_ratio is not None:
+            yield gauge(
+                "billing_payment_volume_ratio",
+                "last-24h payments / 7-day daily average (collapse = intake broke)",
+                snap.payment_volume_ratio,
+            )
+        yield gauge(
+            "billing_payment_volume_collapsed",
+            "1 if last-24h payment volume collapsed vs the 7-day baseline",
+            1.0 if snap.payment_volume_collapsed else 0.0,
+        )
+
+
+REGISTRY.register(_BillingHealthCollector())
+
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     "genieacs_identity_recovery_events_total",
     "Total GenieACS identity recovery events",

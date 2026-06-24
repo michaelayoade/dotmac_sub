@@ -110,6 +110,47 @@ def check_billing_switch_task() -> dict:
                 ",".join(notification.reasons),
                 notification.details,
             )
+
+        # Billing liveness/anomaly monitoring (alert-only; never blocks
+        # enforcement). logger.error so each surfaces as an operator page via
+        # GlitchTip; the same signals are exported as Prometheus gauges.
+        from app.services.billing_health import billing_health_snapshot
+
+        health = billing_health_snapshot(session)
+        anomalies = set(health.anomalies)
+        result["billing_health"] = {
+            "paid_with_balance_count": health.paid_with_balance_count,
+            "last_scanned": health.last_scanned,
+            "eligible_active_subs": health.eligible_active_subs,
+            "scan_ratio": health.scan_ratio,
+            "payments_24h": health.payments_24h,
+            "payments_7d_daily_avg": health.payments_7d_daily_avg,
+            "payment_volume_ratio": health.payment_volume_ratio,
+            "anomalies": sorted(anomalies),
+        }
+        if "paid_invoices_with_balance" in anomalies:
+            logger.error(
+                "billing_paid_invoices_with_balance: %d invoices status=paid carry "
+                "non-zero balance_due (total %s) — AR-integrity defect",
+                health.paid_with_balance_count,
+                health.paid_with_balance_total,
+            )
+        if "invoice_scan_count_low" in anomalies:
+            logger.error(
+                "billing_invoice_scan_count_low: last run scanned %s of ~%d active "
+                "subscriptions (ratio %.2f) — cycle may have stopped scanning a cohort",
+                health.last_scanned,
+                health.eligible_active_subs,
+                health.scan_ratio,
+            )
+        if "payment_volume_collapse" in anomalies:
+            logger.error(
+                "billing_payment_volume_collapse: last-24h %d succeeded payments vs "
+                "7d daily avg %.1f (ratio %.2f) — payment intake may be broken",
+                health.payments_24h,
+                health.payments_7d_daily_avg,
+                health.payment_volume_ratio,
+            )
         return result
     finally:
         session.close()
