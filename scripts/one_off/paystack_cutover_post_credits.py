@@ -124,6 +124,12 @@ def _verify_candidate(db: Session, candidate: Candidate) -> None:
             f"{candidate.reference}: Paystack id changed "
             f"({paystack_id} != {candidate.paystack_id})"
         )
+    currency = str(tx.get("currency") or "").strip()
+    if currency != candidate.currency:
+        raise RuntimeError(
+            f"{candidate.reference}: currency mismatch "
+            f"({currency} != {candidate.currency})"
+        )
     amount = round_money(kobo_to_naira(int(tx.get("amount") or 0)))
     if amount != round_money(candidate.amount):
         raise RuntimeError(
