@@ -45,6 +45,14 @@ class Settings:
     )
     avatar_url_prefix: str = os.getenv("AVATAR_URL_PREFIX", "/static/avatars")
 
+    # Splynx is decommissioned (2026-06-16; local ledger is the sole source of
+    # truth). The incremental-sync machinery and its sync-state tables are gone
+    # (migration 169). The remote-MySQL connection settings that fed that sync
+    # have been removed — nothing read them. Remove SPLYNX_MYSQL_* from .env too;
+    # rotate any value that was a live credential. Historical Splynx data
+    # (splynx_billing_transactions, id mappings, archives, splynx_* id columns)
+    # is retained READ-ONLY for audit/reconciliation only.
+
     # Cookie security
     secure_cookies: bool = os.getenv("SECURE_COOKIES", "true").lower() in (
         "true",

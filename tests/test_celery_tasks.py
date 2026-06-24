@@ -57,6 +57,46 @@ class TestBillingTask:
                     mock_session.rollback.assert_called_once()
                     mock_session.close.assert_called_once()
 
+    def test_check_billing_switch_task_reports_enforcement_health(self):
+        """Hourly billing guard includes payment/enforcement health state."""
+        mock_session = MagicMock()
+        enforcement = MagicMock(
+            ok=False,
+            reasons=["recent_payment_volume_below_floor"],
+            details={"payment_recent_successes": 0},
+        )
+        notification = MagicMock(
+            ok=True,
+            reasons=[],
+            details={"recent_failed": 0},
+        )
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch(
+                "app.tasks.billing.check_billing_switch",
+                return_value={"ok": True, "expected": True, "actual": True},
+            ):
+                with patch(
+                    "app.tasks.billing.billing_enforcement_health",
+                    return_value=enforcement,
+                ):
+                    with patch(
+                        "app.tasks.billing.notification_delivery_health",
+                        return_value=notification,
+                    ):
+                        from app.tasks.billing import check_billing_switch_task
+
+                        result = check_billing_switch_task()
+
+        assert result["ok"] is False
+        assert result["billing_switch"]["ok"] is True
+        assert result["billing_enforcement_health"]["ok"] is False
+        assert result["billing_enforcement_health"]["reasons"] == [
+            "recent_payment_volume_below_floor"
+        ]
+        assert result["notification_delivery_health"]["ok"] is True
+        mock_session.close.assert_called_once()
+
 
 # =============================================================================
 # OLT Profile Sync Task Tests

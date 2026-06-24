@@ -1402,6 +1402,21 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Customer Balance Notifications Enabled",
     ),
+    # Prepaid-monthly invoicing cutover flag. When ON, run_invoice_cycle and
+    # dunning include prepaid subscriptions on MONTHLY-cycle offers (billed in
+    # advance, due on issue); daily/balance prepaid is never invoiced. Default
+    # OFF so deploying is inert. NOTE: this key is read by billing_automation and
+    # collections._core via resolve_value, which returns None for any key without
+    # a registered spec — so without this SettingSpec the flag was non-functional
+    # (could not be enabled at all).
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="prepaid_monthly_invoicing_enabled",
+        env_var="PREPAID_MONTHLY_INVOICING_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Enable Monthly Prepaid Invoicing",
+    ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
         domain=SettingDomain.billing,

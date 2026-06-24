@@ -1422,6 +1422,16 @@ def seed_billing_settings(db: Session) -> None:
         value_text=auto_suspend_raw,
         value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
     )
+    prepaid_monthly_invoicing_raw = os.getenv(
+        "PREPAID_MONTHLY_INVOICING_ENABLED", "false"
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="prepaid_monthly_invoicing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=prepaid_monthly_invoicing_raw,
+        value_json=prepaid_monthly_invoicing_raw.lower() in {"1", "true", "yes", "on"},
+    )
     customer_balance_notifications_raw = os.getenv(
         "BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED", "true"
     )
