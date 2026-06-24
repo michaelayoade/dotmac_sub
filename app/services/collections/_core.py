@@ -1,14 +1,14 @@
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, LedgerEntry
 from app.models.catalog import (
     AccessCredential,
     BillingCycle,
@@ -22,17 +22,17 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.collections import (
+    BillingEnforcementRunRequest,
+    BillingEnforcementRunResponse,
     DunningActionLogCreate,
     DunningActionLogUpdate,
     DunningCaseCreate,
     DunningCaseUpdate,
     DunningRunRequest,
     DunningRunResponse,
-    PrepaidEnforcementRunRequest,
-    PrepaidEnforcementRunResponse,
 )
 from app.services import enforcement_window, settings_spec
 from app.services.common import (
@@ -48,88 +48,20 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
-def _get_prepaid_last_run_date(db: Session) -> date | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.collections)
-        .filter(DomainSetting.key == "prepaid_last_run_date")
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting or not setting.value_text:
-        return None
-    try:
-        return date.fromisoformat(setting.value_text)
-    except ValueError:
-        return None
-
-
-def _set_prepaid_last_run_date(db: Session, run_date: date) -> None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.collections)
-        .filter(DomainSetting.key == "prepaid_last_run_date")
-        .first()
-    )
-    if not setting:
-        setting = DomainSetting(
-            domain=SettingDomain.collections,
-            key="prepaid_last_run_date",
-            value_text=run_date.isoformat(),
-            value_json=None,
-            is_active=True,
-        )
-        db.add(setting)
-    else:
-        setting.value_text = run_date.isoformat()
-        setting.value_json = None
-        setting.is_active = True
-
-
 def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
-    """Authoritative prepaid available balance.
+    """Authoritative prepaid available balance from the local ledger.
 
-    For Splynx-linked accounts the synced ``deposit`` IS the balance: Splynx's
-    billing engine already nets invoices, payments and transactions into it,
-    and it does not reconcile to any naive local recomputation (verified —
-    e.g. cust 25313 deposit 31,965.11 vs payments-minus-invoices 163,236).
-    Re-deriving it locally is what produced the phantom-invoice divergence, so
-    we trust the net rather than recompute it.
-
-    Native (non-Splynx) accounts have no authoritative deposit, so they fall
-    back to the local ledger model: credit minus open invoice balance.
-
-    At cutover the local ledger takes over: once a Splynx-linked account has its
-    one-time opening-balance seed (see the prepaid drawdown engine), we switch
-    that account to the ledger so drawdown debits and top-up credits take
-    effect. The seed is the per-account switch — no risky global flip.
+    The retired imported-deposit fallback is deliberately gone. Available
+    balance is now local credit minus active open AR, so enforcement and portal
+    views share the same post-cutover truth source. Currency is evaluated
+    independently; credit in one currency must not cover debt in another.
     """
-    from app.models.billing import LedgerEntry
     from app.services.billing._common import get_account_credit_balance
-    from app.services.prepaid_billing import PREPAID_OPENING_BALANCE_MEMO
 
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if (
-        account is not None
-        and account.splynx_customer_id is not None
-        and account.deposit is not None
-    ):
-        # The seed (credit for positive deposits, debit for arrears) marks the
-        # account as switched to the ledger; match on memo regardless of type.
-        seeded = (
-            db.query(LedgerEntry.id)
-            .filter(LedgerEntry.account_id == coerce_uuid(account_id))
-            .filter(LedgerEntry.memo == PREPAID_OPENING_BALANCE_MEMO)
-            .filter(LedgerEntry.is_active.is_(True))
-            .first()
-        )
-        if seeded is None:
-            return Decimal(str(account.deposit))
-
-    credit_balance = get_account_credit_balance(db, account_id)
-    open_balance = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == coerce_uuid(account_id))
+    account_uuid = coerce_uuid(account_id)
+    open_rows = (
+        db.query(Invoice.currency, func.coalesce(func.sum(Invoice.balance_due), 0))
+        .filter(Invoice.account_id == account_uuid)
         .filter(Invoice.is_active.is_(True))
         .filter(
             Invoice.status.in_(
@@ -140,9 +72,34 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
                 ]
             )
         )
-        .scalar()
-    ) or Decimal("0.00")
-    return Decimal(str(credit_balance)) - Decimal(str(open_balance))
+        .group_by(Invoice.currency)
+        .all()
+    )
+    credit_currencies = {
+        row[0] or "NGN"
+        for row in (
+            db.query(LedgerEntry.currency)
+            .filter(LedgerEntry.account_id == account_uuid)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.is_active.is_(True))
+            .distinct()
+            .all()
+        )
+    }
+    credit_currencies.update((currency or "NGN") for currency, _amount in open_rows)
+    if not credit_currencies:
+        credit_currencies.add("NGN")
+
+    balances: list[Decimal] = []
+    open_by_currency = {
+        currency or "NGN": Decimal(str(amount or "0.00"))
+        for currency, amount in open_rows
+    }
+    for currency in sorted(credit_currencies):
+        credit_balance = get_account_credit_balance(db, account_id, currency=currency)
+        open_balance = open_by_currency.get(currency, Decimal("0.00"))
+        balances.append(Decimal(str(credit_balance)) - open_balance)
+    return min(balances) if balances else Decimal("0.00")
 
 
 def get_available_balance(db: Session, account_id: str) -> Decimal:
@@ -284,6 +241,7 @@ def _resolve_overdue_days(
     invoice: Invoice,
     run_at: datetime,
     account: Subscriber | None = None,
+    db: Session | None = None,
 ) -> int:
     """Calculate days overdue, accounting for account grace period.
 
@@ -300,10 +258,23 @@ def _resolve_overdue_days(
     delta = run_at.date() - invoice.due_at.date()
     raw_days = max(delta.days, 0)
 
-    # Subtract grace period if account has one configured
+    # Subtract the account grace period. If a migrated account has no explicit
+    # value, fall back to the billing-mode default so dunning can be governed
+    # centrally instead of cutting immediately on null account data.
     grace_period = 0
     if account and account.grace_period_days is not None:
         grace_period = int(account.grace_period_days)
+    elif account and db is not None:
+        setting_key = (
+            "prepaid_default_grace_period_days"
+            if account.billing_mode == BillingMode.prepaid
+            else "postpaid_default_grace_period_days"
+        )
+        value = settings_spec.resolve_value(db, SettingDomain.billing, setting_key)
+        try:
+            grace_period = int(str(value or 0))
+        except (TypeError, ValueError):
+            grace_period = 0
 
     return max(raw_days - grace_period, 0)
 
@@ -334,18 +305,14 @@ def _suspend_account(
     account_id: str,
     reason: EnforcementReason = EnforcementReason.overdue,
     source: str = "dunning",
-    only_billing_mode: BillingMode | None = None,
 ) -> bool:
     """Suspend account via enforcement locks on its active subscriptions.
 
     Delegates to ``account_lifecycle.suspend_subscription`` per subscription
     and lets ``compute_account_status`` derive the subscriber status.
 
-    ``only_billing_mode`` restricts which subscriptions are suspended. Prepaid
-    *balance* enforcement passes ``BillingMode.prepaid`` so it never cuts a
-    postpaid service on the same account (postpaid lapses only via dunning) —
-    mirrors the scoping already in ``_deactivate_prepaid_subscriptions``.
-    Dunning leaves it ``None`` to suspend the whole account on arrears.
+    Unified dunning suspends the whole account on collectible arrears after the
+    live balance/shield gates pass.
 
     Returns True if any subscription was suspended, False otherwise.
     """
@@ -369,8 +336,6 @@ def _suspend_account(
             )
         )
     )
-    if only_billing_mode is not None:
-        query = query.filter(Subscription.billing_mode == only_billing_mode)
     subscriptions = query.all()
     suspended_count = 0
     for sub in subscriptions:
@@ -485,104 +450,6 @@ def _restore_account(
             "Restored %d subscriptions for account %s", restored_count, account_id
         )
     return restored_count
-
-
-# Enforcement reasons that have been retired from the product. Locks created by
-# a retired reason are obsolete and must be resolved so service is restored —
-# the subsystem that would have lifted them no longer runs. Deposit-based prepaid
-# enforcement was retired post-cutover (due-date dunning is the sole enforcer).
-RETIRED_ENFORCEMENT_REASONS: tuple[EnforcementReason, ...] = (
-    EnforcementReason.prepaid,
-)
-
-
-def reconcile_retired_enforcement_locks(
-    db: Session,
-    *,
-    reasons: tuple[EnforcementReason, ...] = RETIRED_ENFORCEMENT_REASONS,
-    resolved_by: str = "retired-enforcement-reconcile",
-) -> dict[str, int]:
-    """Resolve enforcement locks whose reason has been retired, restoring service.
-
-    For each active lock with a retired reason, resolve it via the normal
-    restore path (``restore_subscription``) so RADIUS is re-provisioned and a
-    resume event is emitted. A subscription left with no other active lock is
-    reactivated; one still held by another reason (e.g. ``overdue``) stays
-    suspended. Per-subscription commit, idempotent, safe to re-run — once no
-    retired locks remain it is a no-op.
-    """
-    from app.services.account_lifecycle import restore_subscription
-
-    summary = {
-        "resolved": 0,
-        "restored": 0,
-        "still_locked": 0,
-        "stale_cleared": 0,
-        "errors": 0,
-    }
-    for reason in reasons:
-        # Pass 1: suspended subs — restore via the normal path (resolves the lock,
-        # flips status to active, emits a resume event so RADIUS re-provisions).
-        suspended_sub_ids = [
-            row[0]
-            for row in db.query(EnforcementLock.subscription_id)
-            .join(Subscription, Subscription.id == EnforcementLock.subscription_id)
-            .filter(EnforcementLock.is_active.is_(True))
-            .filter(EnforcementLock.reason == reason)
-            .filter(Subscription.status == SubscriptionStatus.suspended)
-            .distinct()
-            .all()
-        ]
-        for sub_id in suspended_sub_ids:
-            try:
-                restored = restore_subscription(
-                    db,
-                    str(sub_id),
-                    trigger="admin",
-                    resolved_by=resolved_by,
-                    reason=reason,
-                    notes=(
-                        f"Enforcement reason {reason.value!r} retired; "
-                        "obsolete lock resolved by reconcile."
-                    ),
-                    emit=True,
-                )
-                db.commit()
-                summary["resolved"] += 1
-                summary["restored" if restored else "still_locked"] += 1
-            except Exception as exc:  # noqa: BLE001 - keep going, count failures
-                db.rollback()
-                summary["errors"] += 1
-                logger.error(
-                    "retired-lock reconcile failed for subscription %s (reason=%s): %s",
-                    sub_id,
-                    reason.value,
-                    exc,
-                )
-
-        # Pass 2: locks that survive on non-suspended subs (restore_subscription
-        # only resolves locks on suspended subs). The reason is retired, so these
-        # are obsolete records — resolve them directly; no status/RADIUS change.
-        now = datetime.now(UTC)
-        stale = (
-            db.query(EnforcementLock)
-            .filter(EnforcementLock.is_active.is_(True))
-            .filter(EnforcementLock.reason == reason)
-            .all()
-        )
-        for lock in stale:
-            lock.is_active = False
-            lock.resolved_at = now
-            lock.resolved_by = resolved_by
-            lock.notes = (lock.notes or "") + (
-                f" [reason {reason.value!r} retired; stale lock cleared]"
-            )
-            summary["resolved"] += 1
-            summary["stale_cleared"] += 1
-        if stale:
-            db.commit()
-    logger.info("retired-lock reconcile summary: %s", summary)
-    return summary
 
 
 def _get_account_email(db: Session, account_id: str) -> str | None:
@@ -758,6 +625,8 @@ def _create_throttle_notification(
 
     notification = Notification(
         channel=NotificationChannel.email,
+        event_type="account_throttled",
+        category="billing",
         recipient=email,
         subject="Service Speed Reduced - Payment Overdue",
         body=f"Your internet speed has been reduced due to payment being {days_overdue} days overdue. "
@@ -791,6 +660,8 @@ def _create_suspension_warning_notification(
     )
     notification = Notification(
         channel=NotificationChannel.email,
+        event_type="suspension_warning",
+        category="billing",
         recipient=email,
         subject="Suspension Warning - Payment Overdue",
         body=body,
@@ -833,6 +704,8 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
 
     notification = Notification(
         channel=NotificationChannel.email,
+        event_type="account_suspended",
+        category="billing",
         recipient=email,
         subject="Account Suspended",
         body="Your account has been suspended due to non-payment. Please make a payment to restore service.",
@@ -840,176 +713,6 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
     )
     db.add(notification)
     logger.info(f"Created suspension notification for account {account_id}")
-
-
-def _create_prepaid_warning_notification(
-    db: Session, account_id: str, balance: str, threshold: str
-) -> None:
-    from app.models.notification import (
-        Notification,
-        NotificationChannel,
-        NotificationStatus,
-    )
-
-    # Idempotency check: don't create duplicate warning within 24 hours
-    recent_threshold = datetime.now(UTC) - timedelta(hours=24)
-    email = _get_account_email(db, account_id)
-    if not email:
-        logger.warning(
-            f"Cannot create prepaid warning notification for account {account_id}: no email found"
-        )
-        return
-
-    existing_warning = (
-        db.query(Notification)
-        .filter(Notification.recipient == email)
-        .filter(Notification.subject.like("%Low Balance%"))
-        .filter(Notification.created_at > recent_threshold)
-        .filter(Notification.is_active.is_(True))
-        .first()
-    )
-    if existing_warning:
-        logger.debug(
-            f"Skipping prepaid warning for account {account_id}: recent warning exists"
-        )
-        return
-
-    subject = str(
-        settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_warning_subject"
-        )
-        or "Low Balance Warning"
-    )
-    body_template = str(
-        settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_warning_body"
-        )
-        or (
-            "Your prepaid balance is below the minimum threshold ({threshold}). "
-            "Current balance: {balance}. Please top up to avoid suspension."
-        )
-    )
-    try:
-        body = body_template.format(balance=balance, threshold=threshold)
-    except (KeyError, ValueError):
-        body = body_template
-
-    notification = Notification(
-        channel=NotificationChannel.email,
-        recipient=email,
-        subject=subject,
-        body=body,
-        status=NotificationStatus.queued,
-    )
-    db.add(notification)
-    logger.info(f"Created prepaid low balance warning for account {account_id}")
-
-
-def _create_prepaid_deactivation_notification(db: Session, account_id: str) -> None:
-    from app.models.notification import (
-        Notification,
-        NotificationChannel,
-        NotificationStatus,
-    )
-
-    email = _get_account_email(db, account_id)
-    if not email:
-        logger.warning(
-            f"Cannot create prepaid deactivation notification for account {account_id}: no email found"
-        )
-        return
-
-    subject = (
-        settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_deactivation_subject"
-        )
-        or "Service Deactivated"
-    )
-
-    # Idempotency check: don't create duplicate deactivation notification within 24 hours
-    recent_threshold = datetime.now(UTC) - timedelta(hours=24)
-    existing = (
-        db.query(Notification)
-        .filter(Notification.recipient == email)
-        .filter(Notification.subject == subject)
-        .filter(Notification.created_at > recent_threshold)
-        .filter(Notification.is_active.is_(True))
-        .first()
-    )
-    if existing:
-        logger.debug(
-            f"Skipping deactivation notification for account {account_id}: recent notification exists"
-        )
-        return
-
-    body = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_deactivation_body"
-    ) or (
-        "Your prepaid balance has been exhausted and service has been deactivated. "
-        "Please contact support to restore service."
-    )
-
-    notification = Notification(
-        channel=NotificationChannel.email,
-        recipient=email,
-        subject=subject,
-        body=body,
-        status=NotificationStatus.queued,
-    )
-    db.add(notification)
-    logger.info(f"Created prepaid deactivation notification for account {account_id}")
-
-
-def _deactivate_prepaid_subscriptions(
-    db: Session, account_id: str, run_at: datetime
-) -> int:
-    """Cancel all prepaid subscriptions for an account via lifecycle operations."""
-    from app.services.account_lifecycle import (
-        cancel_subscription,
-        compute_account_status,
-    )
-
-    subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == coerce_uuid(account_id))
-        .filter(
-            Subscription.status.in_(
-                [
-                    SubscriptionStatus.active,
-                    SubscriptionStatus.suspended,
-                    SubscriptionStatus.pending,
-                ]
-            )
-        )
-        .filter(Subscription.billing_mode == BillingMode.prepaid)
-        .all()
-    )
-    canceled_count = 0
-    for sub in subscriptions:
-        try:
-            cancel_subscription(
-                db,
-                str(sub.id),
-                cancel_reason="prepaid_deactivation",
-                source="prepaid_enforcement",
-            )
-            canceled_count += 1
-        except ValueError as e:
-            if "already canceled" in str(e):
-                logger.info("Skipped canceling subscription %s: %s", sub.id, e)
-            else:
-                logger.error("Failed to cancel subscription %s: %s", sub.id, e)
-                raise
-
-    # Always recompute account status — handles edge case where all
-    # subscriptions were already canceled by a prior run
-    try:
-        compute_account_status(db, account_id)
-    except ValueError:
-        logger.warning("Could not compute account status for %s", account_id)
-
-    _create_prepaid_deactivation_notification(db, account_id)
-    return canceled_count
 
 
 def _dunning_shield_reason(db: Session, account_id) -> str | None:
@@ -1054,6 +757,97 @@ def _dunning_shield_reason(db: Session, account_id) -> str | None:
 _ENFORCING_ACTIONS = frozenset(
     {DunningAction.suspend, DunningAction.reject, DunningAction.throttle}
 )
+_NON_ADVANCING_DUNNING_OUTCOMES = frozenset(
+    {
+        "balance_cleared",
+        "shielded",
+        "prepaid_balance_available",
+        "notice_grace_active",
+        "enforcement_health_blocked",
+    }
+)
+
+
+def _account_has_prepaid_service(db: Session, account: Subscriber) -> bool:
+    if account.billing_mode == BillingMode.prepaid:
+        return True
+    return (
+        db.query(Subscription.id)
+        .filter(Subscription.subscriber_id == account.id)
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .filter(
+            Subscription.status.in_(
+                [
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.suspended,
+                    SubscriptionStatus.pending,
+                ]
+            )
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+
+
+def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str | None:
+    """Return why prepaid enforcement should not cut service, or None.
+
+    Monthly prepaid creates invoices so AR aging, notifications and case
+    history use the normal dunning path. The service cut itself is guarded by
+    local available balance: ledger credit that covers the account prevents
+    suspension even if an invoice row is technically past due.
+    """
+    if not _account_has_prepaid_service(db, account):
+        return None
+
+    default_threshold = settings_spec.resolve_value(
+        db, SettingDomain.collections, "prepaid_default_min_balance"
+    )
+    threshold_value = (
+        account.min_balance
+        if account.min_balance is not None
+        else (default_threshold if default_threshold is not None else "0.00")
+    )
+    threshold = Decimal(str(threshold_value))
+    balance = _resolve_prepaid_available_balance(db, str(account.id))
+    if balance >= threshold:
+        logger.info(
+            "Dunning enforcement skipped for prepaid account %s: "
+            "available balance %s >= threshold %s",
+            account.id,
+            balance,
+            threshold,
+        )
+        return "prepaid_balance_available"
+    return None
+
+
+def _minimum_enforcement_age_skip_reason(
+    db: Session, account: Subscriber, day_offset: int
+) -> str | None:
+    """Block service-affecting action until the notice runway has elapsed."""
+    value = settings_spec.resolve_value(
+        db,
+        SettingDomain.collections,
+        "billing_enforcement_min_enforcing_day_offset",
+    )
+    try:
+        minimum_days = int(str(value if value is not None else 3))
+    except (TypeError, ValueError):
+        minimum_days = 3
+    if minimum_days <= 0:
+        return None
+    if day_offset < minimum_days:
+        logger.info(
+            "Dunning enforcement skipped for account %s: day_offset %s < "
+            "minimum enforcing day %s",
+            account.id,
+            day_offset,
+            minimum_days,
+        )
+        return "notice_grace_active"
+    return None
 
 
 def _execute_dunning_action(
@@ -1091,6 +885,9 @@ def _execute_dunning_action(
             return "account_not_found"
         if not has_overdue_balance(db, account_id):
             return "balance_cleared"
+        prepaid_skip = _prepaid_balance_gate_skip_reason(db, subscriber)
+        if prepaid_skip:
+            return prepaid_skip
         shield = _dunning_shield_reason(db, case.account_id)
         if shield:
             logger.info(
@@ -1100,6 +897,26 @@ def _execute_dunning_action(
                 shield,
             )
             return "shielded"
+        minimum_age_skip = _minimum_enforcement_age_skip_reason(
+            db, subscriber, day_offset
+        )
+        if minimum_age_skip:
+            return minimum_age_skip
+        from app.services.billing_enforcement_guards import (
+            billing_enforcement_health,
+        )
+
+        health = billing_enforcement_health(db)
+        if not health.ok:
+            logger.warning(
+                "Dunning %s blocked for account %s by billing enforcement "
+                "health gate: reasons=%s details=%s",
+                action.value,
+                account_id,
+                ",".join(health.reasons),
+                health.details,
+            )
+            return "enforcement_health_blocked"
 
         # Phase 6 (audit-first): record whether this enforcing dunning action
         # would be deferred by the enforcement time-of-day window — WITHOUT
@@ -1497,6 +1314,8 @@ class DunningWorkflow(ListResponseMixin):
         )
         overdue_accounts: dict[UUID, list[Invoice]] = {}
         for invoice in invoices:
+            if (invoice.metadata_ or {}).get("reconciliation_hold"):
+                continue
             overdue_accounts.setdefault(invoice.account_id, []).append(invoice)
             if not payload.dry_run and invoice.status in {
                 InvoiceStatus.issued,
@@ -1567,7 +1386,8 @@ class DunningWorkflow(ListResponseMixin):
 
             # Calculate max overdue days accounting for grace period
             max_days = max(
-                _resolve_overdue_days(inv, run_at, account) for inv in account_invoices
+                _resolve_overdue_days(inv, run_at, account, db)
+                for inv in account_invoices
             )
 
             # If all invoices are within grace period, skip dunning
@@ -1647,7 +1467,8 @@ class DunningWorkflow(ListResponseMixin):
                         outcome=outcome,
                         notes=step.note,
                     )
-                    case.current_step = step.day_offset
+                    if outcome not in _NON_ADVANCING_DUNNING_OUTCOMES:
+                        case.current_step = step.day_offset
 
                     # Emit dunning.action_executed event
                     emit_event(
@@ -1755,264 +1576,146 @@ class DunningWorkflow(ListResponseMixin):
         return len(cases)
 
 
-class PrepaidEnforcement(ListResponseMixin):
+class BillingEnforcementReconciler:
+    """Single billing enforcement writer.
+
+    Invoice generation creates AR for every production billing mode. Service
+    enforcement converges here: invoice due dates + policy decide
+    notify/throttle/suspend/restore through the dunning case and account
+    lifecycle machinery, while prepaid enforcing actions are gated by local
+    ledger available balance.
+    """
+
     @staticmethod
-    def run(
-        db: Session, payload: PrepaidEnforcementRunRequest
-    ) -> PrepaidEnforcementRunResponse:
-        run_at = payload.run_at or datetime.now(UTC)
-        blocking_time_value = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_blocking_time"
+    def _settle_due_credit_before_dunning(
+        db: Session, run_at: datetime
+    ) -> dict[str, int | str]:
+        """Apply payment-backed credit to due invoices before escalation."""
+        enabled = settings_spec.resolve_value(
+            db,
+            SettingDomain.collections,
+            "billing_enforcement_settle_credit_before_dunning_enabled",
         )
-        blocking_time = enforcement_window.parse_time(
-            str(blocking_time_value) if blocking_time_value is not None else None
-        )
-        skip_weekends = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_skip_weekends"
-        )
-        skip_holidays = (
-            settings_spec.resolve_value(
-                db, SettingDomain.collections, "prepaid_skip_holidays"
-            )
-            or []
-        )
-        grace_days_default_raw = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_grace_days"
-        )
-        deactivation_days_default_raw = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_deactivation_days"
-        )
-        try:
-            grace_days_default = (
-                int(str(grace_days_default_raw))
-                if grace_days_default_raw is not None
-                else 0
-            )
-        except (TypeError, ValueError):
-            grace_days_default = 0
-        try:
-            deactivation_days_default = (
-                int(str(deactivation_days_default_raw))
-                if deactivation_days_default_raw is not None
-                else 0
-            )
-        except (TypeError, ValueError):
-            deactivation_days_default = 0
-
-        local_run_at = enforcement_window.to_local(db, run_at)
-        run_date = local_run_at.date()
-
-        if enforcement_window.window_block_reason(
-            local_run_at,
-            start_time=blocking_time,
-            skip_weekends=bool(skip_weekends),
-            skip_holidays=skip_holidays if isinstance(skip_holidays, list) else None,
+        if not (
+            enabled is True
+            or str(enabled).strip().lower() in {"1", "true", "yes", "on"}
         ):
-            return PrepaidEnforcementRunResponse(
-                run_at=run_at,
-                accounts_scanned=0,
-                accounts_warned=0,
-                accounts_suspended=0,
-                accounts_deactivated=0,
-                skipped=0,
-            )
-        last_run_date = _get_prepaid_last_run_date(db)
-        if last_run_date == run_date:
-            return PrepaidEnforcementRunResponse(
-                run_at=run_at,
-                accounts_scanned=0,
-                accounts_warned=0,
-                accounts_suspended=0,
-                accounts_deactivated=0,
-                skipped=0,
-            )
+            return {
+                "credit_accounts_scanned": 0,
+                "credit_accounts_settled": 0,
+                "credit_invoices_touched": 0,
+                "credit_settlement_errors": 0,
+                "credit_applied": "0.00",
+            }
 
-        prepaid_accounts = (
-            db.query(Subscription.subscriber_id)
-            .filter(Subscription.billing_mode == BillingMode.prepaid)
-            .filter(
-                Subscription.status.in_(
-                    [
-                        SubscriptionStatus.active,
-                        SubscriptionStatus.suspended,
-                        SubscriptionStatus.pending,
-                    ]
-                )
-            )
-            .distinct()
-            .all()
+        from app.services.billing._common import get_account_credit_balance
+        from app.services.billing.reconcile_unposted import (
+            settle_open_invoices_from_credit,
         )
-        postpaid_account_ids = {
-            row[0]
+
+        account_ids = [
+            str(row[0])
             for row in (
-                db.query(Subscription.subscriber_id)
-                .filter(Subscription.billing_mode == BillingMode.postpaid)
+                db.query(Invoice.account_id)
+                .filter(Invoice.is_active.is_(True))
+                .filter(Invoice.balance_due > 0)
                 .filter(
-                    Subscription.status.in_(
+                    Invoice.status.in_(
                         [
-                            SubscriptionStatus.active,
-                            SubscriptionStatus.suspended,
-                            SubscriptionStatus.pending,
+                            InvoiceStatus.issued,
+                            InvoiceStatus.partially_paid,
+                            InvoiceStatus.overdue,
                         ]
+                    )
+                )
+                .filter(
+                    or_(
+                        Invoice.status == InvoiceStatus.overdue,
+                        and_(
+                            Invoice.due_at.is_not(None),
+                            Invoice.due_at <= run_at,
+                        ),
                     )
                 )
                 .distinct()
                 .all()
             )
+        ]
+        stats: dict[str, int | str] = {
+            "credit_accounts_scanned": len(account_ids),
+            "credit_accounts_settled": 0,
+            "credit_invoices_touched": 0,
+            "credit_settlement_errors": 0,
+            "credit_applied": "0.00",
         }
-
-        accounts_scanned = 0
-        accounts_warned = 0
-        accounts_suspended = 0
-        accounts_deactivated = 0
-        skipped = 0
-
-        use_account_lock_timeout = (
-            not payload.dry_run and db.get_bind().dialect.name == "postgresql"
-        )
-
-        for (account_id,) in prepaid_accounts:
-            accounts_scanned += 1
-            if account_id in postpaid_account_ids:
-                skipped += 1
-                continue
-            # Per-account transaction: on any error (lock timeout, etc.) roll
-            # back just this account and continue; the hourly cadence retries it.
+        total_applied = Decimal("0.00")
+        for account_id in account_ids:
             try:
-                if use_account_lock_timeout:
-                    # Transaction-local so the shorter timeout cannot leak back
-                    # into the pooled connection after this run.
-                    db.execute(text("SET LOCAL lock_timeout = '5s'"))
-                account = db.get(Subscriber, account_id)
-                if not account:
-                    skipped += 1
+                if get_account_credit_balance(db, account_id) <= 0:
                     continue
-                default_threshold = settings_spec.resolve_value(
-                    db, SettingDomain.collections, "prepaid_default_min_balance"
-                )
-                threshold_value = (
-                    account.min_balance
-                    if account.min_balance is not None
-                    else (
-                        default_threshold if default_threshold is not None else "0.00"
+                result = settle_open_invoices_from_credit(db, account_id)
+                if result.changed:
+                    total_applied += result.applied
+                    stats["credit_accounts_settled"] = (
+                        int(stats["credit_accounts_settled"]) + 1
                     )
-                )
-                threshold = Decimal(str(threshold_value))
-                balance = _resolve_prepaid_available_balance(db, str(account_id))
-                if balance >= threshold:
-                    if not payload.dry_run:
-                        if (
-                            account.prepaid_low_balance_at
-                            or account.prepaid_deactivation_at
-                        ):
-                            account.prepaid_low_balance_at = None
-                            account.prepaid_deactivation_at = None
-                            db.commit()
-                    continue
-
-                low_balance_at = account.prepaid_low_balance_at or run_at
-                if not payload.dry_run and account.prepaid_low_balance_at is None:
-                    account.prepaid_low_balance_at = run_at
-                    if deactivation_days_default:
-                        account.prepaid_deactivation_at = run_at + timedelta(
-                            days=deactivation_days_default
-                        )
-                grace_days = (
-                    int(account.grace_period_days)
-                    if account.grace_period_days is not None
-                    else grace_days_default
-                )
-                grace_until = (
-                    low_balance_at + timedelta(days=grace_days)
-                    if grace_days > 0
-                    else low_balance_at
-                )
-                if run_at < grace_until:
-                    if not payload.dry_run:
-                        _create_prepaid_warning_notification(
-                            db, str(account_id), str(balance), str(threshold)
-                        )
-                        db.commit()
-                    accounts_warned += 1
-                    continue
-
-                deactivation_at = account.prepaid_deactivation_at
-                if deactivation_at and run_at >= deactivation_at:
-                    if not payload.dry_run:
-                        _deactivate_prepaid_subscriptions(db, str(account_id), run_at)
-                        db.commit()
-                    accounts_deactivated += 1
-                    continue
-
-                if not payload.dry_run:
-                    _suspend_account(
-                        db,
-                        str(account_id),
-                        reason=EnforcementReason.prepaid,
-                        source="prepaid_enforcement",
-                        # Prepaid balance enforcement must only cut prepaid
-                        # services; a postpaid service on the same account
-                        # lapses via dunning.
-                        only_billing_mode=BillingMode.prepaid,
-                    )
-                    db.commit()
-                accounts_suspended += 1
+                    stats["credit_invoices_touched"] = int(
+                        stats["credit_invoices_touched"]
+                    ) + len(result.invoices_touched)
+                db.commit()
             except Exception:
                 db.rollback()
-                skipped += 1
-                logger.warning(
-                    "prepaid enforcement: skipped account %s after error",
-                    account_id,
-                    exc_info=True,
+                stats["credit_settlement_errors"] = (
+                    int(stats["credit_settlement_errors"]) + 1
                 )
-                continue
-
-        if not payload.dry_run:
-            _set_prepaid_last_run_date(db, run_date)
-            db.commit()
-
-        return PrepaidEnforcementRunResponse(
-            run_at=run_at,
-            accounts_scanned=accounts_scanned,
-            accounts_warned=accounts_warned,
-            accounts_suspended=accounts_suspended,
-            accounts_deactivated=accounts_deactivated,
-            skipped=skipped,
-        )
+                logger.exception(
+                    "billing_enforcement_credit_settlement_failed",
+                    extra={
+                        "event": "billing_enforcement_credit_settlement_failed",
+                        "account_id": account_id,
+                    },
+                )
+        stats["credit_applied"] = str(total_applied)
+        return stats
 
     @staticmethod
-    def resolve_cases_for_account(
-        db: Session,
-        account_id: str,
-        invoice_id: str | None = None,
-        commit: bool = True,
-    ) -> int:
-        cases = (
-            db.query(DunningCase)
-            .filter(DunningCase.account_id == account_id)
-            # Only auto-resolve OPEN cases on payment; a paused case is an
-            # operator hold and must be released by a human, not by a payment.
-            .filter(DunningCase.status == DunningCaseStatus.open)
-            .all()
-        )
-        if not cases:
-            return 0
-        now = datetime.now(UTC)
-        for case in cases:
-            case.status = DunningCaseStatus.resolved
-            case.resolved_at = now
-            _create_action_log(
-                db,
-                case,
-                DunningAction.notify,
-                case.current_step,
-                invoice_id,
-                outcome="resolved",
-                notes="Resolved after payment",
+    def run(
+        db: Session, payload: BillingEnforcementRunRequest
+    ) -> BillingEnforcementRunResponse:
+        run_at = payload.run_at or datetime.now(UTC)
+        credit_stats: dict[str, int | str] = {
+            "credit_accounts_scanned": 0,
+            "credit_accounts_settled": 0,
+            "credit_invoices_touched": 0,
+            "credit_settlement_errors": 0,
+            "credit_applied": "0.00",
+        }
+        if not payload.dry_run:
+            credit_stats = (
+                BillingEnforcementReconciler._settle_due_credit_before_dunning(
+                    db, run_at
+                )
             )
-        if commit:
-            db.commit()
-        return len(cases)
+        dunning = DunningWorkflow.run(
+            db,
+            DunningRunRequest(run_at=run_at, dry_run=payload.dry_run),
+        )
+        return BillingEnforcementRunResponse(
+            run_at=dunning.run_at,
+            accounts_scanned=dunning.accounts_scanned,
+            cases_created=dunning.cases_created,
+            actions_created=dunning.actions_created,
+            skipped=dunning.skipped,
+            dunning_accounts_scanned=dunning.accounts_scanned,
+            dunning_cases_created=dunning.cases_created,
+            dunning_actions_created=dunning.actions_created,
+            dunning_skipped=dunning.skipped,
+            credit_accounts_scanned=int(credit_stats["credit_accounts_scanned"]),
+            credit_accounts_settled=int(credit_stats["credit_accounts_settled"]),
+            credit_invoices_touched=int(credit_stats["credit_invoices_touched"]),
+            credit_settlement_errors=int(credit_stats["credit_settlement_errors"]),
+            credit_applied=str(credit_stats["credit_applied"]),
+        )
 
 
 def _clear_prepaid_dunning_flags(db: Session, account_id: str) -> None:
@@ -2052,4 +1755,4 @@ def restore_account_services(
 dunning_cases = DunningCases()
 dunning_action_logs = DunningActionLogs()
 dunning_workflow = DunningWorkflow()
-prepaid_enforcement = PrepaidEnforcement()
+billing_enforcement_reconciler = BillingEnforcementReconciler()

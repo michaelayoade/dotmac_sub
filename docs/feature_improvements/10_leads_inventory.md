@@ -1,12 +1,12 @@
 # Section 10: Leads/CRM & Inventory Management
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
 ---
 
 ## Overview
 
-This document analyzes Splynx's Leads/CRM module and Inventory management features based on 15 screenshots covering lead pipeline configuration, signup widgets, lead field customization, notification settings, quote/finance management, lead conversion settings, IMAP integration, and inventory stock/category management. These are capabilities DotMac Sub currently lacks and would significantly enhance its pre-sales and equipment tracking workflows.
+This document analyzes legacy BSS's Leads/CRM module and Inventory management features based on 15 screenshots covering lead pipeline configuration, signup widgets, lead field customization, notification settings, quote/finance management, lead conversion settings, IMAP integration, and inventory stock/category management. These are capabilities DotMac Sub currently lacks and would significantly enhance its pre-sales and equipment tracking workflows.
 
 ---
 
@@ -47,7 +47,7 @@ This document analyzes Splynx's Leads/CRM module and Inventory management featur
 ## 10.3 Signup Widget (Public Lead Capture Form)
 
 ### Screenshot Analysis
-- **Signup Widget** (`132724.png`, `132751.png`, `132802.png`): A configurable public-facing lead capture form with settings including: Form title ("New Leads"), Form send button text ("Subscribe"), Thank you message ("Thanks for subscribing an agent to get back to you shortly."), Use HTTPS toggle, Partner assignment (Main), Owner assignment (splynx user), Location (Abuja), Pipeline status (New enquiry), Tariffs selection (7 of 70 selected), Choosing tariff is required toggle, Include VAT in tariff price toggle, Show Terms & Conditions checkbox toggle. Below are notification settings for admins and a result code section with embeddable HTML/JavaScript widget code. Form fields section shows 6 fields: First name (Main, required), Last name (Main, required), Email (Main, enabled), Phone number (Main, enabled), Referrer (Additional, enabled), City (Main, enabled) -- each with type, position controls, required toggle, and actions.
+- **Signup Widget** (`132724.png`, `132751.png`, `132802.png`): A configurable public-facing lead capture form with settings including: Form title ("New Leads"), Form send button text ("Subscribe"), Thank you message ("Thanks for subscribing an agent to get back to you shortly."), Use HTTPS toggle, Partner assignment (Main), Owner assignment (legacy BSS user), Location (Abuja), Pipeline status (New enquiry), Tariffs selection (7 of 70 selected), Choosing tariff is required toggle, Include VAT in tariff price toggle, Show Terms & Conditions checkbox toggle. Below are notification settings for admins and a result code section with embeddable HTML/JavaScript widget code. Form fields section shows 6 fields: First name (Main, required), Last name (Main, required), Email (Main, enabled), Phone number (Main, enabled), Referrer (Additional, enabled), City (Main, enabled) -- each with type, position controls, required toggle, and actions.
 
 ### Proposed Improvements for DotMac Sub
 
@@ -265,4 +265,4 @@ Based on the configuration screens reviewed (stock locations, categories, notifi
 
 ---
 
-*Document generated from analysis of 15 Splynx screenshots (12 leads, 3 inventory) captured 2026-02-24.*
+*Document generated from analysis of 15 legacy BSS screenshots (12 leads, 3 inventory) captured 2026-02-24.*

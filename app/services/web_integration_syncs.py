@@ -90,7 +90,7 @@ def ensure_default_crm_ticket_sync(db: Session) -> IntegrationJob:
             direction="pull",
             trigger_mode="manual",
             mapping_config={
-                "primary": "crm_subscriber.external_system=splynx/external_id",
+                "primary": "crm_subscriber legacy external_id",
                 "fallback": "single structured customer ID pair in title/description",
                 "ambiguous": "skip",
             },

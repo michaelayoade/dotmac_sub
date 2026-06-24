@@ -1,4 +1,4 @@
-"""Splynx ID mapping service — bidirectional lookup for migration."""
+"""Legacy ID mapping service — bidirectional lookup for migration."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class SplynxMappingManager:
-    """Manages Splynx integer ID ↔ DotMac UUID mappings."""
+    """Manages imported integer ID <-> DotMac UUID mappings."""
 
     @staticmethod
     def register(
@@ -25,7 +25,7 @@ class SplynxMappingManager:
         *,
         metadata: dict | None = None,
     ) -> SplynxIdMapping:
-        """Register a new Splynx→DotMac mapping."""
+        """Register a new imported-ID -> DotMac mapping."""
         mapping = SplynxIdMapping(
             entity_type=entity_type,
             splynx_id=splynx_id,
@@ -65,7 +65,7 @@ class SplynxMappingManager:
         entity_type: SplynxEntityType,
         splynx_id: int,
     ) -> uuid.UUID | None:
-        """Look up a DotMac UUID by Splynx integer ID."""
+        """Look up a DotMac UUID by imported integer ID."""
         stmt = select(SplynxIdMapping.dotmac_id).where(
             SplynxIdMapping.entity_type == entity_type,
             SplynxIdMapping.splynx_id == splynx_id,
@@ -78,7 +78,7 @@ class SplynxMappingManager:
         entity_type: SplynxEntityType,
         dotmac_id: str | uuid.UUID,
     ) -> int | None:
-        """Look up a Splynx integer ID by DotMac UUID."""
+        """Look up an imported integer ID by DotMac UUID."""
         stmt = select(SplynxIdMapping.splynx_id).where(
             SplynxIdMapping.entity_type == entity_type,
             SplynxIdMapping.dotmac_id == uuid.UUID(str(dotmac_id)),
@@ -129,7 +129,7 @@ class SplynxMappingManager:
         metadata: dict | None = None,
         flush: bool = True,
     ) -> SplynxIdMapping:
-        """Register or update a Splynx→DotMac mapping."""
+        """Register or update an imported-ID -> DotMac mapping."""
         dotmac_uuid = uuid.UUID(str(dotmac_id))
         stmt = select(SplynxIdMapping).where(
             SplynxIdMapping.entity_type == entity_type,

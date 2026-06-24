@@ -311,7 +311,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 mode = "captive"
             else:
                 mode = "active"
-            # Duplicate logins (Splynx-migration dups): the ACTIVE sub wins the
+            # Duplicate logins (migration duplicates): the ACTIVE sub wins the
             # slot — subscriber-level block still dominates via sub_blocked,
             # so a blocked customer stays enforced either way.
             existing = by_login.get(login)

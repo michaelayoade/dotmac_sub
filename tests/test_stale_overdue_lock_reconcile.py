@@ -7,7 +7,7 @@ subs held by another lock suspended; ignores accounts that owe overdue debt.
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import InvoiceStatus
+from app.models.billing import InvoiceStatus, LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
 from app.schemas.billing import InvoiceCreate
@@ -62,7 +62,7 @@ def test_other_lock_keeps_suspended_after_clearing_overdue(
         db_session,
         str(sub.id),
         reason=EnforcementReason.prepaid,
-        source="prepaid_enforcement",
+        source="legacy_prepaid_balance",
     )
 
     result = reconcile(db_session, apply=True)
@@ -103,6 +103,52 @@ def test_account_with_real_overdue_debt_is_not_a_candidate(
     assert result.candidates == 0
     db_session.refresh(sub)
     assert sub.status == SubscriptionStatus.suspended
+
+
+def test_ledger_covered_overdue_lock_can_be_restored(
+    db_session, subscriber, catalog_offer
+):
+    sub = _postpaid_active(db_session, subscriber, catalog_offer)
+    suspend_subscription(
+        db_session,
+        str(sub.id),
+        reason=EnforcementReason.overdue,
+        source="invoice:covered",
+    )
+    billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber.id,
+            status=InvoiceStatus.issued,
+            total=Decimal("5000.00"),
+            balance_due=Decimal("5000.00"),
+            issued_at=datetime.now(UTC) - timedelta(days=30),
+            due_at=datetime.now(UTC) - timedelta(days=10),
+        ),
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("6000.00"),
+            currency="NGN",
+            memo="covered balance",
+        )
+    )
+    db_session.commit()
+
+    dry = reconcile(db_session, apply=False, restore_ledger_covered=True)
+    assert dry.candidates == 1
+    assert dry.restored == 1
+    assert dry.items[0].available_balance == "1000.00"
+
+    result = reconcile(db_session, apply=True, restore_ledger_covered=True)
+
+    assert result.candidates == 1
+    assert result.restored == 1
+    db_session.refresh(sub)
+    assert sub.status == SubscriptionStatus.active
 
 
 def test_dry_run_writes_nothing(db_session, subscriber, catalog_offer):

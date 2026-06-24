@@ -200,7 +200,7 @@ reconciler's bookkeeping. They stop being separate work.
 caches*, not *projected from one set*. RADIUS builds its reply from
 `subscriptions.ipv4_address` (a cache) for v4, from a pool on the RADIUS profile for v6, and from
 `subscriber_additional_routes` for extra blocks — three sources, no single owner, many independent
-writers (provisioning, Splynx sync, ONT ops, admin endpoints, the RADIUS rebuild) that race. Every
+writers (provisioning, legacy BSS sync, ONT ops, admin endpoints, the RADIUS rebuild) that race. Every
 symptom we chased (de-IP on resume → #282; IPv6-only after inventory return; silent desync) is one
 disease: an assignment can be left in a state that contradicts another because nothing treats the
 assignment *set* as the single truth.

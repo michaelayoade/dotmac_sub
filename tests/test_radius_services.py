@@ -1049,7 +1049,7 @@ class TestExternalSyncUsersStatusAware:
 
 class TestRadiusSyncSubscriptionSelection:
     """_radius_sync_subscription_for_subscriber must prefer an active
-    subscription when a subscriber has several eligible ones (Splynx
+    subscription when a subscriber has several eligible ones (migration
     duplicate-service customers carry active + canceled/suspended rows)."""
 
     def test_prefers_active_over_later_dated_canceled(

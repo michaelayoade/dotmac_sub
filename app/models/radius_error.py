@@ -34,7 +34,7 @@ class RadiusAuthErrorType(enum.Enum):
 class RadiusAuthError(Base):
     """Tracks RADIUS authentication failures.
 
-    Equivalent to Splynx's error_session table (323K rows).
+    Equivalent to the imported error_session table (323K rows).
     One row per failed auth attempt for troubleshooting and
     error rate monitoring.
     """

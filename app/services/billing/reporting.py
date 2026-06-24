@@ -673,7 +673,7 @@ class BillingReporting:
             "flutterwave": "Card",
             "stripe": "Card",
             "paypal": "Card",
-            "splynx_import": "Splynx Import",
+            "splynx_import": "Legacy Import",
         }
 
         def _payment_method_label(raw_value: object) -> str:

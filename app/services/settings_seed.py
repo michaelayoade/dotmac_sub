@@ -989,28 +989,6 @@ def seed_collections_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("DUNNING_INTERVAL_SECONDS", "86400"),
     )
-    prepaid_charges_raw = os.getenv("PREPAID_CHARGES_ENABLED", "false")
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_charges_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=prepaid_charges_raw,
-        value_json=prepaid_charges_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    prepaid_enabled_raw = os.getenv("PREPAID_ENFORCEMENT_ENABLED", "true")
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_enforcement_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=prepaid_enabled_raw,
-        value_json=prepaid_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_enforcement_interval_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_ENFORCEMENT_INTERVAL_SECONDS", "3600"),
-    )
     collections_settings.ensure_by_key(
         db,
         key="prepaid_blocking_time",
@@ -1830,6 +1808,99 @@ def seed_collections_policy_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("COLLECTIONS_DEFAULT_DUNNING_CASE_STATUS", "open"),
     )
+    for key, env_name, default in [
+        (
+            "billing_enforcement_health_gates_enabled",
+            "BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
+            "true",
+        ),
+        (
+            "billing_enforcement_require_notification_health",
+            "BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
+            "false",
+        ),
+        (
+            "billing_enforcement_require_payment_health",
+            "BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
+            "true",
+        ),
+        (
+            "billing_enforcement_settle_credit_before_dunning_enabled",
+            "BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
+            "true",
+        ),
+        (
+            "billing_enforcement_require_active_gateway",
+            "BILLING_ENFORCEMENT_REQUIRE_ACTIVE_GATEWAY",
+            "false",
+        ),
+    ]:
+        raw = os.getenv(env_name, default)
+        collections_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.boolean,
+            value_text=raw,
+            value_json=raw.lower() in {"1", "true", "yes", "on"},
+        )
+    for key, env_name, default in [
+        (
+            "billing_enforcement_min_enforcing_day_offset",
+            "BILLING_ENFORCEMENT_MIN_ENFORCING_DAY_OFFSET",
+            "3",
+        ),
+        (
+            "billing_enforcement_notification_max_oldest_queued_minutes",
+            "BILLING_ENFORCEMENT_NOTIFICATION_MAX_OLDEST_QUEUED_MINUTES",
+            "120",
+        ),
+        (
+            "billing_enforcement_notification_max_failed",
+            "BILLING_ENFORCEMENT_NOTIFICATION_MAX_FAILED",
+            "100",
+        ),
+        (
+            "billing_enforcement_notification_max_stuck_sending",
+            "BILLING_ENFORCEMENT_NOTIFICATION_MAX_STUCK_SENDING",
+            "25",
+        ),
+        (
+            "billing_enforcement_notification_failed_window_hours",
+            "BILLING_ENFORCEMENT_NOTIFICATION_FAILED_WINDOW_HOURS",
+            "24",
+        ),
+        (
+            "billing_enforcement_payment_health_window_hours",
+            "BILLING_ENFORCEMENT_PAYMENT_HEALTH_WINDOW_HOURS",
+            "24",
+        ),
+        (
+            "billing_enforcement_payment_max_pending_minutes",
+            "BILLING_ENFORCEMENT_PAYMENT_MAX_PENDING_MINUTES",
+            "45",
+        ),
+        (
+            "billing_enforcement_payment_max_dead_letters",
+            "BILLING_ENFORCEMENT_PAYMENT_MAX_DEAD_LETTERS",
+            "0",
+        ),
+        (
+            "billing_enforcement_payment_max_stale_pending_topups",
+            "BILLING_ENFORCEMENT_PAYMENT_MAX_STALE_PENDING_TOPUPS",
+            "20",
+        ),
+        (
+            "billing_enforcement_payment_min_recent_successes",
+            "BILLING_ENFORCEMENT_PAYMENT_MIN_RECENT_SUCCESSES",
+            "0",
+        ),
+    ]:
+        collections_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
 
 
 def seed_auth_policy_settings(db: Session) -> None:

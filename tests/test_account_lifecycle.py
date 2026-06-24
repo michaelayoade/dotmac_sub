@@ -365,7 +365,7 @@ class TestTerminalStates:
             db_session,
             str(subscription.id),
             cancel_reason="prepaid_deactivation",
-            source="prepaid_enforcement",
+            source="legacy_prepaid_balance",
             emit=False,
         )
 

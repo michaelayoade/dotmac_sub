@@ -65,7 +65,7 @@ class CrmSyncHandler:
         if not subscriber:
             return
 
-        # Migrated subscribers stay on the splynx-shaped webhook; native ones
+        # Migrated subscribers stay on the legacy-shaped webhook; native ones
         # use the CRM's generic webhook keyed by our subscriber UUID.
         splynx_id = subscriber.splynx_customer_id
         is_native = splynx_id is None

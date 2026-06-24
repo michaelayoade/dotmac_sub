@@ -489,7 +489,7 @@ def _append_additional_routes(
 ) -> None:
     """Append one Framed-Route per active additional routed block.
 
-    Reproduces what Splynx emitted from ``services_internet.ipv4_route``: the
+    Reproduces the legacy route format from ``services_internet.ipv4_route``: the
     BNG installs each as a route to this session's PPP interface and tears it
     down on disconnect. The gateway is ``0.0.0.0`` ("via this session") rather
     than the customer's primary, because primaries are CGNAT and can't be
@@ -575,7 +575,7 @@ def build_radius_reply_attributes(
     # Append Option 82 relay agent attributes for IPoE
     _append_option82_attributes(db, attrs, subscription, connection_type)
 
-    # Append Framed-Route per additional routed IP block (Splynx ipv4_route)
+    # Append Framed-Route per additional routed IP block.
     _append_additional_routes(db, attrs, subscription)
 
     # Append any custom attributes from the profile

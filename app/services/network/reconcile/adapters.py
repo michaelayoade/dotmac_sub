@@ -146,7 +146,7 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         # observation shows real indices in use.
         mgmt_service_port_index=_int_or_none(values.get("mgmt_service_port_index")),
         wan_service_port_index=_int_or_none(values.get("wan_service_port_index")),
-        # DEFAULT: forward-compat for Splynx → in-app Subscriber migration.
+        # DEFAULT: forward-compat for legacy-BSS -> in-app Subscriber migration.
         subscriber_external_id=ont.external_id,
         wan_uprate_kbps=None,
         wan_downrate_kbps=None,

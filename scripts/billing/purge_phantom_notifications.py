@@ -3,8 +3,8 @@
 The local billing runner that produced the ~₦692M phantom invoices also queued
 local dunning/invoice notifications against that phantom-polluted AR
 (``invoice_overdue`` with a broken ``#{}`` invoice reference, plus a handful of
-``invoice_created`` / ``invoice_sent``). During the Splynx dual-run the local
-app is not the biller and must not dun customers — Splynx sends the real
+``invoice_created`` / ``invoice_sent``). During the legacy dual-run the local
+app was not the biller and must not dun customers — the external biller sent the real
 notices — so every one of these is a phantom-era artifact.
 
 Scope is tight and verified non-destructive to customers: only the three local
@@ -28,7 +28,7 @@ from app.db import SessionLocal
 
 EVENT_TYPES = ("invoice_overdue", "invoice_created", "invoice_sent")
 # Definitively phantom: a local billing notice for a subscriber who has NO real
-# open AR. Subscribers who still owe a live (Splynx-linked) balance are EXCLUDED
+# open AR. Subscribers who still owe a live imported balance are EXCLUDED
 # — their notice could reference real debt, so it's left for manual review.
 _HAS_REAL_AR = (
     "subscriber_id IN (SELECT account_id FROM invoices WHERE is_active = true "

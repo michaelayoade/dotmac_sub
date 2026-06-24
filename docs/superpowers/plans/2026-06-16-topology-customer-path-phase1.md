@@ -13,7 +13,7 @@
 ## Decisions locked (from spec + 2026-06-16 amendments)
 - Source = **sub-zabbix** (`http://zabbix-web:8080`), NOT the network Zabbix.
 - Reuse `pop_sites` as basestation (cols incl. `code, latitude, longitude, is_active`); add `zabbix_group_id`. Do NOT add a `Basestation` table.
-- `network_devices` is pre-populated (461; 369 Splynx-sourced, now orphaned) → reconcile is **match-merge + backfill `zabbix_hostid`**, NOT blind upsert.
+- `network_devices` is pre-populated (461; 369 legacy BSS-sourced, now orphaned) → reconcile is **match-merge + backfill `zabbix_hostid`**, NOT blind upsert.
 - Matcher must disambiguate **~2 sub-zabbix hosts per IP** (device host in `*BTS*` group vs `NAS: X` host in `DotMac/Network/NAS`): `OLTDevice`→device host, `NasDevice`→`NAS:` host.
 - Role inference from groups: `*BTS*`=access-site, `DotMac/Network/NAS`=nas, `Data Center Devices`=core.
 - Phase 2 (directed chain) is OUT — sub-zabbix sysmap is empty; separate decision.
@@ -54,7 +54,7 @@
 
 ### Task 4 — Reconcile: groups→pop_sites, hosts→network_devices
 - [ ] **Test first** `test_reconcile_idempotent`: feed a fixture of 2 BTS groups + 3 hosts (incl. a device+NAS pair on one IP) → assert pop_sites upserted by `zabbix_group_id`, network_devices get `pop_site_id`+`zabbix_hostid`+`source='zabbix_reconcile'`, matcher links set, and **running twice changes nothing but `last_synced_at`**.
-- [ ] Implement `reconcile(db, client)`: pull `*BTS*` groups → upsert `pop_sites`; pull hosts (`get_hosts`) → for each, find-or-merge `NetworkDevice` by IP/name (backfill `zabbix_hostid`; do NOT create a dup if a Splynx-sourced row matches), set `pop_site_id` from its BTS group, run matcher. Soft-prune (`is_active=false`) rows whose Zabbix source vanished, computed against this run's snapshot under an advisory lock.
+- [ ] Implement `reconcile(db, client)`: pull `*BTS*` groups → upsert `pop_sites`; pull hosts (`get_hosts`) → for each, find-or-merge `NetworkDevice` by IP/name (backfill `zabbix_hostid`; do NOT create a dup if a legacy BSS-sourced row matches), set `pop_site_id` from its BTS group, run matcher. Soft-prune (`is_active=false`) rows whose Zabbix source vanished, computed against this run's snapshot under an advisory lock.
 - [ ] Run → pass (incl. idempotency). Commit.
 
 ### Task 5 — Celery wiring

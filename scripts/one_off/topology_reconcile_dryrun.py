@@ -3,7 +3,7 @@
 Phase 1 of the customer-path feature. By default this is READ-ONLY: it computes
 what the reconcile WOULD do (match-merge pop_sites + network_devices) and prints
 the summary, so the first run against the populated tables (461 nodes / 23
-pop_sites / orphaned Splynx rows) can be reviewed before any write.
+pop_sites / orphaned legacy rows) can be reviewed before any write.
 
     python -m scripts.one_off.topology_reconcile_dryrun           # dry-run (default)
     python -m scripts.one_off.topology_reconcile_dryrun --apply   # write + commit

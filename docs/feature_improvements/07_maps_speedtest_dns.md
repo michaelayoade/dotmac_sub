@@ -1,20 +1,20 @@
 # Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats
 
-## Source: Splynx ISP Management Platform & Related Tools
-These screenshots show Splynx's networking modules for GIS mapping, subscriber speed test tracking, network weathermap visualization, and DNS threat detection. Each feature is analyzed against DotMac Sub's current capabilities, and actionable improvements are proposed.
+## Source: legacy BSS ISP Management Platform & Related Tools
+These screenshots show legacy BSS's networking modules for GIS mapping, subscriber speed test tracking, network weathermap visualization, and DNS threat detection. Each feature is analyzed against DotMac Sub's current capabilities, and actionable improvements are proposed.
 
 ---
 
 ## 7.1 Maps -- GIS Network Mapping
 
-**What Splynx has:**
+**What legacy BSS has:**
 - Full-page interactive map (OpenStreetMap tiles) displayed under Networking > Maps
 - Right-side "Show" filter panel with toggleable layer checkboxes: Hardware/Routers, Partner, Customers (Online/Offline), Leads (Active/Not Active), Sectors, Fiber/Cables, Splitters, Markers
 - A "Legend" panel at the bottom-right explaining the meaning of each marker color and icon
 - "Apply" button to refresh the map with selected layer filters
 - Map covers an entire country view (Nigeria shown) with clustered markers for subscriber/customer locations, hardware devices, and network infrastructure
 - Breadcrumb navigation: Networking > Maps
-- Clean integration within the Splynx sidebar under the Networking section alongside Network sites, Routers, CPE, IP networks, SpeedTest, DNS threats, and Network Weathermap
+- Clean integration within the legacy BSS sidebar under the Networking section alongside Network sites, Routers, CPE, IP networks, SpeedTest, DNS threats, and Network Weathermap
 
 **What DotMac Sub already has:**
 - A Leaflet-based network map at `/admin/network/map` with pop-site markers, fiber routes, OLT/ONT/CPE pins, and subscriber geocoded locations
@@ -30,7 +30,7 @@ These screenshots show Splynx's networking modules for GIS mapping, subscriber s
 **Feature improvements for DotMac Sub:**
 
 ### Map Layer Controls
-- [ ] **Toggleable layer filter panel**: Add a collapsible right-side panel (like Splynx) with checkboxes to show/hide: Subscribers (Online), Subscribers (Offline), OLTs, ONTs, CPEs, Pop Sites, FDH Cabinets, Splice Closures, Fiber Routes, NAS Devices, Leads/Prospects
+- [ ] **Toggleable layer filter panel**: Add a collapsible right-side panel (like legacy BSS) with checkboxes to show/hide: Subscribers (Online), Subscribers (Offline), OLTs, ONTs, CPEs, Pop Sites, FDH Cabinets, Splice Closures, Fiber Routes, NAS Devices, Leads/Prospects
 - [ ] **Apply/refresh button for filters**: Allow users to select multiple layers and apply them in a batch rather than individual toggles, reducing map re-renders
 - [ ] **Remember layer preferences**: Persist the user's last-selected layer combination in localStorage or a user preference setting so it loads their preferred view on return
 - [ ] **Cluster markers at zoom levels**: Implement Leaflet.markercluster to group dense subscriber/device clusters at country/region zoom levels, expanding on zoom-in
@@ -57,7 +57,7 @@ These screenshots show Splynx's networking modules for GIS mapping, subscriber s
 
 ## 7.2 SpeedTest Results -- Subscriber Speed Test Tracking
 
-**What Splynx has:**
+**What legacy BSS has:**
 - A tabular list view under Networking > SpeedTest result (Module "SpeedTest result")
 - Table columns: Status (checkbox), ID, IP, Date and time of the test, Download speed (Mbit/s), Upload speed (Mbit/s), Ping (ms)
 - Multiple rows of speed test results with timestamps, each tied to a subscriber IP address
@@ -102,7 +102,7 @@ These screenshots show Splynx's networking modules for GIS mapping, subscriber s
 
 ## 7.3 Network Weathermap -- Topology & Traffic Visualization
 
-**What Splynx has:**
+**What legacy BSS has:**
 - A "Network Weathermap" page under Networking in the sidebar
 - The page currently shows a 404 error ("Oops! This page could not be found"), indicating the feature exists in the UI navigation but may require additional addon configuration or is not yet deployed for this instance
 - Sidebar position: listed between DNS threats and Tariff plans
@@ -146,7 +146,7 @@ These screenshots show Splynx's networking modules for GIS mapping, subscriber s
 
 ## 7.4 DNS Threats -- DNS-Based Security Monitoring
 
-**What Splynx has:**
+**What legacy BSS has:**
 - A "DNS threats" page under Networking in the sidebar
 - The page shows an error: "Error: whalebone_api_region is not set. Please check your addon config!" -- indicating this feature integrates with the Whalebone DNS security platform via an addon/API
 - Whalebone is a DNS-based security service that detects malware, phishing, botnet C&C communication, and other threats by analyzing DNS query patterns at the resolver level

@@ -11,26 +11,23 @@ dunning comms can hit customers around ~01:00 UTC (~02:00 WAT). Ops want
 enforcement and notifications to happen only at civilized local hours, and to be
 able to set when jobs run.
 
-There is **no working time-of-day control today** except for the prepaid
-enforcement path. `billing_notif_send_hour` is exposed in the admin UI
+There is **no complete working time-of-day control today** for unified billing
+enforcement. `billing_notif_send_hour` is exposed in the admin UI
 (`templates/admin/system/config/billing_notifications.html`) but is **inert** —
 nothing reads it.
 
-## What already exists (the pattern we generalize)
+## What already exists
 
-`PrepaidEnforcement.run()` (`app/services/collections/_core.py`) already gates on
-a wall-clock window:
+`app/services/enforcement_window.py` contains the shared wall-clock helpers used
+by billing/dunning paths:
 
 - `scheduler.timezone` (canonical local TZ, default = app TZ)
-- `collections.prepaid_blocking_time` ("HH:MM", default `08:00`) — skip if local
-  time is before it
-- `collections.prepaid_skip_weekends`, `collections.prepaid_skip_holidays`
-- once-per-day idempotency via `collections.prepaid_last_run_date`
-- fires **hourly** (`prepaid_enforcement_interval_seconds`, default 3600) and the
-  in-task gate makes it *act once*, after the local hour.
+- `to_local(db, run_at)` — convert to `scheduler.timezone`
+- `parse_time(value)` — "HH:MM[:SS]" → `time`
+- `window_block_reason(...)` — reason str or `None`
 
-This is the proven design. Two distinct timezone concepts: celery beat fires on
-the **celery app TZ** (currently UTC); in-task decisions use **`scheduler.timezone`**.
+Two distinct timezone concepts remain: celery beat fires on the **celery app
+TZ** (currently UTC); in-task decisions use **`scheduler.timezone`**.
 
 ## Design — two complementary parts
 
@@ -49,14 +46,13 @@ actions never happen off-hours regardless of trigger (beat / retry / manual
   (`_emit_invoice_reminders` / `_emit_dunning_escalations` in
   `billing_automation.py`); activates `billing_notif_send_hour`.
 - `within_enforcement_window(db, now)` gates state changes (postpaid overdue
-  suspend in `events/handlers/enforcement.py` + `DunningRun`; prepaid already).
+  suspend in `events/handlers/enforcement.py` + unified dunning enforcement).
 
 **Cadence prerequisite:** a window is only effective if the task fires often
 enough to land inside it. Daily enforcers/notifiers must move to **hourly +
-once-per-day idempotency** (mirror prepaid's `last_run_date`) before their gate
-is wired — otherwise a daily 01:00-UTC run + a 09:00 window means the action
-never fires. This is why notification/enforcement gating is staged after the
-helper, not shipped with it.
+once-per-day idempotency** before their gate is wired — otherwise a daily
+01:00-UTC run + a 09:00 window means the action never fires. This is why
+notification/enforcement gating is staged after the helper, not shipped with it.
 
 ### Part B — Cron scheduling (ops control of run time)
 Let admins set the exact run time of any scheduled job.

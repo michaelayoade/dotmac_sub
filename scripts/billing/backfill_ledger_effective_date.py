@@ -6,13 +6,13 @@ effective_date per entry, in strict priority order:
 
   1. invoice_id FK present  -> invoices.issued_at          (exact)
   2. payment_id FK present   -> payments.paid_at           (exact)
-  3. migrated + unlinked     -> positional match to the Splynx mirror
+  3. migrated + unlinked     -> positional match to the legacy mirror
         (full migrated-ledger sequence zipped against the full
-         splynx_billing_transactions sequence per account, by import order vs
+         historical billing transaction sequence per account, by import order vs
          transaction_date order). For a matched row we prefer the LOCAL
-         invoice.issued_at / payment.paid_at reached via the Splynx row's
-         splynx_invoice_id / splynx_payment_id (so the ledger date matches the
-         invoice view), falling back to the Splynx transaction_date itself.
+         invoice.issued_at / payment.paid_at reached via the legacy row's
+         imported invoice/payment ids (so the ledger date matches the
+         invoice view), falling back to the legacy transaction_date itself.
         The fill is GATED on entry_type+amount agreement at the matched
         position; non-aligned positions are left NULL.
   4. everything else (native post-cutover, adjustment seeds, unmatched) -> NULL
@@ -22,11 +22,11 @@ row keeps today's behaviour. Adjustment cutover seeds and native entries are
 intentionally left NULL — their created_at already IS the real date.
 
 Date provenance (for the finance question that will eventually come up): for the
-~123k unlinked migrated debits the date is the Splynx mirror's transaction_date,
-NOT the local invoice's issued_at. Both fields originate from Splynx at cutover
+~123k unlinked migrated debits the date is the legacy mirror's transaction_date,
+NOT the local invoice's issued_at. Both fields originate from import data at cutover
 and agree to the day for ~98% of rows (the rest differ by ≤1 day), so a ledger
 debit's date can legitimately differ from its invoice's issued_at by a day —
-they are two distinct, both-authoritative Splynx fields. We deliberately do NOT
+they are two distinct imported source fields. We deliberately do NOT
 positionally pin debits to invoices: flat-rate recurring plans produce many
 identical-amount debits whose only timestamp is the shared import created_at, so
 a positional match would confidently assign the wrong month. Independent-but-
@@ -73,7 +73,7 @@ LEFT JOIN _eff e ON e.id = l.id
 WHERE e.id IS NULL AND l.payment_id IS NOT NULL AND p.paid_at IS NOT NULL;
 
 -- Tier 3: positional match of the full migrated ledger sequence against the
--- full Splynx transaction sequence, per account. Resolve only unresolved,
+-- full legacy transaction sequence, per account. Resolve only unresolved,
 -- migrated rows, and only where entry_type+amount agree at the matched index.
 WITH led AS (
     SELECT l.id, l.account_id, l.entry_type::text AS et, l.amount,
@@ -103,8 +103,8 @@ matched AS (
 )
 INSERT INTO _eff (id, effective_date, tier)
 SELECT m.id,
-       -- prefer local invoice/payment date reached via the matched Splynx ids,
-       -- else the Splynx transaction_date.
+       -- prefer local invoice/payment date reached via the matched imported ids,
+       -- else the imported transaction_date.
        COALESCE(
            (i.issued_at)::timestamptz,
            (p.paid_at)::timestamptz,

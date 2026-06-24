@@ -173,7 +173,7 @@ Each phase has its own document in this directory.
 | Live session disconnect (`disconnect_subscription_sessions`) | Already simplified in the recent CoA + SSH-pool work. Keep. |
 | Captive portal product feature | Same business behavior; only the implementation collapses to a group. |
 | Mikrotik vendor specifics | Other vendors can map their own group→attr equivalents later. |
-| Splynx import / sync paths | They populate `SubscriptionStatus`; `access_state` is derived. Splynx-aware operators see no change. |
+| legacy BSS import / sync paths | They populate `SubscriptionStatus`; `access_state` is derived. legacy BSS-aware operators see no change. |
 
 ## 9. Invariants (must always hold)
 
@@ -235,7 +235,7 @@ Documented in each phase doc. Common pattern:
 
 ## 12. Decisions (formerly open questions)
 
-- **Q1** — `captive` is **derived**, not a `SubscriptionStatus` value. Computed from `subscriber.captive_redirect_enabled + status=suspended`. Keeps `SubscriptionStatus` enum stable and Splynx-aligned. Decided 2026-05-26.
+- **Q1** — `captive` is **derived**, not a `SubscriptionStatus` value. Computed from `subscriber.captive_redirect_enabled + status=suspended`. Keeps `SubscriptionStatus` enum stable and legacy BSS-aligned. Decided 2026-05-26.
 - **Q2** — Access state is **shared across all credentials** of a subscription. State lives on the subscription, not the credential. Multi-credential subscribers (rare) get one state that applies to all their usernames. Decided 2026-05-26.
 - **Q3** — The existing 5 reject pools **stay running** through phase 8 as belt-and-suspenders. Standing rules at each NAS are cheap to leave in place. Decommissioned in phase 9 only if/when we commit to the IP-pool migration. Decided 2026-05-26.
 - **Q4** — NAS-side pool provisioning is **manual** (per-NAS by the operator), not scripted. Phase 1 doc supplies the exact RouterOS commands as a runbook. Decided 2026-05-26.

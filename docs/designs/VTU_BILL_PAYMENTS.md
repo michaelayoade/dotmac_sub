@@ -68,7 +68,7 @@ Reuses existing primitives — point them at a new target:
 
 | Need | Existing primitive |
 |---|---|
-| Catalog sync | periodic Celery sync-job pattern (Splynx/CRM syncs) |
+| Catalog sync | periodic Celery sync-job pattern (legacy BSS/CRM syncs) |
 | Wallet debit concurrency | `billing/_common.lock_account()` (mandatory for every VAS debit) |
 | Idempotency | gateway `request_id` discipline (we mint it, VTPass echoes it) |
 | Delivery truth | webhook + requery, like payment-webhook settlement (#204) |

@@ -193,7 +193,7 @@ From `docs/feature_improvements/00_INDEX.md` — **~834 outstanding items** acro
 | File | Purpose |
 |------|---------|
 | `Smartolt Crud.zip` | Reference screenshots for SmartOLT features |
-| `Splynx and Smartolt Dotmacsubs.zip` | Reference screenshots |
+| `legacy BSS and Smartolt Dotmacsubs.zip` | Reference screenshots |
 | `tariff plans screenshots.zip` | UI reference for tariff plan pages |
 | `screenshots/` | Various UI screenshots |
 | `uploads/invoices/` | Test invoice uploads |
@@ -210,6 +210,6 @@ These should be `.gitignore`d, not committed.
 | `a5ea78a` | Platform updates and testing fixes |
 | `4cd7028` | Currency formatting, header overflow, speedtest, error handling |
 | `6fb717d` | RADIUS/NAS enforcement: CoA-Update, connection-type provisioning |
-| `4fa42ba` | SmartOLT/Splynx features: ONU types, speed profiles, FUP, plan categories |
+| `4fa42ba` | SmartOLT/legacy BSS features: ONU types, speed profiles, FUP, plan categories |
 | `655686a` | Ping latency, uptime/backup maps on device list |
 | `b2ff4e3` | Module decomposition, networking features, security hardening |

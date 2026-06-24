@@ -209,7 +209,7 @@ class CRMClient:
     # ── Subscriber resolution ────────────────────────────────────────────
 
     def resolve_subscriber_id(self, splynx_customer_id: int) -> str | None:
-        """Look up CRM subscriber UUID by Splynx external_id.
+        """Look up CRM subscriber UUID by legacy external_id.
 
         Returns:
             CRM subscriber UUID string, or None if not found.

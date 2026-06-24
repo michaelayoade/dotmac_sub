@@ -1,11 +1,11 @@
 """Hard-delete the billing-runner PHANTOM invoices (and their child rows).
 
 Background: the local billing runner once double-billed ~₦692M of invoices that
-never existed in Splynx (the authoritative biller). PR #207/#249 VOIDED them,
+never existed in the authoritative external biller. PR #207/#249 VOIDED them,
 but the user wants the faulty rows physically removed so they cannot surface in
 any UI or report.
 
-The phantom set is tightly scoped and *never* touches Splynx-linked data:
+The phantom set is tightly scoped and *never* touches migrated external data:
 
     is_active = true  AND  splynx_invoice_id IS NULL  AND  status = 'void'
 
@@ -31,7 +31,7 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 
-# Phantom = locally-generated (no Splynx id), already voided, still active.
+# Phantom = locally-generated (no external invoice id), already voided, still active.
 PHANTOM = "is_active = true AND splynx_invoice_id IS NULL AND status = 'void'"
 # Entangled = referenced by a real payment or ledger entry; do NOT delete.
 NOT_ENTANGLED = (

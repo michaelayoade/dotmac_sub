@@ -161,7 +161,7 @@ def _radius_sync_subscription_for_subscriber(
         .where(Subscription.status.in_(RADIUS_SYNC_ELIGIBLE_STATUSES))
         .order_by(
             # Prefer an active subscription when the subscriber has more than
-            # one eligible (Splynx duplicate-service customers carry active +
+            # one eligible (migrated duplicate-service customers carry active +
             # canceled/suspended rows). Without this, the latest-by-date pick
             # could be a canceled subscription, so RADIUS state — including
             # additional-IP Framed-Routes — gets synced from the wrong service.

@@ -334,7 +334,7 @@ def test_shared_contact_email_is_ambiguous(db_session):
 
 
 def test_long_digit_identifier_not_treated_as_splynx_id(db_session):
-    # An 11-digit string exceeds int4; it must NOT hit the splynx_customer_id
+    # An 11-digit string exceeds int4; it must NOT hit the imported customer id
     # branch (which would overflow the int4 column on Postgres → 500). With no
     # phone match it is simply "not found".
     with pytest.raises(HTTPException) as exc:

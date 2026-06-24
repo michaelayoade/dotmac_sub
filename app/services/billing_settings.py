@@ -26,8 +26,8 @@ LIVE_SERVICE_STATUSES = (
 def billing_enabled(db: Session, *, default: bool = True) -> bool:
     """Master switch for local billing automation.
 
-    While the upstream biller (Splynx) remains authoritative, this is set to
-    ``false`` in prod so the local runners stay inert. It gates every task that
+    Before DotMac Sub became the biller of record, this stayed ``false`` so the
+    local runners were inert. It gates every task that
     *acts on customers* off local billing state — invoicing, autopay charges,
     dunning, prepaid enforcement, payment-arrangement checks, and subscription
     expiry — so they all activate together at cutover and none can charge,

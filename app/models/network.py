@@ -558,7 +558,7 @@ class IPAssignment(Base):
 class SubscriberAdditionalRoute(Base):
     """Extra routed IP blocks for a subscriber, emitted as RADIUS Framed-Route.
 
-    Splynx auto-attached these via the ``ipv4_route`` field on its
+    The legacy billing platform auto-attached these via the ``ipv4_route`` field on its
     ``services_internet`` table; the BNG installed each as a route to the PPP
     interface on session-up. After the 2026-06-11 RADIUS cutover dotmac_sub is
     the answering server and must reproduce them, fleet-wide, automatically.
@@ -566,7 +566,7 @@ class SubscriberAdditionalRoute(Base):
     Stored per-subscriber (not via IPAM ``IPAssignment``) on purpose: a routed
     subnet has no managed host-address row in ``ipv4_addresses`` — and the
     ``ip_assignments`` check constraint requires one — so a routed /29 doesn't
-    fit that model without polluting host inventory. Splynx duplicate services
+    fit that model without polluting host inventory. Imported duplicate services
     also collapse to a single dotmac_sub subscriber, so subscriber + CIDR is the
     natural unique grain (see uq constraint below; makes backfill idempotent).
     """
@@ -595,7 +595,7 @@ class SubscriberAdditionalRoute(Base):
     # Normalised network/prefix, e.g. "160.119.125.104/29" or "102.0.2.5/32".
     cidr: Mapped[str] = mapped_column(String(64), nullable=False)
     prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Framed-Route metric (Splynx default was 1).
+    # Framed-Route metric (legacy default was 1).
     metric: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Provenance: "splynx_backfill" | "splynx_sync" | "manual".

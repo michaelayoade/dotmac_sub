@@ -1,7 +1,7 @@
 # Feature Improvements Index
 
 ## Source Material
-Screenshots from **Splynx** and **SmartOLT** reviewed on 2026-02-24 to identify feature gaps and improvements for DotMac Sub.
+Screenshots from **legacy BSS** and **SmartOLT** reviewed on 2026-02-24 to identify feature gaps and improvements for DotMac Sub.
 
 **Total:** 276 screenshots across 11 sections, ~4,600 lines of analysis
 

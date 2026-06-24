@@ -86,15 +86,23 @@ class DunningRunResponse(BaseModel):
     skipped: int
 
 
-class PrepaidEnforcementRunRequest(BaseModel):
+class BillingEnforcementRunRequest(BaseModel):
     run_at: datetime | None = None
     dry_run: bool = False
 
 
-class PrepaidEnforcementRunResponse(BaseModel):
+class BillingEnforcementRunResponse(BaseModel):
     run_at: datetime
     accounts_scanned: int
-    accounts_warned: int
-    accounts_suspended: int
-    accounts_deactivated: int
+    cases_created: int
+    actions_created: int
     skipped: int
+    dunning_accounts_scanned: int
+    dunning_cases_created: int
+    dunning_actions_created: int
+    dunning_skipped: int
+    credit_accounts_scanned: int = 0
+    credit_accounts_settled: int = 0
+    credit_invoices_touched: int = 0
+    credit_settlement_errors: int = 0
+    credit_applied: str = "0.00"

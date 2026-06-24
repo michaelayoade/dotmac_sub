@@ -353,12 +353,15 @@ def _create_payment_ledger_entry(
         # not to a per-subscriber ledger entry.
         return None
 
-    # Idempotency check: skip if ledger entry already exists for this payment/invoice
+    # Idempotency check: skip if an active ledger entry already exists for this
+    # payment/invoice. If a prior allocation was voided/refunded, the soft
+    # deleted entry can be reactivated by the caller below.
     existing_entry = (
         db.query(LedgerEntry)
         .filter(LedgerEntry.payment_id == payment.id)
         .filter(LedgerEntry.invoice_id == (invoice.id if invoice else None))
         .filter(LedgerEntry.source == LedgerSource.payment)
+        .filter(LedgerEntry.is_active.is_(True))
         .first()
     )
     if existing_entry:
@@ -390,11 +393,27 @@ def _find_payment_allocation(
     payment: Payment,
     invoice: Invoice,
 ) -> PaymentAllocation | None:
-    """Return the existing allocation for a payment/invoice pair, if present."""
+    """Return the active allocation for a payment/invoice pair, if present."""
     return (
         db.query(PaymentAllocation)
         .filter(PaymentAllocation.payment_id == payment.id)
         .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(PaymentAllocation.is_active.is_(True))
+        .first()
+    )
+
+
+def _find_inactive_payment_allocation(
+    db: Session,
+    payment: Payment,
+    invoice: Invoice,
+) -> PaymentAllocation | None:
+    """Return a soft-deleted allocation for re-use after void/refund reversal."""
+    return (
+        db.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(PaymentAllocation.is_active.is_(False))
         .first()
     )
 
@@ -414,11 +433,25 @@ def _apply_payment_allocation(
     """
     existing = _find_payment_allocation(db, payment, invoice)
     if existing:
-        applied_amount = round_money(to_decimal(existing.amount))
-        _create_payment_ledger_entry(db, payment, invoice, applied_amount)
-        return existing, applied_amount
+        # Idempotent re-runs must not recreate the invoice ledger credit or
+        # report the old allocation as newly applied. The original allocation
+        # and ledger effect already exist; returning 0 keeps callers from
+        # consuming account credit a second time.
+        return existing, Decimal("0.00")
 
     applied_amount = round_money(to_decimal(amount))
+    inactive = _find_inactive_payment_allocation(db, payment, invoice)
+    if inactive:
+        inactive.amount = applied_amount
+        inactive.memo = memo
+        inactive.is_active = True
+        entry = _create_payment_ledger_entry(db, payment, invoice, applied_amount)
+        if entry is not None:
+            entry.amount = applied_amount
+            entry.currency = payment.currency or invoice.currency or "NGN"
+            entry.is_active = True
+        return inactive, applied_amount
+
     allocation = PaymentAllocation(
         payment_id=payment.id,
         invoice_id=invoice.id,

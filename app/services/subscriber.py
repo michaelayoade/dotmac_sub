@@ -95,7 +95,7 @@ def _metadata_flag(value: object) -> bool:
 
 
 def is_splynx_deleted_import(subscriber: Subscriber) -> bool:
-    """Return whether a subscriber represents a Splynx soft-deleted import."""
+    """Return whether a subscriber represents a legacy soft-deleted import."""
     metadata = subscriber.metadata_ or {}
     if _metadata_flag(metadata.get("splynx_deleted")):
         return True
@@ -116,7 +116,7 @@ def _metadata_text_clause(key: str):
 
 
 def splynx_deleted_import_clause():
-    """Return a SQL clause matching Splynx soft-deleted imported subscribers."""
+    """Return a SQL clause matching legacy soft-deleted imported subscribers."""
     splynx_deleted = _metadata_text_clause("splynx_deleted")
     splynx_status = _metadata_text_clause("splynx_status")
     return or_(
@@ -142,7 +142,7 @@ def not_soft_deleted_subscriber_clause():
     """Return a SQL clause for subscribers that are NOT soft-deleted.
 
     Excludes the ``canceled`` status — the model's "Terminated / soft-deleted"
-    mapping (Splynx ``deleted``) — and Splynx-imported deleted rows. ``disabled``
+    mapping (legacy ``deleted``) — and imported deleted rows. ``disabled``
     accounts are intentionally NOT excluded: they're deactivated but real records
     (e.g. still carry an outstanding balance), so callers that want only live
     accounts should add their own status filter on top.
@@ -993,7 +993,7 @@ class Subscribers(ListResponseMixin):
         now = datetime.now(UTC)
         thirty_days_ago = now - timedelta(days=30)
 
-        # Base filter for visible subscribers (excludes system_user and splynx deleted)
+        # Base filter for visible subscribers (excludes system_user and deleted imports)
         visible_filter = visible_subscriber_clause()
 
         # SQL expression for effective created_at:

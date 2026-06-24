@@ -12,8 +12,8 @@ suggested class, writing a CSV for finance review.
 Balance model note (see collections/_core.py:_resolve_prepaid_available_balance):
 a settled Payment posts a ledger credit (source=payment); these phantom invoices
 posted NO ledger debit, so a payment against one already sits as positive
-balance. For Splynx-linked-but-unseeded accounts the synced ``deposit`` IS the
-balance (Splynx already netted the payment), so the money is likewise already
+balance. For migrated-but-unseeded accounts the imported ``deposit`` IS the
+balance (the previous billing system already netted the payment), so the money is likewise already
 reflected. "Already credited" means: do not also reallocate (that double-counts).
 
 Suggested classes:
@@ -163,7 +163,7 @@ def classify_one(ev: dict) -> str:
     if ev["num_allocations"] == 0 or not ev["any_payment_succeeded"]:
         return "manual_finance_review"
     # money already reflected in balance: local ledger credit exists for every
-    # allocated payment, OR the (unseeded) Splynx deposit already nets it.
+    # allocated payment, OR the (unseeded) imported deposit already nets it.
     credited = ev["all_allocated_have_credit"] or (
         ev["splynx_linked"] and bool(ev["deposit"])
     )

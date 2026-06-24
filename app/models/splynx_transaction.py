@@ -1,6 +1,6 @@
-"""Faithful mirror of Splynx's ``billing_transactions`` ledger.
+"""Faithful mirror of the imported ``billing_transactions`` ledger.
 
-Splynx maintains a granular transaction ledger (credit/debit movements) whose
+The legacy billing platform maintained a granular transaction ledger whose
 running net per customer IS the ``customer_billing.deposit`` (verified exactly:
 deposit = Σ credit − Σ debit over deleted='0'). The migration imported the
 financial *documents* (invoices/payments/credit notes) but not this raw ledger,
@@ -10,7 +10,7 @@ deposit net directly).
 This table is a 1:1, low-coupling mirror of ``billing_transactions`` — kept
 separate from the operational ``ledger_entries`` (which is derived from
 invoices+payments and would double-count if these were merged in). It gives
-full transaction-level history at parity with Splynx and reconciles to the
+full transaction-level history at parity with the imported source and reconciles to the
 deposit per account.
 """
 
@@ -31,7 +31,7 @@ class SplynxBillingTransaction(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # Splynx billing_transactions.id — unique, drives idempotent re-import.
+    # Imported billing_transactions.id — unique, drives idempotent re-import.
     splynx_transaction_id: Mapped[int] = mapped_column(
         Integer, unique=True, index=True, nullable=False
     )

@@ -3,6 +3,11 @@ from datetime import UTC, datetime
 
 from app.celery_app import celery_app
 from app.services import billing_automation as billing_automation_service
+from app.services.billing_enforcement_guards import (
+    billing_enforcement_health,
+    notification_delivery_health,
+)
+from app.services.billing_settings import check_billing_switch
 from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
@@ -55,6 +60,57 @@ def mark_invoices_overdue() -> dict[str, int]:
     except Exception:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.tasks.billing.check_billing_switch")
+def check_billing_switch_task() -> dict:
+    """Config-integrity + billing enforcement health guard.
+
+    This hourly runner is intentionally independent of the billing master
+    switch. If billing is accidentally armed or enforcement/payment intake goes
+    unhealthy, the scheduler still emits an operator-visible critical log.
+    """
+    session = SessionLocal()
+    try:
+        switch = check_billing_switch(session)
+        enforcement = billing_enforcement_health(session)
+        notification = notification_delivery_health(session)
+        result = {
+            "ok": bool(switch["ok"]) and enforcement.ok,
+            "billing_switch": switch,
+            "billing_enforcement_health": {
+                "ok": enforcement.ok,
+                "reasons": enforcement.reasons,
+                "details": enforcement.details,
+            },
+            "notification_delivery_health": {
+                "ok": notification.ok,
+                "reasons": notification.reasons,
+                "details": notification.details,
+            },
+        }
+        if not switch["ok"]:
+            logger.critical(
+                "billing_switch_drift: billing_enabled=%s expected=%s; "
+                "local billing may act on customers unexpectedly",
+                switch["actual"],
+                switch["expected"],
+            )
+        if not enforcement.ok:
+            logger.critical(
+                "billing_enforcement_health_failed: reasons=%s details=%s",
+                ",".join(enforcement.reasons),
+                enforcement.details,
+            )
+        if not notification.ok:
+            logger.error(
+                "billing_notification_delivery_unhealthy: reasons=%s details=%s",
+                ",".join(notification.reasons),
+                notification.details,
+            )
+        return result
     finally:
         session.close()
 
