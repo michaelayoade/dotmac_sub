@@ -36,7 +36,14 @@ flutter pub get
 # subsequent xcodebuild needs. API_BASE_URL defaults to production so Xcode Cloud
 # builds (e.g. TestFlight) point at the live backend; override via an Xcode Cloud
 # environment variable if needed.
+#
+# --dart-define-from-file=../brand.json injects the white-label brand config
+# (BRAND_PRIMARY_COLOR, name, etc.) — the SAME source the Android release build
+# and local `flutter run` use. Without it the app falls back to Flutter's default
+# theme (blue) instead of the brand green. A later --dart-define overrides the
+# same key from the file, so the explicit API_BASE_URL still wins.
 flutter build ios --release --no-codesign \
+  --dart-define-from-file=../brand.json \
   --dart-define=API_BASE_URL="${API_BASE_URL:-https://selfcare.dotmac.io}"
 
 # --- FCM push (operator-gated) -------------------------------------------------
