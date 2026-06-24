@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column
@@ -17,6 +17,9 @@ class ScheduleType(enum.Enum):
 
 class ScheduledTask(Base):
     __tablename__ = "scheduled_tasks"
+    # name is the stable logical identity; one row per task. Enforced so a
+    # task_name rename can't spawn duplicate rows (see migration 172).
+    __table_args__ = (UniqueConstraint("name", name="uq_scheduled_tasks_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
