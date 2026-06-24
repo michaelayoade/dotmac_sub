@@ -128,6 +128,8 @@ def check_billing_switch_task() -> dict:
             "payment_volume_ratio": health.payment_volume_ratio,
             "stale_runners": health.stale_runners,
             "covered_but_locked": health.covered_but_locked,
+            "unbilled_no_path": health.unbilled_no_path,
+            "active_subs_on_terminal_account": health.active_subs_on_terminal_account,
             "anomalies": sorted(anomalies),
         }
         if "paid_invoices_with_balance" in anomalies:
@@ -164,6 +166,13 @@ def check_billing_switch_task() -> dict:
                 "billing_enforcement_covered_but_locked: %d accounts under a billing "
                 "lock despite ledger balance >= 0 — wrongful-suspension drift",
                 health.covered_but_locked,
+            )
+        if "active_subs_without_billing_path" in anomalies:
+            logger.error(
+                "billing_active_subs_without_billing_path: %d active prepaid "
+                "subscription(s) no enabled billing path will invoice (flag off or "
+                "non-monthly offer) — revenue leak",
+                health.unbilled_no_path,
             )
         return result
     finally:

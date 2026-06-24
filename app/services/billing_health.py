@@ -34,7 +34,9 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
+from app.services import settings_spec
 from app.services.job_heartbeat import get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
@@ -80,6 +82,9 @@ class BillingHealthSnapshot:
     # call sites and tests valid).
     runners: tuple[RunnerHeartbeat, ...] = ()
     covered_but_locked: int = 0
+    # §6.1 billing-path coverage.
+    unbilled_no_path: int = 0
+    active_subs_on_terminal_account: int = 0
 
     @property
     def stale_runners(self) -> list[str]:
@@ -98,6 +103,8 @@ class BillingHealthSnapshot:
             out.append("runner_heartbeat_stale")
         if self.covered_but_locked > 0:
             out.append("enforcement_covered_but_locked")
+        if self.unbilled_no_path > 0:
+            out.append("active_subs_without_billing_path")
         return out
 
 
@@ -247,12 +254,65 @@ def covered_but_locked(db: Session) -> int:
     return int(db.execute(sql).scalar() or 0)
 
 
+def _prepaid_monthly_enabled(db: Session) -> bool:
+    """Same resolution as billing_automation's invoice cycle."""
+    value = settings_spec.resolve_value(
+        db, SettingDomain.billing, "prepaid_monthly_invoicing_enabled"
+    )
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def billing_path_coverage(db: Session) -> tuple[int, int]:
+    """§6.1: (unbilled_no_path, active_subs_on_terminal_account).
+
+    Mirrors run_invoice_cycle's selection. A billable-account active sub is
+    covered iff it is postpaid, or (prepaid_monthly enabled AND its offer is a
+    monthly cycle). ``unbilled_no_path`` is the scalable revenue leak — a prepaid
+    cohort that no enabled path bills (flag off, or a non-monthly prepaid offer).
+    ``active_subs_on_terminal_account`` is an active sub whose account is
+    non-billable, so the cycle never touches it (lifecycle drift, low volume).
+    """
+    billable = "('active','blocked','suspended','delinquent')"
+    terminal = db.execute(
+        text(
+            f"""
+            SELECT count(*) FROM subscriptions sub
+            JOIN subscribers s ON s.id = sub.subscriber_id
+            WHERE sub.status = 'active' AND s.status NOT IN {billable}
+            """
+        )
+    ).scalar() or 0
+
+    if _prepaid_monthly_enabled(db):
+        no_path_sql = f"""
+            SELECT count(*) FROM subscriptions sub
+            JOIN subscribers s ON s.id = sub.subscriber_id
+            JOIN catalog_offers o ON o.id = sub.offer_id
+            WHERE sub.status = 'active' AND s.status IN {billable}
+              AND sub.billing_mode = 'prepaid' AND o.billing_cycle <> 'monthly'
+        """
+    else:
+        no_path_sql = f"""
+            SELECT count(*) FROM subscriptions sub
+            JOIN subscribers s ON s.id = sub.subscriber_id
+            WHERE sub.status = 'active' AND s.status IN {billable}
+              AND sub.billing_mode = 'prepaid'
+        """
+    no_path = db.execute(text(no_path_sql)).scalar() or 0
+    return int(no_path), int(terminal)
+
+
 def billing_health_snapshot(
     db: Session, now: datetime | None = None
 ) -> BillingHealthSnapshot:
     pwb_count, pwb_total = paid_with_balance(db)
     last_scanned, eligible, scan_ratio = invoice_scan_coverage(db)
     c24, avg7, ratio, collapsed = payment_volume(db, now=now)
+    no_path, terminal = billing_path_coverage(db)
     return BillingHealthSnapshot(
         paid_with_balance_count=pwb_count,
         paid_with_balance_total=pwb_total,
@@ -265,4 +325,6 @@ def billing_health_snapshot(
         payment_volume_collapsed=collapsed,
         runners=tuple(runner_heartbeats(db, now=now)),
         covered_but_locked=covered_but_locked(db),
+        unbilled_no_path=no_path,
+        active_subs_on_terminal_account=terminal,
     )

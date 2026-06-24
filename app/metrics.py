@@ -264,6 +264,18 @@ class _BillingHealthCollector(Collector):
         yield stale
         yield age
 
+        # §6.1 billing-path coverage: active subs no enabled path will bill.
+        unbilled = GaugeMetricFamily(
+            "billing_unbilled_active_subscriptions",
+            "Active subscriptions that no enabled billing path covers",
+            labels=["reason"],
+        )
+        unbilled.add_metric(["no_billing_path"], float(snap.unbilled_no_path))
+        unbilled.add_metric(
+            ["terminal_account"], float(snap.active_subs_on_terminal_account)
+        )
+        yield unbilled
+
 
 REGISTRY.register(_BillingHealthCollector())
 
