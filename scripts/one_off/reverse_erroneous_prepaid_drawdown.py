@@ -118,6 +118,12 @@ def _base_query(db, start_at: datetime, end_at: datetime, *, lock_rows: bool):
         db.query(LedgerEntry)
         .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
         .filter(LedgerEntry.is_active.is_(True))
+        # The compensating credit is written with invoice_id=None, and
+        # get_account_credit_balance only nets credit-debit over rows where
+        # invoice_id IS NULL. Constrain the matched debits to invoice_id IS NULL
+        # too so the netting stays symmetric and we cannot over-credit available
+        # balance from a debit that was tied to an invoice.
+        .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.memo.ilike(f"{PREPAID_DRAWDOWN_MEMO_PREFIX}%"))
         .filter(LedgerEntry.created_at >= start_at)
         .filter(LedgerEntry.created_at < end_at)
