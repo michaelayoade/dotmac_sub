@@ -28,9 +28,12 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import json
 import logging
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -45,7 +48,15 @@ from app.models.catalog import (
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
 from app.services.ip_consistency_audit import _external_ip_state, _norm
-from app.services.radius_access_state import derive_access_state
+from app.services.radius_access_state import (
+    ACTIVE_STATUSES,
+    BLOCKED_STATUSES,
+    derive_access_state,
+)
+
+# Subscribers in these statuses are expected to carry connectivity (an IP is
+# retained), so they are the population the shadow audit sweeps for drift.
+_RETAINED_STATUSES = ACTIVE_STATUSES | BLOCKED_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +163,18 @@ def note_connectivity_write(field: str, caller: str) -> None:
         )
 
 
-def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
+def connectivity_shadow_diff(
+    db: Session, subscriber_id: Any, *, emit: bool = True
+) -> dict[str, Any]:
     """READ-ONLY. Compare desired connectivity (derived) vs actual stored state
-    for a subscriber across access_state / credentials / IP. Logs and counts
-    disagreements via ``connectivity_shadow_diff_total``. Writes nothing — the
-    step-2c observability path that must look sane before any apply=True cutover.
+    for a subscriber across access_state / credentials / IP / ipv4_cache. Writes
+    nothing — the step-2c observability path that must look sane before any
+    apply=True cutover.
+
+    ``emit`` (default True): increment ``connectivity_shadow_diff_total`` and log
+    per disagreeing subscriber — right for the per-transition event hook. The
+    full-base sweep passes ``emit=False`` (it emits its own point-in-time gauge
+    and would otherwise double-count + log-spam over thousands of subscribers).
 
     Returns a structured report; ``diffs`` lists the disagreeing dimensions.
     """
@@ -237,7 +255,7 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
     if ipv4_cache_mismatch:
         diffs.append("ipv4_cache")
 
-    if diffs:
+    if diffs and emit:
         try:
             from app.metrics import CONNECTIVITY_SHADOW_DIFF
 
@@ -454,3 +472,96 @@ def converge_subscription_connectivity(
             applied,
         )
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Full-base shadow audit — periodic, read-only. Sweeps every subscriber that
+# should carry connectivity and aggregates per-dimension drift into a single
+# point-in-time result, stored in Redis where the web process's metrics
+# collector exports it as ``connectivity_shadow_drift{dimension}``. This is the
+# cutover-readiness signal: when every dimension reads ~0 across the base, the
+# reconciler can be promoted from shadow to sole-writer (apply=True).
+# ---------------------------------------------------------------------------
+
+_SHADOW_DIMENSIONS = ("access_state", "credentials_active", "ip_active", "ipv4_cache")
+
+
+def connectivity_shadow_audit(db: Session, *, sample_limit: int = 20) -> dict[str, Any]:
+    """READ-ONLY full-base sweep. For every subscriber with a connectivity-
+    retaining subscription, compute the shadow-diff and aggregate per-dimension
+    drift counts (+ capped sample subscriber ids). Writes nothing."""
+    sids = (
+        db.execute(
+            select(Subscription.subscriber_id)
+            .where(Subscription.status.in_(_RETAINED_STATUSES))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    counts: dict[str, int] = dict.fromkeys(_SHADOW_DIMENSIONS, 0)
+    samples: dict[str, list[str]] = {dim: [] for dim in _SHADOW_DIMENSIONS}
+    population = 0
+    for sid in sids:
+        if sid is None:
+            continue
+        population += 1
+        report = connectivity_shadow_diff(db, sid, emit=False)
+        for dim in report.get("diffs", []):
+            if dim not in counts:
+                continue
+            counts[dim] += 1
+            if len(samples[dim]) < sample_limit:
+                samples[dim].append(str(sid))
+    return {"population": population, "counts": counts, "samples": samples}
+
+
+_SHADOW_RESULT_KEY = "connectivity:shadow_audit:latest"
+_SHADOW_RESULT_TTL = int(timedelta(days=7).total_seconds())
+_shadow_redis_client: Any = None
+
+
+def _shadow_redis() -> Any:
+    global _shadow_redis_client
+    if _shadow_redis_client is None:
+        url = os.getenv("REDIS_URL")
+        if not url:
+            return None
+        import redis
+
+        # Cached per process — never build clients per call (OOM lesson).
+        _shadow_redis_client = redis.Redis.from_url(
+            url, socket_timeout=2, socket_connect_timeout=2
+        )
+    return _shadow_redis_client
+
+
+def store_connectivity_shadow_result(result: dict[str, Any]) -> bool:
+    """Persist the sweep result for the web-process metrics collector."""
+    client = _shadow_redis()
+    if client is None:
+        logger.warning("Connectivity shadow audit: REDIS_URL unset — not stored.")
+        return False
+    payload = dict(result)
+    payload["ran_at"] = datetime.now(UTC).isoformat()
+    try:
+        client.set(_SHADOW_RESULT_KEY, json.dumps(payload), ex=_SHADOW_RESULT_TTL)
+        return True
+    except Exception as exc:
+        logger.warning("Connectivity shadow audit: failed to store: %s", exc)
+        return False
+
+
+def load_connectivity_shadow_result() -> dict[str, Any] | None:
+    """Latest stored sweep result, or None. Never raises (scrape path)."""
+    try:
+        client = _shadow_redis()
+        if client is None:
+            return None
+        raw = client.get(_SHADOW_RESULT_KEY)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        logger.debug("Connectivity shadow audit: load failed.", exc_info=True)
+        return None

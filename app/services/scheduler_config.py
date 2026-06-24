@@ -903,6 +903,33 @@ def build_beat_schedule() -> dict:
             enabled=ip_consistency_audit_enabled,
             interval_seconds=ip_consistency_audit_interval_seconds,
         )
+        # Connectivity shadow audit (read-only full-base sweep; quantifies
+        # desired-vs-actual drift per dimension — the cutover-readiness gauge for
+        # the connectivity reconciler). Shares the audit cadence defaults.
+        connectivity_shadow_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.radius,
+            "connectivity_shadow_audit_enabled",
+            "RADIUS_CONNECTIVITY_SHADOW_AUDIT_ENABLED",
+            True,
+        )
+        connectivity_shadow_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.radius,
+            "connectivity_shadow_audit_interval_seconds",
+            "RADIUS_CONNECTIVITY_SHADOW_AUDIT_INTERVAL_SECONDS",
+            21600,  # Every 6 hours
+        )
+        connectivity_shadow_audit_interval_seconds = max(
+            connectivity_shadow_audit_interval_seconds, 900
+        )
+        _sync_scheduled_task(
+            session,
+            name="connectivity_shadow_audit",
+            task_name="app.tasks.radius.connectivity_shadow_audit",
+            enabled=connectivity_shadow_audit_enabled,
+            interval_seconds=connectivity_shadow_audit_interval_seconds,
+        )
         # Subscription expiration enforcement (runs daily)
         subscription_expiration_enabled = _effective_bool(
             session,

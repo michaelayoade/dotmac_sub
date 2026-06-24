@@ -496,3 +496,49 @@ class TestAccountingObservedIpSplit:
         )
         assert sub.last_seen_framed_ipv4 == "10.0.0.99"
         assert sub.ipv4_address == "10.0.0.99"  # legacy dual-write retained
+
+
+class TestConnectivityShadowAudit:
+    """Full-base sweep aggregates per-dimension drift across subscribers."""
+
+    def test_sweep_counts_ipv4_cache_drift_and_population(
+        self, db_session, catalog_offer
+    ):
+        from app.services.connectivity_reconciler import connectivity_shadow_audit
+
+        # drifting: served column != active assignment
+        _seed_sub(
+            db_session,
+            login="sweep_drift",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.9",
+            assign_ip="10.0.0.5",
+        )
+        # clean ipv4_cache: column == assignment (distinct IP from the other sub
+        # — IPv4Address.address is unique)
+        _seed_sub(
+            db_session,
+            login="sweep_clean",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.6",
+            assign_ip="10.0.0.6",
+        )
+        result = connectivity_shadow_audit(db_session)
+        assert result["population"] == 2  # both are connectivity-retaining
+        assert result["counts"]["ipv4_cache"] == 1
+        assert len(result["samples"]["ipv4_cache"]) == 1
+
+    def test_terminal_subs_excluded_from_population(self, db_session, catalog_offer):
+        from app.services.connectivity_reconciler import connectivity_shadow_audit
+
+        _seed_sub(
+            db_session,
+            login="sweep_canceled",
+            offer=catalog_offer,
+            status=SubscriptionStatus.canceled,
+            col_ip="10.0.0.9",
+        )
+        result = connectivity_shadow_audit(db_session)
+        assert result["population"] == 0  # canceled is not connectivity-retaining
