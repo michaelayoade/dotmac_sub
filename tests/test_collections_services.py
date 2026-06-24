@@ -1,17 +1,14 @@
 from datetime import UTC, datetime
-from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 
 from app.models.billing import InvoiceStatus, LedgerEntry, LedgerEntryType, LedgerSource
-from app.models.catalog import BillingMode, DunningAction, SubscriptionStatus
-from app.models.subscriber import AccountStatus
+from app.models.catalog import DunningAction
 from app.schemas.billing import InvoiceCreate
 from app.schemas.collections import (
     DunningActionLogCreate,
     DunningCaseCreate,
-    PrepaidEnforcementRunRequest,
 )
 from app.services import billing as billing_service
 from app.services import collections as collections_service
@@ -57,54 +54,10 @@ def test_dunning_case_list_invalid_status(db_session):
     assert exc.value.status_code == 400
 
 
-def test_prepaid_enforcement_accounts_for_open_invoice_balance(
-    db_session, subscriber_account, subscription
-):
-    subscription.billing_mode = BillingMode.prepaid
-    subscriber_account.min_balance = Decimal("7.00")
-    subscriber_account.grace_period = 0
-    db_session.commit()
-
-    invoice = billing_service.invoices.create(
-        db_session,
-        InvoiceCreate(
-            account_id=subscriber_account.id,
-            status=InvoiceStatus.issued,
-            total=Decimal("4.00"),
-            balance_due=Decimal("4.00"),
-            issued_at=datetime.now(UTC),
-        ),
-    )
-    assert invoice.balance_due == Decimal("4.00")
-
-    db_session.add(
-        LedgerEntry(
-            account_id=subscriber_account.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
-            amount=Decimal("10.00"),
-            currency="NGN",
-            memo="Prepaid top-up",
-        )
-    )
-    db_session.commit()
-
-    collections_service.prepaid_enforcement.run(
-        db_session,
-        PrepaidEnforcementRunRequest(run_at=datetime(2026, 1, 2, 12, 0, tzinfo=UTC)),
-    )
-
-    db_session.refresh(subscriber_account)
-    db_session.refresh(subscription)
-    assert subscriber_account.status == AccountStatus.suspended
-    assert subscription.status == SubscriptionStatus.suspended
-
-
-def test_prepaid_balance_uses_splynx_deposit_when_linked(
+def test_prepaid_balance_ignores_imported_deposit_and_uses_ledger(
     db_session, subscriber_account
 ):
-    """Migrated prepaid: available balance = deposit, ignoring local
-    credit/invoices because the imported net is authoritative."""
+    """Imported deposit is no longer an enforcement balance source."""
     from decimal import Decimal as D
 
     from app.services.collections._core import _resolve_prepaid_available_balance
@@ -113,8 +66,6 @@ def test_prepaid_balance_uses_splynx_deposit_when_linked(
     subscriber_account.deposit = D("31965.11")
     db_session.commit()
 
-    # A local open invoice + zero ledger credit would yield a NEGATIVE balance
-    # under the old credit-minus-invoices model; deposit must win.
     billing_service.invoices.create(
         db_session,
         InvoiceCreate(
@@ -128,10 +79,12 @@ def test_prepaid_balance_uses_splynx_deposit_when_linked(
     db_session.commit()
 
     bal = _resolve_prepaid_available_balance(db_session, str(subscriber_account.id))
-    assert bal == D("31965.11")
+    assert bal == D("-87500.00")
 
 
-def test_prepaid_balance_deposit_negative_is_arrears(db_session, subscriber_account):
+def test_prepaid_balance_negative_imported_deposit_is_ignored(
+    db_session, subscriber_account
+):
     from decimal import Decimal as D
 
     from app.services.collections._core import _resolve_prepaid_available_balance
@@ -140,7 +93,7 @@ def test_prepaid_balance_deposit_negative_is_arrears(db_session, subscriber_acco
     subscriber_account.deposit = D("-2112500.00")
     db_session.commit()
     bal = _resolve_prepaid_available_balance(db_session, str(subscriber_account.id))
-    assert bal == D("-2112500.00")
+    assert bal == D("0.00")
 
 
 def test_prepaid_balance_native_account_uses_ledger_fallback(

@@ -300,9 +300,110 @@ def billing_summary(db: Session, subscriber: Subscriber) -> dict[str, Any]:
 def billing_by_subscriber(
     db: Session, subscribers: list[Subscriber]
 ) -> dict[uuid.UUID, dict[str, Any]]:
-    return {
-        subscriber.id: billing_summary(db, subscriber) for subscriber in subscribers
+    if not subscribers:
+        return {}
+
+    subscriber_ids = [subscriber.id for subscriber in subscribers]
+    subscriber_by_id = {subscriber.id: subscriber for subscriber in subscribers}
+
+    balances = {
+        account_id: Decimal(str(value or 0))
+        for account_id, value in db.execute(
+            select(
+                Invoice.account_id,
+                func.coalesce(func.sum(Invoice.balance_due), 0),
+            )
+            .where(Invoice.account_id.in_(subscriber_ids))
+            .where(Invoice.status.in_(ACTIVE_INVOICE_STATUSES))
+            .where(Invoice.is_active.is_(True))
+            .group_by(Invoice.account_id)
+        ).all()
     }
+    invoiced_until = {
+        account_id: value
+        for account_id, value in db.execute(
+            select(Invoice.account_id, func.max(Invoice.billing_period_end))
+            .where(Invoice.account_id.in_(subscriber_ids))
+            .where(Invoice.is_active.is_(True))
+            .group_by(Invoice.account_id)
+        ).all()
+    }
+    total_paid = {
+        account_id: Decimal(str(value or 0))
+        for account_id, value in db.execute(
+            select(Payment.account_id, func.coalesce(func.sum(Payment.amount), 0))
+            .where(Payment.account_id.in_(subscriber_ids))
+            .where(Payment.status.in_(SUCCESSFUL_PAYMENT_STATUSES))
+            .where(Payment.is_active.is_(True))
+            .group_by(Payment.account_id)
+        ).all()
+    }
+    next_bill_dates = {
+        subscriber_id: value
+        for subscriber_id, value in db.execute(
+            select(Subscription.subscriber_id, func.min(Subscription.next_billing_at))
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .where(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.pending]
+                )
+            )
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    }
+    subscription_starts = {
+        subscriber_id: value
+        for subscriber_id, value in db.execute(
+            select(Subscription.subscriber_id, func.min(Subscription.start_at))
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    }
+    lock_dates = {
+        subscriber_id: value
+        for subscriber_id, value in db.execute(
+            select(EnforcementLock.subscriber_id, func.max(EnforcementLock.created_at))
+            .where(EnforcementLock.subscriber_id.in_(subscriber_ids))
+            .where(
+                EnforcementLock.reason.in_(
+                    [EnforcementReason.overdue, EnforcementReason.prepaid]
+                )
+            )
+            .group_by(EnforcementLock.subscriber_id)
+        ).all()
+    }
+    dunning_dates = {
+        account_id: value
+        for account_id, value in db.execute(
+            select(DunningCase.account_id, func.max(DunningCase.started_at))
+            .where(DunningCase.account_id.in_(subscriber_ids))
+            .group_by(DunningCase.account_id)
+        ).all()
+    }
+
+    summaries: dict[uuid.UUID, dict[str, Any]] = {}
+    for subscriber_id in subscriber_ids:
+        subscriber = subscriber_by_id[subscriber_id]
+        blocked_values = [
+            value
+            for value in (
+                lock_dates.get(subscriber_id),
+                dunning_dates.get(subscriber_id),
+            )
+            if value is not None
+        ]
+        billing_start = subscriber.account_start_date or subscription_starts.get(
+            subscriber_id
+        )
+        summaries[subscriber_id] = {
+            "balance": money(balances.get(subscriber_id)),
+            "next_bill_date": utc_iso(next_bill_dates.get(subscriber_id)),
+            "billing_start_date": utc_iso(billing_start),
+            "invoiced_until": utc_iso(invoiced_until.get(subscriber_id)),
+            "blocked_date": utc_iso(max(blocked_values) if blocked_values else None),
+            "total_paid": money(total_paid.get(subscriber_id)),
+        }
+    return summaries
 
 
 def latest_payment(db: Session, subscriber_id: uuid.UUID) -> Payment | None:
@@ -314,6 +415,46 @@ def latest_payment(db: Session, subscriber_id: uuid.UUID) -> Payment | None:
         .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
         .first()
     )
+
+
+def latest_payments_by_subscriber(
+    db: Session, subscriber_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, Any]]:
+    if not subscriber_ids:
+        return {}
+    ranked = (
+        select(
+            Payment.account_id.label("account_id"),
+            Payment.amount.label("amount"),
+            Payment.paid_at.label("paid_at"),
+            Payment.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=Payment.account_id,
+                order_by=func.coalesce(Payment.paid_at, Payment.created_at).desc(),
+            )
+            .label("rank"),
+        )
+        .where(Payment.account_id.in_(subscriber_ids))
+        .where(Payment.status.in_(SUCCESSFUL_PAYMENT_STATUSES))
+        .where(Payment.is_active.is_(True))
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            ranked.c.account_id,
+            ranked.c.amount,
+            ranked.c.paid_at,
+            ranked.c.created_at,
+        ).where(ranked.c.rank == 1)
+    ).all()
+    return {
+        account_id: {
+            "last_payment_date": utc_iso(paid_at or created_at),
+            "last_payment_amount": money(amount),
+        }
+        for account_id, amount, paid_at, created_at in rows
+    }
 
 
 def _latest_session_by_subscription(

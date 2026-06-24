@@ -263,7 +263,7 @@ services:
     - -Q
     - bandwidth,ingestion
 
-  # Consumer for the `billing` queue (daily invoice cycle, prepaid drawdown,
+  # Consumer for the `billing` queue (daily invoice cycle,
   # dunning, autopay, payment-topup reconciliation, usage/FUP, expiry,
   # suspension audit, billing-switch guard). Isolated from the default worker
   # so a long billing run never starves periodic tasks. Money-moving tasks are

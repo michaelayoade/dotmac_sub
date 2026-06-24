@@ -414,6 +414,52 @@ def test_suspend_skipped_when_balance_cleared_mid_run(
     assert not get_active_locks(db_session, subscription_id=str(subscription.id))
 
 
+def test_prepaid_suspend_skipped_when_available_balance_covers_invoice(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """Prepaid monthly invoices can create dunning cases, but the service cut
+    is guarded by available balance so imported/ledger credit prevents a
+    wrongful suspension."""
+    from decimal import Decimal
+
+    from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
+    from app.models.catalog import BillingMode
+    from app.services.account_lifecycle import get_active_locks
+    from app.services.collections._core import _execute_dunning_action
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    subscriber.billing_mode = BillingMode.prepaid
+    subscriber.splynx_customer_id = 987654
+    subscriber.deposit = Decimal("500.00")
+    subscriber.min_balance = Decimal("0.00")
+    subscription.billing_mode = BillingMode.postpaid
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("200.00"),
+            currency="NGN",
+            memo="prepaid test credit",
+        )
+    )
+    db_session.commit()
+
+    case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(case)
+    db_session.commit()
+
+    outcome = _execute_dunning_action(
+        db_session, case, DunningAction.suspend, day_offset=7, note=None
+    )
+    assert outcome == "prepaid_balance_available"
+    assert not get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
 def test_suspend_shielded_by_active_arrangement(
     db_session, subscriber, subscription, catalog_offer
 ):
@@ -450,6 +496,96 @@ def test_suspend_shielded_by_active_arrangement(
     )
     assert outcome == "shielded"
     assert not get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
+def test_prepaid_balance_skip_does_not_advance_dunning_step(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """A covered prepaid account should be retried later if its balance runs
+    out; skipped enforcing actions must not consume the policy step."""
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus, LedgerEntry, LedgerEntryType, LedgerSource
+    from app.models.catalog import (
+        BillingCycle,
+        BillingMode,
+        PolicyDunningStep,
+        PolicySet,
+        SubscriptionStatus,
+    )
+    from app.models.catalog import DunningAction as CatalogDunningAction
+    from app.models.collections import DunningActionLog
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.schemas.collections import DunningRunRequest
+
+    subscriber.billing_mode = BillingMode.prepaid
+    subscriber.splynx_customer_id = 987655
+    subscriber.deposit = Decimal("500.00")
+    subscriber.min_balance = Decimal("0.00")
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    catalog_offer.billing_cycle = BillingCycle.monthly
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="prepaid_monthly_invoicing_enabled",
+            value_text="true",
+            value_json=True,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("200.00"),
+            currency="NGN",
+            memo="prepaid test credit",
+        )
+    )
+    policy_set = PolicySet(name="Prepaid Suspend Policy")
+    db_session.add(policy_set)
+    db_session.flush()
+    db_session.add(
+        PolicyDunningStep(
+            policy_set_id=policy_set.id,
+            day_offset=1,
+            action=CatalogDunningAction.suspend,
+            note="prepaid suspend",
+        )
+    )
+    catalog_offer.policy_set_id = policy_set.id
+    if subscription.offer_version is not None:
+        subscription.offer_version.policy_set_id = policy_set.id
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-PREPAID-DUN-RUN-1",
+        status=InvoiceStatus.issued,
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        due_at=datetime.now(UTC) - timedelta(days=5),
+        metadata_={},
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
+
+    case = (
+        db_session.query(DunningCase).filter(DunningCase.account_id == subscriber.id).one()
+    )
+    log = (
+        db_session.query(DunningActionLog)
+        .filter(DunningActionLog.case_id == case.id)
+        .one()
+    )
+    assert response.actions_created == 1
+    assert case.current_step is None
+    assert log.action == DunningAction.suspend
+    assert log.outcome == "prepaid_balance_available"
 
 
 def test_dunning_run_executes_step_for_active_case(

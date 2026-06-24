@@ -13,8 +13,6 @@ Catalog correction on 2026-06-24 reclassified the four mislabelled daily-cycle
 prepaid offers as monthly. There is no genuine daily prepaid cohort in
 production. Therefore:
 
-- prepaid drawdown should remain dormant unless a real non-monthly prepaid offer
-  is introduced later;
 - all active prepaid subscriptions should bill through monthly invoice-in-advance;
 - invoice totals must apply VAT exclusively: `net + 7.5% VAT`.
 
@@ -26,20 +24,17 @@ For the ₦17,500 plan, the customer-facing invoice total is:
 
 ## 2. Revenue Recovery Path
 
-The immediate revenue fix is monthly prepaid invoicing, not drawdown.
+The immediate revenue fix is monthly prepaid invoicing.
 
-1. Keep `prepaid_charges_enabled=false`. The setting-gated runner is deployed
-   but inert, and the due set is expected to be empty while all prepaid offers
-   are monthly.
-2. Dry-run `run_invoice_cycle` with `prepaid_monthly_invoicing_enabled=true` and
+1. Dry-run `run_invoice_cycle` with `prepaid_monthly_invoicing_enabled=true` and
    verify:
    - only monthly prepaid subscriptions are included;
    - VAT is applied at 7.5% exclusive;
    - proration behavior is understood before the first real run;
    - invoice count and totals match the reviewed export.
-3. Run the real invoice cycle only after explicit finance/ops approval because
+2. Run the real invoice cycle only after explicit finance/ops approval because
    it creates customer-visible invoices and AR.
-4. Enable scheduled monthly-prepaid invoicing only after the manual run is
+3. Enable scheduled monthly-prepaid invoicing only after the manual run is
    verified.
 
 ## 3. Collections And Enforcement

@@ -228,48 +228,6 @@ class TestCollectionsTask:
 
                     mock_session.close.assert_called_once()
 
-    def test_run_prepaid_enforcement_is_retired_noop(self):
-        """Prepaid enforcement is retired: the task never suspends and never
-        invokes the enforcement service — due-date dunning is the sole enforcer."""
-        with patch(
-            "app.tasks.collections.collections_service.prepaid_enforcement.run"
-        ) as mock_run:
-            from app.tasks.collections import run_prepaid_enforcement
-
-            result = run_prepaid_enforcement()
-
-            mock_run.assert_not_called()
-            assert result == {"skipped": "prepaid_enforcement_retired"}
-
-    def test_run_retired_lock_reconcile(self):
-        """The reconcile task resolves retired-reason locks and returns the summary."""
-        mock_session = MagicMock()
-
-        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.tasks.collections.collections_service."
-                "reconcile_retired_enforcement_locks",
-                return_value={
-                    "resolved": 5,
-                    "restored": 4,
-                    "still_locked": 1,
-                    "errors": 0,
-                },
-            ) as mock_reconcile:
-                from app.tasks.collections import run_retired_lock_reconcile
-
-                result = run_retired_lock_reconcile()
-
-                mock_reconcile.assert_called_once_with(mock_session)
-                mock_session.close.assert_called_once()
-                assert result == {
-                    "resolved": 5,
-                    "restored": 4,
-                    "still_locked": 1,
-                    "errors": 0,
-                }
-
-
 class TestBillingMasterSwitchGates:
     """Customer-impacting billing tasks must no-op while billing_enabled is off.
 
@@ -283,7 +241,8 @@ class TestBillingMasterSwitchGates:
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
             with patch("app.tasks.collections.billing_enabled", return_value=False):
                 with patch(
-                    "app.tasks.collections.collections_service.dunning_workflow.run"
+                    "app.tasks.collections.collections_service."
+                    "billing_enforcement_reconciler.run"
                 ) as mock_run:
                     from app.tasks.collections import run_dunning
 
@@ -291,9 +250,6 @@ class TestBillingMasterSwitchGates:
 
                     mock_run.assert_not_called()
                     assert result == {"skipped": "billing_disabled"}
-
-    # NOTE: prepaid enforcement is retired (always a no-op), so it is no longer
-    # gated by the billing master switch — see test_run_prepaid_enforcement_is_retired_noop.
 
     def test_autopay_skipped_when_billing_disabled(self):
         mock_session = MagicMock()
@@ -591,6 +547,7 @@ class TestDailyRunnerQueueRouting:
 
         for task in (
             "app.tasks.billing.run_invoice_cycle",
+            "app.tasks.collections.run_billing_enforcement",
             "app.tasks.collections.run_dunning",
             "app.tasks.catalog.expire_subscriptions",
             "app.tasks.usage.run_usage_rating",
@@ -609,6 +566,7 @@ class TestDailyRunnerQueueRouting:
         annotations = get_celery_config()["task_annotations"]
         for task in (
             "app.tasks.billing.run_invoice_cycle",
+            "app.tasks.collections.run_billing_enforcement",
             "app.tasks.collections.run_dunning",
         ):
             assert annotations[task]["time_limit"] >= 1800, task

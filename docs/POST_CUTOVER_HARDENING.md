@@ -9,8 +9,9 @@ states. In particular, billing data authority and billing automation are
 separate concerns:
 
 - Billing data authority is local. Imported deposits are history only.
-- Billing automation remains a separate go-live decision. Enabling prepaid
-  drawdown is a launch with revenue impact, not a cleanup step.
+- Billing automation remains a separate go-live decision. Enabling invoice
+  generation, dunning, or autopay is a launch with revenue impact, not a
+  cleanup step.
 
 ## Guardrails
 

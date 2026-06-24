@@ -1,8 +1,8 @@
 """Tests for the prepaid phantom-invoice cleanup one-off.
 
-Covers each class: void candidate (ledger reversed), drawdown-overlap (invoice
-voided, drawdown preserved), and paid/partial (manual review, never mutated),
-plus the targeting exclusions.
+Covers each class: void candidate (ledger reversed), legacy-debit overlap
+(invoice voided, historical debit preserved), and paid/partial (manual review,
+never mutated), plus the targeting exclusions.
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def _phantom(
     return inv
 
 
-def _drawdown(db, account_id, amount="3000.00"):
+def _legacy_prepaid_debit(db, account_id, amount="3000.00"):
     e = LedgerEntry(
         account_id=account_id,
         entry_type=LedgerEntryType.debit,
@@ -145,21 +145,21 @@ def test_void_candidate_voids_and_reverses_ledger(db_session):
     assert len(credits) == 1 and credits[0].amount == Decimal("100.00")
 
 
-def test_drawdown_overlap_voids_invoice_preserves_drawdown(db_session):
+def test_legacy_debit_overlap_voids_invoice_preserves_debit(db_session):
     sub = _subscriber(db_session, BillingMode.prepaid)
     inv = _phantom(db_session, sub.id)
-    draw = _drawdown(db_session, sub.id)
+    debit = _legacy_prepaid_debit(db_session, sub.id)
 
     groups = classify(db_session)
-    assert inv in groups["drawdown_overlap"]
+    assert inv in groups["legacy_debit_overlap"]
     assert inv not in groups["void_candidate"]
 
     void_invoice(db_session, inv, datetime.now(UTC))
     db_session.refresh(inv)
-    db_session.refresh(draw)
+    db_session.refresh(debit)
     assert inv.status == InvoiceStatus.void
-    # the drawdown entry is untouched (invoice_id is NULL, not reversed by void)
-    assert draw.is_active is True
+    # the historical debit is untouched (invoice_id is NULL, not reversed by void)
+    assert debit.is_active is True
 
 
 def test_paid_phantom_is_manual_review_not_mutated(db_session):
@@ -171,7 +171,7 @@ def test_paid_phantom_is_manual_review_not_mutated(db_session):
     groups = classify(db_session)
     assert inv in groups["manual_review"]
     assert inv not in groups["void_candidate"]
-    assert inv not in groups["drawdown_overlap"]
+    assert inv not in groups["legacy_debit_overlap"]
     db_session.refresh(inv)
     assert inv.status == InvoiceStatus.paid  # untouched
 

@@ -696,10 +696,9 @@ def subscription_invoice_eligible(
 ) -> bool:
     """Whether a subscription may enter invoice generation.
 
-    Prepaid subscriptions draw down a deposit balance (see
-    ``app/services/prepaid_billing.py``) and must NOT receive balance-due
-    invoices — doing so double-bills them. Only postpaid subscriptions are
-    invoice-eligible, unless a caller passes an explicit credit/admin override.
+    Production prepaid subscriptions are invoiced in advance only when the
+    caller explicitly opts in (``allow_prepaid=True``). The default remains
+    postpaid-only so ad-hoc invoice paths do not double-bill prepaid services.
     """
     if allow_prepaid:
         return True
@@ -878,7 +877,7 @@ def run_invoice_cycle(
     )
     if prepaid_skipped:
         logger.info(
-            "Invoice cycle skipped %d prepaid subscription(s) (drawdown-billed)",
+            "Invoice cycle skipped %d prepaid subscription(s) (prepaid opt-in disabled)",
             prepaid_skipped,
         )
 

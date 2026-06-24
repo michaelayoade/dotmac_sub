@@ -350,6 +350,7 @@ def get_celery_config() -> dict:
             # Whole-base daily runs (4k+ subscriptions); the default 900s
             # limit can kill a catch-up billing or dunning pass mid-run.
             "app.tasks.billing.run_invoice_cycle": long_limits,
+            "app.tasks.collections.run_billing_enforcement": long_limits,
             "app.tasks.collections.run_dunning": long_limits,
         }
     )
@@ -763,62 +764,12 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=dunning_interval_seconds,
         )
-        # STILL FORCED OFF: deposit-based prepaid enforcement suspended paid
-        # customers on a stale imported deposit / derived balance. Enforcement reads
-        # _resolve_prepaid_available_balance, which still falls back to the stale
-        # deposit, so it CANNOT be re-armed until that fallback is removed and
-        # ledger balances are verified (see BILLING_REVENUE_LEAK_CLOSURE.md §3
-        # Phase 1). The prepaid policy is day-0/no-grace, so a wrong balance =
-        # instant wrongful suspension — no grace window to catch it. Hardcoded off
-        # deliberately; do NOT make setting-driven until the balance source is
-        # ledger-only. See run_prepaid_enforcement (no-op) and
-        # run_retired_lock_reconcile (clears the obsolete prepaid locks).
-        _sync_scheduled_task(
-            session,
-            name="prepaid_enforcement_runner",
-            task_name="app.tasks.collections.run_prepaid_enforcement",
-            enabled=False,
-            interval_seconds=3600,
-        )
-        # Prepaid drawdown charges. Now SETTING-GATED (default OFF) for a
-        # controlled cutover, replacing the previous hardcoded-off retirement.
-        # SAFE to enable independently of enforcement: a charge only posts a debit
-        # equal to the recurring price (see run_prepaid_charges -> _resolve_price);
-        # it does NOT read the deposit and does NOT suspend anyone. Recommended
-        # cutover: keep this False, run run_prepaid_charges(dry_run=True), export
-        # affected accounts, run once manually, verify, then flip
-        # prepaid_charges_enabled=true to schedule. Idempotent per
-        # (subscription, charge_date).
-        prepaid_charges_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "prepaid_charges_enabled",
-            "PREPAID_CHARGES_ENABLED",
-            False,
-        )
-        _sync_scheduled_task(
-            session,
-            name="prepaid_charges_runner",
-            task_name="app.tasks.prepaid_billing.run_prepaid_charges",
-            enabled=prepaid_charges_enabled,
-            interval_seconds=86400,
-        )
-        # Resolves obsolete enforcement locks from retired reasons (prepaid) and
-        # restores service via the normal restore path. Idempotent; no-op once
-        # none remain.
-        _sync_scheduled_task(
-            session,
-            name="retired_lock_reconcile_runner",
-            task_name="app.tasks.collections.run_retired_lock_reconcile",
-            enabled=True,
-            interval_seconds=86400,
-        )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
         _sync_scheduled_task(
             session,
             name="billing_switch_guard",
-            task_name="app.tasks.prepaid_billing.check_billing_switch",
+            task_name="app.tasks.billing.check_billing_switch",
             enabled=True,
             interval_seconds=3600,
         )

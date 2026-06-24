@@ -129,12 +129,11 @@ on its own scheduled task being enabled.
 | **1. Postpaid invoice generation** | `run_invoice_cycle` | low (invoice only) | gauges 0 + dry-run clean |
 | **2. Overdue marking / reminders** | overdue sweep + reminder notices | low–medium | stage 1 stable one cycle |
 | **3. Dunning / block enforcement** | dunning + enforcement | **high (cuts service)** | stage 2 verified; support ready |
-| **4. Prepaid drawdown** | prepaid charge task | **high (debits balances)** | stages 1–3 stable; reconcile clean |
-| **5. Autopay** | autopay charges | **high (moves money)** | all prior stable |
+| **4. Autopay** | autopay charges | **high (moves money)** | all prior stable |
 
-Prepaid drawdown and dunning are customer-impacting — **never the first thing
-enabled.** (Confirm the exact setting key per stage from
-`app/services/scheduler_config.py` at enable time.)
+Dunning/enforcement is customer-impacting — **never the first thing enabled.**
+(Confirm the exact setting key per stage from `app/services/scheduler_config.py`
+at enable time.)
 
 ## Step 5 — rollback
 

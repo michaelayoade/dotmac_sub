@@ -556,32 +556,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="prepaid_charges_enabled",
-        env_var="PREPAID_CHARGES_ENABLED",
-        value_type=SettingValueType.boolean,
-        # Default OFF: the prepaid drawdown engine stays inert until a controlled
-        # cutover explicitly enables it (dry-run -> supervised one-time run ->
-        # schedule). Charges only post debits (= recurring price); they never
-        # read the deposit and never suspend. Enforcement is gated separately.
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_enforcement_enabled",
-        env_var="PREPAID_ENFORCEMENT_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_enforcement_interval_seconds",
-        env_var="PREPAID_ENFORCEMENT_INTERVAL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=3600,
-        min_value=300,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="prepaid_blocking_time",
         env_var="PREPAID_BLOCKING_TIME",
         value_type=SettingValueType.string,

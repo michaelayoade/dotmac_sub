@@ -163,9 +163,9 @@ class Invoices(ListResponseMixin):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "This is a prepaid subscription (billed by deposit drawdown). "
-                    "Invoicing it would double-bill the customer. Use the explicit "
-                    "credit override only if service was deliberately delivered on credit."
+                    "This is a prepaid subscription. Use the explicit prepaid "
+                    "invoice path or credit override only when the charge is "
+                    "intentional."
                 ),
             )
 

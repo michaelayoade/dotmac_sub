@@ -6,7 +6,7 @@ This module provides backwards compatibility for code that imports from
 
 For new code, prefer importing from the package::
 
-    from app.services.collections import dunning_cases, prepaid_enforcement
+    from app.services.collections import dunning_cases, billing_enforcement_reconciler
 """
 
 import logging
@@ -17,13 +17,11 @@ from app.services.collections._core import (
     DunningActionLogs,
     DunningCases,
     DunningWorkflow,
-    PrepaidEnforcement,
     billing_enforcement_reconciler,
     dunning_action_logs,
     dunning_cases,
     dunning_workflow,
     get_available_balance,
-    prepaid_enforcement,
     restore_account_services,
 )
 
@@ -34,12 +32,10 @@ __all__ = [
     "DunningActionLogs",
     "BillingEnforcementReconciler",
     "DunningWorkflow",
-    "PrepaidEnforcement",
     "dunning_cases",
     "dunning_action_logs",
     "billing_enforcement_reconciler",
     "dunning_workflow",
-    "prepaid_enforcement",
     "get_available_balance",
     "restore_account_services",
 ]
