@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
 import '../../models/usage.dart';
+import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 
@@ -153,6 +154,253 @@ class QuotaCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Long-horizon view unlocked by the imported usage history: a month-by-month
+/// bar chart of data consumed, with the monthly average and lifetime total.
+/// Self-contained — reads GET /me/usage-history and aggregates to months. Hides
+/// itself when there aren't at least two months of history.
+class MonthlyUsageCard extends ConsumerWidget {
+  const MonthlyUsageCard({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final days = ref.watch(usageHistoryDaysProvider);
+    final history = ref.watch(usageHistoryProvider(days));
+    return history.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.only(bottom: 12),
+        child: CardSkeleton(height: 240),
+      ),
+      // A failed long-history fetch shouldn't break the page — just omit it.
+      error: (_, __) => const SizedBox.shrink(),
+      data: (h) {
+        final months = h.toMonthly();
+        if (months.length < 2) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: _MonthlyUsageBody(
+            history: h,
+            months: months,
+            selectedDays: days,
+            onSelectDays: (d) =>
+                ref.read(usageHistoryDaysProvider.notifier).state = d,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MonthlyUsageBody extends StatelessWidget {
+  const _MonthlyUsageBody({
+    required this.history,
+    required this.months,
+    required this.selectedDays,
+    required this.onSelectDays,
+  });
+
+  final UsageHistory history;
+  final List<MonthlyUsagePoint> months;
+  final int selectedDays;
+  final ValueChanged<int> onSelectDays;
+
+  static const _windows = <int, String>{365: '1Y', 730: '2Y', 3660: 'All'};
+  static const _monthAbbr = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', //
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Cap the bars so a multi-year window stays legible.
+    final shown =
+        months.length > 24 ? months.sublist(months.length - 24) : months;
+    final avgBytes = shown.isEmpty
+        ? 0
+        : shown.fold<int>(0, (a, b) => a + b.bytes) ~/ shown.length;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Usage history', style: theme.textTheme.titleMedium),
+                _WindowSelector(
+                  windows: _windows,
+                  selected: selectedDays,
+                  onSelect: onSelectDays,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child:
+                      _Stat(label: 'Avg / month', value: Fmt.bytes(avgBytes)),
+                ),
+                Expanded(
+                  child: _Stat(
+                      label: 'Total used',
+                      value: Fmt.bytes(history.totalBytes)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _MonthlyBarChart(months: shown, monthAbbr: _monthAbbr),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WindowSelector extends StatelessWidget {
+  const _WindowSelector({
+    required this.windows,
+    required this.selected,
+    required this.onSelect,
+  });
+  final Map<int, String> windows;
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<int>(
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      showSelectedIcon: false,
+      segments: [
+        for (final e in windows.entries)
+          ButtonSegment(value: e.key, label: Text(e.value)),
+      ],
+      selected: {selected},
+      onSelectionChanged: (s) => onSelect(s.first),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(value, style: theme.textTheme.headlineSmall),
+        const SizedBox(height: 2),
+        Text(label,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.outline)),
+      ],
+    );
+  }
+}
+
+class _MonthlyBarChart extends StatelessWidget {
+  const _MonthlyBarChart({required this.months, required this.monthAbbr});
+  final List<MonthlyUsagePoint> months;
+  final List<String> monthAbbr;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final maxBytes = months.fold<int>(0, (a, b) => b.bytes > a ? b.bytes : a);
+
+    const mb = 1 << 20, gb = 1 << 30, tb = 1 << 40;
+    double div;
+    String unit;
+    if (maxBytes >= tb) {
+      div = tb.toDouble();
+      unit = 'TB';
+    } else if (maxBytes >= gb) {
+      div = gb.toDouble();
+      unit = 'GB';
+    } else {
+      div = mb.toDouble();
+      unit = 'MB';
+    }
+    double toUnit(int b) => b / div;
+    final maxY = maxBytes <= 0 ? 1.0 : toUnit(maxBytes) * 1.25;
+    final labelStep = (months.length / 6).ceil().clamp(1, 9999);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Data used per month ($unit)', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 170,
+          child: BarChart(
+            BarChartData(
+              maxY: maxY,
+              alignment: BarChartAlignment.spaceAround,
+              gridData: const FlGridData(show: true, drawVerticalLine: false),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 32,
+                    getTitlesWidget: (v, _) => Text(
+                      v >= 100 ? v.toStringAsFixed(0) : v.toStringAsFixed(1),
+                      style: theme.textTheme.labelSmall,
+                    ),
+                  ),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 24,
+                    getTitlesWidget: (v, _) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= months.length || i % labelStep != 0) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(monthAbbr[months[i].month.month - 1],
+                            style: theme.textTheme.labelSmall),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              barGroups: [
+                for (var i = 0; i < months.length; i++)
+                  BarChartGroupData(x: i, barRods: [
+                    BarChartRodData(
+                      toY: toUnit(months[i].bytes),
+                      width: months.length > 12 ? 8 : 14,
+                      borderRadius: BorderRadius.circular(3),
+                      color: theme.colorScheme.primary,
+                    ),
+                  ]),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

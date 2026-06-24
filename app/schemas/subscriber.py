@@ -479,3 +479,19 @@ class SubscriberContactWriteResponse(BaseModel):
 
     contact: SubscriberContactRead
     warnings: list[str] = Field(default_factory=list)
+
+
+class AccountDeletionRequest(BaseModel):
+    """Optional reason for an in-app account-deletion request."""
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AccountDeletionResponse(BaseModel):
+    status: str
+    requested_at: datetime
+    already_requested: bool = False
+    detail: str = (
+        "Your account deletion request has been received. We will end your "
+        "service and delete your personal data per our privacy policy."
+    )

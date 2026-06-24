@@ -109,9 +109,15 @@ services:
     - -c
     - max_replication_slots=5
     - -c
-    - archive_mode=on
+    # Cap WAL a replication slot can pin on the primary, so a disconnected /
+    # lagging standby can't grow pg_wal unbounded and fill the disk. Beyond
+    # this the slot is invalidated (standby needs re-seed) but the primary
+    # stays safe.
+    - max_slot_wal_keep_size=50GB
     - -c
-    - "archive_command=test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
+    - archive_mode=off
+    - -c
+    - "archive_command=/bin/true"
     - -c
     - archive_timeout=300
     volumes:

@@ -69,6 +69,8 @@ from app.schemas.notification import (
 )
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
+    AccountDeletionRequest,
+    AccountDeletionResponse,
     SubscriberContactCreate,
     SubscriberContactRead,
     SubscriberContactUpdate,
@@ -84,6 +86,7 @@ from app.schemas.support import (
     TicketRead,
 )
 from app.schemas.usage import (
+    DailyUsageHistoryResponse,
     QuotaBucketRead,
     RadiusAccountingSessionRead,
     UsageSummaryResponse,
@@ -103,6 +106,7 @@ from app.schemas.vas import (
     VasVerifyResponse,
     VasWalletOverviewResponse,
 )
+from app.services import account_deletion as account_deletion_service
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
@@ -695,6 +699,33 @@ def my_topup_verify(
     )
 
 
+@router.post("/account/deletion-request", response_model=AccountDeletionResponse)
+def my_account_deletion_request(
+    payload: AccountDeletionRequest | None = None,
+    request: Request = None,  # type: ignore[assignment]
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Request deletion of the caller's account (in-app, App Store 5.1.1(v)).
+
+    Records the request and notifies the customer; operations end service and
+    delete personal data per the privacy policy (statutory billing/tax records
+    are retained where required). The client signs the user out afterwards.
+    """
+    subscriber_id = _subscriber_id(principal)
+    result = account_deletion_service.request_deletion(
+        db,
+        subscriber_id,
+        reason=payload.reason if payload else None,
+        request=request,
+    )
+    return AccountDeletionResponse(
+        status=result["status"],
+        requested_at=result["requested_at"],
+        already_requested=result["already_requested"],
+    )
+
+
 @router.get("/notifications", response_model=ListResponse[NotificationRead])
 def my_notifications(
     limit: int = Query(default=50, ge=1, le=200),
@@ -772,6 +803,22 @@ async def my_usage_summary(
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)
     summary["fup"] = await usage_summary_service.fup_summary(db, subscriber_id)
     return summary
+
+
+@router.get("/usage-history", response_model=DailyUsageHistoryResponse)
+def my_usage_history(
+    days: int = Query(default=365, ge=1, le=3660),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Long-history daily upload/download series for the caller.
+
+    Sourced from the historical daily rollup (back to 2018 for migrated
+    accounts), which reaches years further than per-session accounting. Default
+    window is the last 365 days; raise ``days`` for the full archive.
+    """
+    subscriber_id = _subscriber_id(principal)
+    return usage_summary_service.get_daily_usage_history(db, subscriber_id, days=days)
 
 
 # --- Support tickets (self-scoped) ---------------------------------------------
