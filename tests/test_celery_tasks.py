@@ -654,3 +654,49 @@ class TestDailyRunnerQueueRouting:
             "app.tasks.collections.run_dunning",
         ):
             assert annotations[task]["time_limit"] >= 1800, task
+
+
+class TestUsageMeteringTask:
+    def test_meter_usage_queues_targeted_fup_for_changed_subscriptions(self):
+        mock_session = MagicMock()
+        changed = ["11111111-1111-1111-1111-111111111111"]
+
+        with (
+            patch("app.tasks.usage.SessionLocal", return_value=mock_session),
+            patch(
+                "app.services.usage.meter_usage_into_quota",
+                return_value={
+                    "metered": 1,
+                    "changed_subscription_ids": changed,
+                },
+            ),
+        ):
+            from app.tasks.usage import evaluate_fup_rules, meter_usage_into_quota
+
+            with patch.object(evaluate_fup_rules, "apply_async") as mock_apply:
+                result = meter_usage_into_quota()
+
+        assert result["changed_subscription_ids"] == changed
+        mock_session.commit.assert_called_once()
+        mock_apply.assert_called_once_with(
+            kwargs={"subscription_ids": changed, "source": "usage_metering"},
+            queue="billing",
+        )
+
+    def test_meter_usage_does_not_queue_fup_when_usage_unchanged(self):
+        mock_session = MagicMock()
+
+        with (
+            patch("app.tasks.usage.SessionLocal", return_value=mock_session),
+            patch(
+                "app.services.usage.meter_usage_into_quota",
+                return_value={"metered": 1, "changed_subscription_ids": []},
+            ),
+        ):
+            from app.tasks.usage import evaluate_fup_rules, meter_usage_into_quota
+
+            with patch.object(evaluate_fup_rules, "apply_async") as mock_apply:
+                meter_usage_into_quota()
+
+        mock_session.commit.assert_called_once()
+        mock_apply.assert_not_called()

@@ -930,6 +930,7 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         .all()
     )
     metered = 0
+    changed_subscription_ids: list[str] = []
     for sub in subs:
         if _resolve_allowance(sub) is None:
             continue
@@ -944,6 +945,9 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
             .filter(RadiusAccountingSession.session_start < bucket.period_end)
             .scalar()
         ) or 0
+        previous_used_gb = Decimal(str(bucket.used_gb or 0))
+        previous_topup_gb = Decimal(str(bucket.topup_gb or 0))
+        previous_overage_gb = Decimal(str(bucket.overage_gb or 0))
         used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
         bucket.used_gb = used_gb
         # Refresh top-up from still-valid purchases so expired ones drop out.
@@ -957,9 +961,18 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         bucket.overage_gb = (
             _round_bucket_gb(overage) if overage > Decimal("0") else Decimal("0.00")
         )
+        if (
+            previous_used_gb != Decimal(str(bucket.used_gb or 0))
+            or previous_topup_gb != Decimal(str(bucket.topup_gb or 0))
+            or previous_overage_gb != Decimal(str(bucket.overage_gb or 0))
+        ):
+            changed_subscription_ids.append(str(sub.id))
         metered += 1
-    logger.info("usage_metered_into_quota", extra={"metered": metered})
-    return {"metered": metered}
+    logger.info(
+        "usage_metered_into_quota",
+        extra={"metered": metered, "changed": len(changed_subscription_ids)},
+    )
+    return {"metered": metered, "changed_subscription_ids": changed_subscription_ids}
 
 
 def _active_topup_gb(db: Session, subscription: Subscription, now: datetime) -> Decimal:

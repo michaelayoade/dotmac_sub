@@ -117,6 +117,15 @@ def meter_usage_into_quota():
     try:
         result = usage_service.meter_usage_into_quota(session)
         session.commit()
+        changed_subscription_ids = result.get("changed_subscription_ids") or []
+        if changed_subscription_ids:
+            evaluate_fup_rules.apply_async(
+                kwargs={
+                    "subscription_ids": changed_subscription_ids,
+                    "source": "usage_metering",
+                },
+                queue="billing",
+            )
         return result
     except Exception:
         session.rollback()
@@ -156,7 +165,10 @@ _FUP_EVALUATION_LOCK_KEY = 778_003
 
 
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
-def evaluate_fup_rules() -> dict[str, int]:
+def evaluate_fup_rules(
+    subscription_ids: list[str] | None = None,
+    source: str = "scheduled_full_sweep",
+) -> dict[str, int]:
     from sqlalchemy import func, select
 
     lock_db = SessionLocal()
@@ -182,7 +194,10 @@ def evaluate_fup_rules() -> dict[str, int]:
                     "skipped_locked": 1,
                 }
         try:
-            return _evaluate_fup_rules_locked()
+            return _evaluate_fup_rules_locked(
+                subscription_ids=subscription_ids,
+                source=source,
+            )
         finally:
             if is_pg:
                 lock_db.execute(
@@ -193,13 +208,18 @@ def evaluate_fup_rules() -> dict[str, int]:
         lock_db.close()
 
 
-def _evaluate_fup_rules_locked() -> dict[str, int]:
+def _evaluate_fup_rules_locked(
+    *,
+    subscription_ids: list[str] | None = None,
+    source: str = "scheduled_full_sweep",
+) -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
 
     Runs periodically to check usage against FUP thresholds and apply
     throttle/block/notify actions. Also handles time-based profile switching
     (e.g., night boost) and FUP state resets at period boundaries.
     """
+    import uuid
     from datetime import UTC, datetime
 
     from sqlalchemy import or_
@@ -251,11 +271,24 @@ def _evaluate_fup_rules_locked() -> dict[str, int]:
             FupActionStatus.throttled,
             FupActionStatus.blocked,
         )
+        subscription_uuid_filter = None
+        if subscription_ids is not None:
+            subscription_uuid_filter = []
+            for raw_id in subscription_ids:
+                try:
+                    subscription_uuid_filter.append(uuid.UUID(str(raw_id)))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Skipping invalid FUP subscription id %r from %s",
+                        raw_id,
+                        source,
+                    )
+
         # Find active subscriptions with FUP policies, plus subscriptions
         # already under FUP control. The latter matters for cap-boundary
         # auto-lift: a blocked subscription is suspended, so an active-only
         # scan would never clear it after the reset window.
-        subscriptions = (
+        subscriptions_query = (
             session.query(Subscription)
             .join(FupPolicy, FupPolicy.offer_id == Subscription.offer_id)
             .outerjoin(FupState, FupState.subscription_id == Subscription.id)
@@ -266,8 +299,21 @@ def _evaluate_fup_rules_locked() -> dict[str, int]:
                 )
             )
             .filter(FupPolicy.is_active.is_(True))
-            .all()
         )
+        if subscription_uuid_filter is not None:
+            if not subscription_uuid_filter:
+                return {
+                    "processed": 0,
+                    "enforced": 0,
+                    "reset": 0,
+                    "notified": 0,
+                    "submonthly_no_data": 0,
+                    "targeted": 1,
+                }
+            subscriptions_query = subscriptions_query.filter(
+                Subscription.id.in_(subscription_uuid_filter)
+            )
+        subscriptions = subscriptions_query.all()
 
         for sub in subscriptions:
             processed += 1
@@ -492,8 +538,9 @@ def _evaluate_fup_rules_locked() -> dict[str, int]:
         # failure never rolls back enforcement state.
         notified = _emit_fup_notifications(session, pending_notifs)
         logger.info(
-            "FUP evaluation: %d processed, %d enforced, %d reset, %d notified, "
+            "FUP evaluation (%s): %d processed, %d enforced, %d reset, %d notified, "
             "%d sub-monthly no-data",
+            source,
             processed,
             enforced,
             reset,
@@ -506,6 +553,7 @@ def _evaluate_fup_rules_locked() -> dict[str, int]:
             "reset": reset,
             "notified": notified,
             "submonthly_no_data": submonthly_no_data,
+            "targeted": int(subscription_ids is not None),
         }
     except Exception:
         session.rollback()

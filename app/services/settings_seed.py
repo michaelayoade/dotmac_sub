@@ -331,7 +331,7 @@ def seed_usage_settings(db: Session) -> None:
         db,
         key="fup_evaluation_interval_seconds",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("FUP_EVALUATION_INTERVAL_SECONDS", "60"),
+        value_text=os.getenv("FUP_EVALUATION_INTERVAL_SECONDS", "900"),
     )
     accounting_enabled_raw = os.getenv("RADIUS_ACCOUNTING_IMPORT_ENABLED", "true")
     usage_settings.ensure_by_key(

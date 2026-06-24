@@ -511,7 +511,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="fup_evaluation_interval_seconds",
         env_var="FUP_EVALUATION_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
-        default=60,
+        default=900,
         min_value=60,
     ),
     SettingSpec(

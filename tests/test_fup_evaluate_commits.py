@@ -21,7 +21,8 @@ def _fake_sub():
 def _set_query_subscriptions(session, subs):
     query = session.query.return_value
     joined = query.join.return_value.outerjoin.return_value
-    joined.filter.return_value.filter.return_value.all.return_value = subs
+    joined.filter.return_value = joined
+    joined.all.return_value = subs
 
 
 def _run_with_subs(subs):
@@ -66,6 +67,38 @@ def test_no_subscriptions_is_clean_noop():
     assert result["processed"] == 0
     session.close.assert_called_once()
     session.rollback.assert_not_called()
+
+
+def test_targeted_run_filters_to_changed_subscription_ids():
+    changed_sub = _fake_sub()
+    lock_session = MagicMock()
+    lock_session.bind.dialect.name = "sqlite"
+    session = MagicMock()
+    _set_query_subscriptions(session, [changed_sub])
+    fup_state_mock = MagicMock()
+    fup_state_mock.get.return_value = None
+    bucket = MagicMock(used_gb=0, period_end=None)
+
+    with (
+        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
+        patch("app.services.fup_state.fup_state", fup_state_mock),
+        patch(
+            "app.services.usage._resolve_or_create_quota_bucket",
+            return_value=bucket,
+        ),
+        patch("app.services.fup.evaluate_rules", return_value=[]),
+    ):
+        from app.tasks.usage import evaluate_fup_rules
+
+        result = evaluate_fup_rules(
+            subscription_ids=[str(changed_sub.id)],
+            source="usage_metering",
+        )
+
+    assert result["processed"] == 1
+    assert result["targeted"] == 1
+    joined = session.query.return_value.join.return_value.outerjoin.return_value
+    assert joined.filter.call_count == 3
 
 
 def test_lifts_existing_fup_state_after_cap_reset_even_if_not_active():
