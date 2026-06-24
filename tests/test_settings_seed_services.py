@@ -2,7 +2,9 @@
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import NotificationChannel, NotificationTemplate
+from app.models.subscription_engine import SettingValueType
 from app.services import settings_seed
+from app.services.domain_settings import network_settings
 
 # =============================================================================
 # Auth Settings Tests
@@ -805,10 +807,10 @@ class TestSeedNetworkPolicySettings:
         )
         assert setting is not None
 
-    def test_seeds_mikrotik_api_session_kick_disabled_by_default(
+    def test_seeds_mikrotik_api_session_kick_enabled_by_default(
         self, db_session, monkeypatch
     ):
-        """RouterOS API session kicking is opt-in for controlled rollout."""
+        """RouterOS API session kicking is enabled for reliable forced reauth."""
         monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
 
         settings_seed.seed_network_policy_settings(db_session)
@@ -822,8 +824,33 @@ class TestSeedNetworkPolicySettings:
             .first()
         )
         assert setting is not None
-        assert setting.value_text == "false"
-        assert setting.value_json is False
+        assert setting.value_text == "true"
+        assert setting.value_json is True
+
+    def test_updates_mikrotik_api_session_kick_existing_false(
+        self, db_session, monkeypatch
+    ):
+        """Existing old defaults are moved to the reliable force-reauth path."""
+        monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
+        network_settings.ensure_by_key(
+            db_session,
+            key="mikrotik_api_session_kick_enabled",
+            value_type=SettingValueType.boolean,
+            value_text="false",
+            value_json=False,
+        )
+
+        settings_seed.seed_network_policy_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(DomainSetting.domain == SettingDomain.network)
+            .filter(DomainSetting.key == "mikrotik_api_session_kick_enabled")
+            .first()
+        )
+        assert setting is not None
+        assert setting.value_text == "true"
+        assert setting.value_json is True
 
 
 # =============================================================================

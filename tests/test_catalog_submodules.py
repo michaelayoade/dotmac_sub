@@ -1589,6 +1589,72 @@ class TestSubscriptions:
         assert updated.radius_profile_id == second_profile.id
         assert updated.start_at is not None
 
+    def test_update_subscription_offer_changes_equivalent_legacy_radius_profile(
+        self, db_session, subscriber
+    ):
+        first_offer = _make_offer(
+            db_session,
+            name="Unlimited Basic",
+            speed_download_mbps=6,
+            speed_upload_mbps=6,
+        )
+        second_offer = _make_offer(
+            db_session,
+            name="Unlimited Standard",
+            speed_download_mbps=10,
+            speed_upload_mbps=10,
+        )
+        first_profile = _make_radius_profile(
+            db_session,
+            name="Unlimited Basic Profile",
+            download_speed=6000,
+            upload_speed=6000,
+        )
+        legacy_profile = _make_radius_profile(
+            db_session,
+            name="6 Mbps Fiber",
+            download_speed=6000,
+            upload_speed=6000,
+        )
+        second_profile = _make_radius_profile(
+            db_session,
+            name="Unlimited Standard Profile",
+            download_speed=10000,
+            upload_speed=10000,
+        )
+        catalog_service.offer_radius_profiles.create(
+            db_session,
+            OfferRadiusProfileCreate(
+                offer_id=first_offer.id, profile_id=first_profile.id
+            ),
+        )
+        catalog_service.offer_radius_profiles.create(
+            db_session,
+            OfferRadiusProfileCreate(
+                offer_id=second_offer.id, profile_id=second_profile.id
+            ),
+        )
+
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=first_offer.id,
+                status=SubscriptionStatus.pending,
+                radius_profile_id=legacy_profile.id,
+            ),
+        )
+        assert sub.radius_profile_id == legacy_profile.id
+
+        updated = catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(offer_id=second_offer.id),
+        )
+
+        assert updated.offer_id == second_offer.id
+        assert updated.radius_profile_id == second_profile.id
+
     def test_update_subscription_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc_info:
             catalog_service.subscriptions.update(

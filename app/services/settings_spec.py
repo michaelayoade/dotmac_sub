@@ -1977,7 +1977,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="mikrotik_api_session_kick_enabled",
         env_var="NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED",
         value_type=SettingValueType.boolean,
-        default=False,
+        default=True,
         label="Enable MikroTik API Session Kick",
     ),
     SettingSpec(

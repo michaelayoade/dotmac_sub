@@ -55,8 +55,10 @@ def _make_subscription(db_session, subscriber: Subscriber) -> Subscription:
     return subscription
 
 
-def _make_ipv4(db_session, address: str) -> IPv4Address:
-    record = IPv4Address(address=address)
+def _make_ipv4(
+    db_session, address: str, *, allocation_type: str | None = None
+) -> IPv4Address:
+    record = IPv4Address(address=address, allocation_type=allocation_type)
     db_session.add(record)
     db_session.flush()
     return record
@@ -95,7 +97,7 @@ def test_ip_assignment_with_subscription_syncs_active_subscription_ipv4(db_sessi
 def test_ip_assignment_release_clears_matching_subscription_ipv4(db_session):
     subscriber = _make_subscriber(db_session)
     subscription = _make_subscription(db_session, subscriber)
-    address = _make_ipv4(db_session, "100.64.10.6")
+    address = _make_ipv4(db_session, "100.64.10.6", allocation_type="wan")
     assignment = network_service.ip_assignments.create(
         db_session,
         IPAssignmentCreate(
@@ -109,7 +111,29 @@ def test_ip_assignment_release_clears_matching_subscription_ipv4(db_session):
     network_service.ip_assignments.delete(db_session, str(assignment.id))
 
     db_session.refresh(subscription)
+    db_session.refresh(address)
     assert subscription.ipv4_address is None
+    assert address.allocation_type is None
+
+
+def test_ip_assignment_release_preserves_management_allocation_type(db_session):
+    subscriber = _make_subscriber(db_session)
+    subscription = _make_subscription(db_session, subscriber)
+    address = _make_ipv4(db_session, "100.64.10.60", allocation_type="management")
+    assignment = network_service.ip_assignments.create(
+        db_session,
+        IPAssignmentCreate(
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=address.id,
+        ),
+    )
+
+    network_service.ip_assignments.delete(db_session, str(assignment.id))
+
+    db_session.refresh(address)
+    assert address.allocation_type == "management"
 
 
 def test_subscriber_level_assignment_does_not_guess_with_multiple_active_services(

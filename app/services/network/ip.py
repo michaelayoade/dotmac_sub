@@ -37,6 +37,7 @@ from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
 ACTIVE_SUBSCRIPTION_STATUS = "active"
+SERVICE_ALLOCATION_TYPES = frozenset({"wan", "static"})
 
 
 def _subscription_model() -> type[Any]:
@@ -46,6 +47,30 @@ def _subscription_model() -> type[Any]:
 def _is_active_subscription(subscription: Any) -> bool:
     status = getattr(subscription, "status", None)
     return getattr(status, "value", status) == ACTIVE_SUBSCRIPTION_STATUS
+
+
+def clear_released_ipv4_allocation_type(
+    db: Session, address: IPv4Address | None
+) -> bool:
+    """Clear stale service allocation markers after an IPv4 assignment release."""
+    if address is None:
+        return False
+    allocation_type = str(address.allocation_type or "").strip().lower()
+    if allocation_type not in SERVICE_ALLOCATION_TYPES:
+        return False
+    if bool(address.is_reserved) or address.ont_unit_id is not None:
+        return False
+    db.flush()
+    active_assignment = (
+        db.query(IPAssignment.id)
+        .filter(IPAssignment.ipv4_address_id == address.id)
+        .filter(IPAssignment.is_active.is_(True))
+        .first()
+    )
+    if active_assignment is not None:
+        return False
+    address.allocation_type = None
+    return True
 
 
 class IPAssignments(CRUDManager[IPAssignment]):
@@ -236,6 +261,8 @@ class IPAssignments(CRUDManager[IPAssignment]):
         )
         assignment.is_active = False
         db.flush()
+        if assignment.ip_version == IPVersion.ipv4:
+            clear_released_ipv4_allocation_type(db, assignment.ipv4_address)
         cls._sync_subscription_ipv4(db, assignment, released_ip=released_ip)
         db.commit()
 

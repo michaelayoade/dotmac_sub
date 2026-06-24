@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
+
+from starlette.requests import Request
 
 from app.models.network import (
     IPAssignment,
@@ -13,6 +16,7 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice
 from app.services import web_network_ip
+from app.web.admin import network_ip_management
 
 
 class FakeQuery:
@@ -39,6 +43,59 @@ class FakeSession:
 
     def commit(self):
         self.commits += 1
+
+
+def _request(path: str = "/admin/network/ip-management") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
+
+
+def test_ip_management_search_keeps_addresses_tab(monkeypatch):
+    monkeypatch.setattr(
+        network_ip_management.web_network_ip_service,
+        "build_ip_management_data",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        network_ip_management.web_network_ip_actions_service,
+        "activity_for_types",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        network_ip_management,
+        "_base_context",
+        lambda request, db, active_page, active_menu="network": {"request": request},
+    )
+    monkeypatch.setattr(
+        network_ip_management.templates,
+        "TemplateResponse",
+        lambda template, context: {"template": template, "context": context},
+    )
+
+    response = network_ip_management.ip_management(
+        _request(),
+        db=object(),
+        search="102.220.189.16",
+    )
+
+    assert response["template"] == "admin/network/ip-management/index.html"
+    assert response["context"]["tab"] == "addresses"
+
+
+def test_ip_management_address_controls_preserve_addresses_tab():
+    template = Path("templates/admin/network/ip-management/index.html").read_text()
+
+    assert 'name="tab" value="addresses"' in template
+    assert 'href="/admin/network/ip-management?tab=addresses"' in template
 
 
 def test_pool_utilization_counts_only_active_assignments(monkeypatch):

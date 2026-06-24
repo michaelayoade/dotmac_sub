@@ -136,7 +136,7 @@ def _mikrotik_kill_enabled(db: Session) -> bool:
 
 def _mikrotik_api_session_kick_enabled(db: Session) -> bool:
     return _setting_bool(
-        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", False
+        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", True
     )
 
 

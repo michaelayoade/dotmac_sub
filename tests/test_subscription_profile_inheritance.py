@@ -10,6 +10,7 @@ def _mock_db_with_credentials(*credentials):
     db.query.return_value.filter.return_value.filter.return_value.all.return_value = (
         list(credentials)
     )
+    db.get.return_value = None
     return db
 
 
@@ -63,6 +64,44 @@ def test_apply_offer_radius_profile_preserves_manual_override():
     assert resolved == new_default
     assert subscription.radius_profile_id == manual_profile
     assert credential.radius_profile_id == manual_profile
+
+
+def test_apply_offer_radius_profile_inherits_equivalent_legacy_profile():
+    old_default = uuid4()
+    new_default = uuid4()
+    legacy_same_speed = uuid4()
+    previous_offer_id = uuid4()
+    subscription = SimpleNamespace(
+        subscriber_id=uuid4(),
+        offer_id=uuid4(),
+        radius_profile_id=legacy_same_speed,
+    )
+    credential = SimpleNamespace(radius_profile_id=legacy_same_speed)
+    db = _mock_db_with_credentials(credential)
+
+    with (
+        patch(
+            "app.services.catalog.subscriptions._resolve_offer_radius_profile_id",
+            side_effect=[old_default, new_default],
+        ),
+        patch(
+            "app.services.catalog.subscriptions._radius_profiles_are_speed_equivalent",
+            return_value=True,
+        ),
+        patch(
+            "app.services.catalog.subscriptions._radius_profile_matches_offer",
+            return_value=False,
+        ),
+    ):
+        resolved = apply_offer_radius_profile(
+            db,
+            subscription,
+            previous_offer_id=previous_offer_id,
+        )
+
+    assert resolved == new_default
+    assert subscription.radius_profile_id == new_default
+    assert credential.radius_profile_id == new_default
 
 
 def test_apply_offer_radius_profile_forced_profile_updates_credentials():

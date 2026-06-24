@@ -3869,6 +3869,78 @@ def bulk_change_plan(
     return count
 
 
+def force_subscription_reauth(
+    db: Session,
+    subscription_id: str,
+    request: object,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Refresh RADIUS state and disconnect active PPPoE sessions for one sub."""
+    subscription = catalog_service.subscriptions.get(db, subscription_id)
+    subscriber = subscription.subscriber or db.get(
+        Subscriber, subscription.subscriber_id
+    )
+    nas_device = subscription.provisioning_nas_device
+    nas_ip = None
+    if nas_device is not None:
+        nas_ip = (
+            getattr(nas_device, "nas_ip", None)
+            or getattr(nas_device, "management_ip", None)
+            or getattr(nas_device, "ip_address", None)
+        )
+    metadata = {
+        "reason": "manual_force_reauth",
+        "subscription_id": str(subscription.id),
+        "subscriber_id": str(subscription.subscriber_id),
+        "customer_name": (
+            getattr(subscriber, "display_name", None) if subscriber else None
+        ),
+        "customer_account_number": (
+            getattr(subscriber, "account_number", None) if subscriber else None
+        ),
+        "nas_device_id": str(subscription.provisioning_nas_device_id)
+        if subscription.provisioning_nas_device_id
+        else None,
+        "nas_name": getattr(nas_device, "name", None) if nas_device else None,
+        "nas_ip": nas_ip,
+        "login": subscription.login,
+    }
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    try:
+        from app.services.radius import reconcile_subscription_connectivity
+
+        reconcile_subscription_connectivity(db, str(subscription.id))
+        metadata["radius_reconciled"] = True
+    except Exception:
+        logger.warning(
+            "RADIUS reconcile failed before manual force reauth for %s",
+            subscription.id,
+            exc_info=True,
+        )
+        metadata["radius_reconciled"] = False
+
+    from app.services.enforcement import disconnect_subscription_sessions
+
+    kicked_count = disconnect_subscription_sessions(
+        db, str(subscription.id), reason="manual_force_reauth"
+    )
+    metadata["sessions_disconnected"] = kicked_count
+    record_audit_event(
+        db,
+        action="force_reauth",
+        entity_type="subscription",
+        entity_id=str(subscription.id),
+        actor_id=actor_id,
+        metadata=metadata,
+        request_id=request_id,
+    )
+    return {
+        "subscription_id": str(subscription.id),
+        "sessions_disconnected": kicked_count,
+        "metadata": metadata,
+    }
+
+
 def create_subscription_with_audit(
     db: Session,
     payload_data: dict[str, object],
