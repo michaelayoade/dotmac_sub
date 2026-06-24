@@ -43,6 +43,15 @@ class UsageRepository {
     return UsageSummary.fromJson(data as Map<String, dynamic>);
   }
 
+  /// GET /me/usage-history?days=N — long-history daily upload/download series
+  /// (back to 2018 for migrated accounts), summed across the subscriber's
+  /// subscriptions. Aggregated to months client-side for the trend chart.
+  Future<UsageHistory> usageHistory({int days = 365}) async {
+    final data = await guard(() =>
+        dio.get('/me/usage-history', queryParameters: {'days': days}));
+    return UsageHistory.fromJson(data as Map<String, dynamic>);
+  }
+
   /// GET /bandwidth/my/stats — current throughput for the subscriber's active
   /// subscription (subscriber-perspective download/upload).
   Future<LiveBandwidth> liveBandwidth({String period = '1h'}) async {

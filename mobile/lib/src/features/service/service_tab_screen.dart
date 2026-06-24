@@ -52,6 +52,7 @@ class ServiceTabScreen extends ConsumerWidget {
         onRefresh: () async {
           ref.invalidate(usageSummaryProvider(period));
           ref.invalidate(quotaBucketsProvider);
+          ref.invalidate(usageHistoryProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(subscriptionsProvider);
           if (service != null) ref.invalidate(addonsProvider(service.id));
@@ -168,6 +169,7 @@ class ServiceTabScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 20),
             ],
+            const MonthlyUsageCard(),
             UsageSection(
               period: period,
               summary: summary,
