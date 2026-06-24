@@ -798,6 +798,81 @@ def test_send_subscription_credentials_uses_email_and_sms_targets(
     assert [row[0] for row in sent_sms] == ["+2348000000001", "+2348000000002"]
 
 
+def test_force_subscription_reauth_reconciles_disconnects_and_audits(
+    db_session,
+    subscriber,
+    catalog_offer,
+    monkeypatch,
+):
+    nas = NasDevice(
+        name="NAS Force Reauth",
+        nas_ip="10.20.30.1",
+        management_ip="10.20.30.1",
+        ip_address="10.20.30.1",
+        is_active=True,
+    )
+    db_session.add(nas)
+    db_session.commit()
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+            provisioning_nas_device_id=nas.id,
+            login="pppoe-force-1",
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_reconcile(db, subscription_id):
+        captured["reconcile_subscription_id"] = subscription_id
+        return {"external_credentials_synced": 1}
+
+    def fake_disconnect(db, subscription_id, reason=None):
+        captured["disconnect_subscription_id"] = subscription_id
+        captured["disconnect_reason"] = reason
+        return 2
+
+    def fake_audit(db, **kwargs):
+        captured["audit"] = kwargs
+
+    monkeypatch.setattr(
+        "app.services.radius.reconcile_subscription_connectivity", fake_reconcile
+    )
+    monkeypatch.setattr(
+        "app.services.enforcement.disconnect_subscription_sessions", fake_disconnect
+    )
+    monkeypatch.setattr(
+        web_catalog_subscriptions_service, "record_audit_event", fake_audit
+    )
+
+    result = web_catalog_subscriptions_service.force_subscription_reauth(
+        db_session,
+        str(subscription.id),
+        request=None,
+        actor_id="admin-1",
+    )
+
+    assert result["sessions_disconnected"] == 2
+    assert captured["reconcile_subscription_id"] == str(subscription.id)
+    assert captured["disconnect_subscription_id"] == str(subscription.id)
+    assert captured["disconnect_reason"] == "manual_force_reauth"
+    audit = captured["audit"]
+    assert audit["action"] == "force_reauth"
+    assert audit["entity_type"] == "subscription"
+    assert audit["entity_id"] == str(subscription.id)
+    assert audit["actor_id"] == "admin-1"
+    metadata = audit["metadata"]
+    assert metadata["subscriber_id"] == str(subscriber.id)
+    assert metadata["nas_device_id"] == str(nas.id)
+    assert metadata["nas_name"] == "NAS Force Reauth"
+    assert metadata["nas_ip"] == "10.20.30.1"
+    assert metadata["login"] == "pppoe-force-1"
+    assert metadata["sessions_disconnected"] == 2
+    assert metadata["radius_reconciled"] is True
+
+
 def test_create_subscription_with_audit_uses_requested_free_ipv4(
     db_session,
     subscriber,

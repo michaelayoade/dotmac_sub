@@ -156,6 +156,41 @@ def _coerce_resolved_subscriber_ids(
     return resolved
 
 
+def _validate_resolved_subscriber_ids(
+    db: Session, subscriber_ids: Sequence[str | uuid.UUID] | None
+) -> list[uuid.UUID]:
+    resolved = _coerce_resolved_subscriber_ids(subscriber_ids)
+    if not resolved:
+        return []
+    existing = set(
+        db.scalars(select(Subscriber.id).where(Subscriber.id.in_(resolved))).all()
+    )
+    missing = [
+        str(subscriber_id) for subscriber_id in resolved if subscriber_id not in existing
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not find customer: {missing[0]}",
+        )
+    return resolved
+
+
+def _subscriber_scope_rows(
+    db: Session, subscriber_ids: Sequence[str | uuid.UUID] | None
+) -> list[Subscriber]:
+    resolved = _coerce_resolved_subscriber_ids(subscriber_ids)
+    if not resolved:
+        return []
+    rows = {
+        row.id: row
+        for row in db.scalars(
+            select(Subscriber).where(Subscriber.id.in_(resolved))
+        ).all()
+    }
+    return [rows[subscriber_id] for subscriber_id in resolved if subscriber_id in rows]
+
+
 def _scope_filters(
     db: Session,
     scope_type: ServiceExtensionScope,
@@ -329,6 +364,7 @@ def create_extension(
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
     subscriber_ids: list[str] | None = None,
+    subscriber_ids_resolved: bool = False,
     created_by: str | None = None,
 ) -> ServiceExtension:
     """Create a pending extension. Scope is validated but not applied yet."""
@@ -339,11 +375,14 @@ def create_extension(
             status_code=400, detail="Outage end must be after its start"
         )
     days = _validated_days(days)
-    resolved_subscriber_ids = (
-        [str(item) for item in resolve_subscriber_identifiers(db, subscriber_ids)]
-        if scope_type == ServiceExtensionScope.subscribers
-        else None
-    )
+    resolved_subscriber_ids = None
+    if scope_type == ServiceExtensionScope.subscribers:
+        resolver = (
+            _validate_resolved_subscriber_ids
+            if subscriber_ids_resolved
+            else resolve_subscriber_identifiers
+        )
+        resolved_subscriber_ids = [str(item) for item in resolver(db, subscriber_ids)]
     # Validates scope inputs (raises on missing scope_id / empty list) without
     # materializing every active subscription for network-wide extensions.
     _scope_subscription_counts(
@@ -400,6 +439,11 @@ def preview_extension(db: Session, extension: ServiceExtension) -> dict:
     return {
         "subscriptions": sample,
         "sample": sample,
+        "selected_subscribers": (
+            _subscriber_scope_rows(db, extension.scope_subscriber_ids)
+            if extension.scope_type == ServiceExtensionScope.subscribers
+            else []
+        ),
         "total_count": total_count,
         "extendable_count": extendable_count,
         "skipped_count": total_count - extendable_count,
