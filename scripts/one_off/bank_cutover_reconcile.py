@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing import Payment, PaymentStatus
-from app.models.payment_proof import PaymentProof
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Subscriber
 from app.services.common import round_money
 
@@ -185,8 +185,12 @@ def _load_local_records(
             )
         )
 
+    # Only VERIFIED proofs are evidence of a real bank credit. Submitted proofs
+    # are unconfirmed and rejected proofs were explicitly disproved; either can
+    # fall back to the *claimed* amount and falsely match a genuine credit.
     proofs = db.scalars(
         select(PaymentProof)
+        .where(PaymentProof.status == PaymentProofStatus.verified)
         .where(PaymentProof.created_at >= start)
         .where(PaymentProof.created_at < end)
         .order_by(PaymentProof.created_at.asc())
@@ -225,7 +229,16 @@ def _text_match(statement: StatementRow, record: LocalRecord) -> bool:
 
 
 def _matches(statement: StatementRow, records: list[LocalRecord]) -> list[LocalRecord]:
-    matches: list[LocalRecord] = []
+    """Return records that definitively match the statement credit.
+
+    A record only counts as a match on a *definitive* signal: an exact
+    reference match (which wins outright) or a text match (reference /
+    subscriber number / name found in the statement reference or narration).
+    Amount + date alone is a coincidence, not evidence, so such records are
+    never counted as matches and never feed matched/ambiguous totals.
+    """
+    reference_matches: list[LocalRecord] = []
+    text_matches: list[LocalRecord] = []
     for record in records:
         if abs(record.amount - statement.amount) > AMOUNT_TOLERANCE:
             continue
@@ -234,14 +247,16 @@ def _matches(statement: StatementRow, records: list[LocalRecord]) -> list[LocalR
             if delta > DATE_WINDOW_DAYS:
                 continue
         if statement.reference and statement.reference == record.reference:
-            matches.append(record)
+            reference_matches.append(record)
             continue
         if _text_match(statement, record):
-            matches.append(record)
+            text_matches.append(record)
             continue
-        # Amount/date-only is useful but not definitive.
-        matches.append(record)
-    return matches
+        # Amount/date-only coincidence is not definitive: do NOT count it.
+    # A strong reference match wins over weaker text-only matches.
+    if reference_matches:
+        return reference_matches
+    return text_matches
 
 
 def _write_system(path: Path, records: list[LocalRecord]) -> None:
