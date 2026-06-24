@@ -1,6 +1,6 @@
 """Write off obvious migration-cruft arrears on terminated-service accounts.
 
-Context: the local-billing cutover left ~₦101M of Splynx-imported open invoices
+Context: the local-billing cutover left ~NGN101M of imported open invoices
 sitting on accounts whose services are all terminal (disabled/canceled/etc.).
 The live-service billing gate (``billing_settings.LIVE_SERVICE_STATUSES``) now
 stops further reminders/escalations/autopay on them, but the balances still sit
@@ -95,7 +95,7 @@ def _memo(bucket: str, svc_status: str, splynx_id) -> str:
     src = f"splynx_invoice_id={splynx_id}" if splynx_id is not None else "native"
     return (
         f"{REASON} | bucket={bucket} | {src} | "
-        f"Splynx-imported invoice on {svc_status} terminal account; "
+        f"Imported invoice on {svc_status} terminal account; "
         f"confirmed {bucket} migration cruft; excluded from collectible AR"
     )
 

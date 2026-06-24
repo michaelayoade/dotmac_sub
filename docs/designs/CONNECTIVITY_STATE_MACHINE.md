@@ -247,6 +247,6 @@ Each sub-step is independently revertible (flag flip / re-enable the old writer)
 
 ## 7. Non-goals (unchanged from parent)
 
-No `Bundle` ORM aggregate; no control-plane; `SubscriptionStatus` enum unchanged; Splynx import
+No `Bundle` ORM aggregate; no control-plane; `SubscriptionStatus` enum unchanged; legacy BSS import
 paths unchanged (they write status, not connectivity); routed-block unification behind one
 projection view is acknowledged (parent §5b wrinkle) but only required at 2b.

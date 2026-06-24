@@ -21,7 +21,7 @@ def _sub(db, *, status, deposit) -> Subscriber:
         email=f"walled-{n}@example.com",
         status=status,
         # splynx_customer_id + deposit make get_available_balance return the
-        # deposit (Splynx-truth) rather than the local ledger.
+        # imported deposit rather than the local ledger.
         splynx_customer_id=n,
         deposit=deposit,
     )

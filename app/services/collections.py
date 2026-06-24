@@ -13,10 +13,12 @@ import logging
 
 # Re-export everything from the package for backwards compatibility
 from app.services.collections._core import (
+    BillingEnforcementReconciler,
     DunningActionLogs,
     DunningCases,
     DunningWorkflow,
     PrepaidEnforcement,
+    billing_enforcement_reconciler,
     dunning_action_logs,
     dunning_cases,
     dunning_workflow,
@@ -30,10 +32,12 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DunningCases",
     "DunningActionLogs",
+    "BillingEnforcementReconciler",
     "DunningWorkflow",
     "PrepaidEnforcement",
     "dunning_cases",
     "dunning_action_logs",
+    "billing_enforcement_reconciler",
     "dunning_workflow",
     "prepaid_enforcement",
     "get_available_balance",

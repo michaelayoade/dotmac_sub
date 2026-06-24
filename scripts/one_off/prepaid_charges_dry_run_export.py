@@ -17,7 +17,7 @@ Classifications mirror the engine loop:
   * chargeable           — a debit equal to ``charge`` would be posted.
 
 The advisory ``available_balance`` column is computed via the collections
-helper and MAY still reflect the stale Splynx deposit for un-migrated accounts;
+helper and MAY still reflect the stale imported deposit for un-migrated accounts;
 it is for eyeballing only and has no bearing on the charge amount.
 
 Examples

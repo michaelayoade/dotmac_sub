@@ -48,7 +48,7 @@ class CommunicationStatus(enum.Enum):
 class CommunicationLog(Base):
     """Immutable log of communications sent to/from subscribers.
 
-    Primary migration target for Splynx mail_pool (798K) and
+    Primary migration target for imported mail_pool (798K) and
     sms_pool (186K) tables.  Also used for ongoing outbound
     notification history.
     """

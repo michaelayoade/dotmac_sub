@@ -215,7 +215,7 @@ class NetworkDevice(Base):
             postgresql_where=text("is_active AND splynx_monitoring_id IS NOT NULL"),
         ),
         # Stable Zabbix host id is the reconcile key; partial-unique so rows not
-        # yet linked to Zabbix (e.g. orphaned Splynx imports) stay NULL.
+        # yet linked to Zabbix (e.g. orphaned imports) stay NULL.
         Index(
             "uq_network_devices_zabbix_hostid",
             "zabbix_hostid",

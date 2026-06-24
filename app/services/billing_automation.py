@@ -241,9 +241,9 @@ def _effective_unit_price(
 ) -> Decimal:
     """Effective per-cycle price for a subscription.
 
-    A positive subscription.unit_price (Splynx-imported or admin-set
+    A positive subscription.unit_price (imported or admin-set
     negotiated price) overrides the catalog amount. Zero is treated as
-    "no override" because the Splynx importer stores 0 when the export
+    "no override" because the legacy importer stores 0 when the export
     carried no per-service price. An enabled discount inside its
     [discount_start_at, discount_end_at] window (open-ended where null,
     bounds inclusive) is then applied: percentage is percent-off, fixed
@@ -767,8 +767,8 @@ def run_invoice_cycle(
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
 
-    # Global kill-switch. While Splynx remains the billing system of record,
-    # local invoice generation must stay off (it duplicates Splynx). dry_run is
+    # Global kill-switch. Before local billing became the system of record,
+    # invoice generation had to stay off to avoid duplicate bills. dry_run is
     # exempt so the shadow reconciler can still compute would-be invoices for
     # validation without writing anything.
     if not dry_run and not _setting_truthy(db, "billing_enabled", default=True):
@@ -928,10 +928,10 @@ def run_invoice_cycle(
         period_end = _period_end(period_start, effective_cycle)
 
         # Skip wholly-past billing periods instead of invoicing every missed
-        # month. Migrated (Splynx) subscribers carry next_billing_at/start_at at
+        # month. Migrated subscribers carry next_billing_at/start_at at
         # their original signup date — without this, the runner generated a
         # backdated invoice per missed period per run, double-billing periods
-        # already settled in Splynx (the 2026-05/06 phantom-invoice incident).
+        # already settled before local billing cutover.
         # We fast-forward next_billing_at to the current period and bill only
         # that. Set billing.bill_backdated_periods=true to restore arrears
         # billing if an operator genuinely needs it.
@@ -1131,11 +1131,11 @@ def run_invoice_cycle(
 
         # Inline credit settlement is DISABLED by default. It was found to be
         # unsafe on the migrated dataset: per-invoice balance_due/allocations are
-        # not authoritative (Splynx paid many invoices from the account deposit
+        # not authoritative (many invoices were paid from the account deposit
         # with no invoice-linked allocation, and some allocations were synced
         # without recomputing balance_due), so settling against local "open"
         # invoices destroyed real credit on already-paid invoices. "Paid but
-        # walled" must be solved at the account level (deposit/Splynx-truth), not
+        # walled" must be solved at the account level, not
         # by per-invoice settlement here. Re-enable only after that redesign.
         if newly_created_invoices and _setting_truthy(
             db, "settle_credit_on_invoice_enabled", default=False
@@ -1660,7 +1660,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         # Check idempotency flag before changing status
         metadata = dict(invoice.metadata_ or {})
         # Reconciliation hold: invoices flagged as under reconciliation (e.g. the
-        # phantom Splynx duplicate-billing cleanup) must not be marked overdue or
+        # phantom duplicate-billing cleanup) must not be marked overdue or
         # drive suspension/dunning. Setting this flag immediately stops dunning
         # before the invoices are voided.
         if metadata.get("reconciliation_hold"):

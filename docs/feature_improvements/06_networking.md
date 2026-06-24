@@ -1,12 +1,12 @@
-# Section 6: Splynx Networking & IP Management
+# Section 6: legacy BSS Networking & IP Management
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
 ---
 
 ## Screenshot Analysis
 
-### Folder 1: Splynx Networking Folder (19 screenshots)
+### Folder 1: legacy BSS Networking Folder (19 screenshots)
 
 **Screenshot 102124 -- Network Sites List**
 Shows a comprehensive "Network sites" table with columns for ID, Title, Partners, Location, Postal address, and status. The list contains approximately 20+ network site entries across multiple locations (Abuja, Lagos, etc.) with partner assignments (Chibuokem, Ohakwe, Main). Each site has location data, physical address, and contact information. The table supports filtering by partner, searching, and pagination.
@@ -234,7 +234,7 @@ Shows the bottom of the IPv6 networks list with entries 25-30: "CSS IPv6 Range",
 - [x] **Network categorization** -- Support categorizing networks as: EndNet (end-user subnets), PoolNet (RADIUS/DHCP pools), Management, Point-to-Point, Infrastructure. Allow filtering the list by category.
 - [x] **Location-based network filtering** -- Filter IPv4 networks by location to quickly find all subnets assigned to a specific POP, city, or region.
 - [x] **IP address detail view per subnet** -- Click into a subnet to see individual IP address assignments: which IPs are assigned to subscribers, which are reserved, which are available. Show assignment details (subscriber name, service, device).
-- [x] **Fallback IP range management** -- Support creating "fallback" IP ranges for each location (as seen in Splynx with entries like "Garki Fallback IP", "Lokogoma Fallback IP") that are used when primary pools are exhausted or for temporary assignments.
+- [x] **Fallback IP range management** -- Support creating "fallback" IP ranges for each location (as seen in legacy BSS with entries like "Garki Fallback IP", "Lokogoma Fallback IP") that are used when primary pools are exhausted or for temporary assignments.
 - [x] **IP address conflict detection** -- Detect and alert on overlapping subnets or duplicate IP assignments across the network. Display warnings when adding a network that overlaps with an existing entry.
 - [x] **Bulk subnet operations** -- Support importing multiple subnets from CSV and bulk-updating network category, location, or type assignments.
 

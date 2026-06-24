@@ -93,7 +93,7 @@ celery_app.conf.task_routes = {
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
     # Monitoring cache warmer queries Zabbix; keep it off the default queue so
-    # it isn't starved by slow/long default-queue jobs (e.g. Splynx sync).
+    # it isn't starved by slow/long default-queue jobs.
     "app.tasks.monitoring_warm.warm_monitoring_caches": {"queue": "ingestion"},
     # CRM ticket pull paginates an external API; the default queue's backlog
     # would push it far past its 5-minute schedule.

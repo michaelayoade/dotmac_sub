@@ -2,7 +2,7 @@
 
 Background
 ----------
-During the Splynx → local-ledger cutover (from 2026-06-13) a cohort of
+During the legacy-BSS -> local-ledger cutover (from 2026-06-13) a cohort of
 ``succeeded`` gateway payments landed without their balance being applied to the
 customer's open invoices. Two distinct failure modes produced the same visible
 symptom (*"paid but still walled-garden"*):

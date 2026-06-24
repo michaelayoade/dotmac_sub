@@ -75,9 +75,9 @@ def push_subscriber_change(
     """Push one subscriber change to the CRM webhook, retrying on failure.
 
     Args:
-        external_id: CRM external_id — the Splynx customer ID for migrated
+        external_id: CRM external_id — the imported customer ID for migrated
             subscribers, the local subscriber UUID for native ones.
-        subscriber_data: Subscriber fields (Splynx-shaped for splynx, CRM
+        subscriber_data: Subscriber fields (legacy-shaped for migrated records, CRM
             column names otherwise).
         external_system: CRM external system the payload is keyed under.
         billing_snapshot_subscriber_id: when set, this push carries a billing
@@ -133,7 +133,7 @@ def _stamp_billing_snapshot(subscriber_id: str, sent_payload: dict) -> None:
     """Mark the billing snapshot as delivered on the subscriber.
 
     Mirrors the key the batch (crm_billing_push) compares against, so the
-    next run sees it unchanged and skips re-sending. Splynx pushes drop
+    next run sees it unchanged and skips re-sending. Migrated-record pushes drop
     billing_cycle, so the stored key matches what the batch would build.
     """
     from uuid import UUID

@@ -292,7 +292,7 @@ synchronous fan-out was ~100s):
 2. **Reuse `pop_sites` (23 rows) as the basestation — do NOT add a `Basestation` table.**
    Reconcile `pop_site ↔ Zabbix BTS group` (not 1:1 — `pop_sites` also has regions Abuja/Lagos/CBD);
    populate the existing `network_devices.pop_site_id`. (Supersedes §5.1.)
-3. **The 461 `network_devices` are orphaned Splynx data (369 via `splynx_monitoring_id`); Splynx is
+3. **The 461 `network_devices` are orphaned legacy BSS data (369 via imported monitoring IDs); legacy BSS is
    now decommissioned.** Reconcile = **match-merge** existing rows to sub-zabbix hosts by IP/name and
    **backfill `zabbix_hostid`** — NOT a blind upsert (which would duplicate). (Refines §4, §6.3.)
 4. **Matcher: sub-zabbix has ~2 hosts per access IP** — the device host (in the `*BTS*` group) AND a

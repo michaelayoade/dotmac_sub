@@ -75,7 +75,7 @@ credential is a no-op, verified):
   create a radcheck row without a password** — this is a customer **password
   RESET** (CPE update + notification), owned by **NOC/ops**, not engineering.
   In the 2026-06-18 snapshot all 3 real cases were this (secrets unrecoverable —
-  backup empty, Splynx decommissioned).
+  backup empty, legacy BSS decommissioned).
 - **qa_exclude** — QA/test login: exclude from the launch gate with documentation.
 
 The unusable-password gauge is broader than `missing_radius`: it also catches

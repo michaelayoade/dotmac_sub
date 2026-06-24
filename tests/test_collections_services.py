@@ -103,8 +103,8 @@ def test_prepaid_enforcement_accounts_for_open_invoice_balance(
 def test_prepaid_balance_uses_splynx_deposit_when_linked(
     db_session, subscriber_account
 ):
-    """Splynx-linked prepaid: available balance = deposit, ignoring local
-    credit/invoices (Splynx's net is authoritative)."""
+    """Migrated prepaid: available balance = deposit, ignoring local
+    credit/invoices because the imported net is authoritative."""
     from decimal import Decimal as D
 
     from app.services.collections._core import _resolve_prepaid_available_balance
@@ -146,7 +146,7 @@ def test_prepaid_balance_deposit_negative_is_arrears(db_session, subscriber_acco
 def test_prepaid_balance_native_account_uses_ledger_fallback(
     db_session, subscriber_account
 ):
-    """Non-Splynx account (no authoritative deposit) keeps the ledger model."""
+    """Native account (no authoritative deposit) keeps the ledger model."""
     from decimal import Decimal as D
 
     from app.services.collections._core import _resolve_prepaid_available_balance

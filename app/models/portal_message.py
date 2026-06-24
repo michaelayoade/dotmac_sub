@@ -39,7 +39,7 @@ class PortalMessageStatus(enum.Enum):
 class PortalMessage(Base):
     """In-app messages visible in the customer portal.
 
-    Covers Splynx portal_messages, welcome_message, and
+    Covers imported portal_messages, welcome_message, and
     instant_message tables.
     """
 
@@ -97,7 +97,7 @@ class PortalMessage(Base):
 class PortalOnboardingState(Base):
     """Tracks customer portal onboarding progress.
 
-    Equivalent to Splynx portal_onboarding table.
+    Equivalent to the imported portal_onboarding table.
     """
 
     __tablename__ = "portal_onboarding_states"

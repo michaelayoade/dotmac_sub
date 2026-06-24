@@ -737,6 +737,10 @@ def build_beat_schedule() -> dict:
             enabled=billing_notif_hourly_enabled,
             interval_seconds=billing_notif_interval,
         )
+        # Unified billing enforcement. The legacy setting/key remains
+        # ``dunning_enabled`` for operator compatibility, but the scheduled task
+        # now routes through the single billing-enforcement reconciler. Accrual
+        # remains mode-specific; suspension/restore decisions converge there.
         dunning_enabled = _effective_bool(
             session,
             SettingDomain.collections,
@@ -755,12 +759,12 @@ def build_beat_schedule() -> dict:
         _sync_scheduled_task(
             session,
             name="dunning_runner",
-            task_name="app.tasks.collections.run_dunning",
+            task_name="app.tasks.collections.run_billing_enforcement",
             enabled=dunning_enabled,
             interval_seconds=dunning_interval_seconds,
         )
         # STILL FORCED OFF: deposit-based prepaid enforcement suspended paid
-        # customers on a stale Splynx deposit / derived balance. Enforcement reads
+        # customers on a stale imported deposit / derived balance. Enforcement reads
         # _resolve_prepaid_available_balance, which still falls back to the stale
         # deposit, so it CANNOT be re-armed until that fallback is removed and
         # ledger balances are verified (see BILLING_REVENUE_LEAK_CLOSURE.md §3

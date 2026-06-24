@@ -25,6 +25,8 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.collections import (
+    BillingEnforcementRunRequest,
+    BillingEnforcementRunResponse,
     DunningActionLogCreate,
     DunningActionLogUpdate,
     DunningCaseCreate,
@@ -89,17 +91,17 @@ def _set_prepaid_last_run_date(db: Session, run_date: date) -> None:
 def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
     """Authoritative prepaid available balance.
 
-    For Splynx-linked accounts the synced ``deposit`` IS the balance: Splynx's
-    billing engine already nets invoices, payments and transactions into it,
+    For migrated accounts the imported ``deposit`` IS the balance from the
+    previous billing system: invoices, payments and transactions were already netted,
     and it does not reconcile to any naive local recomputation (verified —
     e.g. cust 25313 deposit 31,965.11 vs payments-minus-invoices 163,236).
     Re-deriving it locally is what produced the phantom-invoice divergence, so
     we trust the net rather than recompute it.
 
-    Native (non-Splynx) accounts have no authoritative deposit, so they fall
+    Native accounts have no authoritative imported deposit, so they fall
     back to the local ledger model: credit minus open invoice balance.
 
-    At cutover the local ledger takes over: once a Splynx-linked account has its
+    At cutover the local ledger takes over: once a migrated account has its
     one-time opening-balance seed (see the prepaid drawdown engine), we switch
     that account to the ledger so drawdown debits and top-up credits take
     effect. The seed is the per-account switch — no risky global flip.
@@ -1497,6 +1499,8 @@ class DunningWorkflow(ListResponseMixin):
         )
         overdue_accounts: dict[UUID, list[Invoice]] = {}
         for invoice in invoices:
+            if (invoice.metadata_ or {}).get("reconciliation_hold"):
+                continue
             overdue_accounts.setdefault(invoice.account_id, []).append(invoice)
             if not payload.dry_run and invoice.status in {
                 InvoiceStatus.issued,
@@ -1753,6 +1757,38 @@ class DunningWorkflow(ListResponseMixin):
         if commit:
             db.commit()
         return len(cases)
+
+
+class BillingEnforcementReconciler:
+    """Single billing enforcement writer.
+
+    Accrual stays mode-specific: invoice generation creates AR and prepaid
+    drawdown may post ledger debits for true short-period prepaid offers.
+    Service enforcement converges here: invoice due dates + policy decide
+    notify/throttle/suspend/restore through the existing dunning case and
+    account lifecycle machinery. Legacy prepaid balance enforcement remains
+    retired until available-balance truth is ledger-only.
+    """
+
+    @staticmethod
+    def run(
+        db: Session, payload: BillingEnforcementRunRequest
+    ) -> BillingEnforcementRunResponse:
+        dunning = DunningWorkflow.run(
+            db,
+            DunningRunRequest(run_at=payload.run_at, dry_run=payload.dry_run),
+        )
+        return BillingEnforcementRunResponse(
+            run_at=dunning.run_at,
+            accounts_scanned=dunning.accounts_scanned,
+            cases_created=dunning.cases_created,
+            actions_created=dunning.actions_created,
+            skipped=dunning.skipped,
+            dunning_accounts_scanned=dunning.accounts_scanned,
+            dunning_cases_created=dunning.cases_created,
+            dunning_actions_created=dunning.actions_created,
+            dunning_skipped=dunning.skipped,
+        )
 
 
 class PrepaidEnforcement(ListResponseMixin):
@@ -2052,4 +2088,5 @@ def restore_account_services(
 dunning_cases = DunningCases()
 dunning_action_logs = DunningActionLogs()
 dunning_workflow = DunningWorkflow()
+billing_enforcement_reconciler = BillingEnforcementReconciler()
 prepaid_enforcement = PrepaidEnforcement()

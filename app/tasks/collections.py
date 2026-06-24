@@ -1,7 +1,7 @@
 import logging
 
 from app.celery_app import celery_app
-from app.schemas.collections import DunningRunRequest
+from app.schemas.collections import BillingEnforcementRunRequest
 from app.services import collections as collections_service
 from app.services.billing_settings import billing_enabled
 from app.services.db_session_adapter import db_session_adapter
@@ -10,15 +10,20 @@ logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
 
-@celery_app.task(name="app.tasks.collections.run_dunning")
-def run_dunning() -> dict[str, int | str]:
-    logger.info("Starting dunning run")
+@celery_app.task(name="app.tasks.collections.run_billing_enforcement")
+def run_billing_enforcement() -> dict[str, int | str]:
+    logger.info("Starting unified billing enforcement run")
     session = SessionLocal()
     try:
         if not billing_enabled(session):
-            logger.info("dunning skipped: local billing disabled (billing_enabled)")
+            logger.info(
+                "billing enforcement skipped: local billing disabled "
+                "(billing_enabled)"
+            )
             return {"skipped": "billing_disabled"}
-        result = collections_service.dunning_workflow.run(session, DunningRunRequest())
+        result = collections_service.billing_enforcement_reconciler.run(
+            session, BillingEnforcementRunRequest()
+        )
         summary: dict[str, int | str] = {
             "accounts_scanned": int(result.accounts_scanned),
             "cases_created": int(result.cases_created),
@@ -26,7 +31,7 @@ def run_dunning() -> dict[str, int | str]:
             "skipped": int(result.skipped),
         }
         logger.info(
-            "Dunning run completed: accounts_scanned=%d cases_created=%d "
+            "Billing enforcement run completed: accounts_scanned=%d cases_created=%d "
             "actions_created=%d skipped=%d",
             summary["accounts_scanned"],
             summary["cases_created"],
@@ -42,10 +47,16 @@ def run_dunning() -> dict[str, int | str]:
         session.close()
 
 
+@celery_app.task(name="app.tasks.collections.run_dunning")
+def run_dunning() -> dict[str, int | str]:
+    """Backward-compatible task alias for the unified billing enforcer."""
+    return run_billing_enforcement()
+
+
 @celery_app.task(name="app.tasks.collections.run_prepaid_enforcement")
 def run_prepaid_enforcement() -> dict[str, int | str]:
     """RETIRED. Deposit-based prepaid enforcement suspended paid customers on a
-    stale Splynx deposit/derived balance; due-date dunning (run_dunning) is now
+    stale imported deposit/derived balance; due-date dunning (run_dunning) is now
     the sole enforcer. This is a no-op kept only so the task name still resolves;
     it never suspends. Obsolete prepaid locks are cleared by
     run_retired_lock_reconcile.

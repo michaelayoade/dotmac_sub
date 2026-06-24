@@ -1,6 +1,6 @@
 """Reconcile cutover payments that posted as credit but never settled debt.
 
-A cohort of ``succeeded`` gateway payments captured during the Splynx → local
+A cohort of ``succeeded`` gateway payments captured during the legacy -> local
 cutover (from 2026-06-13) left the customer's *available balance* sitting as
 unallocated credit while their invoices aged into suspension — the visible
 symptom being "paid but still walled-garden". See

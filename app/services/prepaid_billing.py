@@ -1,17 +1,15 @@
-"""Prepaid drawdown engine: periodic charges that decrement a prepaid balance.
+"""Prepaid drawdown engine for true short-period prepaid plans.
 
-Splynx's prepaid customers (``prepaid_monthly`` / ``prepaid``) pay in advance:
-a periodic charge draws their balance down, and service is suspended when the
-balance falls below ``min_balance``. DotMac previously had no mechanism to
-*decrement* the balance, so a cut-over prepaid customer would get free service.
+The production prepaid base is currently monthly and uses invoice-in-advance.
+This engine remains dormant unless a non-monthly prepaid offer is introduced:
+a periodic charge draws balance down, and service is suspended when the balance
+falls below ``min_balance``.
 
 This posts the periodic charge as a debit ``LedgerEntry`` (the same primitive
 used by prepaid plan-change and add-on charges). The existing prepaid
 enforcement (``collections/_core.py``) reads the resulting balance and handles
-warn → grace → suspend → deactivate. Top-ups are the existing payment-credit
-flow. See docs/designs/PREPAID_DRAWDOWN_ENGINE.md.
-
-Gated by ``billing_enabled`` at the task layer — inert until cutover.
+warn -> grace -> suspend -> deactivate. Top-ups are the existing payment-credit
+flow. Gated by scheduler settings at the task layer and disabled by default.
 """
 
 from __future__ import annotations
@@ -71,15 +69,15 @@ def _already_charged(
 
 
 # Memo on the one-time cutover opening-balance credit. Its presence flips a
-# Splynx-linked account's balance source from the synced deposit (#247) to the
-# local ledger — see _resolve_prepaid_available_balance and the cutover runbook.
+# migrated account's balance source from an imported deposit to the local ledger
+# see _resolve_prepaid_available_balance and the cutover runbook.
 PREPAID_OPENING_BALANCE_MEMO = "Prepaid opening balance @ cutover"
 
 
 def _parse_period_days(prepaid_period: str | None) -> int:
     """Map an offer's free-text ``prepaid_period`` to a charge cadence in days.
 
-    Splynx "Prepaid (Daily)" → 1; "Prepaid (Custom)"/monthly → 30. A bare
+    Legacy "Prepaid (Daily)" -> 1; "Prepaid (Custom)"/monthly -> 30. A bare
     integer is taken as a day count. Unknown/empty defaults to 30 (covers the
     ~98%-majority ``prepaid_monthly``).
     """
@@ -118,7 +116,7 @@ def _period_charge(
     """Return (charge, currency, period_days) for one prepaid period.
 
     Charge = the recurring catalog/subscription price (discounts and
-    Splynx-imported ``unit_price`` overrides applied) normalised to monthly and
+    imported ``unit_price`` overrides applied) normalised to monthly and
     pro-rated to the period: full price for a 30-day period, 1/30 for a day.
     """
     # Imported lazily to avoid a heavy import at module load and a potential
@@ -132,7 +130,7 @@ def _period_charge(
     has_unit_override = (
         subscription.unit_price is not None and subscription.unit_price > 0
     )
-    # Splynx-migrated subscriptions often carry a per-service unit_price with no
+    # Migrated subscriptions often carry a per-service unit_price with no
     # separate OfferPrice row, so price off the override even when the catalog
     # amount is absent. Only when neither exists is there nothing to charge.
     if amount is None and not has_unit_override:
@@ -182,8 +180,9 @@ def run_prepaid_charges(
     First time a subscription is seen (``next_billing_at`` is null) it is only
     *initialised* — ``next_billing_at`` is set one period out and NO charge is
     posted — so enabling the engine never retroactively bills the shadow period
-    Splynx already covered. Thereafter, when due, a single period charge is
-    posted and ``next_billing_at`` advances one period from now (no backlog
+    the previous billing system already covered. Thereafter, when due, a single
+    period charge is posted and ``next_billing_at`` advances one period from now
+    (no backlog
     catch-up, so downtime can't multiply charges). Charges are posted even when
     the balance goes negative; enforcement suspends on the threshold.
 

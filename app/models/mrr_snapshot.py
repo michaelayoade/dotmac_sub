@@ -27,7 +27,7 @@ class MrrSnapshot(Base):
 
     Populated by a nightly Celery task that iterates active subscribers
     and sums their subscription MRR.  Used for revenue trend reporting,
-    churn analysis, and Splynx mrr_statistics migration (2.99M rows).
+    churn analysis, and imported mrr_statistics migration (2.99M rows).
     """
 
     __tablename__ = "mrr_snapshots"

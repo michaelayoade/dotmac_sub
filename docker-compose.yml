@@ -38,8 +38,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_URL: ${APP_URL:-}
@@ -154,8 +152,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
@@ -171,7 +167,7 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    # 3 processes: the default queue mixes long jobs (Splynx sync) with
+    # 3 processes: the default queue mixes long jobs with
     # short periodic ones; at 2, one long job halves throughput and the
     # queue grows faster than it drains.
     - --concurrency=3
@@ -205,8 +201,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
@@ -330,8 +324,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}

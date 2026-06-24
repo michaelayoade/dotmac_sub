@@ -9,7 +9,7 @@ billing/enforcement, so any drift is silent.
 
 This surfaces accounts where the three layers disagree (or an account holds
 mixed-mode active subscriptions) so they can be reconciled — especially before
-the local billing runner is enabled at Splynx cutover.
+the local billing runner is enabled after cutover.
 """
 
 from __future__ import annotations

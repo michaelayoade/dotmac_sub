@@ -12,11 +12,13 @@ for backwards compatibility.
 # Re-export from core module
 from app.services.collections._core import (
     DunningActionLogs,
+    BillingEnforcementReconciler,
     # Classes
     DunningCases,
     DunningWorkflow,
     PrepaidEnforcement,
     dunning_action_logs,
+    billing_enforcement_reconciler,
     # Service instances
     dunning_cases,
     dunning_workflow,
@@ -32,11 +34,13 @@ __all__ = [
     # Classes
     "DunningCases",
     "DunningActionLogs",
+    "BillingEnforcementReconciler",
     "DunningWorkflow",
     "PrepaidEnforcement",
     # Service instances
     "dunning_cases",
     "dunning_action_logs",
+    "billing_enforcement_reconciler",
     "dunning_workflow",
     "prepaid_enforcement",
     # Public functions

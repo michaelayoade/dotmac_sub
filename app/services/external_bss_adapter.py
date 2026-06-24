@@ -25,7 +25,7 @@ class ExternalBssReference:
 
 
 class ExternalBssAdapter:
-    """Adapter for external OSS/BSS references and legacy Splynx IDs."""
+    """Adapter for external OSS/BSS references and legacy imported IDs."""
 
     name = "external_bss"
 

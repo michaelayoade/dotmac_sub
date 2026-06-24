@@ -541,6 +541,9 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="dunning_enabled",
         env_var="DUNNING_ENABLED",
         value_type=SettingValueType.boolean,
+        # Compatibility name for the unified billing-enforcement runner. This
+        # is the single scheduled writer for dunning policy actions and
+        # subscription enforcement locks.
         default=True,
     ),
     SettingSpec(
@@ -1266,8 +1269,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
         # Kill-switch for the billing runner's inline "settle open invoices from
         # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
-        # per-invoice balance_due/allocations aren't authoritative (Splynx
-        # deposit-paid invoices have no local allocation). Re-enable only after
+        # per-invoice balance_due/allocations aren't authoritative (deposit-paid
+        # invoices have no local allocation). Re-enable only after
         # the account-level redesign.
         domain=SettingDomain.billing,
         key="settle_credit_on_invoice_enabled",

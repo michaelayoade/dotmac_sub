@@ -1,14 +1,14 @@
 # Section 8: System Configuration
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
-This document catalogs feature improvements for the DotMac Sub ISP management system based on a comprehensive review of 46 Splynx configuration screenshots. The screenshots cover: system-level config hub, company information, file management, templates, preferences/security, API settings, customer settings, portal configuration, email/SMTP configuration, log rotation, finance automation, billing settings, payment methods, transaction categories, accounting integration, payment pairing, billing reminders, billing notifications, tax configuration, plan change rules, RADIUS configuration, NetFlow accounting, CPE management, monitoring, MikroTik API, FUP (Fair Usage Policy), NAS types, IPv6, IP network categories, and Huawei OLT board support.
+This document catalogs feature improvements for the DotMac Sub ISP management system based on a comprehensive review of 46 legacy BSS configuration screenshots. The screenshots cover: system-level config hub, company information, file management, templates, preferences/security, API settings, customer settings, portal configuration, email/SMTP configuration, log rotation, finance automation, billing settings, payment methods, transaction categories, accounting integration, payment pairing, billing reminders, billing notifications, tax configuration, plan change rules, RADIUS configuration, NetFlow accounting, CPE management, monitoring, MikroTik API, FUP (Fair Usage Policy), NAS types, IPv6, IP network categories, and Huawei OLT board support.
 
 ---
 
 ## 8.1 Configuration Hub & Navigation
 
-**What Splynx shows:** A centralized Config landing page with a searchable index of all configuration sections, organized by color-coded category tabs (System, Main, Finance, Networking, Helpdesk, Scheduling, Leads, Inventory, Integrations, Tools). Each section displays clickable links to subsections with descriptive icons.
+**What legacy BSS shows:** A centralized Config landing page with a searchable index of all configuration sections, organized by color-coded category tabs (System, Main, Finance, Networking, Helpdesk, Scheduling, Leads, Inventory, Integrations, Tools). Each section displays clickable links to subsections with descriptive icons.
 
 ### Improvements
 
@@ -22,7 +22,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.2 Company Information & Branding
 
-**What Splynx shows:** A Company Information page with fields for: company name, billing system URL, full address (street, ZIP, city, country, ISO country), email, phone, Company ID, VAT number, default system tax, bank details (account, name, branch), partner commission percentage, and selectable PDF templates for invoices, credit notes, proforma invoices, quotes, payment receipts, and statements. Also supports per-partner company info via a "Partners" dropdown and "Load information from another partner" feature.
+**What legacy BSS shows:** A Company Information page with fields for: company name, billing system URL, full address (street, ZIP, city, country, ISO country), email, phone, Company ID, VAT number, default system tax, bank details (account, name, branch), partner commission percentage, and selectable PDF templates for invoices, credit notes, proforma invoices, quotes, payment receipts, and statements. Also supports per-partner company info via a "Partners" dropdown and "Load information from another partner" feature.
 
 ### Improvements
 
@@ -36,7 +36,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.3 File Manager
 
-**What Splynx shows:** A system-wide File Manager listing uploaded files with columns for ID, Title, Filename, Size, and Actions (view, edit, delete). Files include logos, favicons, and terms/conditions documents. Supports upload with title/filename association.
+**What legacy BSS shows:** A system-wide File Manager listing uploaded files with columns for ID, Title, Filename, Size, and Actions (view, edit, delete). Files include logos, favicons, and terms/conditions documents. Supports upload with title/filename association.
 
 ### Improvements
 
@@ -50,7 +50,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.4 Notification & Communication Templates
 
-**What Splynx shows:** A Templates list page filtered by type (Customer portal dropdown) showing 30+ templates with ID, Title, and Description columns. Templates cover: welcome messages, new customer SMS, fiber installation progress, service restoration, maintenance notices, ticket acknowledgement/progress/resolution, link disconnection, loss of signal, compensation, payment confirmation/proof/issues, slow connection, failed appointments, installation updates, refund/refusal, account change requests, downtime compensation, support channels, and API tests. Actions include edit and delete per template.
+**What legacy BSS shows:** A Templates list page filtered by type (Customer portal dropdown) showing 30+ templates with ID, Title, and Description columns. Templates cover: welcome messages, new customer SMS, fiber installation progress, service restoration, maintenance notices, ticket acknowledgement/progress/resolution, link disconnection, loss of signal, compensation, payment confirmation/proof/issues, slow connection, failed appointments, installation updates, refund/refusal, account change requests, downtime compensation, support channels, and API tests. Actions include edit and delete per template.
 
 ### Improvements
 
@@ -66,7 +66,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.5 System Preferences & Security
 
-**What Splynx shows:** A Preferences page with sections for: Default Landing Page (Administration portal vs. Customer portal), Administration & Security (admin page title, force 2FA toggle, password reset settings with code validity/attempts/method selection, email/SMS template for reset, check code character set and length), Server-side Data Table Processing (enable toggle, search delay in ms), Mention Notifications (enable with template selection for individual and group mentions), Documents Encryption (enable encryption of documents sent via email, select which documents to encrypt, password source for individual vs. business accounts), and Google OAuth credentials.
+**What legacy BSS shows:** A Preferences page with sections for: Default Landing Page (Administration portal vs. Customer portal), Administration & Security (admin page title, force 2FA toggle, password reset settings with code validity/attempts/method selection, email/SMS template for reset, check code character set and length), Server-side Data Table Processing (enable toggle, search delay in ms), Mention Notifications (enable with template selection for individual and group mentions), Documents Encryption (enable encryption of documents sent via email, select which documents to encrypt, password source for individual vs. business accounts), and Google OAuth credentials.
 
 ### Improvements
 
@@ -83,7 +83,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.6 API Configuration
 
-**What Splynx shows:** A simple API settings page with fields for: System API URL, a toggle to disable API URL validation, and a toggle to trust all domains (allow requests from any domain / CORS).
+**What legacy BSS shows:** A simple API settings page with fields for: System API URL, a toggle to disable API URL validation, and a toggle to trust all domains (allow requests from any domain / CORS).
 
 ### Improvements
 
@@ -96,7 +96,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.7 Customer/Subscriber Settings
 
-**What Splynx shows:** A Customers configuration page with sections for: Login (toggle for changing login on add/edit, character set for login generation, show "Generate" button, login format with variables like {id}{6}, 2FA settings with type/template selection), Password (character set, password length), Miscellaneous configs (max customers to show, statistics graph format in Bits/Bytes, default billing type), Welcome Message (enable/disable, type Email/SMS, trigger on customer status, send delay, email/SMS template selection), and Reminder Notifications (template selection for comment reminders).
+**What legacy BSS shows:** A Customers configuration page with sections for: Login (toggle for changing login on add/edit, character set for login generation, show "Generate" button, login format with variables like {id}{6}, 2FA settings with type/template selection), Password (character set, password length), Miscellaneous configs (max customers to show, statistics graph format in Bits/Bytes, default billing type), Welcome Message (enable/disable, type Email/SMS, trigger on customer status, send delay, email/SMS template selection), and Reminder Notifications (template selection for comment reminders).
 
 ### Improvements
 
@@ -112,7 +112,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.8 Customer Portal Configuration
 
-**What Splynx shows:** Portal settings with two tabs (General settings and Per partner settings). General settings include: language selection, authentication field (Login/Email/Phone), password reset (enable, method, template, SMS text, code config), "Need help?" link, and Customer Mobile App (enable, Google Play App ID, App Store App ID). Per-partner settings include: portal title, GDPR toggle, menu item selection (8 of 9 selected), Dashboard toggles (show payment due, account suspension, live bandwidth usage, FUP/CAP active services, applied FUP rules), Documents (contract notification subject/text with variables), Profile field permissions (view/edit/hidden for login, name, email, billing email, phone, street, ZIP, city, payment method, password), and Internet Statistics toggles (daily usage, totals, graph, FUP stats, current limits, monthly limits/CAP, session statistics, session termination cause).
+**What legacy BSS shows:** Portal settings with two tabs (General settings and Per partner settings). General settings include: language selection, authentication field (Login/Email/Phone), password reset (enable, method, template, SMS text, code config), "Need help?" link, and Customer Mobile App (enable, Google Play App ID, App Store App ID). Per-partner settings include: portal title, GDPR toggle, menu item selection (8 of 9 selected), Dashboard toggles (show payment due, account suspension, live bandwidth usage, FUP/CAP active services, applied FUP rules), Documents (contract notification subject/text with variables), Profile field permissions (view/edit/hidden for login, name, email, billing email, phone, street, ZIP, city, payment method, password), and Internet Statistics toggles (daily usage, totals, graph, FUP stats, current limits, monthly limits/CAP, session statistics, session termination cause).
 
 ### Improvements
 
@@ -128,7 +128,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.9 Email & SMTP Configuration
 
-**What Splynx shows:** An Email settings page with per-partner configuration. Sections include: Email Address (sender name, sender email, admin email, enable email sending toggle, redirect all emails to test address, BCC copy address, days until email expiration, emails limit per hour), Transport (transport type: SMTP, set local domain toggle), and SMTP Config (host, port, verify SSL certificate, encryption method: SSL, use authentication toggle, username).
+**What legacy BSS shows:** An Email settings page with per-partner configuration. Sections include: Email Address (sender name, sender email, admin email, enable email sending toggle, redirect all emails to test address, BCC copy address, days until email expiration, emails limit per hour), Transport (transport type: SMTP, set local domain toggle), and SMTP Config (host, port, verify SSL certificate, encryption method: SSL, use authentication toggle, username).
 
 ### Improvements
 
@@ -145,7 +145,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.10 Log Rotation & Data Retention
 
-**What Splynx shows:** A Logrotate settings page with configurable retention periods for: admin logs (6 months), API logs (1 month), internal logs (2 years), portal logs (1 year), customer statistics (3 years), voucher statistics (1 year), unused RRD files (1 year), background task logs (3 months), and background task result files (2 years). Each setting has a dropdown for time period and a reset button.
+**What legacy BSS shows:** A Logrotate settings page with configurable retention periods for: admin logs (6 months), API logs (1 month), internal logs (2 years), portal logs (1 year), customer statistics (3 years), voucher statistics (1 year), unused RRD files (1 year), background task logs (3 months), and background task result files (2 years). Each setting has a dropdown for time period and a reset button.
 
 ### Improvements
 
@@ -159,7 +159,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.11 Finance Automation
 
-**What Splynx shows:** A Finance Automation page (Config > Finance > Automation) with sections for: Finance Automation (enable auto-issuing of transactions/invoices/proforma invoices, confirmation period in days, confirmation time, preview generation days before billing, date to use on documents: billing date vs. real date, dashboard notification toggle, per-partner preview toggle), Automatic Blocking (enable blocking period processing, blocking time, enable deactivation period, prepaid deactivation toggle, block by one-time invoices, block on weekends toggle, block on holidays toggle), and Automatically Remove IPs for Inactive Prepaid Customers (enable, period in months).
+**What legacy BSS shows:** A Finance Automation page (Config > Finance > Automation) with sections for: Finance Automation (enable auto-issuing of transactions/invoices/proforma invoices, confirmation period in days, confirmation time, preview generation days before billing, date to use on documents: billing date vs. real date, dashboard notification toggle, per-partner preview toggle), Automatic Blocking (enable blocking period processing, blocking time, enable deactivation period, prepaid deactivation toggle, block by one-time invoices, block on weekends toggle, block on holidays toggle), and Automatically Remove IPs for Inactive Prepaid Customers (enable, period in months).
 
 ### Improvements
 
@@ -174,7 +174,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.12 Billing & Invoice Settings
 
-**What Splynx shows:** A Finance Settings page (per-partner) with sections for: Recurring Billing (enable, payment period, payment method, billing day with calendar picker showing billing/blocking/deactivation timeline, use customer creation date toggle, payment due days, blocking period days, deactivation period days, minimum balance, send billing notifications toggle), Prepaid Custom settings (issue invoice after payment, item text, tax, auto-associate invoice with payments), Prepay settings (deactivation period), Receipt settings (receipt number format with variables), Invoice settings (auto-create toggle, invoice number format with variables, invoice cache toggle, enable zero-total invoicing, auto-associate with payments), Proforma Invoice settings (enable auto proforma, generation day, payment period, create for next month, number pattern), and Credit Note settings (number pattern with variables).
+**What legacy BSS shows:** A Finance Settings page (per-partner) with sections for: Recurring Billing (enable, payment period, payment method, billing day with calendar picker showing billing/blocking/deactivation timeline, use customer creation date toggle, payment due days, blocking period days, deactivation period days, minimum balance, send billing notifications toggle), Prepaid Custom settings (issue invoice after payment, item text, tax, auto-associate invoice with payments), Prepay settings (deactivation period), Receipt settings (receipt number format with variables), Invoice settings (auto-create toggle, invoice number format with variables, invoice cache toggle, enable zero-total invoicing, auto-associate with payments), Proforma Invoice settings (enable auto proforma, generation day, payment period, create for next month, number pattern), and Credit Note settings (number pattern with variables).
 
 ### Improvements
 
@@ -193,7 +193,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.13 Payment Methods & Providers
 
-**What Splynx shows:** A Payment Methods list page showing 10 configured methods: Cash CBD, Zenith 461 Bank, Paystack, Refill card, QuickBooks, Zenith 523 Bank, Dotmac USD, Flutterwave, UBA, and Remita. Each has ID, Name, Active status (Yes/No), and edit/delete actions. Add button at top right.
+**What legacy BSS shows:** A Payment Methods list page showing 10 configured methods: Cash CBD, Zenith 461 Bank, Paystack, Refill card, QuickBooks, Zenith 523 Bank, Dotmac USD, Flutterwave, UBA, and Remita. Each has ID, Name, Active status (Yes/No), and edit/delete actions. Add button at top right.
 
 ### Improvements
 
@@ -207,7 +207,7 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ## 8.14 Transaction Categories & Accounting Integration
 
-**What Splynx shows:** A Transaction Categories page with a list of categories (Service, Discount, Payment, Refund, Correction as defaults, plus custom: Credit note, Air Fibre Installation Cost, Call down support, Faulty Device Replacement, Dropcable Rerun, IP Addresses, Ground Fibre Installation Cost, Relocations, Withholding Tax, Stampduty deducted from sales). Below the list, a "Transaction categories configuration" section maps categories to service types (Internet service, Recurring service, One-time service, Bundle service) with dropdowns for Service/Discount/Top-up/Activation fee/Cancellation fee. Also includes "Miscellaneous configs" mapping inventory/invoice/credit note items to categories. A separate section enables transaction categories per tariff plan type.
+**What legacy BSS shows:** A Transaction Categories page with a list of categories (Service, Discount, Payment, Refund, Correction as defaults, plus custom: Credit note, Air Fibre Installation Cost, Call down support, Faulty Device Replacement, Dropcable Rerun, IP Addresses, Ground Fibre Installation Cost, Relocations, Withholding Tax, Stampduty deducted from sales). Below the list, a "Transaction categories configuration" section maps categories to service types (Internet service, Recurring service, One-time service, Bundle service) with dropdowns for Service/Discount/Top-up/Activation fee/Cancellation fee. Also includes "Miscellaneous configs" mapping inventory/invoice/credit note items to categories. A separate section enables transaction categories per tariff plan type.
 
 Also shows an Accounting Categories page for mapping transaction categories to external accounting software categories (e.g., QuickBooks), with a "Load categories" button to sync from accounting software, and an Accounting Tax Rates page mapping internal tax rates to accounting software tax rates.
 
@@ -224,7 +224,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.15 Payment Pairing & Reconciliation
 
-**What Splynx shows:** A Pairing settings page with dropdowns to configure how imported bank payments are matched to customers and invoices: Global pairing fields (#1: Customer ID, #2: None), Invoice pairing field (Invoice number), and Proforma Invoice pairing field (Proforma invoice number).
+**What legacy BSS shows:** A Pairing settings page with dropdowns to configure how imported bank payments are matched to customers and invoices: Global pairing fields (#1: Customer ID, #2: None), Invoice pairing field (Invoice number), and Proforma Invoice pairing field (Proforma invoice number).
 
 ### Improvements
 
@@ -236,7 +236,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.16 Billing Reminders
 
-**What Splynx shows:** A Reminders settings page (per-partner, with General/Per partner tabs) with: enable reminders toggle, message type (Email + SMS), send time, and three configurable reminder waves. Each wave has: days before due date (e.g., 5, 2, Disabled), email subject, email template selector, SMS template selector. Additional options: filter by payment methods, attach unpaid invoices to reminder emails, and a calendar visualization of billing day vs. reminder schedule.
+**What legacy BSS shows:** A Reminders settings page (per-partner, with General/Per partner tabs) with: enable reminders toggle, message type (Email + SMS), send time, and three configurable reminder waves. Each wave has: days before due date (e.g., 5, 2, Disabled), email subject, email template selector, SMS template selector. Additional options: filter by payment methods, attach unpaid invoices to reminder emails, and a calendar visualization of billing day vs. reminder schedule.
 
 ### Improvements
 
@@ -251,7 +251,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.17 Billing Notifications (Prepaid/Recurring)
 
-**What Splynx shows:** A Finance Notifications page with tabs for: Global, Recurring, Prepaid (Daily), Prepaid (Custom), Card Expiration, Services, and Contracts. The Prepaid (Custom) tab shows: main settings (hour to send), Blocking Wave (enable, send to Email/SMS, email/SMS template, BCC), First Notification Wave (enable, days before blocking, send to, email/SMS template, BCC), and Second Notification Wave (same structure). Each wave is independently configurable.
+**What legacy BSS shows:** A Finance Notifications page with tabs for: Global, Recurring, Prepaid (Daily), Prepaid (Custom), Card Expiration, Services, and Contracts. The Prepaid (Custom) tab shows: main settings (hour to send), Blocking Wave (enable, send to Email/SMS, email/SMS template, BCC), First Notification Wave (enable, days before blocking, send to, email/SMS template, BCC), and Second Notification Wave (same structure). Each wave is independently configurable.
 
 ### Improvements
 
@@ -264,7 +264,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.18 Tax Configuration
 
-**What Splynx shows:** A Taxes page listing configured tax rates: Tax 0.00% (0%), 2019 VAT (5%), Tax 7.50% (7.5%). Each has name, rate, optional group name, and edit/delete actions. Supports adding individual taxes and tax groups. An "Active" filter dropdown allows filtering active vs. archived taxes.
+**What legacy BSS shows:** A Taxes page listing configured tax rates: Tax 0.00% (0%), 2019 VAT (5%), Tax 7.50% (7.5%). Each has name, rate, optional group name, and edit/delete actions. Supports adding individual taxes and tax groups. An "Active" filter dropdown allows filtering active vs. archived taxes.
 
 ### Improvements
 
@@ -278,7 +278,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.19 Plan Change / Service Upgrade Configuration
 
-**What Splynx shows:** A Change Plan settings page (per-partner) with sections for Recurring and Prepaid (Custom) billing types. Each section has: plan change refund policy (Refund unused money / No refund / Do not create transaction), additional fee for upgrading to a more expensive plan, additional fee for downgrading, tax rate for additional fees, and timing for invoice creation after service change (During next billing cycle / Immediately). Prepaid also includes rollover expiration setting (End of period). A Discounts section has a toggle to transfer discounts to new services when plans change.
+**What legacy BSS shows:** A Change Plan settings page (per-partner) with sections for Recurring and Prepaid (Custom) billing types. Each section has: plan change refund policy (Refund unused money / No refund / Do not create transaction), additional fee for upgrading to a more expensive plan, additional fee for downgrading, tax rate for additional fees, and timing for invoice creation after service change (During next billing cycle / Immediately). Prepaid also includes rollover expiration setting (End of period). A Discounts section has a toggle to transfer discounts to new services when plans change.
 
 ### Improvements
 
@@ -294,7 +294,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.20 RADIUS Configuration
 
-**What Splynx shows:** RADIUS configuration with General and Advanced tabs. General tab: Reject IP addresses (5 configurable ranges for different rejection reasons: user not found, blocked/inactive, negative balance, incorrect MAC, incorrect password), NAS config (NAS type selector with "Load" to pull config templates), and RADIUS Tools (Restart radius, Clear online sessions buttons). Advanced tab: Radd Server (listen IP, port), Debug/Logs (short log toggle, file path, debug toggle with auto-off after 60 min, debug level 0-10, console/syslog/file output toggles), RADIUS Extended (check online duplicate sessions, DHCP framed-route, bind MAC on first connect, max unique MACs, overwrite oldest MAC), Administrative Access (allow unknown NAS devices, default NAS ID), RADIUS NAS Settings (force network to use one NAS, static IP on connect), IP from Pools (link to customer location, use "Location = All" fallback), and Periodic RADIUS Server Restart (enable, frequency weekly/monthly, time of day).
+**What legacy BSS shows:** RADIUS configuration with General and Advanced tabs. General tab: Reject IP addresses (5 configurable ranges for different rejection reasons: user not found, blocked/inactive, negative balance, incorrect MAC, incorrect password), NAS config (NAS type selector with "Load" to pull config templates), and RADIUS Tools (Restart radius, Clear online sessions buttons). Advanced tab: Radd Server (listen IP, port), Debug/Logs (short log toggle, file path, debug toggle with auto-off after 60 min, debug level 0-10, console/syslog/file output toggles), RADIUS Extended (check online duplicate sessions, DHCP framed-route, bind MAC on first connect, max unique MACs, overwrite oldest MAC), Administrative Access (allow unknown NAS devices, default NAS ID), RADIUS NAS Settings (force network to use one NAS, static IP on connect), IP from Pools (link to customer location, use "Location = All" fallback), and Periodic RADIUS Server Restart (enable, frequency weekly/monthly, time of day).
 
 ### Improvements
 
@@ -311,7 +311,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.21 NetFlow Accounting
 
-**What Splynx shows:** A NetFlow Accounting settings page with: Accounting Options (max timeout for idle sessions in seconds, max session time in hours to split long sessions, minimum bytes threshold for recording), Daemon Options (rotation interval in seconds, listen port), and Expire Options (max file lifetime, lifetime unit in weeks).
+**What legacy BSS shows:** A NetFlow Accounting settings page with: Accounting Options (max timeout for idle sessions in seconds, max session time in hours to split long sessions, minimum bytes threshold for recording), Daemon Options (rotation interval in seconds, listen port), and Expire Options (max file lifetime, lifetime unit in weeks).
 
 ### Improvements
 
@@ -322,7 +322,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.22 CPE (Customer Premises Equipment) Configuration
 
-**What Splynx shows:** A CPE configuration page with sections for: Size (1KB = 1000 or 1024), API (debug toggle, connection attempts, timeout), QoS (reverse in/out toggle, queue types for download/upload, default QoS rules with format specification, simple target network), WLAN (enable WLAN management toggle), Customer Blocking (enable blocking on CPE via NAT rules, redirect IP, redirect port), and DHCP Default Config (enable, server name, interface, lease time, network/gateway/pool range, DNS servers, WINS servers).
+**What legacy BSS shows:** A CPE configuration page with sections for: Size (1KB = 1000 or 1024), API (debug toggle, connection attempts, timeout), QoS (reverse in/out toggle, queue types for download/upload, default QoS rules with format specification, simple target network), WLAN (enable WLAN management toggle), Customer Blocking (enable blocking on CPE via NAT rules, redirect IP, redirect port), and DHCP Default Config (enable, server name, interface, lease time, network/gateway/pool range, DNS servers, WINS servers).
 
 ### Improvements
 
@@ -336,7 +336,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.23 Monitoring Configuration
 
-**What Splynx shows:** A Monitoring configuration page with three manageable lists: Vendors (MikroTik, Cisco, Ericsson, D-Link, Juniper, Ubiquiti, TP-Link, Other), Device Types (Router, Switch, Server, Other, Access Point, CPE), and Groups (Main, Alerts -- note: "Notifications can be configured per group"). Each list supports add, edit, and delete operations.
+**What legacy BSS shows:** A Monitoring configuration page with three manageable lists: Vendors (MikroTik, Cisco, Ericsson, D-Link, Juniper, Ubiquiti, TP-Link, Other), Device Types (Router, Switch, Server, Other, Access Point, CPE), and Groups (Main, Alerts -- note: "Notifications can be configured per group"). Each list supports add, edit, and delete operations.
 
 ### Improvements
 
@@ -349,7 +349,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.24 MikroTik API Configuration
 
-**What Splynx shows:** A MikroTik API settings page with: Size (1KB definition), API (debug toggle with 60-min auto-off, connection attempts, timeout), Accounting (log file toggle, min bytes, max timeout, max session time, RRD enable/cached toggles), Router Accounting Options (account local traffic toggle, accounting table threshold), Simple Shaping (reverse in/out, queue types for download/upload), PCQ Shaping (shaping in/out chains, routing in/out chains, for-radius toggle, connection mark toggle), PPP Secrets (add Caller ID for MAC restriction), and IP Firewall Filter/DHCP (add framed route, include inactive customers, filter rules template with MikroTik CLI commands, filter rules position, system IP/hostname, allowed resources address list name and addresses). Also has a "Mass update all routers" button.
+**What legacy BSS shows:** A MikroTik API settings page with: Size (1KB definition), API (debug toggle with 60-min auto-off, connection attempts, timeout), Accounting (log file toggle, min bytes, max timeout, max session time, RRD enable/cached toggles), Router Accounting Options (account local traffic toggle, accounting table threshold), Simple Shaping (reverse in/out, queue types for download/upload), PCQ Shaping (shaping in/out chains, routing in/out chains, for-radius toggle, connection mark toggle), PPP Secrets (add Caller ID for MAC restriction), and IP Firewall Filter/DHCP (add framed route, include inactive customers, filter rules template with MikroTik CLI commands, filter rules position, system IP/hostname, allowed resources address list name and addresses). Also has a "Mass update all routers" button.
 
 ### Improvements
 
@@ -363,7 +363,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.25 Fair Usage Policy (FUP)
 
-**What Splynx shows:** A FUP settings page with: customer additional field for custom reset dates, monthly reset schedule for prepaid daily limits, monthly reset for recurring limits (billing day), weekly limit reset day (Monday/Sunday), and a toggle to send notifications after applying FUP rules.
+**What legacy BSS shows:** A FUP settings page with: customer additional field for custom reset dates, monthly reset schedule for prepaid daily limits, monthly reset for recurring limits (billing day), weekly limit reset day (Monday/Sunday), and a toggle to send notifications after applying FUP rules.
 
 ### Improvements
 
@@ -375,7 +375,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.26 NAS Types Configuration
 
-**What Splynx shows:** A NAS Types list page showing 10 NAS types: MikroTik (with MikroTik API: Yes), Cisco, Ericsson, Linux PPPD, Ubiquiti, D-Link, Juniper, Cisco IOS, Cisco IOS XE, and netElastic (all with MikroTik API: No). Each has edit/delete actions and an "Add" button.
+**What legacy BSS shows:** A NAS Types list page showing 10 NAS types: MikroTik (with MikroTik API: Yes), Cisco, Ericsson, Linux PPPD, Ubiquiti, D-Link, Juniper, Cisco IOS, Cisco IOS XE, and netElastic (all with MikroTik API: No). Each has edit/delete actions and an "Add" button.
 
 ### Improvements
 
@@ -387,7 +387,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.27 IPv6 Configuration
 
-**What Splynx shows:** An IPv6 settings page with: Auto-assign IPv6 to Customers (enable toggle, networks to auto-assign from, assign-to field: IPv6 network), Manual IPv6 Assignment (default prefix for network selection), and an "Update IPv6 on services for all customers" bulk action button.
+**What legacy BSS shows:** An IPv6 settings page with: Auto-assign IPv6 to Customers (enable toggle, networks to auto-assign from, assign-to field: IPv6 network), Manual IPv6 Assignment (default prefix for network selection), and an "Update IPv6 on services for all customers" bulk action button.
 
 ### Improvements
 
@@ -399,7 +399,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.28 IP Network Categories
 
-**What Splynx shows:** An IP Network Categories page listing categories: Dev, Corp, Production. Simple table with ID, Category name, and edit/delete actions.
+**What legacy BSS shows:** An IP Network Categories page listing categories: Dev, Corp, Production. Simple table with ID, Category name, and edit/delete actions.
 
 ### Improvements
 
@@ -409,7 +409,7 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ## 8.29 Huawei OLT Board Support
 
-**What Splynx shows:** A "Huawei supported boards" configuration page listing supported OLT board models with: ID, Name (e.g., H901GPLF), and Count of ports (8). Supports add/edit/delete.
+**What legacy BSS shows:** A "Huawei supported boards" configuration page listing supported OLT board models with: ID, Name (e.g., H901GPLF), and Count of ports (8). Supports add/edit/delete.
 
 ### Improvements
 
@@ -464,4 +464,4 @@ Also shows an Accounting Categories page for mapping transaction categories to e
 
 ---
 
-*Document generated from review of 46 Splynx configuration screenshots. Each improvement item maps to observed capabilities in the Splynx platform and is proposed for implementation in DotMac Sub using the FastAPI/HTMX/Tailwind stack with the project's service-layer architecture.*
+*Document generated from review of 46 legacy BSS configuration screenshots. Each improvement item maps to observed capabilities in the legacy BSS platform and is proposed for implementation in DotMac Sub using the FastAPI/HTMX/Tailwind stack with the project's service-layer architecture.*

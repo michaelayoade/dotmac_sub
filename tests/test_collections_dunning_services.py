@@ -484,3 +484,23 @@ def test_dunning_run_executes_step_for_active_case(
     assert len(logs) == 1
     assert logs[0].action == DunningAction.notify
     assert logs[0].outcome == "notification_sent"
+
+
+def test_dunning_run_skips_reconciliation_hold_invoice(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """Invoices on reconciliation hold must not drive enforcement actions."""
+    from app.models.collections import DunningActionLog
+    from app.schemas.collections import DunningRunRequest
+
+    invoice = _setup_overdue_postpaid_account(
+        db_session, subscriber, subscription, catalog_offer
+    )
+    invoice.metadata_ = {"reconciliation_hold": True}
+    db_session.commit()
+
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
+
+    assert response.actions_created == 0
+    assert response.accounts_scanned == 0
+    assert db_session.query(DunningActionLog).count() == 0

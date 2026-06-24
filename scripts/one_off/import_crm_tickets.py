@@ -1,7 +1,7 @@
 """One-time batched CRM ticket import.
 
 Keeps CRM ticket numbers unchanged and maps tickets to local subscribers via
-CRM subscriber external_system=splynx / external_id.
+CRM subscriber legacy external_system / external_id.
 """
 
 from __future__ import annotations

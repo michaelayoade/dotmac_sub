@@ -1,8 +1,8 @@
-# Section 5: Splynx Finance & Billing
+# Section 5: legacy BSS Finance & Billing
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
-This document captures feature improvement proposals for DotMac Sub's billing and finance module, derived from a detailed review of 10 Splynx Finance screenshots. Each screenshot is analyzed for the features shown, gaps in the current DotMac Sub implementation are identified, and actionable improvements are proposed.
+This document captures feature improvement proposals for DotMac Sub's billing and finance module, derived from a detailed review of 10 legacy BSS Finance screenshots. Each screenshot is analyzed for the features shown, gaps in the current DotMac Sub implementation are identified, and actionable improvements are proposed.
 
 ---
 
@@ -10,7 +10,7 @@ This document captures feature improvement proposals for DotMac Sub's billing an
 
 ### Screenshot 1: Finance Dashboard (100611.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - Comprehensive finance dashboard with six top-level KPI cards: Payments (count + total), Paid Invoices (count + total), Unpaid Invoices (count + total), Credit Notes (count + total), Paid Proforma Invoices, and Unpaid Proforma Invoices
 - Three-column period summary (Last Month, Current Month, Next Month) showing: Payments, Paid Invoices, Unpaid Invoices, Credit Notes, Paid/Unpaid Proforma Invoices, and Total Income
 - "Invoicing for period (VAT included)" bar chart with month/quarter/year toggle and multi-color legend (Paid, Unpaid, Paid on time, Paid overdue)
@@ -23,7 +23,7 @@ The existing billing dashboard (`templates/admin/billing/index.html`) has four K
 
 ### Screenshot 2: Finance Dashboard continued -- MRR, ARPU, Top 10 Payers, Daily Payments (100935.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - "Monthly Recurring Revenue" line chart with period toggle (Month/Quarter/Year) and partner/location filters
 - "Average Revenue per User" line chart showing ARPU trends over time
 - "Top 10 payers" pie chart identifying highest-value customers by payment volume, with partner/location filters
@@ -34,7 +34,7 @@ The revenue report (`templates/admin/reports/revenue.html`) provides Total Reven
 
 ### Screenshot 3: Top 10 Debtors & Overdue Invoices (101013.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - "Top 10 Debtors" pie chart with time filter (This month / Last month / All) and partner/location filter dropdowns, identifying the largest outstanding balances by customer name
 - "Overdue Invoices" summary table with aging buckets: 0-30 days overdue (42 invoices, 14.7M NGN), 30-60 days (28 invoices, 18.4M NGN), 60-90 days (18 invoices, 9.7M NGN), 90+ days (138 invoices, 37.9M NGN), with a Total row (226 invoices, 80.7M NGN)
 - Partner and location filter on overdue invoices as well
@@ -45,7 +45,7 @@ The AR Aging page (`templates/admin/billing/ar_aging.html`) has five aging bucke
 
 ### Screenshot 4: Transactions List (101059.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - Dedicated "Transactions" list page under Finance, separate from invoices and payments
 - Columns: Type (color-coded badges -- Debit in pink/red, Credit in green/teal), Transaction Date, Debit amount, Credit amount, Description, Category (Payment vs Service), and Actions
 - Filtering bar with: Type (Any), Category (All), Period date range selector, Partners filter
@@ -59,7 +59,7 @@ The General Ledger (`templates/admin/billing/ledger.html`) provides a combined t
 
 ### Screenshot 5: Transaction Totals Summary (101125.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - Summary totals footer below the transactions list showing: Credit (930 transactions, 34,093,193.16 NGN) and Debit (1,225 transactions, 58,831,250.02 NGN)
 - Type column with color-coded badges (Credit in green, Debit in yellow/amber)
 - Clean summary layout showing both count and amount per type
@@ -69,7 +69,7 @@ The ledger view does not display aggregate totals (sum of credits, sum of debits
 
 ### Screenshot 6: Invoices List (101227.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - Full invoices list under Finance with columns: Status (color-coded: Unpaid in blue, Paid in green, Overdue in red/orange), Customer Name, Invoice Number, Date Created, Date Due, Total, Payment Due, Payment Received, and Actions (multiple icon buttons per row)
 - Filtering: text search, date period selector, status filter
 - Pagination controls at the bottom
@@ -83,7 +83,7 @@ The invoices list page (`templates/admin/billing/invoices.html`) shows invoice n
 
 ### Screenshot 7: Invoices List continued + Totals Footer (101249.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - Continuation of the invoices list showing more rows, with consistent color-coded status badges
 - Pagination ("Showing X to Y of Z entries" with page navigation)
 - Totals footer at the bottom summarizing by status: Unpaid (count + total), Paid (count + total), Overdue (count + total), with a grand Total row
@@ -94,7 +94,7 @@ The current invoices list shows pagination (page/total_pages) but lacks a totals
 
 ### Screenshot 8: Payment Statement Processing / Bank File Import (101442.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - "Finance > Payment statements > Processing" page for importing bank statements
 - Form fields: Handler (dropdown with "Base (CSV)" selected), File (Browse button), Delimiter (dropdown with "Tabulator" selected), Payment type (dropdown with "Zenith 461 Bank" selected)
 - "Pair to inactive customers" toggle switch (enabled)
@@ -102,11 +102,11 @@ The current invoices list shows pagination (page/total_pages) but lacks a totals
 - Supports multiple delimiters (tab, comma, etc.) and multiple bank statement formats via handler plugins
 
 **DotMac Sub Current State:**
-The payment import page (`templates/admin/billing/payment_import.html`) supports CSV upload with drag-and-drop, preview table, row validation, and a template download. However, it lacks: configurable delimiter selection (hardcoded to comma), bank statement handler/format plugins, payment type/method association during import, and the ability to pair payments to inactive customers. The Splynx handler system suggests support for bank-specific statement formats.
+The payment import page (`templates/admin/billing/payment_import.html`) supports CSV upload with drag-and-drop, preview table, row validation, and a template download. However, it lacks: configurable delimiter selection (hardcoded to comma), bank statement handler/format plugins, payment type/method association during import, and the ability to pair payments to inactive customers. The legacy BSS handler system suggests support for bank-specific statement formats.
 
 ### Screenshot 9: Finance History & Preview / Batch Invoice Generation (101520.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - "Finance > History & Preview" page for batch invoice generation
 - "Finance preview" section with: Date field (24/02/2026), Partners dropdown ("All selected"), "Generate separate preview per partner" toggle, Preview button
 - "History" section showing previous batch runs as a table: Date, Created At, Partners, ID, Transactions (count badge), Invoices (count badge), Proforma Invoices (count), Status (badge -- "Processed"), Status Message ("Transactions have been created"), and Actions (download, retry icons)
@@ -114,11 +114,11 @@ The payment import page (`templates/admin/billing/payment_import.html`) supports
 - This represents a billing cycle run management interface
 
 **DotMac Sub Current State:**
-The invoice batch page (`templates/admin/billing/invoice_batch.html`) exists but the current implementation appears to be basic. Splynx's approach of maintaining a full history of billing runs with status tracking, transaction counts, downloadable results, and per-partner separation is significantly more mature. DotMac Sub has `app/services/billing/runs.py` and `app/tasks/billing.py` for invoice cycle runs, but the web UI for managing and reviewing batch runs could be enhanced.
+The invoice batch page (`templates/admin/billing/invoice_batch.html`) exists but the current implementation appears to be basic. legacy BSS's approach of maintaining a full history of billing runs with status tracking, transaction counts, downloadable results, and per-partner separation is significantly more mature. DotMac Sub has `app/services/billing/runs.py` and `app/tasks/billing.py` for invoice cycle runs, but the web UI for managing and reviewing batch runs could be enhanced.
 
 ### Screenshot 10: Payments List (101607.png)
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 - Full payments list under Finance with columns: Payment Number (e.g., "Cash 431", "Bank 453"), Transaction Date, Amount, Note (detailed bank transfer descriptions, narrations), Customer Name (linked), and Actions (view, edit, delete icons)
 - Status indicator column with color-coded indicators
 - Multiple payment types visible: Cash, Bank transfers with full narration text
@@ -128,7 +128,7 @@ The invoice batch page (`templates/admin/billing/invoice_batch.html`) exists but
 - Rich payment descriptions showing bank transaction narratives (e.g., "NIP/WEMA/BANK/ENE CONNECTIVITY...", "FT Transfer from AFRIEXIM CORRBIAN...")
 
 **DotMac Sub Current State:**
-The payments page (`templates/admin/billing/payments.html`) shows payment stats (Total Collected, Completed, Pending, Failed) and a payments table. It includes an Import button and Record Payment action. However, it lacks the detailed bank narration display, payment type prefix labeling (Cash/Bank/Online), and the rich transaction description field that Splynx captures from bank statements.
+The payments page (`templates/admin/billing/payments.html`) shows payment stats (Total Collected, Completed, Pending, Failed) and a payments table. It includes an Import button and Record Payment action. However, it lacks the detailed bank narration display, payment type prefix labeling (Cash/Bank/Online), and the rich transaction description field that legacy BSS captures from bank statements.
 
 ---
 
@@ -136,7 +136,7 @@ The payments page (`templates/admin/billing/payments.html`) shows payment stats 
 
 ### 5.1 Finance Dashboard Enhancements
 
-- [x] **Add period comparison summary panel** -- Display a three-column layout (Last Month / Current Month / Next Month) showing Payments, Paid Invoices, Unpaid Invoices, Credit Notes, and Total Income for each period, matching Splynx's at-a-glance period comparison
+- [x] **Add period comparison summary panel** -- Display a three-column layout (Last Month / Current Month / Next Month) showing Payments, Paid Invoices, Unpaid Invoices, Credit Notes, and Total Income for each period, matching legacy BSS's at-a-glance period comparison
 - [x] **Add Payments KPI card with count** -- Show both total payment amount and number of payments received, not just the revenue total
 - [x] **Add Unpaid Invoices KPI card** -- Add a dedicated KPI card showing total unpaid invoice amount and count alongside the existing "Pending Amount" card
 - [x] **Add Credit Notes KPI card** -- Display credit note count and total value as a standalone dashboard metric
@@ -157,9 +157,9 @@ The payments page (`templates/admin/billing/payments.html`) shows payment stats 
 
 ### 5.3 Transactions & Ledger Enhancements
 
-- [x] **Add transaction type categorization** -- Classify ledger entries into categories (Service, Payment, Credit Note, Adjustment, Refund) with dedicated filter options, matching Splynx's Category column
+- [x] **Add transaction type categorization** -- Classify ledger entries into categories (Service, Payment, Credit Note, Adjustment, Refund) with dedicated filter options, matching legacy BSS's Category column
 - [x] **Add color-coded transaction type badges** -- Display Debit entries in amber/rose badges and Credit entries in emerald/teal badges for instant visual scanning in the ledger table
-- [x] **Add ledger totals summary footer** -- Display aggregate Credit total (count + amount), Debit total (count + amount), and Net Balance at the bottom of the transactions list, matching Splynx's Totals panel
+- [x] **Add ledger totals summary footer** -- Display aggregate Credit total (count + amount), Debit total (count + amount), and Net Balance at the bottom of the transactions list, matching legacy BSS's Totals panel
 - [x] **Add date range picker to ledger** -- Add a period selector (date range picker) to filter ledger entries by transaction date, replacing or supplementing the current customer-only filter
 - [x] **Add Debit and Credit amount columns** -- Split the single "amount" column into separate Debit and Credit columns for traditional double-entry ledger display
 - [x] **Add description/narration column to ledger** -- Include a transaction description field showing the source (e.g., bank narration, invoice reference, payment method) for each ledger entry
@@ -168,12 +168,12 @@ The payments page (`templates/admin/billing/payments.html`) shows payment stats 
 ### 5.4 Invoices List Improvements
 
 - [x] **Add Payment Due and Payment Received columns** -- Show outstanding balance (Payment Due) and amount already received (Payment Received) as separate columns on the invoices list, enabling quick identification of partially paid invoices
-- [x] **Add invoice totals summary footer** -- Display count and total amount grouped by status (Paid, Unpaid, Overdue, Draft) at the bottom of the invoices table, matching Splynx's totals breakdown
+- [x] **Add invoice totals summary footer** -- Display count and total amount grouped by status (Paid, Unpaid, Overdue, Draft) at the bottom of the invoices table, matching legacy BSS's totals breakdown
 - [x] **Add inline row actions for invoices** -- Add PDF download, email/send, and print action buttons directly on each invoice row, rather than requiring navigation to the detail page first
 - [x] **Add date range selector to invoices list** -- Allow filtering invoices by creation date or due date range using a date range picker component
 - [x] **Add batch/bulk invoice actions** -- Support selecting multiple invoices and performing bulk operations: send reminders, mark as paid, void, export to PDF, or export to CSV
 - [x] **Add "Charge" quick action** -- Add a "Charge" button alongside "Create Invoice" for generating one-off service charges directly from the invoices list
-- [x] **Add proforma/draft invoice workflow** -- Support a proforma invoice stage before final invoicing, with separate tracking and conversion workflow, matching Splynx's Paid/Unpaid proforma invoice metrics
+- [x] **Add proforma/draft invoice workflow** -- Support a proforma invoice stage before final invoicing, with separate tracking and conversion workflow, matching legacy BSS's Paid/Unpaid proforma invoice metrics
 
 ### 5.5 Payment Statement Import & Bank Reconciliation
 

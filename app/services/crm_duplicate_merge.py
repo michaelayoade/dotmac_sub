@@ -1,6 +1,6 @@
-"""Merge duplicate CRM subscriber records (erpnext copies → splynx primaries).
+"""Merge duplicate CRM subscriber records (erpnext copies -> imported primaries).
 
-The CRM holds ~4.5k customers twice: a splynx-sourced record (our primary
+The CRM holds ~4.5k customers twice: an imported primary record (our primary
 crm_subscriber_id link) and an erpnext-sourced copy whose id we keep in
 metadata crm_alias_ids. Tickets mostly hang off the erpnext copies. This
 merge re-points each alias's tickets and work orders to the primary record,

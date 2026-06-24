@@ -174,7 +174,7 @@ def test_daily_period_charges_one_thirtieth(
 def test_resolver_uses_deposit_until_seeded_then_ledger(
     db_session, subscriber_account, subscription
 ):
-    """Splynx-linked: deposit drives the balance until the cutover seed exists,
+    """Migrated account: deposit drives the balance until the cutover seed exists,
     then the ledger (so drawdown debits/top-ups take effect)."""
     subscriber_account.splynx_customer_id = 4242
     subscriber_account.deposit = Decimal("5000.00")

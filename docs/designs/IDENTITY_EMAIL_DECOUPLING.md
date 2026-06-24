@@ -39,7 +39,7 @@ get mangled into `wanserverng+8265@gmail.com` to satisfy uniqueness.
   (`app/services/validation_api.py:69`; `app/services/web_customer_actions.py:1042,1142,1358`).
 
 - **❗ The `+NNNN` workaround is NOT in the codebase.** No creation/import/CRM path generates suffixed
-  emails — the app only *rejects* duplicates. The mangled addresses in prod are **data** (Splynx import
+  emails — the app only *rejects* duplicates. The mangled addresses in prod are **data** (legacy BSS import
   or manual). There is no code to delete; un-mangling is a separate data cleanup (follow-up).
 
 - **❗ Hidden coupling:** login resolution treats `Subscriber.email` as a login key
