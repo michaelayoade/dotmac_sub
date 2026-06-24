@@ -10,13 +10,13 @@ for backwards compatibility.
 
 # Re-export from core module
 from app.services.collections._core import (
-    DunningActionLogs,
     BillingEnforcementReconciler,
+    DunningActionLogs,
     # Classes
     DunningCases,
     DunningWorkflow,
-    dunning_action_logs,
     billing_enforcement_reconciler,
+    dunning_action_logs,
     # Service instances
     dunning_cases,
     dunning_workflow,
