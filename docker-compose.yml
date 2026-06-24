@@ -109,6 +109,12 @@ services:
     - -c
     - max_replication_slots=5
     - -c
+    # Cap WAL a replication slot can pin on the primary, so a disconnected /
+    # lagging standby can't grow pg_wal unbounded and fill the disk. Beyond
+    # this the slot is invalidated (standby needs re-seed) but the primary
+    # stays safe.
+    - max_slot_wal_keep_size=50GB
+    - -c
     - archive_mode=off
     - -c
     - "archive_command=/bin/true"
