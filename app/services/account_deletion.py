@@ -61,7 +61,7 @@ def request_deletion(
             subscriber_id=str(subscriber_id),
             payload=SubscriberUpdate(status=SubscriberStatus.canceled, is_active=False),
         )
-        subscriber = db.get(Subscriber, subscriber_id)
+        db.refresh(subscriber)
 
     # Stamp who/why for operations + the eventual personal-data purge.
     subscriber.metadata_ = {
