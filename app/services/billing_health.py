@@ -302,30 +302,37 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
     ``active_subs_on_terminal_account`` is an active sub whose account is
     non-billable, so the cycle never touches it (lifecycle drift, low volume).
     """
-    billable = "('active','blocked','suspended','delinquent')"
-    terminal = db.execute(
-        text(
-            f"""
+    # Static SQL — the status set is a fixed constant (the billable-account
+    # statuses), never user input, so this is not an injection surface.
+    terminal = (
+        db.execute(
+            text(
+                """
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
-            WHERE sub.status = 'active' AND s.status NOT IN {billable}
+            WHERE sub.status = 'active'
+              AND s.status NOT IN ('active', 'blocked', 'suspended', 'delinquent')
             """
-        )
-    ).scalar() or 0
+            )
+        ).scalar()
+        or 0
+    )
 
     if _prepaid_monthly_enabled(db):
-        no_path_sql = f"""
+        no_path_sql = """
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
             JOIN catalog_offers o ON o.id = sub.offer_id
-            WHERE sub.status = 'active' AND s.status IN {billable}
+            WHERE sub.status = 'active'
+              AND s.status IN ('active', 'blocked', 'suspended', 'delinquent')
               AND sub.billing_mode = 'prepaid' AND o.billing_cycle <> 'monthly'
         """
     else:
-        no_path_sql = f"""
+        no_path_sql = """
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
-            WHERE sub.status = 'active' AND s.status IN {billable}
+            WHERE sub.status = 'active'
+              AND s.status IN ('active', 'blocked', 'suspended', 'delinquent')
               AND sub.billing_mode = 'prepaid'
         """
     no_path = db.execute(text(no_path_sql)).scalar() or 0
