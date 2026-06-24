@@ -33,9 +33,28 @@ from app.models.billing import (
     Payment,
     PaymentStatus,
 )
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.scheduler import ScheduledTask
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.job_heartbeat import get_last_success
+
+# Subscriber (account) states whose ACTIVE subscriptions are still billed by
+# run_invoice_cycle — network/enforcement blocks don't suppress invoicing, so a
+# non-payment ``blocked`` (or suspended/delinquent) account is scanned. The
+# scan-coverage denominator MUST mirror this eligibility set, otherwise blocked
+# subs are scanned but not counted as eligible, inflating the ratio and hiding a
+# real cohort drop (false negative). Keep in sync with
+# app/services/billing_automation.run_invoice_cycle's billable_account_statuses.
+_BILLABLE_SUBSCRIBER_STATUSES = (
+    SubscriberStatus.active,
+    SubscriberStatus.blocked,
+    SubscriberStatus.suspended,
+    SubscriberStatus.delinquent,
+)
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -121,11 +140,18 @@ def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
         .order_by(BillingRun.created_at.desc())
         .limit(1)
     ).scalar()
+    # Mirror run_invoice_cycle's eligibility: ACTIVE subscriptions whose account
+    # is in a billable state and that are not prepaid. Counting only
+    # SubscriptionStatus.active (with no subscriber/billing_mode filter) both
+    # missed blocked/suspended/delinquent accounts that ARE billed and counted
+    # prepaid subs that are NOT — skewing the coverage ratio.
     eligible = (
         db.execute(
-            select(func.count(Subscription.id)).where(
-                Subscription.status == SubscriptionStatus.active
-            )
+            select(func.count(Subscription.id))
+            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+            .where(Subscription.status == SubscriptionStatus.active)
+            .where(Subscriber.status.in_(_BILLABLE_SUBSCRIBER_STATUSES))
+            .where(Subscription.billing_mode != BillingMode.prepaid)
         ).scalar()
         or 0
     )
