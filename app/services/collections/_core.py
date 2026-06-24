@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, LedgerEntry
 from app.models.catalog import (
     AccessCredential,
     BillingCycle,
@@ -53,14 +53,15 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
 
     The retired imported-deposit fallback is deliberately gone. Available
     balance is now local credit minus active open AR, so enforcement and portal
-    views share the same post-cutover truth source.
+    views share the same post-cutover truth source. Currency is evaluated
+    independently; credit in one currency must not cover debt in another.
     """
     from app.services.billing._common import get_account_credit_balance
 
-    credit_balance = get_account_credit_balance(db, account_id)
-    open_balance = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == coerce_uuid(account_id))
+    account_uuid = coerce_uuid(account_id)
+    open_rows = (
+        db.query(Invoice.currency, func.coalesce(func.sum(Invoice.balance_due), 0))
+        .filter(Invoice.account_id == account_uuid)
         .filter(Invoice.is_active.is_(True))
         .filter(
             Invoice.status.in_(
@@ -71,9 +72,34 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
                 ]
             )
         )
-        .scalar()
-    ) or Decimal("0.00")
-    return Decimal(str(credit_balance)) - Decimal(str(open_balance))
+        .group_by(Invoice.currency)
+        .all()
+    )
+    credit_currencies = {
+        row[0] or "NGN"
+        for row in (
+            db.query(LedgerEntry.currency)
+            .filter(LedgerEntry.account_id == account_uuid)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.is_active.is_(True))
+            .distinct()
+            .all()
+        )
+    }
+    credit_currencies.update((currency or "NGN") for currency, _amount in open_rows)
+    if not credit_currencies:
+        credit_currencies.add("NGN")
+
+    balances: list[Decimal] = []
+    open_by_currency = {
+        currency or "NGN": Decimal(str(amount or "0.00"))
+        for currency, amount in open_rows
+    }
+    for currency in sorted(credit_currencies):
+        credit_balance = get_account_credit_balance(db, account_id, currency=currency)
+        open_balance = open_by_currency.get(currency, Decimal("0.00"))
+        balances.append(Decimal(str(credit_balance)) - open_balance)
+    return min(balances) if balances else Decimal("0.00")
 
 
 def get_available_balance(db: Session, account_id: str) -> Decimal:

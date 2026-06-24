@@ -48,7 +48,9 @@ def _validate_account(db: Session, account_id: str):
     return account
 
 
-def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
+def get_account_credit_balance(
+    db: Session, account_id: str, *, currency: str | None = "NGN"
+) -> Decimal:
     """Calculate the credit balance for an account from ledger entries.
 
     Credit balance is calculated as:
@@ -58,6 +60,9 @@ def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
     Args:
         db: Database session
         account_id: The account to check
+        currency: Currency to read. Defaults to NGN so payment credit in one
+            currency cannot accidentally cover debt in another. Pass ``None``
+            only for explicit all-currency reporting, never enforcement.
 
     Returns:
         Credit balance (positive means customer has credit)
@@ -65,24 +70,28 @@ def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
     from app.services.common import coerce_uuid
 
     # Get unallocated credits (payments not applied to invoices)
-    credit_total = (
+    credit_query = (
         db.query(func.coalesce(func.sum(LedgerEntry.amount), Decimal("0.00")))
         .filter(LedgerEntry.account_id == coerce_uuid(account_id))
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
         .filter(LedgerEntry.is_active.is_(True))
-        .scalar()
-    ) or Decimal("0.00")
+    )
+    if currency is not None:
+        credit_query = credit_query.filter(LedgerEntry.currency == currency)
+    credit_total = credit_query.scalar() or Decimal("0.00")
 
     # Get debits against unallocated credits (refunds)
-    debit_total = (
+    debit_query = (
         db.query(func.coalesce(func.sum(LedgerEntry.amount), Decimal("0.00")))
         .filter(LedgerEntry.account_id == coerce_uuid(account_id))
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
         .filter(LedgerEntry.is_active.is_(True))
-        .scalar()
-    ) or Decimal("0.00")
+    )
+    if currency is not None:
+        debit_query = debit_query.filter(LedgerEntry.currency == currency)
+    debit_total = debit_query.scalar() or Decimal("0.00")
 
     return round_money(to_decimal(credit_total) - to_decimal(debit_total))
 
