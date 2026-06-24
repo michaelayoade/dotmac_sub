@@ -27,8 +27,10 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import (
     SUSPENDED_EQUIVALENT,
+    compute_account_status,
     get_active_locks,
     reactivation_blocked_by_active_login,
+    resolve_locks_for_trigger,
     restore_subscription,
 )
 from app.services import settings_spec
@@ -47,7 +49,7 @@ class ReconcileItem:
     available_balance: str | None = None
     min_balance: str | None = None
     action: str = (
-        ""  # would_restore|would_clear_lock_only|restored|lock_cleared_not_restored
+        ""  # would_restore|would_clear_lock_only|restored|lock_cleared_not_restored|lock_cleared
     )
     detail: str = ""
 
@@ -83,11 +85,10 @@ def find_candidates(
     sub_ids: list[str] | None = None,
     limit: int | None = None,
 ) -> list[Subscription]:
-    """Suspended-equivalent subs carrying an active overdue lock."""
+    """Subscriptions carrying an active overdue lock."""
     q = (
         db.query(Subscription)
         .join(EnforcementLock, EnforcementLock.subscription_id == Subscription.id)
-        .filter(Subscription.status.in_(list(SUSPENDED_EQUIVALENT)))
         .filter(EnforcementLock.is_active.is_(True))
         .filter(EnforcementLock.reason == EnforcementReason.overdue)
         .distinct()
@@ -148,7 +149,8 @@ def reconcile(
             available_balance=str(available) if available is not None else None,
             min_balance=str(threshold) if threshold is not None else None,
         )
-        will_reactivate = not other
+        subscription_is_suspended = sub.status in SUSPENDED_EQUIVALENT
+        will_reactivate = subscription_is_suspended and not other
 
         # Superseded duplicate (subscriber already active on this login) — don't
         # flip it back to active (active-login uniqueness). Skip.
@@ -163,14 +165,18 @@ def reconcile(
             continue
 
         if not apply:
-            item.action = (
-                "would_restore" if will_reactivate else "would_clear_lock_only"
-            )
-            item.detail = (
-                "would clear stale/covered overdue lock and reactivate"
-                if will_reactivate
-                else f"would clear stale/covered overdue lock; stays suspended (locks: {other})"
-            )
+            if will_reactivate:
+                item.action = "would_restore"
+                item.detail = "would clear stale/covered overdue lock and reactivate"
+            elif subscription_is_suspended:
+                item.action = "would_clear_lock_only"
+                item.detail = (
+                    "would clear stale/covered overdue lock; "
+                    f"stays suspended (locks: {other})"
+                )
+            else:
+                item.action = "would_clear_lock"
+                item.detail = "would clear stale/covered overdue lock"
             if will_reactivate:
                 result.restored += 1
             else:
@@ -178,18 +184,35 @@ def reconcile(
             result.items.append(item)
             continue
 
-        restored = restore_subscription(
-            db,
-            sid,
-            trigger=_TRIGGER,
-            resolved_by=_RESOLVED_BY,
-            reason=EnforcementReason.overdue,
-            notes=_NOTES,
-        )
+        if subscription_is_suspended:
+            restored = restore_subscription(
+                db,
+                sid,
+                trigger=_TRIGGER,
+                resolved_by=_RESOLVED_BY,
+                reason=EnforcementReason.overdue,
+                notes=_NOTES,
+            )
+        else:
+            resolved_count, _remaining = resolve_locks_for_trigger(
+                db,
+                sub,
+                trigger=_TRIGGER,
+                resolved_by=_RESOLVED_BY,
+                reason=EnforcementReason.overdue,
+                notes=_NOTES,
+            )
+            if resolved_count:
+                compute_account_status(db, str(sub.subscriber_id))
+            restored = False
         if restored:
             item.action = "restored"
             item.detail = "stale/covered overdue lock cleared; reactivated"
             result.restored += 1
+        elif not subscription_is_suspended:
+            item.action = "lock_cleared"
+            item.detail = "stale/covered overdue lock cleared"
+            result.lock_cleared_only += 1
         else:
             item.action = "lock_cleared_not_restored"
             item.detail = (
