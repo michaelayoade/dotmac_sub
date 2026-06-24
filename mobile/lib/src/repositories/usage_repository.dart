@@ -47,8 +47,8 @@ class UsageRepository {
   /// (back to 2018 for migrated accounts), summed across the subscriber's
   /// subscriptions. Aggregated to months client-side for the trend chart.
   Future<UsageHistory> usageHistory({int days = 365}) async {
-    final data = await guard(() =>
-        dio.get('/me/usage-history', queryParameters: {'days': days}));
+    final data = await guard(
+        () => dio.get('/me/usage-history', queryParameters: {'days': days}));
     return UsageHistory.fromJson(data as Map<String, dynamic>);
   }
 

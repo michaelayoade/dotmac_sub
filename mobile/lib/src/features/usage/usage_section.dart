@@ -245,8 +245,8 @@ class _MonthlyUsageBody extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: _Stat(
-                      label: 'Avg / month', value: Fmt.bytes(avgBytes)),
+                  child:
+                      _Stat(label: 'Avg / month', value: Fmt.bytes(avgBytes)),
                 ),
                 Expanded(
                   child: _Stat(
