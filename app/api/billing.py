@@ -1173,11 +1173,6 @@ def initiate_payment(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # Resolve the email the gateway webview needs (the customer dict carries none).
-    from app.models.subscriber import Subscriber
-
-    sub = db.get(Subscriber, customer["subscriber_id"])
-    email = (getattr(sub, "email", None) or None) if sub else None
     return PaymentInitiateResponse(
         invoice_id=payload.invoice_id,
         invoice_number=result.get("invoice_number"),
@@ -1186,7 +1181,7 @@ def initiate_payment(
         provider_type=result["provider_type"],
         provider_public_key=result.get("provider_public_key"),
         payment_reference=result["reference"],
-        customer_email=email,
+        customer_email=result.get("customer_email"),
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
     )
