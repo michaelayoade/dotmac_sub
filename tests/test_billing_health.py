@@ -13,15 +13,28 @@ from app.models.billing import (
     Payment,
     PaymentStatus,
 )
+from app.models.catalog import (
+    AccessType,
+    BillingMode,
+    CatalogOffer,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import billing_health
 from app.services.billing_health import BillingHealthSnapshot
 
 
-def _subscriber(db) -> Subscriber:
+def _subscriber(
+    db, status=SubscriberStatus.active, email="hmon@example.com"
+) -> Subscriber:
     s = Subscriber(
-        first_name="Health", last_name="Mon", email="hmon@example.com",
-        status=SubscriberStatus.active,
+        first_name="Health",
+        last_name="Mon",
+        email=email,
+        status=status,
     )
     db.add(s)
     db.commit()
@@ -29,7 +42,40 @@ def _subscriber(db) -> Subscriber:
     return s
 
 
-def _add_payments(db, n: int, paid_at: datetime, status=PaymentStatus.succeeded) -> None:
+def _offer(db) -> CatalogOffer:
+    offer = CatalogOffer(
+        name="Health Offer",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_mode=BillingMode.postpaid,
+    )
+    db.add(offer)
+    db.flush()
+    return offer
+
+
+def _subscription(
+    db,
+    subscriber,
+    offer,
+    status=SubscriptionStatus.active,
+    billing_mode=BillingMode.postpaid,
+) -> Subscription:
+    s = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=status,
+        billing_mode=billing_mode,
+    )
+    db.add(s)
+    db.flush()
+    return s
+
+
+def _add_payments(
+    db, n: int, paid_at: datetime, status=PaymentStatus.succeeded
+) -> None:
     for _ in range(n):
         db.add(Payment(amount=Decimal("100"), status=status, paid_at=paid_at))
     db.commit()
@@ -48,7 +94,9 @@ def test_paid_with_balance_counts_only_nonzero(db_session):
     )
     # an overdue-with-balance invoice must NOT count (only status=paid does)
     db_session.add(
-        Invoice(account_id=sub.id, status=InvoiceStatus.overdue, balance_due=Decimal("99"))
+        Invoice(
+            account_id=sub.id, status=InvoiceStatus.overdue, balance_due=Decimal("99")
+        )
     )
     db_session.commit()
     count, total = billing_health.paid_with_balance(db_session)
@@ -111,6 +159,44 @@ def test_invoice_scan_ratio_from_latest_run(db_session):
     assert last_scanned == 3
     # eligible active subs is 0 in this isolated test -> ratio guarded to None
     assert ratio is None
+
+
+def test_invoice_scan_coverage_counts_blocked_subscriber_subs(db_session):
+    """run_invoice_cycle still bills active subs of blocked/suspended/delinquent
+    accounts, so the coverage denominator must count them too (else blocked subs
+    are scanned but not eligible -> ratio inflated, real cohort drop hidden)."""
+    offer = _offer(db_session)
+    active_acct = _subscriber(db_session, SubscriberStatus.active, "a@example.com")
+    blocked_acct = _subscriber(db_session, SubscriberStatus.blocked, "b@example.com")
+    suspended_acct = _subscriber(
+        db_session, SubscriberStatus.suspended, "s@example.com"
+    )
+    delinquent = _subscriber(db_session, SubscriberStatus.delinquent, "d@example.com")
+    # disabled account is NOT billable -> must be excluded
+    disabled_acct = _subscriber(db_session, SubscriberStatus.disabled, "x@example.com")
+    _subscription(db_session, active_acct, offer)
+    _subscription(db_session, blocked_acct, offer)
+    _subscription(db_session, suspended_acct, offer)
+    _subscription(db_session, delinquent, offer)
+    _subscription(db_session, disabled_acct, offer)
+    # prepaid active sub is skipped by the cycle -> must be excluded
+    prepaid_acct = _subscriber(db_session, SubscriberStatus.active, "p@example.com")
+    _subscription(db_session, prepaid_acct, offer, billing_mode=BillingMode.prepaid)
+    db_session.add(
+        BillingRun(
+            run_at=datetime.now(UTC),
+            subscriptions_scanned=4,
+            status=BillingRunStatus.success,
+        )
+    )
+    db_session.commit()
+
+    last_scanned, eligible, ratio = billing_health.invoice_scan_coverage(db_session)
+    assert last_scanned == 4
+    # active + blocked + suspended + delinquent (non-prepaid) = 4; disabled and
+    # prepaid excluded.
+    assert eligible == 4
+    assert ratio == 1.0
 
 
 # ---- anomaly thresholds (pure) --------------------------------------------
