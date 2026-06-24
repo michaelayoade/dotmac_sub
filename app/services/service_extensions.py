@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
@@ -69,7 +70,10 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
     if parsed_uuid is not None:
         subscriber = db.get(Subscriber, parsed_uuid)
         if subscriber is not None:
-            matches.append(subscriber)
+            return subscriber
+        raise HTTPException(
+            status_code=400, detail=f"Could not find customer: {identifier}"
+        )
 
     # 2. Exact account / subscriber number (case-insensitive).
     lowered = identifier.lower()
@@ -89,6 +93,12 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
             ).all()
         )
 
+    matches = _unique_subscribers(matches)
+    if len(matches) > 1:
+        raise HTTPException(status_code=400, detail=ambiguous_detail)
+    if len(matches) == 1:
+        return matches[0]
+
     # 4. Email / phone via the indexed customer-identity resolver (auto-detects
     #    type, queries customer_identity_index — no full table scan). A shared
     #    contact email (non-unique post-decoupling) resolves as ambiguous.
@@ -103,8 +113,6 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
             matches.append(subscriber)
 
     matches = _unique_subscribers(matches)
-    if len(matches) > 1:
-        raise HTTPException(status_code=400, detail=ambiguous_detail)
     if len(matches) == 1:
         return matches[0]
     # No exact match: an email/phone that resolved to several customers is
@@ -130,11 +138,31 @@ def resolve_subscriber_identifiers(
     return resolved
 
 
+def _coerce_resolved_subscriber_ids(
+    subscriber_ids: Sequence[str | uuid.UUID] | None,
+) -> list[uuid.UUID]:
+    resolved: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw_id in subscriber_ids or []:
+        subscriber_id = _parse_uuid(str(raw_id))
+        if subscriber_id is None:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid subscriber id in scope: {raw_id}"
+            )
+        if subscriber_id in seen:
+            continue
+        seen.add(subscriber_id)
+        resolved.append(subscriber_id)
+    return resolved
+
+
 def _scope_filters(
     db: Session,
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
-    subscriber_ids: list[str] | None = None,
+    subscriber_ids: Sequence[str | uuid.UUID] | None = None,
+    *,
+    subscriber_ids_resolved: bool = False,
 ) -> list:
     filters = [Subscription.status == SubscriptionStatus.active]
     if scope_type == ServiceExtensionScope.nas_device:
@@ -150,7 +178,11 @@ def _scope_filters(
             )
         )
     elif scope_type == ServiceExtensionScope.subscribers:
-        ids = resolve_subscriber_identifiers(db, subscriber_ids)
+        ids = (
+            _coerce_resolved_subscriber_ids(subscriber_ids)
+            if subscriber_ids_resolved
+            else resolve_subscriber_identifiers(db, list(subscriber_ids or []))
+        )
         if not ids:
             raise HTTPException(
                 status_code=400, detail="At least one subscriber is required"
@@ -163,9 +195,17 @@ def _scope_subscription_counts(
     db: Session,
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
-    subscriber_ids: list[str] | None = None,
+    subscriber_ids: Sequence[str | uuid.UUID] | None = None,
+    *,
+    subscriber_ids_resolved: bool = False,
 ) -> tuple[int, int]:
-    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    filters = _scope_filters(
+        db,
+        scope_type,
+        scope_id,
+        subscriber_ids,
+        subscriber_ids_resolved=subscriber_ids_resolved,
+    )
     total = db.scalar(select(func.count(Subscription.id)).where(*filters)) or 0
     extendable = (
         db.scalar(
@@ -182,11 +222,18 @@ def _scope_subscription_sample(
     db: Session,
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
-    subscriber_ids: list[str] | None = None,
+    subscriber_ids: Sequence[str | uuid.UUID] | None = None,
     *,
     limit: int = PREVIEW_SAMPLE_LIMIT,
+    subscriber_ids_resolved: bool = False,
 ) -> list[Subscription]:
-    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    filters = _scope_filters(
+        db,
+        scope_type,
+        scope_id,
+        subscriber_ids,
+        subscriber_ids_resolved=subscriber_ids_resolved,
+    )
     stmt = (
         select(Subscription)
         .options(joinedload(Subscription.subscriber))
@@ -201,10 +248,18 @@ def resolve_scope_subscriptions(
     db: Session,
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
-    subscriber_ids: list[str] | None = None,
+    subscriber_ids: Sequence[str | uuid.UUID] | None = None,
+    *,
+    subscriber_ids_resolved: bool = False,
 ) -> list[Subscription]:
     """Active subscriptions in scope, with subscriber eagerly loaded."""
-    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    filters = _scope_filters(
+        db,
+        scope_type,
+        scope_id,
+        subscriber_ids,
+        subscriber_ids_resolved=subscriber_ids_resolved,
+    )
     stmt = (
         select(Subscription)
         .options(joinedload(Subscription.subscriber))
@@ -217,11 +272,18 @@ def _iter_scope_subscriptions(
     db: Session,
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
-    subscriber_ids: list[str] | None = None,
+    subscriber_ids: Sequence[str | uuid.UUID] | None = None,
     *,
     batch_size: int = APPLY_BATCH_SIZE,
+    subscriber_ids_resolved: bool = False,
 ):
-    filters = _scope_filters(db, scope_type, scope_id, subscriber_ids)
+    filters = _scope_filters(
+        db,
+        scope_type,
+        scope_id,
+        subscriber_ids,
+        subscriber_ids_resolved=subscriber_ids_resolved,
+    )
     offset = 0
     while True:
         ids = list(
@@ -282,7 +344,13 @@ def create_extension(
     )
     # Validates scope inputs (raises on missing scope_id / empty list) without
     # materializing every active subscription for network-wide extensions.
-    _scope_subscription_counts(db, scope_type, scope_id, resolved_subscriber_ids)
+    _scope_subscription_counts(
+        db,
+        scope_type,
+        scope_id,
+        resolved_subscriber_ids,
+        subscriber_ids_resolved=scope_type == ServiceExtensionScope.subscribers,
+    )
 
     extension = ServiceExtension(
         reason=reason.strip(),
@@ -316,12 +384,16 @@ def preview_extension(db: Session, extension: ServiceExtension) -> dict:
         extension.scope_type,
         scope_id,
         extension.scope_subscriber_ids,
+        subscriber_ids_resolved=extension.scope_type
+        == ServiceExtensionScope.subscribers,
     )
     sample = _scope_subscription_sample(
         db,
         extension.scope_type,
         scope_id,
         extension.scope_subscriber_ids,
+        subscriber_ids_resolved=extension.scope_type
+        == ServiceExtensionScope.subscribers,
     )
     return {
         "subscriptions": sample,
@@ -373,6 +445,8 @@ def apply_extension(
         extension.scope_type,
         str(extension.scope_id) if extension.scope_id else None,
         extension.scope_subscriber_ids,
+        subscriber_ids_resolved=extension.scope_type
+        == ServiceExtensionScope.subscribers,
     ):
         previous = subscription.next_billing_at
         if previous is None:
