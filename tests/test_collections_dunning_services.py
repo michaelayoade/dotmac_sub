@@ -770,3 +770,133 @@ def test_billing_enforcement_settles_payment_credit_before_dunning(
     assert response.dunning_accounts_scanned == 0
     assert invoice.status == InvoiceStatus.paid
     assert invoice.balance_due == Decimal("0.00")
+
+
+def test_billing_enforcement_health_keeps_notification_gate_optional(
+    db_session, monkeypatch
+):
+    """Notification health can be observed without blocking enforcement."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import billing_enforcement_guards as guards
+
+    def _resolve_value(_db, domain, key):
+        settings = {
+            (SettingDomain.collections, "billing_enforcement_health_gates_enabled"): True,
+            (
+                SettingDomain.collections,
+                "billing_enforcement_require_notification_health",
+            ): False,
+            (SettingDomain.collections, "billing_enforcement_require_payment_health"): True,
+        }
+        return settings.get((domain, key))
+
+    monkeypatch.setattr(guards.settings_spec, "resolve_value", _resolve_value)
+    monkeypatch.setattr(
+        guards,
+        "notification_delivery_health",
+        lambda _db: guards.EnforcementHealth(
+            ok=False,
+            reasons=["critical_notifications_failed"],
+            details={"recent_failed": 10},
+        ),
+    )
+    monkeypatch.setattr(
+        guards,
+        "payment_channel_health",
+        lambda _db: guards.EnforcementHealth(
+            ok=False,
+            reasons=["payment_webhook_dead_letters"],
+            details={"dead_letters": 1},
+        ),
+    )
+
+    health = guards.billing_enforcement_health(db_session)
+
+    assert health.ok is False
+    assert health.reasons == ["payment_webhook_dead_letters"]
+    assert "notification_recent_failed" not in health.details
+    assert health.details["payment_dead_letters"] == 1
+
+
+def test_billing_enforcement_health_can_require_notifications(
+    db_session, monkeypatch
+):
+    """Turning the notification gate on makes notification failures blocking."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import billing_enforcement_guards as guards
+
+    def _resolve_value(_db, domain, key):
+        settings = {
+            (SettingDomain.collections, "billing_enforcement_health_gates_enabled"): True,
+            (
+                SettingDomain.collections,
+                "billing_enforcement_require_notification_health",
+            ): True,
+            (SettingDomain.collections, "billing_enforcement_require_payment_health"): False,
+        }
+        return settings.get((domain, key))
+
+    monkeypatch.setattr(guards.settings_spec, "resolve_value", _resolve_value)
+    monkeypatch.setattr(
+        guards,
+        "notification_delivery_health",
+        lambda _db: guards.EnforcementHealth(
+            ok=False,
+            reasons=["critical_notifications_not_draining"],
+            details={"old_queued": 1},
+        ),
+    )
+
+    health = guards.billing_enforcement_health(db_session)
+
+    assert health.ok is False
+    assert health.reasons == ["critical_notifications_not_draining"]
+    assert health.details["notification_old_queued"] == 1
+
+
+def test_billing_enforcement_credit_settle_failures_are_counted(
+    db_session, subscriber, subscription, catalog_offer, monkeypatch
+):
+    """A credit-settle exception is isolated and reported, not fatal."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.services.billing import _common as billing_common
+    from app.services.billing import reconcile_unposted
+    from app.services.collections._core import BillingEnforcementReconciler
+
+    invoice = _setup_overdue_postpaid_account(
+        db_session, subscriber, subscription, catalog_offer
+    )
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.collections,
+            key="billing_enforcement_settle_credit_before_dunning_enabled",
+            value_text="true",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        billing_common,
+        "get_account_credit_balance",
+        lambda _db, _account_id: invoice.balance_due,
+    )
+
+    def _raise_settle(_db, _account_id):
+        raise RuntimeError("settlement failed")
+
+    monkeypatch.setattr(
+        reconcile_unposted,
+        "settle_open_invoices_from_credit",
+        _raise_settle,
+    )
+
+    stats = BillingEnforcementReconciler._settle_due_credit_before_dunning(
+        db_session, datetime.now(UTC)
+    )
+
+    assert stats["credit_accounts_scanned"] == 1
+    assert stats["credit_accounts_settled"] == 0
+    assert stats["credit_invoices_touched"] == 0
+    assert stats["credit_settlement_errors"] == 1
+    assert stats["credit_applied"] == "0.00"
