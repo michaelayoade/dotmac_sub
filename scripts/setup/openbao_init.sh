@@ -152,9 +152,7 @@ seed_group s3 \
     "secret_key=${S3_SECRET_KEY:-}"
 
 seed_group migration \
-    "SPLYNX_MYSQL_PASS" \
-    "smartolt_api_key=${SMARTOLT_API_KEY:-}" \
-    "splynx_mysql_pass=${SPLYNX_MYSQL_PASS:-}"
+    "smartolt_api_key=${SMARTOLT_API_KEY:-}"
 
 seed_group notifications \
     "SMTP_PORT" \

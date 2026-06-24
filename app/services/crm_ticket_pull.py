@@ -216,7 +216,7 @@ def _find_local_subscriber_id_from_ticket_text(
 def load_local_crm_id_map(db: Session) -> dict[str, UUID]:
     """Map stored CRM subscriber UUIDs (and aliases) to local subscriber IDs.
 
-    The CRM holds some customers twice (a splynx-sourced and an erpnext-sourced
+    The CRM holds some customers twice (an imported and an erpnext-sourced
     record). The primary link lives in crm_subscriber_id; duplicate CRM ids are
     kept in metadata crm_alias_ids so tickets attached to either record map to
     the same local subscriber.
@@ -272,7 +272,7 @@ def build_subscriber_cache(
     *,
     max_pages: int = 200,
 ) -> dict[str, UUID]:
-    """Map CRM subscriber UUIDs to local subscribers via Splynx external IDs."""
+    """Map CRM subscriber UUIDs to local subscribers via imported external IDs."""
     return build_subscriber_cache_from_map(
         load_local_subscriber_map(db),
         client,
@@ -281,7 +281,7 @@ def build_subscriber_cache(
 
 
 def load_local_subscriber_map(db: Session) -> dict[int, UUID]:
-    """Map Splynx customer IDs to local subscriber IDs."""
+    """Map imported customer IDs to local subscriber IDs."""
     return {
         int(splynx_customer_id): subscriber_id
         for splynx_customer_id, subscriber_id in db.query(
@@ -445,7 +445,7 @@ def sync_ticket(
     if not subscriber_id:
         return "skipped_unmapped_subscriber", 0, None
     if resolved_via_legacy_chain and crm_subscriber_id:
-        # The CRM subscriber's Splynx external id matched a local subscriber;
+        # The CRM subscriber's imported external id matched a local subscriber;
         # store the direct link. Text-regex matches are NOT persisted — the
         # title may name a different customer than the ticket's CRM subscriber.
         _persist_crm_subscriber_id(

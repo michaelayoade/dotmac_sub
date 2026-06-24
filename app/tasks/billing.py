@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from app.celery_app import celery_app
 from app.services import billing_automation as billing_automation_service
+from app.services.billing_settings import check_billing_switch
 from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
@@ -55,6 +56,24 @@ def mark_invoices_overdue() -> dict[str, int]:
     except Exception:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.tasks.billing.check_billing_switch")
+def check_billing_switch_task() -> dict:
+    """Config-integrity guard: alert if billing_enabled drifts from expected."""
+    session = SessionLocal()
+    try:
+        result = check_billing_switch(session)
+        if not result["ok"]:
+            logger.critical(
+                "billing_switch_drift: billing_enabled=%s expected=%s; "
+                "local billing may act on customers unexpectedly",
+                result["actual"],
+                result["expected"],
+            )
+        return result
     finally:
         session.close()
 

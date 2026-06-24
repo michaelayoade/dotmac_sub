@@ -52,9 +52,9 @@ class ContactMethod(enum.Enum):
 
 
 class SubscriberStatus(enum.Enum):
-    """Account status — mirrors Splynx customer status lifecycle.
+    """Account status — mirrors the imported customer status lifecycle.
 
-    Splynx mapping (1:1):
+    Imported status mapping (1:1):
       new      → new (signed up, not yet activated)
       active   → active (paying, service running)
       blocked  → blocked (temporarily blocked — non-payment or violation)
@@ -62,15 +62,15 @@ class SubscriberStatus(enum.Enum):
       deleted  → canceled (soft-deleted, record preserved for audit)
 
     DotMac-only statuses:
-      suspended — generic suspension (non-Splynx origin)
+      suspended — generic suspension (local origin)
       delinquent — past due, pre-suspension
     """
 
     new = "new"  # Signed up, awaiting activation
     active = "active"  # Active, paying subscriber
-    blocked = "blocked"  # Temporarily blocked (Splynx: blocked)
+    blocked = "blocked"  # Temporarily blocked
     suspended = "suspended"  # Generic suspension (DotMac-native)
-    disabled = "disabled"  # Permanently deactivated by admin (Splynx: disabled)
+    disabled = "disabled"  # Permanently deactivated by admin
     canceled = "canceled"  # Terminated / soft-deleted
     delinquent = "delinquent"  # Past due, pre-suspension
 
@@ -321,7 +321,7 @@ class Subscriber(Base):
     )
 
     # === Transient Attributes (not persisted) ===
-    # Used by legacy_bss.py to stage customer ID before syncing to SplynxIdMapping
+    # Used by legacy_bss.py to stage customer ID before writing ID mappings.
     _legacy_bss_customer_id: ClassVar[int | None] = None
 
     # === Relationships ===

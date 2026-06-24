@@ -36,7 +36,7 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
     "other": (LedgerSource.other,),
 }
 
-# Splynx cutover: the migrated ledger carries invoice debits only through this
+# Legacy cutover: the migrated ledger carries invoice debits only through this
 # instant. Native invoice issuance does NOT post a debit to ledger_entries (the
 # invoice row itself is the AR record), so without merging post-cutover invoices
 # the ledger view looks frozen at March 2026. Invoices issued on/before the
@@ -89,9 +89,9 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
 
 
 def _splynx_credit_as_ledger_row(txn, account) -> SimpleNamespace:  # type: ignore[no-untyped-def]
-    """Adapt an unmigrated Splynx credit transaction into a display row.
+    """Adapt an unmigrated legacy credit transaction into a display row.
 
-    Some pre-cutover Splynx credits (back-office corrections, credit notes,
+    Some pre-cutover credits (back-office corrections, credit notes,
     withholding-tax, service credits) were not imported 1:1 into ledger_entries;
     their VALUE is already reflected in each prepaid account's balance via the
     cutover deposit true-up, so they must NOT be inserted as real ledger rows
@@ -113,7 +113,7 @@ def _splynx_credit_as_ledger_row(txn, account) -> SimpleNamespace:  # type: igno
         source=SimpleNamespace(value="credit_note"),
         amount=txn.amount,
         currency="NGN",
-        memo=f"{label} (Splynx)",
+        memo=f"{label} (legacy import)",
         effective_date=when,
         created_at=when,
         is_active=True,
@@ -239,13 +239,13 @@ def build_ledger_entries_data(
                 .all()
             ]
 
-        # Merge pre-cutover Splynx credits that were never migrated 1:1 into the
+        # Merge pre-cutover credits that were never migrated 1:1 into the
         # ledger (corrections / credit notes / withholding-tax / service credits),
-        # so they are visible "as they were in Splynx". Display-only: deduped
+        # so they remain visible for audit. Display-only: deduped
         # against existing ledger credits (same account+amount+date) so already-
         # migrated ones aren't shown twice; never written to ledger_entries, so
         # balances are untouched. They are credits, shown under "credit_note".
-        # These Splynx credits are all pre-cutover (<= 2026-03-15), so in an
+        # These legacy credits are all pre-cutover (<= 2026-03-15), so in an
         # unscoped, recency-ordered view they can never beat the post-cutover
         # top-N — running the (correlated) dedup scan there is pure cost for zero
         # rows. Only evaluate it when the view is scoped to a customer/partner or

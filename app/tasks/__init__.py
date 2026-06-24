@@ -17,13 +17,9 @@ from app.tasks.bandwidth import (
 from app.tasks.bandwidth import (
     trim_redis_stream as trim_bandwidth_stream,
 )
-from app.tasks.billing import run_invoice_cycle
+from app.tasks.billing import check_billing_switch_task, run_invoice_cycle
 from app.tasks.catalog import expire_subscriptions
-from app.tasks.collections import (
-    run_dunning,
-    run_prepaid_enforcement,
-    run_retired_lock_reconcile,
-)
+from app.tasks.collections import run_dunning
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.crm_sync import redrive_crm_dead_letters
@@ -81,10 +77,6 @@ from app.tasks.ont_provisioning import (
     queue_bulk_provisioning,
 )
 from app.tasks.payment_reconciliation import reconcile_topups
-from app.tasks.prepaid_billing import (
-    check_billing_switch_task,
-    run_prepaid_charges_task,
-)
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
@@ -184,9 +176,6 @@ __all__ = [
     "reconcile_topups",
     "expire_subscriptions",
     "run_dunning",
-    "run_prepaid_enforcement",
-    "run_retired_lock_reconcile",
-    "run_prepaid_charges_task",
     "check_billing_switch_task",
     "push_crm_subscriber_change",
     "redrive_crm_dead_letters",

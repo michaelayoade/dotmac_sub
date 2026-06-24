@@ -617,7 +617,7 @@ class LedgerEntryRead(LedgerEntryBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    # Real-world date of the entry (invoice issue / payment / Splynx txn date).
+    # Real-world date of the entry (invoice issue / payment / imported txn date).
     # NULL for native and unbackfilled rows; clients should prefer it over
     # created_at (the import instant) and fall back to created_at when NULL.
     effective_date: datetime | None = None

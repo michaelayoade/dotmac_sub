@@ -1,6 +1,6 @@
 """Validate a proposed mutation of ``OntDesiredState``.
 
-Validation runs at the boundary — UI write endpoints, Splynx webhooks, and the
+Validation runs at the boundary — UI write endpoints, external webhooks, and the
 top of ``reconcile_ont`` itself. Internal reconciler code (planner, applier,
 readers) does **not** re-validate. The current ``OntDesiredState`` is assumed
 valid because it had to pass validation when it was first committed.

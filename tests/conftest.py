@@ -484,9 +484,8 @@ def subscription(db_session, subscriber, catalog_offer):
     """Active subscription for usage tests.
 
     Defaults to POSTPAID (the invoice-eligible mode). The model column default
-    is prepaid, but prepaid is billed by deposit drawdown and is excluded from
-    invoice generation, so a generic invoiceable subscription must be postpaid.
-    Prepaid tests override billing_mode explicitly.
+    is prepaid, but generic invoice-generation tests use postpaid by default.
+    Prepaid monthly-invoicing tests override billing_mode explicitly.
     """
     from app.models.catalog import BillingMode
 

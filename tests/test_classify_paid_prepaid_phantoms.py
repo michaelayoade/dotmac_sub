@@ -48,7 +48,7 @@ def test_classify_already_credited_local_ledger():
 
 
 def test_classify_already_credited_via_splynx_deposit():
-    # unseeded Splynx deposit already nets the payment; no local credit needed
+    # unseeded imported deposit already nets the payment; no local credit needed
     assert (
         classify_one(
             _ev(all_allocated_have_credit=False, splynx_linked=True, deposit="5000.00")

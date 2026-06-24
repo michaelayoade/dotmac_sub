@@ -1,6 +1,6 @@
 # DotMac Feature Improvement Roadmap
 
-*Comparison with Splynx v4.0-v5.2 feature set*
+*Comparison with legacy BSS v4.0-v5.2 feature set*
 
 ---
 
@@ -8,7 +8,7 @@
 *Reduce manual intervention, improve cash flow*
 
 ### 1.1 Auto Invoice Charging
-**Priority: P0 (Critical)** | **Effort: Medium** | **Splynx: v5.1**
+**Priority: P0 (Critical)** | **Effort: Medium** | **legacy BSS: v5.1**
 
 Automatically charge issued invoices against stored payment methods.
 
@@ -42,7 +42,7 @@ class InvoiceChargeAttempt(Base):
 ---
 
 ### 1.2 Linked Accounts (Consolidated Billing)
-**Priority: P1 (High)** | **Effort: Large** | **Splynx: v5.1**
+**Priority: P1 (High)** | **Effort: Large** | **legacy BSS: v5.1**
 
 Allow multiple subscriber accounts to roll up to a single billing entity.
 
@@ -78,7 +78,7 @@ class SubscriberAccountLink(Base):
 ---
 
 ### 1.3 Tax Update Tool
-**Priority: P2 (Medium)** | **Effort: Medium** | **Splynx: v5.2**
+**Priority: P2 (Medium)** | **Effort: Medium** | **legacy BSS: v5.2**
 
 Bulk update tax rates with safety mechanisms.
 
@@ -100,7 +100,7 @@ Bulk update tax rates with safety mechanisms.
 ---
 
 ### 1.4 Prorated Cancellation Refunds
-**Priority: P1 (High)** | **Effort: Medium** | **Splynx: v5.1**
+**Priority: P1 (High)** | **Effort: Medium** | **legacy BSS: v5.1**
 
 Automatic refund calculation when services are cancelled mid-cycle.
 
@@ -127,7 +127,7 @@ class CancellationRefundPolicy(Base):
 *Reduce support burden, improve customer experience*
 
 ### 2.1 Customer Portal 2FA
-**Priority: P0 (Critical)** | **Effort: Small** | **Splynx: v4.2**
+**Priority: P0 (Critical)** | **Effort: Small** | **legacy BSS: v4.2**
 
 Two-factor authentication for customer portal login.
 
@@ -162,7 +162,7 @@ class SubscriberMfaBackupCode(Base):
 ---
 
 ### 2.2 Self-Service Cancellation
-**Priority: P1 (High)** | **Effort: Medium** | **Splynx: v5.2**
+**Priority: P1 (High)** | **Effort: Medium** | **legacy BSS: v5.2**
 
 Allow customers to cancel services from portal.
 
@@ -197,7 +197,7 @@ class CancellationRequest(Base):
 ---
 
 ### 2.3 Blocked Customer DNS Redirect
-**Priority: P1 (High)** | **Effort: Medium** | **Splynx: v5.1**
+**Priority: P1 (High)** | **Effort: Medium** | **legacy BSS: v5.1**
 
 Redirect blocked customers to a landing page instead of hard block.
 
@@ -229,7 +229,7 @@ class BlockedCustomerRedirect(Base):
 ---
 
 ### 2.4 Referral Program
-**Priority: P3 (Low)** | **Effort: Medium** | **Splynx: v4.2**
+**Priority: P3 (Low)** | **Effort: Medium** | **legacy BSS: v4.2**
 
 Customer referral tracking and rewards.
 
@@ -268,7 +268,7 @@ class Referral(Base):
 *Improve NOC efficiency and network reliability*
 
 ### 3.1 RADIUS Failover
-**Priority: P1 (High)** | **Effort: Medium** | **Splynx: v4.1**
+**Priority: P1 (High)** | **Effort: Medium** | **legacy BSS: v4.1**
 
 Backup RADIUS server for high availability.
 
@@ -301,7 +301,7 @@ class RadiusServerHealth(Base):
 ---
 
 ### 3.2 Multi-PSK for MDUs
-**Priority: P2 (Medium)** | **Effort: Large** | **Splynx: v5.1/5.2**
+**Priority: P2 (Medium)** | **Effort: Large** | **legacy BSS: v5.1/5.2**
 
 Multiple pre-shared keys per WiFi network for apartment buildings.
 
@@ -342,7 +342,7 @@ class WifiPsk(Base):
 ---
 
 ### 3.3 NetFlow Traffic Analysis
-**Priority: P3 (Low)** | **Effort: Large** | **Splynx: v4.0**
+**Priority: P3 (Low)** | **Effort: Large** | **legacy BSS: v4.0**
 
 Network traffic analysis and statistics.
 
@@ -376,7 +376,7 @@ class TrafficSummary(Base):  # Aggregated hourly
 *Field technician and NOC workflow improvements*
 
 ### 4.1 Task Labels (Color-Coded)
-**Priority: P2 (Medium)** | **Effort: Small** | **Splynx: v5.1**
+**Priority: P2 (Medium)** | **Effort: Small** | **legacy BSS: v5.1**
 
 Visual categorization of tasks.
 
@@ -404,7 +404,7 @@ class TaskLabelAssignment(Base):
 ---
 
 ### 4.2 Mass Task Actions
-**Priority: P2 (Medium)** | **Effort: Small** | **Splynx: v5.0**
+**Priority: P2 (Medium)** | **Effort: Small** | **legacy BSS: v5.0**
 
 Bulk operations on multiple tasks.
 
@@ -422,7 +422,7 @@ Bulk operations on multiple tasks.
 ---
 
 ### 4.3 Scheduling Calendar
-**Priority: P2 (Medium)** | **Effort: Large** | **Splynx: v4.3**
+**Priority: P2 (Medium)** | **Effort: Large** | **legacy BSS: v4.3**
 
 Visual calendar for field technician scheduling.
 
@@ -467,7 +467,7 @@ class AppointmentSlot(Base):
 ---
 
 ### 4.4 Inventory + Scheduling Integration
-**Priority: P3 (Low)** | **Effort: Medium** | **Splynx: v5.1**
+**Priority: P3 (Low)** | **Effort: Medium** | **legacy BSS: v5.1**
 
 Link inventory items to scheduled tasks.
 
@@ -495,7 +495,7 @@ class TaskEquipmentRequirement(Base):
 *Improve customer engagement*
 
 ### 5.1 WhatsApp Enhancements
-**Priority: P2 (Medium)** | **Effort: Medium** | **Splynx: v5.2**
+**Priority: P2 (Medium)** | **Effort: Medium** | **legacy BSS: v5.2**
 
 Improve WhatsApp integration.
 
@@ -523,7 +523,7 @@ class WhatsAppUnansweredAlert(Base):
 ---
 
 ### 5.2 Ticket Feedback Surveys
-**Priority: P3 (Low)** | **Effort: Small** | **Splynx: v4.1**
+**Priority: P3 (Low)** | **Effort: Small** | **legacy BSS: v4.1**
 
 Customer satisfaction measurement.
 
@@ -550,7 +550,7 @@ class TicketFeedback(Base):
 *Stock management improvements*
 
 ### 6.1 Low-Stock Alerts
-**Priority: P2 (Medium)** | **Effort: Small** | **Splynx: v4.1**
+**Priority: P2 (Medium)** | **Effort: Small** | **legacy BSS: v4.1**
 
 Per-product stock threshold notifications.
 
@@ -574,7 +574,7 @@ class InventoryStockThreshold(Base):
 ---
 
 ### 6.2 Stock Location Permissions
-**Priority: P3 (Low)** | **Effort: Small** | **Splynx: v5.1**
+**Priority: P3 (Low)** | **Effort: Small** | **legacy BSS: v5.1**
 
 Per-location inventory access control.
 
@@ -600,7 +600,7 @@ class InventoryLocationPermission(Base):
 *Improve administrator experience*
 
 ### 7.1 Global Search Shortcut
-**Priority: P2 (Medium)** | **Effort: Small** | **Splynx: v4.0**
+**Priority: P2 (Medium)** | **Effort: Small** | **legacy BSS: v4.0**
 
 Keyboard shortcut for system-wide search.
 
@@ -614,7 +614,7 @@ Keyboard shortcut for system-wide search.
 ---
 
 ### 7.2 Welcome Tour & Deployment Guide
-**Priority: P3 (Low)** | **Effort: Medium** | **Splynx: v4.0**
+**Priority: P3 (Low)** | **Effort: Medium** | **legacy BSS: v4.0**
 
 Onboarding for new administrators.
 
@@ -638,7 +638,7 @@ class AdminOnboardingProgress(Base):
 ---
 
 ### 7.3 Force Admin 2FA
-**Priority: P1 (High)** | **Effort: Small** | **Splynx: v5.0**
+**Priority: P1 (High)** | **Effort: Small** | **legacy BSS: v5.0**
 
 Require MFA for all admin accounts.
 
@@ -654,7 +654,7 @@ Require MFA for all admin accounts.
 *Expand ecosystem connectivity*
 
 ### 8.1 3CX Call Center Integration
-**Priority: P3 (Low)** | **Effort: Large** | **Splynx: v4.0**
+**Priority: P3 (Low)** | **Effort: Large** | **legacy BSS: v4.0**
 
 Call center integration.
 
@@ -667,7 +667,7 @@ Call center integration.
 ---
 
 ### 8.2 Accounting Integrations (NetSuite/Zoho)
-**Priority: P3 (Low)** | **Effort: Large** | **Splynx: v4.3**
+**Priority: P3 (Low)** | **Effort: Large** | **legacy BSS: v4.3**
 
 Sync financial data to accounting systems.
 
@@ -739,7 +739,7 @@ Sync financial data to accounting systems.
 
 ---
 
-## DotMac Existing Advantages Over Splynx
+## DotMac Existing Advantages Over legacy BSS
 
 | Feature | Notes |
 |---------|-------|
@@ -750,11 +750,11 @@ Sync financial data to accounting systems.
 | **Service qualification** | Address-based availability checking |
 | **Churn analytics** | Prediction and tracking |
 | **Zabbix integration** | Enterprise monitoring |
-| **Splynx migration** | Built-in data migration |
+| **legacy BSS migration** | Built-in data migration |
 | **Ledger system** | Double-entry accounting |
 | **GIS/fiber change requests** | Geographic change management |
 
 ---
 
 *Generated: 2026-05-08*
-*Based on Splynx changelog v4.0-v5.2*
+*Based on legacy BSS changelog v4.0-v5.2*

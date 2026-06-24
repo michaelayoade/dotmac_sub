@@ -2,11 +2,11 @@
 
 The SAFE replacement for per-invoice credit settlement, which is unsound on the
 migrated dataset (per-invoice ``balance_due``/allocations are not authoritative —
-Splynx paid many invoices from the account deposit with no invoice-linked
+many invoices were paid from the account deposit with no invoice-linked
 allocation, and recomputing locally manufactures phantom debt).
 
 Instead of trusting per-invoice balances, this keys on the authoritative
-account-level net: ``get_available_balance`` (the Splynx deposit for migrated
+account-level net: ``get_available_balance`` (the imported deposit for migrated
 accounts, the local ledger for native ones). An account that is walled
 (``suspended``/``blocked``) but whose available balance is ``>= 0`` is paid up
 and should not be walled for non-payment — so we re-evaluate enforcement and

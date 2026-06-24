@@ -306,3 +306,20 @@ def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         invoice_id=str(invoice_id),
     )
     return HTMLResponse(web_billing_invoice_actions_service.void_message(invoice_id))
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/void-and-return",
+    dependencies=[Depends(require_permission("billing:invoice:delete"))],
+)
+def invoice_void_and_return(
+    request: Request,
+    invoice_id: UUID,
+    next_url: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    invoice_void(request=request, invoice_id=invoice_id, db=db)
+    return RedirectResponse(
+        url=next_url or f"/admin/billing/invoices/{invoice_id}",
+        status_code=303,
+    )

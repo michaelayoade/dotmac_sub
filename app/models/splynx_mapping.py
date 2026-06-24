@@ -1,4 +1,4 @@
-"""Splynx ID mapping — bidirectional integer↔UUID lookup for migration."""
+"""Legacy ID mapping — bidirectional integer<->UUID lookup for migration."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class SplynxEntityType(enum.Enum):
 
 
 class SplynxIdMapping(Base):
-    """Bidirectional mapping between Splynx integer IDs and DotMac UUIDs.
+    """Bidirectional mapping between imported integer IDs and DotMac UUIDs.
 
     Used during and after migration to correlate records across systems.
     Covers entities that don't have a dedicated ``splynx_*_id`` column

@@ -541,6 +541,9 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="dunning_enabled",
         env_var="DUNNING_ENABLED",
         value_type=SettingValueType.boolean,
+        # Compatibility name for the unified billing-enforcement runner. This
+        # is the single scheduled writer for dunning policy actions and
+        # subscription enforcement locks.
         default=True,
     ),
     SettingSpec(
@@ -550,32 +553,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=86400,
         min_value=60,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_charges_enabled",
-        env_var="PREPAID_CHARGES_ENABLED",
-        value_type=SettingValueType.boolean,
-        # Default OFF: the prepaid drawdown engine stays inert until a controlled
-        # cutover explicitly enables it (dry-run -> supervised one-time run ->
-        # schedule). Charges only post debits (= recurring price); they never
-        # read the deposit and never suspend. Enforcement is gated separately.
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_enforcement_enabled",
-        env_var="PREPAID_ENFORCEMENT_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_enforcement_interval_seconds",
-        env_var="PREPAID_ENFORCEMENT_INTERVAL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=3600,
-        min_value=300,
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -607,6 +584,121 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=3600,
         min_value=300,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_health_gates_enabled",
+        env_var="BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_require_notification_health",
+        env_var="BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_require_payment_health",
+        env_var="BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_settle_credit_before_dunning_enabled",
+        env_var="BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_min_enforcing_day_offset",
+        env_var="BILLING_ENFORCEMENT_MIN_ENFORCING_DAY_OFFSET",
+        value_type=SettingValueType.integer,
+        default=3,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_notification_max_oldest_queued_minutes",
+        env_var="BILLING_ENFORCEMENT_NOTIFICATION_MAX_OLDEST_QUEUED_MINUTES",
+        value_type=SettingValueType.integer,
+        default=120,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_notification_max_failed",
+        env_var="BILLING_ENFORCEMENT_NOTIFICATION_MAX_FAILED",
+        value_type=SettingValueType.integer,
+        default=100,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_notification_max_stuck_sending",
+        env_var="BILLING_ENFORCEMENT_NOTIFICATION_MAX_STUCK_SENDING",
+        value_type=SettingValueType.integer,
+        default=25,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_notification_failed_window_hours",
+        env_var="BILLING_ENFORCEMENT_NOTIFICATION_FAILED_WINDOW_HOURS",
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_payment_health_window_hours",
+        env_var="BILLING_ENFORCEMENT_PAYMENT_HEALTH_WINDOW_HOURS",
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_payment_max_pending_minutes",
+        env_var="BILLING_ENFORCEMENT_PAYMENT_MAX_PENDING_MINUTES",
+        value_type=SettingValueType.integer,
+        default=45,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_payment_max_dead_letters",
+        env_var="BILLING_ENFORCEMENT_PAYMENT_MAX_DEAD_LETTERS",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_payment_max_stale_pending_topups",
+        env_var="BILLING_ENFORCEMENT_PAYMENT_MAX_STALE_PENDING_TOPUPS",
+        value_type=SettingValueType.integer,
+        default=20,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_payment_min_recent_successes",
+        env_var="BILLING_ENFORCEMENT_PAYMENT_MIN_RECENT_SUCCESSES",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="billing_enforcement_require_active_gateway",
+        env_var="BILLING_ENFORCEMENT_REQUIRE_ACTIVE_GATEWAY",
+        value_type=SettingValueType.boolean,
+        default=False,
     ),
     # Enforcement (suspend/block) time-of-day window. Default unset = no gate;
     # phase 6 audit-only logs "would_gate" without skipping until enforced.
@@ -1266,8 +1358,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
         # Kill-switch for the billing runner's inline "settle open invoices from
         # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
-        # per-invoice balance_due/allocations aren't authoritative (Splynx
-        # deposit-paid invoices have no local allocation). Re-enable only after
+        # per-invoice balance_due/allocations aren't authoritative (deposit-paid
+        # invoices have no local allocation). Re-enable only after
         # the account-level redesign.
         domain=SettingDomain.billing,
         key="settle_credit_on_invoice_enabled",

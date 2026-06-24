@@ -699,8 +699,34 @@ class TestBuildBeatSchedule:
 
         assert schedule["gis_sync"]["schedule"] == timedelta(minutes=1)
 
+    def test_dunning_runner_targets_unified_billing_enforcement(self, monkeypatch):
+        """The scheduled collections writer is the unified enforcement task."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("DUNNING_ENABLED", "true")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        assert any(
+            getattr(call.args[0], "name", None) == "dunning_runner"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.collections.run_billing_enforcement"
+            for call in mock_session.add.call_args_list
+        )
+
     def test_ignores_retired_splynx_sync_settings(self, monkeypatch):
-        """Retired Splynx sync env toggles must not create beat entries."""
+        """Retired legacy-sync env toggles must not create beat entries."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_ENABLED", "true")
         monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS", "24")

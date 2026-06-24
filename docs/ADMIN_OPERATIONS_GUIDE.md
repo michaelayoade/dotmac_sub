@@ -1083,7 +1083,7 @@ Permission format: `resource:action`
 | secret/radius | db_password, db_dsn | FreeRADIUS sync |
 | secret/genieacs | mongodb_dsn, mongodb_password, jwt_secret, cwmp_user, cwmp_pass | TR-069 ACS |
 | secret/s3 | access_key, secret_key | MinIO storage |
-| secret/migration | smartolt_api_key, splynx_mysql_pass | Data migration |
+| secret/migration | smartolt_api_key | Data migration |
 | secret/notifications | smtp_host, smtp_port, smtp_username, smtp_password, sms_api_key, sms_api_secret | Email/SMS when configured |
 
 ### Reference Format

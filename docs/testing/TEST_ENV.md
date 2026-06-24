@@ -71,7 +71,7 @@ seeded login: `TestPass123!`**
 | ------------------------------ | -------- | -------------------------- | ------------------------------------------------ |
 | `active.customer@test.local`   | House    | active, postpaid, **paid** | happy path; paid invoice + succeeded payment     |
 | `overdue.customer@test.local`  | House    | **delinquent**, overdue    | dunning, arrangement eligibility, blocked pay    |
-| `prepaid.customer@test.local`  | E2E      | active, **prepaid**        | drawdown/balance, top-up/bundle, change-plan     |
+| `prepaid.customer@test.local`  | E2E      | active, **prepaid**        | invoice-in-advance, top-up/bundle, change-plan   |
 | `suspended.customer@test.local`| E2E      | **suspended** sub          | login-while-suspended, captive/blocked access    |
 | `new.customer@test.local`      | House    | **new**, no subscription   | onboarding, empty-state pages                    |
 

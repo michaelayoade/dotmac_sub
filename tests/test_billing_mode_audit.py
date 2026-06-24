@@ -83,7 +83,7 @@ def test_mixed_mode_account_flagged(db_session):
     prepaid_offer = _offer(db_session, BillingMode.prepaid)
     postpaid_offer = _offer(db_session, BillingMode.postpaid)
     # Two active subscriptions of different modes (drift state reachable via
-    # Splynx import / migration / direct writes that bypass enforce_single_active).
+    # Import / migration / direct writes that bypass enforce_single_active).
     _subscription(db_session, sub, prepaid_offer, BillingMode.prepaid)
     _subscription(db_session, sub, postpaid_offer, BillingMode.postpaid)
     db_session.commit()

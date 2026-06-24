@@ -1,15 +1,15 @@
 # Section 9: Helpdesk & Scheduling
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
-This document captures feature improvements for the DotMac Sub ISP management system based on a comprehensive review of 28 Splynx screenshots covering helpdesk ticketing configuration and field scheduling/task management features.
+This document captures feature improvements for the DotMac Sub ISP management system based on a comprehensive review of 28 legacy BSS screenshots covering helpdesk ticketing configuration and field scheduling/task management features.
 
 ---
 
 ## 9.1 Helpdesk Ticket Configuration
 
-**Splynx Features Observed:**
-The Splynx helpdesk configuration (Config > Helpdesk > Tickets) provides a comprehensive ticketing system setup with email notification controls, sender name/email configuration, CC email support, admin panel notification toggles, configurable limits on additional fields, scheduled auto-assigning of tickets to admins based on project scheduling, and default admin assignment for tickets outside scheduled hours.
+**legacy BSS Features Observed:**
+The legacy BSS helpdesk configuration (Config > Helpdesk > Tickets) provides a comprehensive ticketing system setup with email notification controls, sender name/email configuration, CC email support, admin panel notification toggles, configurable limits on additional fields, scheduled auto-assigning of tickets to admins based on project scheduling, and default admin assignment for tickets outside scheduled hours.
 
 ### Email & Notification Settings
 
@@ -28,7 +28,7 @@ The Splynx helpdesk configuration (Config > Helpdesk > Tickets) provides a compr
 
 ## 9.2 Ticket Status Workflow
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 The "Tickets link status with action" configuration maps ticket lifecycle events (creating, opening, closing, customer reply, agent reply) to status transitions. Ticket statuses include New, Work in Progress, Resolved, Waiting on Customer, and Waiting on Agent, each with separate labels for agent and customer views, color-coded badges, open/closed/unresolved marks, dashboard icons, and dashboard visibility toggles.
 
 ### Status Configuration
@@ -42,8 +42,8 @@ The "Tickets link status with action" configuration maps ticket lifecycle events
 
 ## 9.3 Ticket Types (ISP-Specific Categories)
 
-**Splynx Features Observed:**
-Splynx supports 44+ configurable ticket types tailored to ISP operations, including network-specific categories (Fiber Link Disconnection, Base Station Down, Cabinet Disconnection, Intermittent Connectivity, IP Authentication, Low Signal, Radio Issues, AP/Air Fiber Outage, BTS Outage, Cable Burn, Cable Vandalization, Core Breakage, Bad Pigtail/Patch Cord, Outdoor Box Faults, PPOE Authentication, Router Troubleshooting, Power Optimization), billing categories (Billing Issues, Expired Subscription, Payment Confirmation, Plan Downgrade, Plan Upgrade), and service categories (Service Change, Order Service Request, Migration, Drop Cable Installation, LAN Troubleshooting). Types are color-coded by category.
+**legacy BSS Features Observed:**
+legacy BSS supports 44+ configurable ticket types tailored to ISP operations, including network-specific categories (Fiber Link Disconnection, Base Station Down, Cabinet Disconnection, Intermittent Connectivity, IP Authentication, Low Signal, Radio Issues, AP/Air Fiber Outage, BTS Outage, Cable Burn, Cable Vandalization, Core Breakage, Bad Pigtail/Patch Cord, Outdoor Box Faults, PPOE Authentication, Router Troubleshooting, Power Optimization), billing categories (Billing Issues, Expired Subscription, Payment Confirmation, Plan Downgrade, Plan Upgrade), and service categories (Service Change, Order Service Request, Migration, Drop Cable Installation, LAN Troubleshooting). Types are color-coded by category.
 
 ### Ticket Type Management
 
@@ -56,8 +56,8 @@ Splynx supports 44+ configurable ticket types tailored to ISP operations, includ
 
 ## 9.4 Ticket Groups & Agent Assignment
 
-**Splynx Features Observed:**
-Splynx organizes agents into ticket groups (Finance, NOC, Helpdesk, Project, Sales, Tech Support, Lagos Team, regional PM teams, Store Unit, CRM, FMU, etc.) with 55+ groups for a large ISP operation. Each group has a title, description, and list of assigned agents. This enables routing tickets to the right team and regional assignment.
+**legacy BSS Features Observed:**
+legacy BSS organizes agents into ticket groups (Finance, NOC, Helpdesk, Project, Sales, Tech Support, Lagos Team, regional PM teams, Store Unit, CRM, FMU, etc.) with 55+ groups for a large ISP operation. Each group has a title, description, and list of assigned agents. This enables routing tickets to the right team and regional assignment.
 
 ### Team-Based Ticket Routing
 
@@ -70,8 +70,8 @@ Splynx organizes agents into ticket groups (Finance, NOC, Helpdesk, Project, Sal
 
 ## 9.5 Ticket Notifications
 
-**Splynx Features Observed:**
-Splynx provides granular ticket notification configuration with separate email and SMS toggles for: ticket received (to customer), new ticket (to admin), ticket changes (to customer/admin), new messages (to customer/admin), new note (to admin), ticket assigned (to admin), ticket closed (to customer/admin), ticket opened (to customer/admin), ticket reopened (to customer/admin), ticket status notification (to watchers), and file attachment notifications. Each notification has a configurable subject line template using placeholders like `#(ticket_id)`, `(ticket_subject)`.
+**legacy BSS Features Observed:**
+legacy BSS provides granular ticket notification configuration with separate email and SMS toggles for: ticket received (to customer), new ticket (to admin), ticket changes (to customer/admin), new messages (to customer/admin), new note (to admin), ticket assigned (to admin), ticket closed (to customer/admin), ticket opened (to customer/admin), ticket reopened (to customer/admin), ticket status notification (to watchers), and file attachment notifications. Each notification has a configurable subject line template using placeholders like `#(ticket_id)`, `(ticket_subject)`.
 
 ### Notification Configuration
 
@@ -84,8 +84,8 @@ Splynx provides granular ticket notification configuration with separate email a
 
 ## 9.6 Canned Responses
 
-**Splynx Features Observed:**
-Splynx provides canned response management with two levels: Canned Groups (e.g., "Help Desk/Support", "NOC") and individual Canned Responses. Each response has a title, text body, group membership, associated agent (Personal visibility), and visibility scope (Tickets). This allows agents to insert pre-written responses for common issues quickly.
+**legacy BSS Features Observed:**
+legacy BSS provides canned response management with two levels: Canned Groups (e.g., "Help Desk/Support", "NOC") and individual Canned Responses. Each response has a title, text body, group membership, associated agent (Personal visibility), and visibility scope (Tickets). This allows agents to insert pre-written responses for common issues quickly.
 
 ### Quick Response Management
 
@@ -98,8 +98,8 @@ Splynx provides canned response management with two levels: Canned Groups (e.g.,
 
 ## 9.7 Ticket Widget (Customer-Facing)
 
-**Splynx Features Observed:**
-Splynx offers an embeddable ticket widget that can be placed on external websites. Configuration includes: button type (Text/Icon), button text, background/text colors, alignment (Left/Right), offset in pixels, form title, send button text, thank-you message, HTTPS toggle, priority toggle, and ticket type toggle. The widget generates an embed code (JavaScript snippet) for placement on any website.
+**legacy BSS Features Observed:**
+legacy BSS offers an embeddable ticket widget that can be placed on external websites. Configuration includes: button type (Text/Icon), button text, background/text colors, alignment (Left/Right), offset in pixels, form title, send button text, thank-you message, HTTPS toggle, priority toggle, and ticket type toggle. The widget generates an embed code (JavaScript snippet) for placement on any website.
 
 ### Public Support Widget
 
@@ -112,8 +112,8 @@ Splynx offers an embeddable ticket widget that can be placed on external website
 
 ## 9.8 Email-to-Ticket (Inboxes)
 
-**Splynx Features Observed:**
-Splynx provides an email-to-ticket pipeline (Config > Helpdesk > Inboxes) with: regex pattern for identifying ticket numbers in email subjects, HTML purification for save format, subject-based pairing option, forwarded email processing from admins, incoming email processing toggle, configured incoming mailboxes (with email, group assignment, type, priority), and a deny list for filtering spam by location, filter type, and filter pattern.
+**legacy BSS Features Observed:**
+legacy BSS provides an email-to-ticket pipeline (Config > Helpdesk > Inboxes) with: regex pattern for identifying ticket numbers in email subjects, HTML purification for save format, subject-based pairing option, forwarded email processing from admins, incoming email processing toggle, configured incoming mailboxes (with email, group assignment, type, priority), and a deny list for filtering spam by location, filter type, and filter pattern.
 
 ### Email Integration
 
@@ -128,8 +128,8 @@ Splynx provides an email-to-ticket pipeline (Config > Helpdesk > Inboxes) with: 
 
 ## 9.9 Ticket Automation
 
-**Splynx Features Observed:**
-Splynx provides a ticket automation rules engine (Config > Helpdesk > Ticket Automation) with columns for: Rule Priority, Current Status, Current Priority, Time Passed, Change Status To, and Change Priority To. This allows time-based escalation rules (e.g., if a ticket has been in "New" status with "High" priority for more than 2 hours, auto-escalate to "Critical" and change status to "Work in Progress").
+**legacy BSS Features Observed:**
+legacy BSS provides a ticket automation rules engine (Config > Helpdesk > Ticket Automation) with columns for: Rule Priority, Current Status, Current Priority, Time Passed, Change Status To, and Change Priority To. This allows time-based escalation rules (e.g., if a ticket has been in "New" status with "High" priority for more than 2 hours, auto-escalate to "Critical" and change status to "Work in Progress").
 
 ### Automation Rules
 
@@ -142,8 +142,8 @@ Splynx provides a ticket automation rules engine (Config > Helpdesk > Ticket Aut
 
 ## 9.10 Scheduling Workflows
 
-**Splynx Features Observed:**
-Splynx provides a scheduling workflow configuration (Config > Scheduling > Workflows) with named workflow definitions: Default, Installation Workflow, Maintenance Workflow, Migration Workflow, and Test. Each workflow has view, edit, and delete actions.
+**legacy BSS Features Observed:**
+legacy BSS provides a scheduling workflow configuration (Config > Scheduling > Workflows) with named workflow definitions: Default, Installation Workflow, Maintenance Workflow, Migration Workflow, and Test. Each workflow has view, edit, and delete actions.
 
 ### Workflow Management
 
@@ -156,8 +156,8 @@ Splynx provides a scheduling workflow configuration (Config > Scheduling > Workf
 
 ## 9.11 Scheduling Teams
 
-**Splynx Features Observed:**
-Splynx provides team management (Config > Scheduling > Teams) with named teams: Support, Fiber installation team, Lagos Team, and individual technician names (Brighten Daniel, Babatope Adewunmi, Isaac Absalom, Elisha Ajeh, Idris George). Each team has view, edit, and delete actions.
+**legacy BSS Features Observed:**
+legacy BSS provides team management (Config > Scheduling > Teams) with named teams: Support, Fiber installation team, Lagos Team, and individual technician names (Brighten Daniel, Babatope Adewunmi, Isaac Absalom, Elisha Ajeh, Idris George). Each team has view, edit, and delete actions.
 
 ### Field Team Management
 
@@ -170,8 +170,8 @@ Splynx provides team management (Config > Scheduling > Teams) with named teams: 
 
 ## 9.12 Task Templates
 
-**Splynx Features Observed:**
-Splynx provides task templates (Config > Scheduling > Task templates) with 20+ ISP-specific templates: Radio Signal Confirmation, Addition of Fallback IP, Addition of Device to UNMS, Deployment of Devices to Client Site, Internet Status Confirmation from Client, Sending of Onboarding Email to Client, Minimal Power Confirmation (Fiber), Creation of Client on UNMS, RADIO (ALL), FIBER (ALL), Fiber Installation, Core Integration, Radio Installation, Fiber Migration, NGO Temp, Gov ITT, Gov Fin, Gov EOI. Each template has view, edit, and delete actions.
+**legacy BSS Features Observed:**
+legacy BSS provides task templates (Config > Scheduling > Task templates) with 20+ ISP-specific templates: Radio Signal Confirmation, Addition of Fallback IP, Addition of Device to UNMS, Deployment of Devices to Client Site, Internet Status Confirmation from Client, Sending of Onboarding Email to Client, Minimal Power Confirmation (Fiber), Creation of Client on UNMS, RADIO (ALL), FIBER (ALL), Fiber Installation, Core Integration, Radio Installation, Fiber Migration, NGO Temp, Gov ITT, Gov Fin, Gov EOI. Each template has view, edit, and delete actions.
 
 ### Task Template Library
 
@@ -184,8 +184,8 @@ Splynx provides task templates (Config > Scheduling > Task templates) with 20+ I
 
 ## 9.13 Checklist Templates
 
-**Splynx Features Observed:**
-Splynx provides checklist templates (Config > Scheduling > Checklist templates) with 29+ entries: Connect client, Disconnect client, Customer's repair, Equipment installation, Equipment removal, Equipment repairing, Signal Confirmation, Addition of Fallback IP, Addition of Device to UNMS, Deployment of Devices to Client Site, Internet Status Confirmation from Client, Sending of Onboarding Email to Client, Minimal Power Confirmation (Fiber), Creation of Client on UNMS, Fiber Cable Installation, FIBER(ALL), RADIO (ALL), L2 VPN Connection, Wireless Access Link Deployment, Customers Premise, Last-Mile, Core Integration, Fiber Installation, Radio Installation, BTS Maintenance, NGO Temp, Gov ITT, Gov Fin, Gov EOI. Each has view, edit, and delete actions.
+**legacy BSS Features Observed:**
+legacy BSS provides checklist templates (Config > Scheduling > Checklist templates) with 29+ entries: Connect client, Disconnect client, Customer's repair, Equipment installation, Equipment removal, Equipment repairing, Signal Confirmation, Addition of Fallback IP, Addition of Device to UNMS, Deployment of Devices to Client Site, Internet Status Confirmation from Client, Sending of Onboarding Email to Client, Minimal Power Confirmation (Fiber), Creation of Client on UNMS, Fiber Cable Installation, FIBER(ALL), RADIO (ALL), L2 VPN Connection, Wireless Access Link Deployment, Customers Premise, Last-Mile, Core Integration, Fiber Installation, Radio Installation, BTS Maintenance, NGO Temp, Gov ITT, Gov Fin, Gov EOI. Each has view, edit, and delete actions.
 
 ### Checklist Management
 
@@ -199,8 +199,8 @@ Splynx provides checklist templates (Config > Scheduling > Checklist templates) 
 
 ## 9.14 Project Types & Categories
 
-**Splynx Features Observed:**
-Splynx provides project type definitions (Config > Scheduling > Project types): Default type, Fiber, Radio, Power, and Business Development. Separately, project categories (Config > Scheduling > Project categories) include: Default category, New Installation, Troubleshooting, Migration, Retrieval, Fiber Maintenance, and Radio Maintenance. This two-dimensional classification (type x category) enables rich filtering and reporting.
+**legacy BSS Features Observed:**
+legacy BSS provides project type definitions (Config > Scheduling > Project types): Default type, Fiber, Radio, Power, and Business Development. Separately, project categories (Config > Scheduling > Project categories) include: Default category, New Installation, Troubleshooting, Migration, Retrieval, Fiber Maintenance, and Radio Maintenance. This two-dimensional classification (type x category) enables rich filtering and reporting.
 
 ### Project Classification
 
@@ -213,8 +213,8 @@ Splynx provides project type definitions (Config > Scheduling > Project types): 
 
 ## 9.15 Scheduling Notifications
 
-**Splynx Features Observed:**
-Splynx provides extensive scheduling notification configuration (Config > Scheduling > Notifications) organized into sections: Team Settings (enable notifications for teams), Watchers Notification (auto-add reporter to watchers), On Assign Notifications (Email + SMS with configurable templates), On Change Notifications (project change, partner change, related task change, related service change, priority change, status change, information change, "is scheduled" notification, "customer added/changed" notification), Comment Notifications (add/edit/delete comment), Attachment Notifications (add/delete attachment), Worklog Notifications, Checklist Notifications (add/delete/check/uncheck items), Reminder Notifications (send 3 hours before scheduled time via Email + SMS), and Digest Notifications (daily digest at configurable time).
+**legacy BSS Features Observed:**
+legacy BSS provides extensive scheduling notification configuration (Config > Scheduling > Notifications) organized into sections: Team Settings (enable notifications for teams), Watchers Notification (auto-add reporter to watchers), On Assign Notifications (Email + SMS with configurable templates), On Change Notifications (project change, partner change, related task change, related service change, priority change, status change, information change, "is scheduled" notification, "customer added/changed" notification), Comment Notifications (add/edit/delete comment), Attachment Notifications (add/delete attachment), Worklog Notifications, Checklist Notifications (add/delete/check/uncheck items), Reminder Notifications (send 3 hours before scheduled time via Email + SMS), and Digest Notifications (daily digest at configurable time).
 
 ### Scheduling Notification System
 
@@ -232,7 +232,7 @@ Splynx provides extensive scheduling notification configuration (Config > Schedu
 
 ## 9.16 Helpdesk-Scheduling Integration
 
-**Splynx Features Observed:**
+**legacy BSS Features Observed:**
 Multiple screenshots reveal deep integration between the helpdesk and scheduling modules. The ticket configuration references scheduling projects for auto-assignment, ticket types map to service actions that would generate scheduled tasks, and the organizational structure (ticket groups and scheduling teams) often mirrors each other.
 
 ### Cross-Module Integration

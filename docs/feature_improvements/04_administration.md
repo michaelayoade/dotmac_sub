@@ -1,8 +1,8 @@
-# Section 4: Splynx Administration
+# Section 4: legacy BSS Administration
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
-This document captures feature observations from 42 screenshots of Splynx's Administration module and proposes corresponding feature improvements for DotMac Sub. Each screenshot has been reviewed and organized into logical subsections.
+This document captures feature observations from 42 screenshots of legacy BSS's Administration module and proposes corresponding feature improvements for DotMac Sub. Each screenshot has been reviewed and organized into logical subsections.
 
 ---
 
@@ -10,7 +10,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Administration Dashboard.png`
 
-**Splynx features observed:** A centralized administration hub organized into four sections -- (1) Splynx core management (Administrators, Roles, Partners, Locations, API Keys), (2) Logs (Operations, Internal, Portal, Files, Email, SMS, Sessions, API, Customer/Service status changes, Accounting integrations, Mailjet/Paystack logs, Planned changes), (3) Information (License, Site, Documentation, Forum, API docs), and (4) Reports (20+ report types covering internet usage, finance, customers, invoices, agents, resellers, services, tickets, DNS threats, and more). Each item is represented as a clickable link with a colored icon and clear label. A search bar allows quick filtering of admin functions.
+**legacy BSS features observed:** A centralized administration hub organized into four sections -- (1) legacy BSS core management (Administrators, Roles, Partners, Locations, API Keys), (2) Logs (Operations, Internal, Portal, Files, Email, SMS, Sessions, API, Customer/Service status changes, Accounting integrations, Mailjet/Paystack logs, Planned changes), (3) Information (License, Site, Documentation, Forum, API docs), and (4) Reports (20+ report types covering internet usage, finance, customers, invoices, agents, resellers, services, tickets, DNS threats, and more). Each item is represented as a clickable link with a colored icon and clear label. A search bar allows quick filtering of admin functions.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -24,7 +24,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Administrators.png`
 
-**Splynx features observed:** A table listing all administrator accounts with columns for ID, Admin login, Full name, Photo (avatar), Role (Super administrator, Administrator, Partner), Partner assignment, Phone number, and row-level Actions (edit, impersonate, delete). Filterable by Partner dropdown. Supports table search and configurable entries per page (100).
+**legacy BSS features observed:** A table listing all administrator accounts with columns for ID, Admin login, Full name, Photo (avatar), Role (Super administrator, Administrator, Partner), Partner assignment, Phone number, and row-level Actions (edit, impersonate, delete). Filterable by Partner dropdown. Supports table search and configurable entries per page (100).
 
 **Proposed improvements for DotMac Sub:**
 
@@ -40,7 +40,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Roles.png`
 
-**Splynx features observed:** A comprehensive roles table with 16 predefined ISP-specific roles: administrator, customer-creator, engineer, finance, financial-manager, frontdesk, manager, noc, operations-support, partner, procurement, project, sales, super-administrator, technical-support, and technician. Each has a Name (slug) and Title (display name). Actions include edit, view members, and delete (with some roles being system-protected and not deletable).
+**legacy BSS features observed:** A comprehensive roles table with 16 predefined ISP-specific roles: administrator, customer-creator, engineer, finance, financial-manager, frontdesk, manager, noc, operations-support, partner, procurement, project, sales, super-administrator, technical-support, and technician. Each has a Name (slug) and Title (display name). Actions include edit, view members, and delete (with some roles being system-protected and not deletable).
 
 **Proposed improvements for DotMac Sub:**
 
@@ -56,7 +56,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Partners.png`
 
-**Splynx features observed:** A partners/resellers table showing 20+ partner organizations with columns for ID, Partner name, Customers count (clickable, showing totals like 4,996 for "Main"), Customers online (real-time count, e.g., 1,243), and row-level Actions (edit, delete). This provides a high-level overview of multi-tenant customer distribution across partner organizations.
+**legacy BSS features observed:** A partners/resellers table showing 20+ partner organizations with columns for ID, Partner name, Customers count (clickable, showing totals like 4,996 for "Main"), Customers online (real-time count, e.g., 1,243), and row-level Actions (edit, delete). This provides a high-level overview of multi-tenant customer distribution across partner organizations.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -71,7 +71,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Agents.png`
 
-**Splynx features observed:** A sales agent commission tracking system with three tabs: Agents consolidated report, Agent report, and Customer report. Columns include Agent name, Commissioned transactions count, Unpaid total, Total revenue, and Commission amount. Period date range selector for filtering. Includes a Totals summary row at the bottom.
+**legacy BSS features observed:** A sales agent commission tracking system with three tabs: Agents consolidated report, Agent report, and Customer report. Columns include Agent name, Commissioned transactions count, Unpaid total, Total revenue, and Commission amount. Period date range selector for filtering. Includes a Totals summary row at the bottom.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -88,7 +88,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Locations.png`
 
-**Splynx features observed:** A locations table listing geographical regions (e.g., Abuja with 4,901 customers and 1,215 online, Lagos with 357 customers and 103 online). Columns: ID, Location name, Customers count, Customers online, Taxes (associated tax configuration, showing "Not used"), and Actions (edit, delete). Supports location-based tax assignment.
+**legacy BSS features observed:** A locations table listing geographical regions (e.g., Abuja with 4,901 customers and 1,215 online, Lagos with 357 customers and 103 online). Columns: ID, Location name, Customers count, Customers online, Taxes (associated tax configuration, showing "Not used"), and Actions (edit, delete). Supports location-based tax assignment.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -103,7 +103,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `API Keys.png`
 
-**Splynx features observed:** An API keys table listing 25+ named integrations (NetworkWeatherMap, Splynx Google Maps, Splynx Paystack Add-On, Google Maps, Social Registration Add-on, Network Weathermap, Speedtest, Mobile App, QuickBooks Accounting, Splynx Add-on Mobijet, Mikrotik discover/export add-on, Splynx Huawei OLT, Splynx Ruijie, Zoho books, Zoho CRM). Each key has an ID, Name, Key string (partially visible), Partner scope, and Actions. Filterable by Partner.
+**legacy BSS features observed:** An API keys table listing 25+ named integrations (NetworkWeatherMap, legacy BSS Google Maps, legacy BSS Paystack Add-On, Google Maps, Social Registration Add-on, Network Weathermap, Speedtest, Mobile App, QuickBooks Accounting, legacy BSS Add-on Mobijet, Mikrotik discover/export add-on, legacy BSS Huawei OLT, legacy BSS Ruijie, Zoho books, Zoho CRM). Each key has an ID, Name, Key string (partially visible), Partner scope, and Actions. Filterable by Partner.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -120,7 +120,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `API.png`
 
-**Splynx features observed:** An API request audit log with filter bar (Customer ID, Period date range, API key selector, Operation type filter). Table columns: Date and time, API key used, Operation performed, Result status, and Actions (view detail). Provides complete audit trail of all API interactions.
+**legacy BSS features observed:** An API request audit log with filter bar (Customer ID, Period date range, API key selector, Operation type filter). Table columns: Date and time, API key used, Operation performed, Result status, and Actions (view detail). Provides complete audit trail of all API interactions.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -136,7 +136,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Operations.png`
 
-**Splynx features observed:** An administrator operations audit log recording all admin actions. Columns: Date and time, Administrator (who performed the action), Operation description (e.g., "View internet service", "Edit internet service", "View customer", "Create payment"), Customer ID, Result (Success/Failure). Filterable by Customer ID, Period, Administrator, and Operation type. Shows both system-initiated and human-initiated operations.
+**legacy BSS features observed:** An administrator operations audit log recording all admin actions. Columns: Date and time, Administrator (who performed the action), Operation description (e.g., "View internet service", "Edit internet service", "View customer", "Create payment"), Customer ID, Result (Success/Failure). Filterable by Customer ID, Period, Administrator, and Operation type. Shows both system-initiated and human-initiated operations.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -152,7 +152,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Internal.png`
 
-**Splynx features observed:** An internal system operations log showing automated/batch processing events. Entries show timestamps at sub-second precision (e.g., "24/02/2026 00:00:12"), Operation types (Edit customer, Edit internet service), and Result status (Success). Filterable by Customer ID, Period, and Operation type. Shows high-frequency batch operations (multiple "Edit customer" entries per second during automated processing).
+**legacy BSS features observed:** An internal system operations log showing automated/batch processing events. Entries show timestamps at sub-second precision (e.g., "24/02/2026 00:00:12"), Operation types (Edit customer, Edit internet service), and Result status (Success). Filterable by Customer ID, Period, and Operation type. Shows high-frequency batch operations (multiple "Edit customer" entries per second during automated processing).
 
 **Proposed improvements for DotMac Sub:**
 
@@ -167,7 +167,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Portal.png`
 
-**Splynx features observed:** A customer portal activity log tracking subscriber self-service actions. Columns: Date and time, Customer ID, Operation (Customer login, Customer logout), Result (Success). Filterable by Customer ID, Period date range, and Operation type. Shows login/logout patterns for customer self-service portal usage tracking.
+**legacy BSS features observed:** A customer portal activity log tracking subscriber self-service actions. Columns: Date and time, Customer ID, Operation (Customer login, Customer logout), Result (Success). Filterable by Customer ID, Period date range, and Operation type. Shows login/logout patterns for customer self-service portal usage tracking.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -183,7 +183,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Session.png`
 
-**Splynx features observed:** A RADIUS/network session search tool with fields for Period (date range), IP address, IPv6 address, MAC address, Search scope (Customer statistics dropdown), and Fields selector (All selected). Allows searching active and historical network sessions by various identifiers.
+**legacy BSS features observed:** A RADIUS/network session search tool with fields for Period (date range), IP address, IPv6 address, MAC address, Search scope (Customer statistics dropdown), and Fields selector (All selected). Allows searching active and historical network sessions by various identifiers.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -199,7 +199,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Files.png`
 
-**Splynx features observed:** A file-based log viewer showing system cron job and process logs. Entries include: api/error, billing/generate_preview, cron/accounting, cron/acme_sh, cron/backup-critical (263 KB), cron/backup-full (55 KB), cron/backup-radius-failover, cron/daily (and many daily sub-tasks like bonusCappedDataDailyProcess, cappedDataDailyProcess, changeStatusInvoicesWithZeroDue, checkAllLogs, checkNewVersionAddonsAvailability, closePublicAccessToTicket, expireNetFlowLogs, fixedCostsDailyProcess, fupResetLimits, generateInvoices, prepaidBillingDaily, prepaidCleanUp). Each shows Name, Description, Size, and an action to view contents.
+**legacy BSS features observed:** A file-based log viewer showing system cron job and process logs. Entries include: api/error, billing/generate_preview, cron/accounting, cron/acme_sh, cron/backup-critical (263 KB), cron/backup-full (55 KB), cron/backup-radius-failover, cron/daily (and many daily sub-tasks like bonusCappedDataDailyProcess, cappedDataDailyProcess, changeStatusInvoicesWithZeroDue, checkAllLogs, checkNewVersionAddonsAvailability, closePublicAccessToTicket, expireNetFlowLogs, fixedCostsDailyProcess, fupResetLimits, generateInvoices, prepaidBillingDaily, prepaidCleanUp). Each shows Name, Description, Size, and an action to view contents.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -216,7 +216,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Emails.png`
 
-**Splynx features observed:** A comprehensive email delivery log showing all outbound emails. Columns include: ID, Recipient email, Type (Message), Status (Sent), Address source, Date/time sent, and Actions. Shows emails sent to various customer email addresses with delivery status tracking.
+**legacy BSS features observed:** A comprehensive email delivery log showing all outbound emails. Columns include: ID, Recipient email, Type (Message), Status (Sent), Address source, Date/time sent, and Actions. Shows emails sent to various customer email addresses with delivery status tracking.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -232,7 +232,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `SMS.png`
 
-**Splynx features observed:** An SMS delivery log table with columns: ID, Recipient phone number, Type (Message), Status (Error or Success indicators), Deliver date, Start time, and Details. Shows both successful and failed SMS deliveries with error tracking. Filterable by Period, destination, description, Type, and Status.
+**legacy BSS features observed:** An SMS delivery log table with columns: ID, Recipient phone number, Type (Message), Status (Error or Success indicators), Deliver date, Start time, and Details. Shows both successful and failed SMS deliveries with error tracking. Filterable by Period, destination, description, Type, and Status.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -248,7 +248,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Planned customer status and service changes.png`
 
-**Splynx features observed:** A scheduled changes viewer split into two sections -- (1) Statuses: showing planned customer status transitions (e.g., customer 100000205 scheduled to become Inactive), and (2) Services: showing planned service changes with Date, Customer ID, Description (plan name), Price, Type (internet), and Plan link. Shows future-dated service activations and plan changes (e.g., "Unlimited Basic" at 17,500, "Homeflex Elite" at 25,500, "Unlimited Compact" at 35,000).
+**legacy BSS features observed:** A scheduled changes viewer split into two sections -- (1) Statuses: showing planned customer status transitions (e.g., customer 100000205 scheduled to become Inactive), and (2) Services: showing planned service changes with Date, Customer ID, Description (plan name), Price, Type (internet), and Plan link. Shows future-dated service activations and plan changes (e.g., "Unlimited Basic" at 17,500, "Homeflex Elite" at 25,500, "Unlimited Compact" at 35,000).
 
 **Proposed improvements for DotMac Sub:**
 
@@ -265,7 +265,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `customer status and service changes.png`
 
-**Splynx features observed:** A historical log of all customer status transitions. Columns: Date and time (precise to seconds), Administrator (who made the change, including "[SYSTEM]" for automated changes), Customer ID, Status transition (e.g., "blocked -> active", "active -> blocked"), and Plan. Shows bulk automated blocking operations (system blocking many customers in rapid succession at 08:00-08:01) as well as manual admin changes (e.g., "r.okpe@dotmac.ng" changing "blocked -> active").
+**legacy BSS features observed:** A historical log of all customer status transitions. Columns: Date and time (precise to seconds), Administrator (who made the change, including "[SYSTEM]" for automated changes), Customer ID, Status transition (e.g., "blocked -> active", "active -> blocked"), and Plan. Shows bulk automated blocking operations (system blocking many customers in rapid succession at 08:00-08:01) as well as manual admin changes (e.g., "r.okpe@dotmac.ng" changing "blocked -> active").
 
 **Proposed improvements for DotMac Sub:**
 
@@ -281,7 +281,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Service status changes.png`
 
-**Splynx features observed:** A service-level status change log. Columns: Date and time, Administrator, Customer ID, Status transition (e.g., "Active -> Disabled", "Active -> Paused", "Paused -> Active", "-> Active"), Plan change (e.g., "Unlimited Basic -> Unlimited Compact"), and Service name link. Shows both status changes and plan migrations in a single view. Filterable by Customer ID, Period, and Admin.
+**legacy BSS features observed:** A service-level status change log. Columns: Date and time, Administrator, Customer ID, Status transition (e.g., "Active -> Disabled", "Active -> Paused", "Paused -> Active", "-> Active"), Plan change (e.g., "Unlimited Basic -> Unlimited Compact"), and Service name link. Shows both status changes and plan migrations in a single view. Filterable by Customer ID, Period, and Admin.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -297,7 +297,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Accounting Integrations.png`
 
-**Splynx features observed:** An accounting system sync log with four tabs: Customers, Invoices, Credit notes, and Payments. Shows sync status between Splynx and external accounting software. Columns: Customer name, Modified flag, Accounting ID (external system reference), Accounting Status (Ok, Error), Additional info fields (showing sync results like "Updated" or error messages such as "Object Not Found"), Created date, and Last updated timestamp. Filterable by Customer ID, Period, Modified status, and Accounting Status.
+**legacy BSS features observed:** An accounting system sync log with four tabs: Customers, Invoices, Credit notes, and Payments. Shows sync status between legacy BSS and external accounting software. Columns: Customer name, Modified flag, Accounting ID (external system reference), Accounting Status (Ok, Error), Additional info fields (showing sync results like "Updated" or error messages such as "Object Not Found"), Created date, and Last updated timestamp. Filterable by Customer ID, Period, Modified status, and Accounting Status.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -314,7 +314,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Mailjet Logs.png`
 
-**Splynx features observed:** A Mailjet email service provider log viewer showing integration status. Currently displays "File not found" error, indicating the log file is not present or the integration is not active.
+**legacy BSS features observed:** A Mailjet email service provider log viewer showing integration status. Currently displays "File not found" error, indicating the log file is not present or the integration is not active.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -328,7 +328,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Paystack Logs.png`
 
-**Splynx features observed:** A Paystack payment gateway log showing transaction events. Columns: ID, Message (e.g., "Your transaction has been successfully processed", "Set payment method to bank_transfer", "Changed PIN", authorization errors like "Token Authentication Failed"), Status (color-coded badges: green for success, red for errors), Payment Number, Transaction Type (reference, status), Payment Type, Additional info (showing raw reference IDs and status codes), and Date/Time. Shows both successful and failed payment transactions with detailed error messages.
+**legacy BSS features observed:** A Paystack payment gateway log showing transaction events. Columns: ID, Message (e.g., "Your transaction has been successfully processed", "Set payment method to bank_transfer", "Changed PIN", authorization errors like "Token Authentication Failed"), Status (color-coded badges: green for success, red for errors), Payment Number, Transaction Type (reference, status), Payment Type, Additional info (showing raw reference IDs and status codes), and Date/Time. Shows both successful and failed payment transactions with detailed error messages.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -345,7 +345,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `License.png`
 
-**Splynx features observed:** A system license information page showing product details: Product name (Splynx ISP Framework), Version (5.0.6584), Compiled date, Registered to (Dotmac Technologies Ltd), License limit (2000), Licensed customer count (1391 -- clickable). Includes action buttons: Reload license, Upgrade your license, Check validity.
+**legacy BSS features observed:** A system license information page showing product details: Product name (legacy BSS ISP Framework), Version (5.0.6584), Compiled date, Registered to (Dotmac Technologies Ltd), License limit (2000), Licensed customer count (1391 -- clickable). Includes action buttons: Reload license, Upgrade your license, Check validity.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -361,7 +361,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Documentation.png`
 
-**Splynx features observed:** An integrated knowledge base with organized sections: Getting started, FAQs, Product updates. Main content sections organized by functional area: Customers, Leads, Tickets, Tariff plans, Networking, Customer portal. Left sidebar with expandable categories. Search functionality at the top. Covers CRM, Company, and System administration documentation.
+**legacy BSS features observed:** An integrated knowledge base with organized sections: Getting started, FAQs, Product updates. Main content sections organized by functional area: Customers, Leads, Tickets, Tariff plans, Networking, Customer portal. Left sidebar with expandable categories. Search functionality at the top. Covers CRM, Company, and System administration documentation.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -377,7 +377,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Resellers.png`
 
-**Splynx features observed:** A resellers commission tracking report with three tabs: Resellers consolidated report, Reseller report, and Customer report. Columns: Reseller name, Commissioned transactions, Unpaid total, Total, and Commission. Period selector for date range filtering. Totals summary row at bottom. Mirrors the Agents report structure but scoped to reseller partners.
+**legacy BSS features observed:** A resellers commission tracking report with three tabs: Resellers consolidated report, Reseller report, and Customer report. Columns: Reseller name, Commissioned transactions, Unpaid total, Total, and Commission. Period selector for date range filtering. Totals summary row at bottom. Mirrors the Agents report structure but scoped to reseller partners.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -393,7 +393,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Customers chart.png`
 
-**Splynx features observed:** A time-series line chart showing customer status distribution over a 30-day period (24/01/2026 - 24/02/2026). Five data series: New (dark blue, near bottom), Active (light blue, ~1,500-2,300), Blocked (red, ~2,800 consistent), Inactive (grey, ~400 then dropping), and Total (purple, ~4,900-5,300). Shows a notable inflection point around 05-06/02/2026 where Active customers jumped from ~1,500 to ~2,300 and Total increased from ~4,900 to ~5,300. Date-range picker for customization.
+**legacy BSS features observed:** A time-series line chart showing customer status distribution over a 30-day period (24/01/2026 - 24/02/2026). Five data series: New (dark blue, near bottom), Active (light blue, ~1,500-2,300), Blocked (red, ~2,800 consistent), Inactive (grey, ~400 then dropping), and Total (purple, ~4,900-5,300). Shows a notable inflection point around 05-06/02/2026 where Active customers jumped from ~1,500 to ~2,300 and Total increased from ~4,900 to ~5,300. Date-range picker for customization.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -410,7 +410,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Internet usage report.png`
 
-**Splynx features observed:** An internet plan usage report aggregating bandwidth consumption by plan. Columns: Plan name, Count of services, Partner, Download (GB), Upload (GB), Total Down/Up (GB). Filterable by Period, Partners, Locations, and Type (By counters). Provides aggregate usage data per tariff plan for capacity planning.
+**legacy BSS features observed:** An internet plan usage report aggregating bandwidth consumption by plan. Columns: Plan name, Count of services, Partner, Download (GB), Upload (GB), Total Down/Up (GB). Filterable by Period, Partners, Locations, and Type (By counters). Provides aggregate usage data per tariff plan for capacity planning.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -426,7 +426,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Customer internet usage.png`
 
-**Splynx features observed:** A per-customer internet usage report with detailed columns: Status, Customer ID, Portal login, Full name, Phone number, Internet plans, IPs assigned, VAT ID, Building Type (custom field), Download total, Upload total. Filterable by Period, Locations, and Partners. Provides granular per-subscriber bandwidth consumption data.
+**legacy BSS features observed:** A per-customer internet usage report with detailed columns: Status, Customer ID, Portal login, Full name, Phone number, Internet plans, IPs assigned, VAT ID, Building Type (custom field), Download total, Upload total. Filterable by Period, Locations, and Partners. Provides granular per-subscriber bandwidth consumption data.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -442,7 +442,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Finance logs.png`
 
-**Splynx features observed:** A financial operations log with three tabs: Future charges (showing upcoming scheduled charges with Customer login, Customer name, Transactions count, Will be charged amount, Account balance), Daily receipt, and Charge history. Filterable by Period, Partner, and Location. Includes a "Generate" action button (presumably to process pending charges). Shows transaction previews before they are executed.
+**legacy BSS features observed:** A financial operations log with three tabs: Future charges (showing upcoming scheduled charges with Customer login, Customer name, Transactions count, Will be charged amount, Account balance), Daily receipt, and Charge history. Filterable by Period, Partner, and Location. Includes a "Generate" action button (presumably to process pending charges). Shows transaction previews before they are executed.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -459,7 +459,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Financial report per plan.png`
 
-**Splynx features observed:** A comprehensive revenue report by tariff plan with two components: (1) A bar chart showing "Top 20 compared with another period" with three color-coded series (Main period in green, Period for comparison in yellow, Difference in blue) displaying revenue per plan (Unlimited Basic, Unlimited Compact, 50 Mbps Fiber, etc. -- values up to 20,000,000 Naira), and (2) A detailed table below with columns: Plan, Plan price, Transactions count, Sum of transactions for selected period, Invoiced amount, Discount, Charge total, and Charge total for compared period. Filterable by Main period, Plans, Partner, and Location. Values in Nigerian Naira.
+**legacy BSS features observed:** A comprehensive revenue report by tariff plan with two components: (1) A bar chart showing "Top 20 compared with another period" with three color-coded series (Main period in green, Period for comparison in yellow, Difference in blue) displaying revenue per plan (Unlimited Basic, Unlimited Compact, 50 Mbps Fiber, etc. -- values up to 20,000,000 Naira), and (2) A detailed table below with columns: Plan, Plan price, Transactions count, Sum of transactions for selected period, Invoiced amount, Discount, Charge total, and Charge total for compared period. Filterable by Main period, Plans, Partner, and Location. Values in Nigerian Naira.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -476,7 +476,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Invoice report.png`
 
-**Splynx features observed:** A detailed invoice listing with columns: Invoice number (formatted as date-based sequence), Status (color-coded "Paid" badges in green), Customer ID, Customer name, VAT amount, Net amount, Total amount (showing values like 7,500/17,500/21,500 Naira), Building Type (custom field). Shows all invoices with payment status for financial reconciliation.
+**legacy BSS features observed:** A detailed invoice listing with columns: Invoice number (formatted as date-based sequence), Status (color-coded "Paid" badges in green), Customer ID, Customer name, VAT amount, Net amount, Total amount (showing values like 7,500/17,500/21,500 Naira), Building Type (custom field). Shows all invoices with payment status for financial reconciliation.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -492,7 +492,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Statements.png`
 
-**Splynx features observed:** A customer statements module with three tabs: Statements (showing Customer login, Customer name, Finance documents, Opening balance, Closing balance), Finance customers report, and Receivables aging report. Period selector and Type filter (Transactions). Action buttons: Show, Generate PDF, Send to customers, and Filter. Supports bulk statement generation and distribution.
+**legacy BSS features observed:** A customer statements module with three tabs: Statements (showing Customer login, Customer name, Finance documents, Opening balance, Closing balance), Finance customers report, and Receivables aging report. Period selector and Type filter (Transactions). Action buttons: Show, Generate PDF, Send to customers, and Filter. Supports bulk statement generation and distribution.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -509,7 +509,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Tax Reports.png`
 
-**Splynx features observed:** A tax reporting module with two tabs: Tax report and Tax totals report. Table columns: Document number, Status (color-coded "Paid" badges), Customer ID, Customer name, Transaction count, Description (e.g., "Radio Installation"), VAT rate, Net amount, VAT amount (with values in Naira), Building Type. Shows per-transaction tax detail for regulatory compliance.
+**legacy BSS features observed:** A tax reporting module with two tabs: Tax report and Tax totals report. Table columns: Document number, Status (color-coded "Paid" badges), Customer ID, Customer name, Transaction count, Description (e.g., "Radio Installation"), VAT rate, Net amount, VAT amount (with values in Naira), Building Type. Shows per-transaction tax detail for regulatory compliance.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -525,7 +525,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Custom prices and discounts.png`
 
-**Splynx features observed:** A custom pricing and discount report showing all non-standard pricing across the customer base. Columns: Type, Customer ID, Customer name, Customer login, Partner, Location, ID, Description, Plan, Tariff price, Unit price, Unit, Billing start/end date, Period, Discount value, Discount type, Discount start/end date. Filterable by Partner and Location. Provides visibility into all pricing overrides and active discounts.
+**legacy BSS features observed:** A custom pricing and discount report showing all non-standard pricing across the customer base. Columns: Type, Customer ID, Customer name, Customer login, Partner, Location, ID, Description, Plan, Tariff price, Unit price, Unit, Billing start/end date, Period, Discount value, Discount type, Discount start/end date. Filterable by Partner and Location. Provides visibility into all pricing overrides and active discounts.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -542,7 +542,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Transactions categories.png`
 
-**Splynx features observed:** A revenue breakdown by transaction/service category. Columns: ID, Revenue stream (category name), Invoices count, Transactions count, Income, Tax, Income with Tax, Data top-ups, Data top-ups with Tax, Average service price, Average top-up. Filterable by Period and Partner. Provides ARPU (Average Revenue Per User) and revenue composition analysis.
+**legacy BSS features observed:** A revenue breakdown by transaction/service category. Columns: ID, Revenue stream (category name), Invoices count, Transactions count, Income, Tax, Income with Tax, Data top-ups, Data top-ups with Tax, Average service price, Average top-up. Filterable by Period and Partner. Provides ARPU (Average Revenue Per User) and revenue composition analysis.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -558,7 +558,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Customer Contracts.png`
 
-**Splynx features observed:** A contract management report with three tabs: Contracts pending signature, Expiring contracts, and Signed contracts. Table columns: ID, Customer, Title, Description, and Date. Provides lifecycle tracking of customer service contracts from creation through signature to expiration.
+**legacy BSS features observed:** A contract management report with three tabs: Contracts pending signature, Expiring contracts, and Signed contracts. Table columns: ID, Customer, Title, Description, and Date. Provides lifecycle tracking of customer service contracts from creation through signature to expiration.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -575,7 +575,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Monthly recurring revenue net change report.png`
 
-**Splynx features observed:** An MRR net change report with columns: Month start (subscriber count), New services (additions), Cancellations, Month end (subscriber count), and Net change. Filterable by Year, Partners, and Locations. Tracks monthly subscriber base movement for growth analysis.
+**legacy BSS features observed:** An MRR net change report with columns: Month start (subscriber count), New services (additions), Cancellations, Month end (subscriber count), and Net change. Filterable by Year, Partners, and Locations. Tracks monthly subscriber base movement for growth analysis.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -592,7 +592,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `New services report.png`
 
-**Splynx features observed:** A detailed new service activations report. Columns: Type (icon), Customer name, Region, Description, Plan name, Unit price (e.g., 17,500 / 10,000 Naira), Billing start date, Status (color-coded: Active in green, Blocked in red, Disabled), Connections (showing service identifiers), and Address. Filterable by Period, Partners, Locations, and Status. Shows all new service installations with pricing and location detail.
+**legacy BSS features observed:** A detailed new service activations report. Columns: Type (icon), Customer name, Region, Description, Plan name, Unit price (e.g., 17,500 / 10,000 Naira), Billing start date, Status (color-coded: Active in green, Blocked in red, Disabled), Connections (showing service identifiers), and Address. Filterable by Period, Partners, Locations, and Status. Shows all new service installations with pricing and location detail.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -608,7 +608,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Service export.png`
 
-**Splynx features observed:** A configurable service data export tool. Filter options: Types (service types), Status (Any), Partners, Attributes (selectable data fields), Delimiter (Comma/Tab/Semicolon). Toggle options: "First row contains column names" and "Ignore services from bundle". Single "Export" action button generates a downloadable CSV/file.
+**legacy BSS features observed:** A configurable service data export tool. Filter options: Types (service types), Status (Any), Partners, Attributes (selectable data fields), Delimiter (Comma/Tab/Semicolon). Toggle options: "First row contains column names" and "Ignore services from bundle". Single "Export" action button generates a downloadable CSV/file.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -626,7 +626,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Ticket reports.png`
 
-**Splynx features observed:** A comprehensive ticket/support reporting module with seven tabs: Closed tickets, SLA report, Agent Performance, Performance distribution report, Ticket lifecycle, Activity per admin, and Cost of support. Table columns: ID, Created date, Resolved date, Assigned to, Subject, Comment, Customer feedback, Content, Timing, Feedback, and Grade. Filterable by Period, Show (All/Specific), Date of (Resolve/Create), and Assign to. Provides deep support operations analytics.
+**legacy BSS features observed:** A comprehensive ticket/support reporting module with seven tabs: Closed tickets, SLA report, Agent Performance, Performance distribution report, Ticket lifecycle, Activity per admin, and Cost of support. Table columns: ID, Created date, Resolved date, Assigned to, Subject, Comment, Customer feedback, Content, Timing, Feedback, and Grade. Filterable by Period, Show (All/Specific), Date of (Resolve/Create), and Assign to. Provides deep support operations analytics.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -643,7 +643,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Referral system Report.png`
 
-**Splynx features observed:** A customer referral program tracking report. Columns: ID, Referrer (referring customer), Referrer bonus, Referee (referred customer), Referee bonus, Credit note date, Invitation send date, Account creation date, Activation date, and Tariffs (plan subscribed). Period selector for date range filtering.
+**legacy BSS features observed:** A customer referral program tracking report. Columns: ID, Referrer (referring customer), Referrer bonus, Referee (referred customer), Referee bonus, Credit note date, Invitation send date, Account creation date, Activation date, and Tariffs (plan subscribed). Period selector for date range filtering.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -660,7 +660,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `Refill cards statistics.png`
 
-**Splynx features observed:** A prepaid refill/voucher card statistics report. Columns: Serie (card series/batch), Partner, Price, Amount (face value), Total used, Total active, Total expired, Total disabled, Total amount used, Total amount active, Total amount expired, Total amount disabled. Filterable by Period and Partner. Tracks voucher inventory and redemption across card batches.
+**legacy BSS features observed:** A prepaid refill/voucher card statistics report. Columns: Serie (card series/batch), Partner, Price, Amount (face value), Total used, Total active, Total expired, Total disabled, Total amount used, Total amount active, Total amount expired, Total amount disabled. Filterable by Period and Partner. Tracks voucher inventory and redemption across card batches.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -677,7 +677,7 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 **Screenshot reviewed:** `DNS threat archive.png`
 
-**Splynx features observed:** A DNS security/threat intelligence integration (Whalebone) showing an error state: "whalebone_api_region is not set. Please check your addon config!" This is a DNS-based threat detection and blocking system that archives DNS threat events for ISP network security monitoring.
+**legacy BSS features observed:** A DNS security/threat intelligence integration (Whalebone) showing an error state: "whalebone_api_region is not set. Please check your addon config!" This is a DNS-based threat detection and blocking system that archives DNS threat events for ISP network security monitoring.
 
 **Proposed improvements for DotMac Sub:**
 
@@ -756,4 +756,4 @@ This document captures feature observations from 42 screenshots of Splynx's Admi
 
 ---
 
-*Document generated from review of 42 Splynx Administration screenshots. All features described are observations from Splynx ISP Framework v5.0 as deployed at Dotmac Technologies Ltd. Proposed improvements are adapted for DotMac Sub's FastAPI/HTMX/Tailwind architecture.*
+*Document generated from review of 42 legacy BSS Administration screenshots. All features described are observations from legacy BSS ISP Framework v5.0 as deployed at Dotmac Technologies Ltd. Proposed improvements are adapted for DotMac Sub's FastAPI/HTMX/Tailwind architecture.*

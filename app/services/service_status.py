@@ -1,12 +1,11 @@
 """Compute a customer's truthful service status.
 
-Service expiry here is NOT date-driven (see prepaid enforcement in
-``collections/_core.py:PrepaidEnforcement`` and postpaid dunning in
-``DunningWorkflow``):
+Service expiry here is NOT date-driven (see unified billing enforcement in
+``collections/_core.py:BillingEnforcementReconciler``):
 
-* Prepaid goes out of service when the available balance drops below the
-  account threshold, then after a grace window is suspended, then deactivated.
-  ``next_billing_at`` is only the next drawdown-charge marker, never an expiry.
+* Prepaid monthly service is invoiced in advance; dunning policy drives cases
+  and customer notices, while actual enforcing actions are gated by available
+  ledger balance.
 * Postpaid never lapses on a date; only dunning on overdue invoices suspends it.
 
 This module mirrors those enforcement rules read-only so the customer app can
@@ -55,7 +54,7 @@ _NEEDS_PAYMENT_STATUSES = frozenset(
 
 
 def _prepaid_threshold(db: Session, account: Subscriber) -> Decimal:
-    """The min-balance threshold for this account (mirrors PrepaidEnforcement)."""
+    """The min-balance threshold used by the prepaid enforcement gate."""
     if account.min_balance is not None:
         return Decimal(str(account.min_balance))
     default = settings_spec.resolve_value(

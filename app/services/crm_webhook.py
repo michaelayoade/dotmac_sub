@@ -49,9 +49,9 @@ def push_subscriber_change(
     """Push a subscriber change to the CRM sync webhook.
 
     Args:
-        external_id: The CRM external_id — Splynx customer ID for migrated
+        external_id: The CRM external_id — imported customer ID for migrated
             subscribers, the local subscriber UUID for native ones.
-        subscriber_data: Subscriber fields. Splynx-shaped for the splynx
+        subscriber_data: Subscriber fields. Legacy-shaped for the migrated
             system; CRM Subscriber column names for any other system (the
             CRM's generic handler instantiates its model from the payload
             verbatim, so unknown keys break creation).
@@ -123,7 +123,7 @@ def native_subscriber_payload(
     service_speed: str = "",
     status: str | None = None,
 ) -> dict:
-    """Build a generic-webhook payload for a native (non-Splynx) subscriber.
+    """Build a generic-webhook payload for a native subscriber.
 
     Only CRM Subscriber column names: the CRM's generic handler creates its
     model from the payload verbatim. The CRM has no name field on

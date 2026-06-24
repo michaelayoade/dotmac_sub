@@ -1,4 +1,4 @@
-# Post-cutover Splynx-deposit fallback — finance hand-off manifest
+# Post-cutover imported-deposit fallback — finance hand-off manifest
 
 Companion to `docs/POST_CUTOVER_HARDENING.md` (billing data-hardening slice).
 

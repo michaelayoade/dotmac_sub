@@ -1,7 +1,7 @@
 """CLI for the CRM duplicate-subscriber merge (see crm_duplicate_merge).
 
 DESTRUCTIVE on the CRM when run without --dry-run: re-points tickets/work
-orders from each erpnext alias record to the splynx primary, then
+orders from each erpnext alias record to the imported primary, then
 soft-deletes the alias. Start with --dry-run, then a small --limit canary.
 
 Usage:

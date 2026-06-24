@@ -303,7 +303,7 @@ CatalogOffer (Service Plan)
 │
 └── External Integration
     ├── splynx_tariff_id, splynx_service_name, splynx_tax_id
-    └── [for Splynx billing system sync]
+    └── [historical import reference fields]
 
 Subscription (Active Service)
 ├── subscriber_id → Subscriber
@@ -1084,7 +1084,6 @@ celery_app = Celery("dotmac_sm")
 - `deliver_webhook` - POST to webhook endpoints (retry on failure)
 
 **Integration Tasks**
-- `sync_subscribers_to_splynx` - Export to Splynx (nightly)
 - `sync_fiber_plant` - GIS sync (weekly)
 
 ### Task Pattern
@@ -1135,12 +1134,6 @@ def task_name(arg1, arg2):
 **Huawei OLT**
 - SSH for ONT activation
 - TR-069 via GenieACS for CPE management
-
-### External Billing (Splynx)
-
-- Bidirectional sync of subscribers, subscriptions, invoices
-- API-based integration
-- External reference tracking
 
 ### Notification Channels
 

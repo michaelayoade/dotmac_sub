@@ -2,8 +2,8 @@
 
 Two passes over the CRM subscriber list:
 
-1. external_system=splynx — authoritative: the CRM record's external_id is a
-   Splynx customer id, matched against subscribers.splynx_customer_id.
+1. external_system=splynx — legacy CRM contract: the CRM record's external_id is
+   the imported customer id, matched against subscribers.splynx_customer_id.
 2. external_system=erpnext — best-effort: the CRM record's external_id is a
    customer name; matched against local display/full/company name only when
    exactly one active local subscriber matches. Ambiguous names are skipped
@@ -70,7 +70,7 @@ def backfill(db, client: CRMClient, *, dry_run: bool = False) -> dict[str, int]:
         )
     }
     # Mirrors would-be column state so dry runs see the same collisions a live
-    # run does (the CRM holds many customers twice: splynx + erpnext records).
+    # run does (the CRM holds many customers twice: imported + erpnext records).
     assigned: dict[UUID, UUID] = {}
 
     def _add_alias(subscriber: Subscriber, crm_id: UUID) -> bool:
@@ -110,7 +110,7 @@ def backfill(db, client: CRMClient, *, dry_run: bool = False) -> dict[str, int]:
         taken_crm_ids.add(crm_id)
         stats[bucket] += 1
 
-    # Pass 1: splynx external ids (authoritative).
+    # Pass 1: imported external ids.
     local_by_splynx = {
         splynx_id: sub
         for sub in db.query(Subscriber).filter(

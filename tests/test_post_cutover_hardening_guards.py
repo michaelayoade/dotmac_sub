@@ -44,28 +44,28 @@ def _app_python_files() -> list[Path]:
 
 
 def test_no_splynx_task_is_registered():
-    """Code-level guard: no retired Splynx task may be registered in the Celery
+    """Code-level guard: no retired legacy-sync task may be registered in the Celery
     app. This fails the moment a ``splynx_sync``-style task module is recreated
     and imported — unlike a DB query, which only sees the (empty) test DB.
 
-    NB: only holds once the Splynx task modules are deleted AND dropped from
+    NB: only holds once the retired task modules are deleted AND dropped from
     ``app/tasks/__init__``. Commit this guard WITH that removal, not before.
     """
     from app.celery_app import celery_app
 
     splynx = sorted(name for name in celery_app.tasks if "splynx" in name.lower())
     assert splynx == [], (
-        f"Retired Splynx tasks still registered in Celery: {splynx}. "
+        f"Retired legacy-sync tasks still registered in Celery: {splynx}. "
         "Delete the task module and its app/tasks/__init__ import."
     )
 
 
 def test_enabled_schedules_do_not_target_splynx_tasks(db_session):
-    """Belt to the registry guard: no ENABLED ScheduledTask row targets a Splynx
+    """Belt to the registry guard: no ENABLED ScheduledTask row targets a retired
     task. (In CI this sees only the test DB; the registry guard above is the one
     with teeth against code reintroduction.)"""
     disabled_legacy = ScheduledTask(
-        name="disabled legacy Splynx task",
+        name="disabled legacy sync task",
         task_name="app.tasks.splynx_sync.run_incremental_sync",
         schedule_type=ScheduleType.interval,
         interval_seconds=3600,

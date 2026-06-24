@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 MAX_EXTENSION_DAYS = 30
 PREVIEW_SAMPLE_LIMIT = 50
 APPLY_BATCH_SIZE = 500
-# Postgres int4 ceiling: digit strings above this aren't splynx_customer_ids
+# Postgres int4 ceiling: digit strings above this are not legacy customer IDs.
 # (e.g. phone numbers) and would overflow the column comparison.
 _MAX_INT4 = 2_147_483_647
 
@@ -82,7 +82,7 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
             db.scalars(select(Subscriber).where(func.lower(column) == lowered)).all()
         )
 
-    # 3. Splynx customer id — int4-bounded so a longer digit string (e.g. an
+    # 3. Imported customer id — int4-bounded so a longer digit string (e.g. an
     #    11-digit phone number) doesn't overflow the int4 column on Postgres.
     if identifier.isdigit() and int(identifier) <= _MAX_INT4:
         matches.extend(

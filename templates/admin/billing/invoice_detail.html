@@ -51,6 +51,20 @@
         {% if status_val in ['draft', 'pending'] %}
         {{ action_button("Send Invoice", href="#", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>', variant="primary", color="emerald", color2="teal") }}
         {% endif %}
+        {% if status_val not in ['paid', 'void', 'written_off'] %}
+        <form method="post"
+              action="/admin/billing/invoices/{{ invoice.id }}/void-and-return"
+              class="inline-flex"
+              onsubmit="return confirm('Void this invoice? This should only be used when the invoice should never have existed.');">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="next_url" value="/admin/billing/invoices/{{ invoice.id }}">
+            <button type="submit"
+                    class="group inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-400 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:bg-slate-700 dark:hover:text-white">
+                <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                Void
+            </button>
+        </form>
+        {% endif %}
     {% endcall %}
 
     {% if error %}

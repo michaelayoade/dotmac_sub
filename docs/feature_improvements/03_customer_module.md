@@ -1,14 +1,14 @@
-# Section 3: Splynx Customer Module
+# Section 3: legacy BSS Customer Module
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
-This document analyzes 29 screenshots from the Splynx Customer Module and proposes feature improvements for DotMac Sub. The Splynx Customer Module covers the full customer lifecycle: profile management, service provisioning, billing configuration, usage statistics, documents, CPE management, and communication history.
+This document analyzes 29 screenshots from the legacy BSS Customer Module and proposes feature improvements for DotMac Sub. The legacy BSS Customer Module covers the full customer lifecycle: profile management, service provisioning, billing configuration, usage statistics, documents, CPE management, and communication history.
 
 ---
 
 ## 3.1 Customer Detail - Information Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Main information panel** (left column): Customer ID, portal login, portal password (with Show/Hide toggle), status dropdown (Active/Suspended/Canceled with color badge), billing type (Recurring/Prepaid), company name, email, billing email (separate field), phone number (multiple numbers comma-separated), partner/reseller assignment, location dropdown, street address, ZIP code.
 - **Comments / To-Dos panel** (right column): Inline comment/to-do list with add (+) button directly on the customer detail page.
 - **Additional information panel** (right column, collapsible): Labels (tag-style typeahead), category (Business/Residential dropdown), contact person, company ID, VAT ID, base station (GPON reference), social ID, coverage notes, comment field.
@@ -26,7 +26,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 - [ ] **Add "Login as Customer" impersonation action** -- Implement admin ability to impersonate a subscriber's portal session for troubleshooting. Requires: session token generation scoped to subscriber, audit log entry on impersonation start/end, visual banner in the customer portal indicating impersonation mode.
 - [ ] **Add "Send Welcome Message" action** -- Allow re-sending the welcome/onboarding email from the subscriber detail page. Pull template from notification templates, pre-fill with subscriber data.
 - [ ] **Add "Send Message" quick action** -- Enable sending ad-hoc email/SMS to the subscriber directly from their detail page without navigating to a separate communication module.
-- [ ] **Add integrated ticket summary on subscriber detail** -- Show ticket counts (open/closed) and quick-create link directly on the subscriber detail page header area, similar to the Splynx Tickets dropdown.
+- [ ] **Add integrated ticket summary on subscriber detail** -- Show ticket counts (open/closed) and quick-create link directly on the subscriber detail page header area, similar to the legacy BSS Tickets dropdown.
 - [ ] **Add labels/tags system for subscribers** -- Implement a tagging system with typeahead search. Model: `SubscriberLabel` (many-to-many). Tags should be filterable on the subscriber list page. Use cases: VIP, corporate, problematic, referral-source, etc.
 - [ ] **Add separate billing email field** -- Allow subscribers to have a distinct billing email address separate from their primary contact email. This is common for corporate accounts where invoices go to accounts@company.com but service notifications go to IT staff.
 - [ ] **Add subscriber category field** -- Add a Business/Residential/Government/NGO category enum to the subscriber model. This enables segmentation in reports and different billing/dunning rules per category.
@@ -41,7 +41,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.2 Customer Detail - Services Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Internet services table**: Columns for ID, Status (Online/Offline badge with color), Description, Plan (clickable link to catalog), Price, Billing start date, Billing end date, Invoiced until date, Service login (RADIUS username), IPv4 address, Rule (bandwidth rule indicator), and Actions.
 - **Service status indicators**: Green "Online" badge for active RADIUS sessions, showing real-time connectivity.
 - **View filter dropdown**: Active / Disabled / All services.
@@ -67,7 +67,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.3 Customer Detail - Billing Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Three sub-tabs**: Finance documents, Transactions, Billing config.
 - **Finance documents table**: Sortable columns for ID, Type (badge: Recurring Invoice, One-time Invoice, Proforma, Credit Note), Number, Date, Price, Payment status (Paid/Unpaid badges), Payment date, Actions. Color-coded type badges (blue for recurring, green for paid, purple for proforma).
 - **Persistent billing summary bar**: Account balance, Next block date, Payment method -- always visible at the top of the billing tab.
@@ -122,7 +122,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.4 Customer Detail - Statistics Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Service type sub-tab**: "Internet" tab (implies support for multiple service types with separate stats).
 - **Service and period selectors**: Service dropdown (select specific service or "All"), date range picker for the statistics period.
 - **Online sessions table**: Login, data In (MB), data Out (MB), Start at (timestamp), Time (duration), IP address, MAC address, NAS device (clickable link), Actions.
@@ -148,7 +148,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.5 Customer Detail - Documents Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Documents table**: Columns for ID, Added (updated) by, Status, Source (Generated/Uploaded), Title, Date, Description, Actions (edit, print, download, send, delete).
 - **Type filter dropdown**: Filter documents by type (All, contracts, CRM calls, etc.).
 - **Upload button**: Direct file upload capability.
@@ -169,7 +169,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.6 Customer Detail - CPE Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Add CPE section** (collapsible): Button to add a new CPE device.
 - **CPE device form fields**:
   - Title (device name/label)
@@ -196,7 +196,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.7 Customer Detail - Communication Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **Two sub-tabs**: Internal (email) and Messengers.
 - **Internal (email) tab**: Shows email communication history with the subscriber. Lists sent emails with sender, recipient, subject, date, and preview. Includes service outage notifications, billing reminders, tariff change notices. Warning banner when SMTP is not configured.
 - **Messengers tab**: Integration point for messaging add-ons (WhatsApp, Telegram, etc.). Shows a notice when no messenger add-ons are installed, with a link to the integration configuration page.
@@ -213,7 +213,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.8 Customer Detail - DNS Security Tab
 
-### Splynx Features Observed
+### legacy BSS Features Observed
 - **DNS filtering/security integration**: A tab dedicated to DNS-level security (Whalebone integration). Shows per-subscriber DNS security configuration.
 - **Error state handling**: Displays a clear error message when the integration is not configured ("whalebone_api_region is not set. Please check your addon config!").
 
@@ -226,7 +226,7 @@ This document analyzes 29 screenshots from the Splynx Customer Module and propos
 
 ## 3.9 Cross-Cutting UI/UX Improvements
 
-### Splynx Features Observed Across All Tabs
+### legacy BSS Features Observed Across All Tabs
 - **Tabbed navigation**: Information, Services, Billing, Statistics, Documents, CPE, Communication, DNS Security -- eight tabs covering all aspects of customer management.
 - **Consistent header bar**: Customer name, account number, account balance always visible.
 - **Column show/hide modals**: On transaction and document tables, a modal lets users toggle which columns are visible with checkboxes and drag reorder.

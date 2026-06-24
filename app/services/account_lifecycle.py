@@ -77,7 +77,7 @@ _SUSPENDABLE = {
 }
 
 # Statuses treated as equivalent to "suspended" in account derivation
-# (Splynx legacy statuses that mean the service is not running)
+# Legacy statuses that mean the service is not running.
 SUSPENDED_EQUIVALENT = {
     SubscriptionStatus.suspended,
     SubscriptionStatus.blocked,

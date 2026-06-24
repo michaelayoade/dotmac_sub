@@ -93,7 +93,7 @@ celery_app.conf.task_routes = {
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
     # Monitoring cache warmer queries Zabbix; keep it off the default queue so
-    # it isn't starved by slow/long default-queue jobs (e.g. Splynx sync).
+    # it isn't starved by slow/long default-queue jobs.
     "app.tasks.monitoring_warm.warm_monitoring_caches": {"queue": "ingestion"},
     # CRM ticket pull paginates an external API; the default queue's backlog
     # would push it far past its 5-minute schedule.
@@ -111,9 +111,9 @@ celery_app.conf.task_routes = {
     "app.tasks.autopay.charge_due_invoices": {"queue": "billing"},
     "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
+    "app.tasks.collections.run_billing_enforcement": {"queue": "billing"},
     "app.tasks.collections.run_dunning": {"queue": "billing"},
-    "app.tasks.prepaid_billing.run_prepaid_charges": {"queue": "billing"},
-    "app.tasks.prepaid_billing.check_billing_switch": {"queue": "billing"},
+    "app.tasks.billing.check_billing_switch": {"queue": "billing"},
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
     "app.tasks.usage.run_usage_rating": {"queue": "billing"},
     "app.tasks.usage.evaluate_fup_rules": {"queue": "billing"},

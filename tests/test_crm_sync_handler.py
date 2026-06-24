@@ -4,7 +4,7 @@ Covers the async handoff added so a slow/unreachable CRM never blocks the
 request thread, plus the task-level retry contract:
 
 - CrmSyncHandler: enqueues a Celery task (never blocks on HTTP inline),
-  guards on CRM config, resolves the Splynx id, and degrades silently.
+  guards on CRM config, resolves the imported id, and degrades silently.
 - push_subscriber_change task: returns True on success, raises CrmPushError
   (to drive Celery autoretry) on failure.
 - crm_webhook payload builders: shape + null-speed handling.
@@ -229,7 +229,7 @@ class TestCrmSyncHandler:
         http.assert_not_called()
 
     def test_native_subscriber_pushes_generic_webhook(self):
-        """Subscribers without a Splynx id push via the generic 'dotmac' system."""
+        """Subscribers without an imported id push via the generic 'dotmac' system."""
         sub = _subscriber(splynx_id=None)
         db = MagicMock()
         db.get.return_value = sub
@@ -245,7 +245,7 @@ class TestCrmSyncHandler:
         external_id, payload, external_system = kwargs["args"]
         assert external_id == str(sub.id)
         assert external_system == "dotmac"
-        assert payload["status"] == "suspended"  # CRM vocabulary, not splynx's
+        assert payload["status"] == "suspended"  # CRM vocabulary, not source-specific.
         assert "name" not in payload  # not a CRM Subscriber column
 
     def test_subscriber_created_pushes_native_only(self):
@@ -267,7 +267,7 @@ class TestCrmSyncHandler:
         assert external_system == "dotmac"
         assert payload["status"] == "active"
 
-        db.get.return_value = _subscriber()  # has a splynx id → already in CRM
+        db.get.return_value = _subscriber()  # has an imported id -> already in CRM
         with crm_base_url("https://crm.example"):
             enqueue, _ = self._handle(event, db)
         enqueue.assert_not_called()

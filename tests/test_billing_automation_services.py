@@ -287,7 +287,7 @@ class TestEffectiveUnitPrice:
         assert result == Decimal("80.00")
 
     def test_zero_unit_price_falls_back_to_catalog(self):
-        # Splynx importer stores 0 when the export had no per-service price.
+        # Legacy importer stores 0 when the export had no per-service price.
         result = billing_automation._effective_unit_price(
             _sub(unit_price=Decimal("0.00")), Decimal("100.00"), self.NOW
         )
@@ -878,7 +878,7 @@ class TestRunInvoiceCycle:
         run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
         subscription.status = SubscriptionStatus.active
         # Account-level walled-garden with an active subscription (the runner's
-        # widened, Splynx-imported-style population).
+        # widened, imported-style population).
         subscriber_account.status = AccountStatus.blocked
         subscription.start_at = run_at - timedelta(days=30)
         subscription.next_billing_at = run_at - timedelta(days=2)
