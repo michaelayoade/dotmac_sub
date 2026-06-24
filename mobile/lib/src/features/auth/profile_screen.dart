@@ -134,9 +134,63 @@ class ProfileScreen extends ConsumerWidget {
                   onPressed: () =>
                       ref.read(authControllerProvider.notifier).logout(),
                 ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  icon: const Icon(Icons.delete_forever_outlined, size: 18),
+                  label: const Text('Delete account'),
+                  onPressed: () => _confirmDeleteAccount(context, ref),
+                ),
               ],
             ),
     );
+  }
+
+  Future<void> _confirmDeleteAccount(
+      BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete account?'),
+        content: const Text(
+          'This closes your DotMac account and signs you out. Your service will '
+          'end and your personal data will be deleted per our privacy policy '
+          '(some billing and tax records are kept where the law requires). '
+          'To restore your account afterwards, contact support@dotmac.ng.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete account'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await ref.read(authControllerProvider.notifier).deleteAccount();
+      messenger.showSnackBar(const SnackBar(
+        content:
+            Text('Your account has been closed. You have been signed out.'),
+      ));
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Could not delete your account — please try again or '
+            'contact support@dotmac.ng.'),
+      ));
+    }
   }
 
   void _showChangePassword(BuildContext context, WidgetRef ref) {
