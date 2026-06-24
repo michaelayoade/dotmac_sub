@@ -166,7 +166,9 @@ def _validate_resolved_subscriber_ids(
         db.scalars(select(Subscriber.id).where(Subscriber.id.in_(resolved))).all()
     )
     missing = [
-        str(subscriber_id) for subscriber_id in resolved if subscriber_id not in existing
+        str(subscriber_id)
+        for subscriber_id in resolved
+        if subscriber_id not in existing
     ]
     if missing:
         raise HTTPException(

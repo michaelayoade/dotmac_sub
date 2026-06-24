@@ -603,11 +603,16 @@ def catalog_subscription_force_reauth(
             url,
             status_code=303,
         )
-    count = int(result.get("sessions_disconnected") or 0)
+    count_raw = result.get("sessions_disconnected", 0)
+    if isinstance(count_raw, int):
+        count = count_raw
+    elif isinstance(count_raw, str):
+        count = int(count_raw or "0")
+    else:
+        count = 0
     if count > 0:
         message = (
-            "Force reauthentication requested. "
-            f"Disconnected {count} active session(s)."
+            f"Force reauthentication requested. Disconnected {count} active session(s)."
         )
         url = (
             f"/admin/catalog/subscriptions/{subscription_id}"
@@ -622,8 +627,7 @@ def catalog_subscription_force_reauth(
         "found to disconnect."
     )
     url = (
-        f"/admin/catalog/subscriptions/{subscription_id}"
-        f"?warning={quote_plus(message)}"
+        f"/admin/catalog/subscriptions/{subscription_id}?warning={quote_plus(message)}"
     )
     return RedirectResponse(
         url,

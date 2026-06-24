@@ -254,9 +254,8 @@ def _resolve_request_actor_id(request, actor_id: str | None) -> str | None:
 
 
 def _resolve_request_actor_type(request, actor_id: str | None) -> AuditActorType:
-    raw_type = (
-        _request_auth_value(request, "principal_type")
-        or getattr(getattr(request, "state", None), "actor_type", None)
+    raw_type = _request_auth_value(request, "principal_type") or getattr(
+        getattr(request, "state", None), "actor_type", None
     )
     normalized = str(raw_type or "").strip().lower()
     if normalized in {AuditActorType.api_key.value, AuditActorType.service.value}:
@@ -292,7 +291,9 @@ def _request_user_value(request, key: str):
 def _cached_current_user_value(request, key: str):
     if request is None:
         return None
-    cached = getattr(getattr(request, "state", None), "_dotmac_cached_user_context", None)
+    cached = getattr(
+        getattr(request, "state", None), "_dotmac_cached_user_context", None
+    )
     if isinstance(cached, Mapping):
         return cached.get(key)
     return None
@@ -326,8 +327,12 @@ def _request_actor_identity(request) -> tuple[str | None, str | None]:
 
     try:
         state = getattr(user, "__dict__", {}) or {}
-        first_name = _first_text(state.get("first_name"), getattr(user, "first_name", None))
-        last_name = _first_text(state.get("last_name"), getattr(user, "last_name", None))
+        first_name = _first_text(
+            state.get("first_name"), getattr(user, "first_name", None)
+        )
+        last_name = _first_text(
+            state.get("last_name"), getattr(user, "last_name", None)
+        )
         display_name = _first_text(
             state.get("display_name"),
             getattr(user, "display_name", None),

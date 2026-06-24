@@ -21,6 +21,7 @@ from app.services.network.reconcile import (
     ReconcileResult,
 )
 
+
 @pytest.fixture
 def olt_device(db_session):
     olt = OLTDevice(

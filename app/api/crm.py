@@ -359,9 +359,7 @@ def service_extensions(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
-    rows, total = crm_api.service_extension_rows(
-        db, page=page, per_page=per_page
-    )
+    rows, total = crm_api.service_extension_rows(db, page=page, per_page=per_page)
     return _envelope(rows, {**meta, "total": total})
 
 

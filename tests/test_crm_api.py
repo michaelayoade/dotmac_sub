@@ -359,9 +359,7 @@ def test_billing_risk_source_batches_page_aggregates(db_session, crm_auth):
     assert len(statements) <= 20
 
 
-def test_service_extension_endpoints_expose_compensation_for_crm(
-    db_session, crm_auth
-):
+def test_service_extension_endpoints_expose_compensation_for_crm(db_session, crm_auth):
     subscriber = _subscriber(db_session)
     subscriber.splynx_customer_id = 11038
     offer = _offer(db_session)

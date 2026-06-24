@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import HTTPException
@@ -60,13 +61,15 @@ def _request(content: bytes) -> Request:
 
 
 def _call(db_session, content: bytes, *, token: str | None = None):
-    return asyncio.run(
-        zabbix_webhook.receive_zabbix_alert(
-            request=_request(content),
-            db=db_session,
-            x_zabbix_token=token,
-        )
-    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(
+            asyncio.run,
+            zabbix_webhook.receive_zabbix_alert(
+                request=_request(content),
+                db=db_session,
+                x_zabbix_token=token,
+            ),
+        ).result()
 
 
 def test_unauthenticated_request_is_401_not_422(db_session, zabbix_auth):

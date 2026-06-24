@@ -423,9 +423,7 @@ def service_extension_rows(
     return [_service_extension_payload(row, actors=actors) for row in rows], int(total)
 
 
-def service_extension_detail(
-    db: Session, extension_id: str
-) -> dict[str, Any] | None:
+def service_extension_detail(db: Session, extension_id: str) -> dict[str, Any] | None:
     parsed = _uuid_or_none(extension_id)
     if parsed is None:
         return None
