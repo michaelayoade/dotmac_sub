@@ -212,6 +212,9 @@ def test_existing_allocation_recalc_does_not_consume_credit_again(db_session):
     )
     db_session.commit()
 
+    projected = project_settlement(db_session, str(sub.id))
+    assert projected.applied == Decimal("0.00")
+
     result = settle_open_invoices_from_credit(db_session, str(sub.id))
     db_session.commit()
 

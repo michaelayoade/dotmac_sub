@@ -40,6 +40,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    CreditNoteApplication,
     Invoice,
     InvoiceStatus,
     LedgerEntry,
@@ -194,8 +195,10 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
     for invoice in invoices:
         if remaining <= 0:
             break
-        invoice_remaining = round_money(to_decimal(invoice.balance_due))
+        invoice_remaining = _project_invoice_remaining(db, invoice)
         if invoice_remaining <= 0:
+            if to_decimal(invoice.balance_due) > 0:
+                touched.add(invoice.id)
             continue
         for payment, _room in payments:
             if remaining <= 0 or invoice_remaining <= 0:
@@ -290,7 +293,7 @@ def project_settlement(db: Session, account_id: str) -> SettleResult:
     for invoice in invoices:
         if remaining <= 0:
             break
-        invoice_remaining = round_money(to_decimal(invoice.balance_due))
+        invoice_remaining = _project_invoice_remaining(db, invoice)
         if invoice_remaining <= 0:
             continue
         apply_here = min(remaining, invoice_remaining)
@@ -303,6 +306,27 @@ def project_settlement(db: Session, account_id: str) -> SettleResult:
             result.invoices_settled.append(str(invoice.id))
     _ = currency_room
     return result
+
+
+def _project_invoice_remaining(db: Session, invoice: Invoice) -> Decimal:
+    allocated = (
+        db.query(func.coalesce(func.sum(PaymentAllocation.amount), 0))
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(PaymentAllocation.is_active.is_(True))
+        .filter(Payment.is_active.is_(True))
+        .filter(Payment.status == PaymentStatus.succeeded)
+        .scalar()
+    )
+    credited = (
+        db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
+        .filter(CreditNoteApplication.invoice_id == invoice.id)
+        .scalar()
+    )
+    computed_remaining = round_money(
+        to_decimal(invoice.total) - to_decimal(allocated) - to_decimal(credited)
+    )
+    return max(Decimal("0.00"), min(to_decimal(invoice.balance_due), computed_remaining))
 
 
 @dataclass
