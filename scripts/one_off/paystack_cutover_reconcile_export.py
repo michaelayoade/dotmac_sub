@@ -36,7 +36,7 @@ from app.services.paystack import PAYSTACK_API_BASE, _get_secret_key, kobo_to_na
 DEFAULT_FROM_DATE = "2026-06-15"
 DEFAULT_TO_DATE = "2026-06-18"
 DEFAULT_OUTPUT = "scratchpad/paystack_cutover_reconcile.csv"
-MAX_PAYSTACK_FEE_DELTA = Decimal("1000.00")
+MAX_PAYSTACK_FEE_DELTA = Decimal("2500.00")
 
 
 @dataclass(frozen=True)
