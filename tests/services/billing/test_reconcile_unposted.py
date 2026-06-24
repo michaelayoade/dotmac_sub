@@ -13,6 +13,9 @@ from decimal import Decimal
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentProvider,
@@ -168,6 +171,55 @@ def test_settle_is_idempotent(db_session):
     )
     assert allocations_after_first == allocations_after_second
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
+
+
+def test_existing_allocation_recalc_does_not_consume_credit_again(db_session):
+    """A stale open invoice with an existing allocation must not double-spend.
+
+    This mirrors migrated rows where allocations existed but invoice summary
+    fields still showed open AR. The settler may recalculate the invoice, but it
+    must not recreate the invoice ledger credit or add an offsetting credit-pool
+    debit for the old allocation.
+    """
+    sub = _native_subscriber(db_session, suffix="ExistingAllocation")
+    payment = Payment(
+        account_id=sub.id,
+        amount=Decimal("125.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    inv = _open_invoice(db_session, sub, Decimal("100.00"))
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=inv.id,
+            amount=Decimal("100.00"),
+            memo="pre-existing allocation",
+        )
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=sub.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("25.00"),
+            currency="NGN",
+            memo="unallocated credit that must not be consumed",
+        )
+    )
+    db_session.commit()
+
+    result = settle_open_invoices_from_credit(db_session, str(sub.id))
+    db_session.commit()
+
+    db_session.refresh(inv)
+    assert result.applied == Decimal("0.00")
+    assert inv.status == InvoiceStatus.paid
+    assert inv.balance_due == Decimal("0.00")
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("25.00")
 
 
 def test_no_credit_is_noop(db_session):

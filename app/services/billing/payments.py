@@ -414,9 +414,11 @@ def _apply_payment_allocation(
     """
     existing = _find_payment_allocation(db, payment, invoice)
     if existing:
-        applied_amount = round_money(to_decimal(existing.amount))
-        _create_payment_ledger_entry(db, payment, invoice, applied_amount)
-        return existing, applied_amount
+        # Idempotent re-runs must not recreate the invoice ledger credit or
+        # report the old allocation as newly applied. The original allocation
+        # and ledger effect already exist; returning 0 keeps callers from
+        # consuming account credit a second time.
+        return existing, Decimal("0.00")
 
     applied_amount = round_money(to_decimal(amount))
     allocation = PaymentAllocation(
