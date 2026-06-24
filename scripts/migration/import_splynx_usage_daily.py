@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -23,6 +25,7 @@ from app.models.usage import SubscriberDailyUsage
 from scripts.migration._splynx_conn import splynx_connection
 
 BATCH = 10000
+LAGOS = ZoneInfo("Africa/Lagos")
 
 
 def _load_service_map(db) -> dict[int, uuid.UUID]:
@@ -73,6 +76,14 @@ def run(*, execute: bool) -> None:
                     "upload_bytes": int(row["up"] or 0),
                     "download_bytes": int(row["down"] or 0),
                     "source": "splynx_traffic_counter",
+                    # Backfilled rows: created_at reflects the usage day itself
+                    # (midnight, subscriber-region tz), not import time.
+                    "created_at": datetime(
+                        row["date"].year,
+                        row["date"].month,
+                        row["date"].day,
+                        tzinfo=LAGOS,
+                    ),
                 }
             )
             if len(batch) >= BATCH:

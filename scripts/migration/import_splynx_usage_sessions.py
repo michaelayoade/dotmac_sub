@@ -70,7 +70,14 @@ def _load_login_map(db) -> dict[str, tuple[uuid.UUID, uuid.UUID]]:
     return {str(r[0]): (r[1], r[2]) for r in rows if r[0] is not None}
 
 
-def run(*, execute: bool, cutover: str, include_errors: bool) -> None:
+def run(
+    *,
+    execute: bool,
+    cutover: str,
+    include_errors: bool,
+    min_id: int = 0,
+    min_start_date: str = "",
+) -> None:
     db = SessionLocal()
     service_map = _load_service_map(db)
     login_map = _load_login_map(db)
@@ -92,6 +99,16 @@ def run(*, execute: bool, cutover: str, include_errors: bool) -> None:
     params = [cutover]
     if not include_errors:
         where += " AND error = 0"
+    if min_start_date:
+        # Resume by date: MySQL scans this query in start_date order (the range
+        # predicate uses the start_date index), so a dropped run leaves the
+        # latest-dated tail. Re-running from the last fully-imported date picks
+        # up only that tail (ON CONFLICT de-dupes the boundary day).
+        where += " AND start_date >= %s"
+        params.append(min_start_date)
+    if min_id:
+        where += " AND id >= %s"
+        params.append(min_id)
 
     batch: list[dict] = []
     # AUTOCOMMIT: each batch commits on execute, so there is never an open
@@ -129,6 +146,7 @@ def run(*, execute: bool, cutover: str, include_errors: bool) -> None:
             if cred:
                 stats["matched_credential"] += 1
             sess_id = row["session_id"] or str(row["id"])
+            sess_start = _to_dt(row["start_date"], row["start_time"])
             batch.append(
                 {
                     "id": uuid.uuid4(),
@@ -136,8 +154,11 @@ def run(*, execute: bool, cutover: str, include_errors: bool) -> None:
                     "access_credential_id": cred[0] if cred else None,
                     "session_id": str(sess_id)[:120],
                     "status_type": "stop",
-                    "session_start": _to_dt(row["start_date"], row["start_time"]),
+                    "session_start": sess_start,
                     "session_end": _to_dt(row["end_date"], row["end_time"]),
+                    # Backfilled rows: created_at reflects the original session
+                    # time, not import time, so history reads at its true date.
+                    "created_at": sess_start,
                     "input_octets": int(row["in_bytes"] or 0),
                     "output_octets": int(row["out_bytes"] or 0),
                     "terminate_cause": (
@@ -176,9 +197,22 @@ if __name__ == "__main__":
         action="store_true",
         help="also import failed/errored auth rows (error<>0)",
     )
+    ap.add_argument(
+        "--min-id",
+        type=int,
+        default=0,
+        help="resume: only scan statistics.id >= this (idempotent regardless)",
+    )
+    ap.add_argument(
+        "--min-start-date",
+        default="",
+        help="resume: only scan rows with start_date >= this YYYY-MM-DD",
+    )
     args = ap.parse_args()
     run(
         execute=args.execute,
         cutover=args.cutover_date,
         include_errors=args.include_errors,
+        min_id=args.min_id,
+        min_start_date=args.min_start_date,
     )
