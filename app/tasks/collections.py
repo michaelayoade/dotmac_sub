@@ -17,8 +17,7 @@ def run_billing_enforcement() -> dict[str, int | str]:
     try:
         if not billing_enabled(session):
             logger.info(
-                "billing enforcement skipped: local billing disabled "
-                "(billing_enabled)"
+                "billing enforcement skipped: local billing disabled (billing_enabled)"
             )
             return {"skipped": "billing_disabled"}
         result = collections_service.billing_enforcement_reconciler.run(

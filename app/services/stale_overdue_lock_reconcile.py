@@ -25,6 +25,7 @@ from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
+from app.services import settings_spec
 from app.services.account_lifecycle import (
     SUSPENDED_EQUIVALENT,
     compute_account_status,
@@ -33,7 +34,6 @@ from app.services.account_lifecycle import (
     resolve_locks_for_trigger,
     restore_subscription,
 )
-from app.services import settings_spec
 from app.services.collections import get_available_balance, has_overdue_balance
 
 _TRIGGER = "admin"
@@ -48,9 +48,7 @@ class ReconcileItem:
     other_active_locks: list[str]  # active lock reasons besides 'overdue'
     available_balance: str | None = None
     min_balance: str | None = None
-    action: str = (
-        ""  # would_restore|would_clear_lock_only|restored|lock_cleared_not_restored|lock_cleared
-    )
+    action: str = ""  # would_restore|would_clear_lock_only|restored|lock_cleared_not_restored|lock_cleared
     detail: str = ""
 
 
