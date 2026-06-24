@@ -369,28 +369,40 @@ class TestSyncScheduledTask:
 
         assert task is None
 
-    def test_updates_existing_task_name(self, db_session):
-        """Test updates name of existing task."""
+    def test_updates_existing_task_task_name_in_place(self, db_session):
+        """Match is by ``name``; a task_name rename updates the row in place.
+
+        The sync identifies the row by its stable ``name``. When the task is
+        renamed/moved (its ``task_name`` changes) the existing row's
+        ``task_name`` is updated in place rather than a new row being inserted.
+        """
         task = ScheduledTask(
-            name="original_name",
-            task_name="app.tasks.update.run",
+            name="stable_name",
+            task_name="app.tasks.update.old",
             schedule_type=ScheduleType.interval,
             interval_seconds=3600,
             enabled=True,
         )
         db_session.add(task)
         db_session.commit()
+        original_id = task.id
 
         scheduler_config._sync_scheduled_task(
             db_session,
-            name="updated_name",
-            task_name="app.tasks.update.run",
+            name="stable_name",
+            task_name="app.tasks.update.new",
             enabled=True,
             interval_seconds=3600,
         )
 
-        db_session.refresh(task)
-        assert task.name == "updated_name"
+        rows = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "stable_name")
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].id == original_id
+        assert rows[0].task_name == "app.tasks.update.new"
 
     def test_updates_existing_task_interval(self, db_session):
         """Test updates interval of existing task."""

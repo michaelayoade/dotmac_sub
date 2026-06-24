@@ -110,6 +110,86 @@ def check_billing_switch_task() -> dict:
                 ",".join(notification.reasons),
                 notification.details,
             )
+
+        # Billing liveness/anomaly monitoring (alert-only; never blocks
+        # enforcement). logger.error so each surfaces as an operator page via
+        # GlitchTip; the same signals are exported as Prometheus gauges.
+        #
+        # Failure isolation: this is MONITORING, not a gate. A snapshot error
+        # (bad query, schema drift, DB hiccup) must never crash the hourly
+        # billing guard or mask the config/enforcement/notification alerts
+        # emitted above. Swallow + log.exception so the task always completes.
+        # TODO: add per-anomaly alert cooldown to avoid paging every hour.
+        try:
+            from app.services.billing_health import billing_health_snapshot
+
+            health = billing_health_snapshot(session)
+            anomalies = set(health.anomalies)
+            result["billing_health"] = {
+                "paid_with_balance_count": health.paid_with_balance_count,
+                "last_scanned": health.last_scanned,
+                "eligible_active_subs": health.eligible_active_subs,
+                "scan_ratio": health.scan_ratio,
+                "payments_24h": health.payments_24h,
+                "payments_7d_daily_avg": health.payments_7d_daily_avg,
+                "payment_volume_ratio": health.payment_volume_ratio,
+                "stale_runners": health.stale_runners,
+                "covered_but_locked": health.covered_but_locked,
+                "unbilled_no_path": health.unbilled_no_path,
+                "active_subs_on_terminal_account": (
+                    health.active_subs_on_terminal_account
+                ),
+                "anomalies": sorted(anomalies),
+            }
+            if "paid_invoices_with_balance" in anomalies:
+                logger.error(
+                    "billing_paid_invoices_with_balance: %d invoices status=paid "
+                    "carry non-zero balance_due (total %s) — AR-integrity defect",
+                    health.paid_with_balance_count,
+                    health.paid_with_balance_total,
+                )
+            if "invoice_scan_count_low" in anomalies:
+                logger.error(
+                    "billing_invoice_scan_count_low: last run scanned %s of ~%d "
+                    "eligible subscriptions (ratio %.2f) — cycle may have stopped "
+                    "scanning a cohort",
+                    health.last_scanned,
+                    health.eligible_active_subs,
+                    health.scan_ratio,
+                )
+            if "payment_volume_collapse" in anomalies:
+                logger.error(
+                    "billing_payment_volume_collapse: last-24h %d succeeded payments "
+                    "vs 7d daily avg %.1f (ratio %.2f) — payment intake may be broken",
+                    health.payments_24h,
+                    health.payments_7d_daily_avg,
+                    health.payment_volume_ratio,
+                )
+            if "runner_heartbeat_stale" in anomalies:
+                logger.error(
+                    "billing_runner_heartbeat_stale: no fresh success for %s — a "
+                    "billing/collections runner may be stalled or dead",
+                    ",".join(health.stale_runners),
+                )
+            if "enforcement_covered_but_locked" in anomalies:
+                logger.error(
+                    "billing_enforcement_covered_but_locked: %d accounts under a "
+                    "billing lock despite ledger balance >= 0 — wrongful-suspension "
+                    "drift",
+                    health.covered_but_locked,
+                )
+            if "active_subs_without_billing_path" in anomalies:
+                logger.error(
+                    "billing_active_subs_without_billing_path: %d active prepaid "
+                    "subscription(s) no enabled billing path will invoice (flag off "
+                    "or non-monthly offer) — revenue leak",
+                    health.unbilled_no_path,
+                )
+        except Exception:
+            logger.exception(
+                "billing_health_snapshot_failed: monitoring snapshot raised; "
+                "skipping liveness anomaly alerts (enforcement guard unaffected)"
+            )
         return result
     finally:
         session.close()

@@ -69,6 +69,35 @@ def audit_ip_consistency() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.radius.connectivity_shadow_audit")
+def connectivity_shadow_audit() -> dict:
+    """Periodic read-only full-base connectivity shadow sweep. Aggregates
+    per-dimension desired-vs-actual drift across every connectivity-retaining
+    subscriber and stores it in Redis, where the web process's metrics collector
+    exports it as ``connectivity_shadow_drift{dimension}``. This is the
+    cutover-readiness gauge for the connectivity reconciler — see
+    docs/designs/CONNECTIVITY_STATE_MACHINE.md. Writes nothing."""
+    from app.services.connectivity_reconciler import (
+        connectivity_shadow_audit as run_sweep,
+    )
+    from app.services.connectivity_reconciler import (
+        store_connectivity_shadow_result,
+    )
+
+    session = SessionLocal()
+    try:
+        result = run_sweep(session)
+        store_connectivity_shadow_result(result)
+        logger.info(
+            "connectivity shadow audit: population=%s drift=%s",
+            result.get("population"),
+            result.get("counts"),
+        )
+        return result
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.radius.run_enforcement_reconciler")
 def run_enforcement_reconciler() -> dict[str, int]:
     """Assert that non-serviceable subscribers are actually unreachable.
