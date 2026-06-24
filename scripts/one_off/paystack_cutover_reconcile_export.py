@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -28,13 +28,15 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.billing import Payment, PaymentProviderEvent, TopupIntent
+from app.models.billing import Payment, PaymentProviderEvent, PaymentStatus, TopupIntent
 from app.models.subscriber import Subscriber, SubscriberContact
+from app.services.common import round_money
 from app.services.paystack import PAYSTACK_API_BASE, _get_secret_key, kobo_to_naira
 
 DEFAULT_FROM_DATE = "2026-06-15"
 DEFAULT_TO_DATE = "2026-06-18"
 DEFAULT_OUTPUT = "scratchpad/paystack_cutover_reconcile.csv"
+MAX_PAYSTACK_FEE_DELTA = Decimal("1000.00")
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,9 @@ def _metadata_dict(value: Any) -> dict[str, Any]:
 
 
 def _transaction_from_payload(payload: dict[str, Any]) -> GatewayTransaction:
-    customer = payload.get("customer") if isinstance(payload.get("customer"), dict) else {}
+    customer = (
+        payload.get("customer") if isinstance(payload.get("customer"), dict) else {}
+    )
     return GatewayTransaction(
         reference=str(payload.get("reference") or ""),
         external_id=str(payload.get("id") or ""),
@@ -126,6 +130,72 @@ def _find_payment(db: Session, tx: GatewayTransaction) -> Payment | None:
     ).first()
 
 
+def _paid_date(value: str) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _looks_like_paystack_fee_gross(
+    gateway_amount: Decimal, local_amount: Decimal
+) -> bool:
+    delta = round_money(gateway_amount - local_amount)
+    return Decimal("0.00") <= delta <= MAX_PAYSTACK_FEE_DELTA
+
+
+def _find_legacy_same_day_payment(
+    db: Session,
+    tx: GatewayTransaction,
+    matched_subscribers: list[Subscriber],
+) -> Payment | None:
+    """Find local rows imported without Paystack external ids.
+
+    During cutover, some successful Paystack payments were imported from the old
+    billing source as ordinary local payments: same account, same paid date, net
+    invoice amount, but no provider/external id. Treat those as already recorded
+    so the recovery poster does not double-credit the account.
+    """
+    paid_at = _paid_date(tx.paid_at)
+    if paid_at is None:
+        return None
+
+    if tx.reference:
+        reference_match = db.scalars(
+            select(Payment)
+            .where(Payment.is_active.is_(True))
+            .where(Payment.status == PaymentStatus.succeeded)
+            .where(Payment.memo.ilike(f"%{tx.reference}%"))
+            .order_by(Payment.created_at.desc())
+            .limit(1)
+        ).first()
+        if reference_match is not None:
+            return reference_match
+
+    account_ids = [subscriber.id for subscriber in matched_subscribers]
+    if not account_ids:
+        return None
+
+    day_start = datetime.combine(paid_at.date(), time.min, tzinfo=paid_at.tzinfo)
+    day_end = day_start + timedelta(days=1)
+    candidates = db.scalars(
+        select(Payment)
+        .where(Payment.account_id.in_(account_ids))
+        .where(Payment.is_active.is_(True))
+        .where(Payment.status == PaymentStatus.succeeded)
+        .where(Payment.paid_at >= day_start)
+        .where(Payment.paid_at < day_end)
+        .where(Payment.memo.not_like("Paystack cutover recovery ref:%"))
+        .order_by(Payment.amount.desc(), Payment.created_at.desc())
+    ).all()
+    for payment in candidates:
+        if _looks_like_paystack_fee_gross(tx.amount, payment.amount):
+            return payment
+    return None
+
+
 def _find_provider_event(
     db: Session, tx: GatewayTransaction
 ) -> PaymentProviderEvent | None:
@@ -133,7 +203,9 @@ def _find_provider_event(
     if tx.external_id:
         predicates.append(PaymentProviderEvent.external_id == tx.external_id)
     if tx.reference:
-        predicates.append(PaymentProviderEvent.idempotency_key == f"paystack-{tx.reference}")
+        predicates.append(
+            PaymentProviderEvent.idempotency_key == f"paystack-{tx.reference}"
+        )
     if not predicates:
         return None
     return db.scalars(
@@ -173,8 +245,10 @@ def _matched_subscribers_by_email(db: Session, email: str) -> list[Subscriber]:
 
 
 def _subscriber_label(subscriber: Subscriber) -> str:
-    name = subscriber.display_name or subscriber.company_name or (
-        f"{subscriber.first_name} {subscriber.last_name}".strip()
+    name = (
+        subscriber.display_name
+        or subscriber.company_name
+        or (f"{subscriber.first_name} {subscriber.last_name}".strip())
     )
     status = subscriber.status.value if subscriber.status else ""
     number = subscriber.subscriber_number or ""
@@ -186,9 +260,12 @@ def _classification(
     payment: Payment | None,
     event: PaymentProviderEvent | None,
     intent: TopupIntent | None,
+    legacy_payment: Payment | None,
 ) -> str:
     if payment is not None:
         return "recorded_payment"
+    if legacy_payment is not None:
+        return "recorded_legacy_payment_same_day"
     if event is not None and event.payment_id is not None:
         return "provider_event_links_payment_missing_locally"
     if intent is not None and intent.completed_payment_id is not None:
@@ -212,14 +289,13 @@ def _recovery_bucket(classification: str, matched_subscriber_count: int) -> str:
     return "ambiguous_email_match"
 
 
-def _row(
-    db: Session, tx: GatewayTransaction
-) -> dict[str, str]:
+def _row(db: Session, tx: GatewayTransaction) -> dict[str, str]:
     payment = _find_payment(db, tx)
     event = _find_provider_event(db, tx)
     intent = _find_topup_intent(db, tx.reference)
     matched_subscribers = _matched_subscribers_by_email(db, tx.customer_email)
-    classification = _classification(tx, payment, event, intent)
+    legacy_payment = _find_legacy_same_day_payment(db, tx, matched_subscribers)
+    classification = _classification(tx, payment, event, intent, legacy_payment)
     metadata = tx.metadata
     return {
         "classification": classification,
@@ -243,15 +319,28 @@ def _row(
         "local_payment_amount": str(payment.amount) if payment else "",
         "local_payment_account_id": str(payment.account_id) if payment else "",
         "local_payment_billing_account_id": (
-            str(payment.billing_account_id) if payment and payment.billing_account_id else ""
+            str(payment.billing_account_id)
+            if payment and payment.billing_account_id
+            else ""
+        ),
+        "legacy_payment_id": str(legacy_payment.id) if legacy_payment else "",
+        "legacy_payment_amount": str(legacy_payment.amount) if legacy_payment else "",
+        "legacy_payment_account_id": (
+            str(legacy_payment.account_id)
+            if legacy_payment and legacy_payment.account_id
+            else ""
         ),
         "provider_event_id": str(event.id) if event else "",
         "provider_event_status": event.status.value if event else "",
-        "provider_event_payment_id": str(event.payment_id) if event and event.payment_id else "",
+        "provider_event_payment_id": str(event.payment_id)
+        if event and event.payment_id
+        else "",
         "topup_intent_id": str(intent.id) if intent else "",
         "topup_intent_status": intent.status if intent else "",
         "topup_intent_completed_payment_id": (
-            str(intent.completed_payment_id) if intent and intent.completed_payment_id else ""
+            str(intent.completed_payment_id)
+            if intent and intent.completed_payment_id
+            else ""
         ),
         "matched_subscriber_count": str(len(matched_subscribers)),
         "matched_subscriber_id": (
@@ -265,35 +354,39 @@ def _row(
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(rows[0].keys()) if rows else [
-        "classification",
-        "recovery_bucket",
-        "reference",
-        "paystack_id",
-        "status",
-        "amount",
-        "currency",
-        "paid_at",
-        "created_at",
-        "customer_email",
-        "metadata_account_id",
-        "metadata_invoice_id",
-        "metadata_topup_intent_id",
-        "local_payment_id",
-        "local_payment_status",
-        "local_payment_amount",
-        "local_payment_account_id",
-        "local_payment_billing_account_id",
-        "provider_event_id",
-        "provider_event_status",
-        "provider_event_payment_id",
-        "topup_intent_id",
-        "topup_intent_status",
-        "topup_intent_completed_payment_id",
-        "matched_subscriber_count",
-        "matched_subscriber_id",
-        "matched_subscribers",
-    ]
+    fieldnames = (
+        list(rows[0].keys())
+        if rows
+        else [
+            "classification",
+            "recovery_bucket",
+            "reference",
+            "paystack_id",
+            "status",
+            "amount",
+            "currency",
+            "paid_at",
+            "created_at",
+            "customer_email",
+            "metadata_account_id",
+            "metadata_invoice_id",
+            "metadata_topup_intent_id",
+            "local_payment_id",
+            "local_payment_status",
+            "local_payment_amount",
+            "local_payment_account_id",
+            "local_payment_billing_account_id",
+            "provider_event_id",
+            "provider_event_status",
+            "provider_event_payment_id",
+            "topup_intent_id",
+            "topup_intent_status",
+            "topup_intent_completed_payment_id",
+            "matched_subscriber_count",
+            "matched_subscriber_id",
+            "matched_subscribers",
+        ]
+    )
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
