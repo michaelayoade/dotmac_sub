@@ -13,6 +13,8 @@ Create Date: 2026-06-24
 
 from __future__ import annotations
 
+from sqlalchemy import inspect
+
 from alembic import op
 
 revision = "172_scheduled_tasks_unique_name"
@@ -20,9 +22,23 @@ down_revision = "171_system_user_device_login"
 branch_labels = None
 depends_on = None
 
+CONSTRAINT_NAME = "uq_scheduled_tasks_name"
+TABLE_NAME = "scheduled_tasks"
+
+
+def _has_constraint() -> bool:
+    inspector = inspect(op.get_bind())
+    return any(
+        c["name"] == CONSTRAINT_NAME
+        for c in inspector.get_unique_constraints(TABLE_NAME)
+    )
+
 
 def upgrade() -> None:
     # Self-healing: collapse any duplicate names before adding the constraint.
+    # Intentional history drop: surplus duplicate rows are hard-DELETEd (no FK
+    # references scheduled_tasks.id, so nothing depends on the discarded ids).
+    # We keep the enabled, then most-recently-updated row per name.
     op.execute(
         """
         DELETE FROM scheduled_tasks
@@ -38,10 +54,11 @@ def upgrade() -> None:
         )
         """
     )
-    op.create_unique_constraint(
-        "uq_scheduled_tasks_name", "scheduled_tasks", ["name"]
-    )
+    # Idempotent: only create the constraint if it isn't already present.
+    if not _has_constraint():
+        op.create_unique_constraint(CONSTRAINT_NAME, TABLE_NAME, ["name"])
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_scheduled_tasks_name", "scheduled_tasks", type_="unique")
+    if _has_constraint():
+        op.drop_constraint(CONSTRAINT_NAME, TABLE_NAME, type_="unique")

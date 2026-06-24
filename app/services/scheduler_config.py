@@ -164,6 +164,8 @@ def _sync_scheduled_task(
     changed = False
     # Defensive dedupe: delete any stray duplicate rows for this name (the
     # unique constraint prevents new ones, but pre-existing data may have them).
+    # Intentional history drop: the surplus rows are hard-deleted; nothing has a
+    # FK to scheduled_tasks.id, so no dependent records are affected.
     for duplicate in tasks[1:]:
         db.delete(duplicate)
         changed = True
