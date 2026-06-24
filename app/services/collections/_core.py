@@ -1682,7 +1682,10 @@ class BillingEnforcementReconciler:
         db: Session, payload: BillingEnforcementRunRequest
     ) -> BillingEnforcementRunResponse:
         run_at = payload.run_at or datetime.now(UTC)
-        credit_stats = {
+        # Annotate to match _settle_due_credit_before_dunning's return type;
+        # without it mypy joins the mixed int/str literal to dict[str, object],
+        # clashing (dict is invariant) with the reassignment below.
+        credit_stats: dict[str, int | str] = {
             "credit_accounts_scanned": 0,
             "credit_accounts_settled": 0,
             "credit_invoices_touched": 0,
