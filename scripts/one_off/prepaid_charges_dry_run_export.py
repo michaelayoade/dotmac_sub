@@ -115,9 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                         else ""
                     ),
                     "next_billing_at": (
-                        sub.next_billing_at.isoformat()
-                        if sub.next_billing_at
-                        else ""
+                        sub.next_billing_at.isoformat() if sub.next_billing_at else ""
                     ),
                     "first_sighting": first_sighting,
                     "period_days": period_days,
@@ -125,7 +123,9 @@ def main(argv: list[str] | None = None) -> int:
                     "currency": currency,
                     "classification": classification,
                     "available_balance_advisory": (
-                        "" if args.no_balance else _available_balance(db, sub.subscriber_id)
+                        ""
+                        if args.no_balance
+                        else _available_balance(db, sub.subscriber_id)
                     ),
                 }
             )
@@ -135,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
             writer.writeheader()
             writer.writerows(rows)
 
-        print(f"prepaid drawdown dry-run @ {now.isoformat()}  (READ-ONLY, nothing posted)")
+        print(
+            f"prepaid drawdown dry-run @ {now.isoformat()}  (READ-ONLY, nothing posted)"
+        )
         print(f"  due (daily/non-monthly prepaid): {len(due)}")
         print(f"  chargeable now:                  {n_charge}   total ₦{total}")
         print(f"  initialise-only (no charge):     {n_init}")
