@@ -20,6 +20,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -31,6 +32,7 @@ from app.models.billing import (
 from app.models.catalog import (
     BillingCycle,
     BillingMode,
+    CatalogOffer,
     Subscription,
     SubscriptionStatus,
 )
@@ -142,13 +144,25 @@ def _period_charge(
 
 
 def _due_prepaid_subscriptions(db: Session, now: datetime) -> list[Subscription]:
-    """Active prepaid subscriptions of active subscribers that are due or new."""
+    """Active prepaid subscriptions of active subscribers that are due or new.
+
+    Excludes prepaid on MONTHLY-cycle offers: those are billed in advance by the
+    invoice cycle (``prepaid_monthly_invoicing_enabled``) and chased by dunning,
+    so drawing them down here as well would double-bill. Drawdown owns
+    daily/weekly/balance prepaid; the invoice cycle owns monthly prepaid. Mirrors
+    the monthly gate in ``billing_automation.run_invoice_cycle`` and
+    ``collections._core`` so the two engines stay mutually exclusive.
+    """
+    monthly_offer_ids = select(CatalogOffer.id).where(
+        CatalogOffer.billing_cycle == BillingCycle.monthly
+    )
     return (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.billing_mode == BillingMode.prepaid)
         .filter(Subscription.status == SubscriptionStatus.active)
         .filter(Subscriber.status == SubscriberStatus.active)
+        .filter(Subscription.offer_id.not_in(monthly_offer_ids))
         .filter(
             (Subscription.next_billing_at.is_(None))
             | (Subscription.next_billing_at <= now)

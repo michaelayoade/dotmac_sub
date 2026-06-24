@@ -989,6 +989,14 @@ def seed_collections_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("DUNNING_INTERVAL_SECONDS", "86400"),
     )
+    prepaid_charges_raw = os.getenv("PREPAID_CHARGES_ENABLED", "false")
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_charges_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=prepaid_charges_raw,
+        value_json=prepaid_charges_raw.lower() in {"1", "true", "yes", "on"},
+    )
     prepaid_enabled_raw = os.getenv("PREPAID_ENFORCEMENT_ENABLED", "true")
     collections_settings.ensure_by_key(
         db,
