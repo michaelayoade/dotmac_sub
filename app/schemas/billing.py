@@ -358,6 +358,13 @@ class PaymentRead(PaymentBase):
 
 class PaymentInitiateRequest(BaseModel):
     invoice_id: UUID
+    # Which online gateway to checkout with for a new card; ignored for saved
+    # cards. Defaults to the configured provider when omitted.
+    provider: str | None = None
+    # Charge this saved card server-side (one-tap); idempotency_key makes that
+    # charge safe against a double-submit.
+    payment_method_id: UUID | None = None
+    idempotency_key: str | None = None
 
 
 class PaymentInitiateResponse(BaseModel):
@@ -369,6 +376,10 @@ class PaymentInitiateResponse(BaseModel):
     provider_public_key: str | None = None
     payment_reference: str
     customer_email: str | None = None
+    # True when a saved card was charged server-side — skip the gateway webview
+    # and go straight to verify (mirrors the top-up flow).
+    charged: bool = False
+    checkout_url: str | None = None
 
 
 class PaymentVerifyRequest(BaseModel):

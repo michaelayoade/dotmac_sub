@@ -54,13 +54,17 @@ def test_initiate_payment_maps_context(monkeypatch):
     )
     monkeypatch.setattr(
         billing_api.customer_payments,
-        "get_payment_page",
-        lambda db, customer, invoice_id: {
-            "invoice": invoice,
+        "create_invoice_payment_intent",
+        lambda db, customer, invoice_id, **kw: {
+            "invoice_number": "INV-001",
+            "amount": Decimal("2500.00"),
+            "currency": "NGN",
             "provider_type": "paystack",
             "provider_public_key": "pk_test_123",
-            "payment_reference": "ref_abc",
+            "reference": "ref_abc",
             "customer_email": "c@example.com",
+            "charged": False,
+            "checkout_url": None,
         },
     )
 
@@ -78,13 +82,17 @@ def test_initiate_payment_maps_context(monkeypatch):
     assert resp.provider_public_key == "pk_test_123"
     assert resp.payment_reference == "ref_abc"
     assert resp.customer_email == "c@example.com"
+    assert resp.charged is False
 
 
-def test_initiate_payment_404_when_not_payable(monkeypatch):
+def test_initiate_payment_400_when_not_payable(monkeypatch):
+    def _raise(db, customer, invoice_id, **kw):
+        raise ValueError("Invoice is no longer payable")
+
     monkeypatch.setattr(
         billing_api.customer_payments,
-        "get_payment_page",
-        lambda db, customer, invoice_id: None,
+        "create_invoice_payment_intent",
+        _raise,
     )
     with pytest.raises(HTTPException) as exc:
         billing_api.initiate_payment(
@@ -92,7 +100,7 @@ def test_initiate_payment_404_when_not_payable(monkeypatch):
             db=None,
             principal=_subscriber_principal(),
         )
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 400
 
 
 def test_initiate_payment_403_for_non_subscriber():
