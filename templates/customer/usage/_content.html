@@ -242,6 +242,42 @@
         </div>
     </div>
 
+    {% if usage_history and usage_history.has_history %}
+    <div class="{{ usage_panel_class }}"
+         x-data='window.DotmacCharts && typeof window.DotmacCharts.createUsageRecordsPanel === "function" ? DotmacCharts.createUsageRecordsPanel({
+             defaultView: "chart",
+             chartRecords: {{ usage_history.chart_records | tojson }},
+             chartId: "portal-usage-history-chart",
+             chartLabel: "Monthly Usage (GB)"
+         }) : { init() {} }'
+         x-init="if (typeof init === 'function') init()">
+        <div class="flex items-center justify-between gap-4 border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="flex items-center gap-2 text-lg font-semibold {{ usage_primary_text }}" style="font-family: var(--font-display);">
+                <svg class="h-5 w-5 {{ usage_accent_icon }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+                Usage History
+            </h2>
+            <span class="text-xs font-medium {{ usage_muted_text }}">Since {{ usage_history.since }}</span>
+        </div>
+        <div class="grid gap-3 px-6 pt-6 sm:grid-cols-2">
+            <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average / Month</p>
+                <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_history.average_gb) }} GB</p>
+            </div>
+            <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Total Used (all time)</p>
+                <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">
+                    {% if usage_history.total_gb >= 1024 %}{{ "{:.2f}".format(usage_history.total_gb / 1024) }} TB{% else %}{{ "{:.2f}".format(usage_history.total_gb) }} GB{% endif %}
+                </p>
+            </div>
+        </div>
+        <div class="p-6">
+            <div class="h-80">
+                <canvas x-ref="recordsChartCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="{{ usage_panel_class }}"
          {% if usage_enable_records_chart %}
          x-data='window.DotmacCharts && typeof window.DotmacCharts.createUsageRecordsPanel === "function" ? DotmacCharts.createUsageRecordsPanel({

@@ -507,6 +507,7 @@ def customer_usage(
     usage_data = customer_portal.get_usage_page(
         db, customer, period=period, page=page, per_page=per_page
     )
+    usage_history = customer_portal.get_usage_history(db, customer, months=12)
 
     return templates.TemplateResponse(
         "customer/usage/index.html",
@@ -514,6 +515,7 @@ def customer_usage(
             "request": request,
             "customer": customer,
             **usage_data,
+            "usage_history": usage_history,
             "usage_chart_records": usage_data.get("chart_records", []),
             "active_page": "usage",
             "bandwidth_chart_initial_stats": _load_initial_bandwidth_stats(

@@ -517,6 +517,7 @@ from app.models.usage import (  # noqa: F401
     AccountingStatus,
     QuotaBucket,
     RadiusAccountingSession,
+    SubscriberDailyUsage,
     UsageCharge,
     UsageChargeStatus,
     UsageRatingRun,

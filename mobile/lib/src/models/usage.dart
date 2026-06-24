@@ -253,6 +253,93 @@ class UsageSummary {
       );
 }
 
+/// One calendar day's traffic (bytes). Mirrors DailyUsagePoint from
+/// schemas/usage.py (GET /me/usage-history). Dates are plain calendar days —
+/// not localized, so month bucketing stays stable across timezones.
+class DailyUsagePoint {
+  DailyUsagePoint({
+    required this.date,
+    required this.uploadBytes,
+    required this.downloadBytes,
+    required this.totalBytes,
+  });
+
+  final DateTime date;
+  final int uploadBytes;
+  final int downloadBytes;
+  final int totalBytes;
+
+  factory DailyUsagePoint.fromJson(Map<String, dynamic> json) =>
+      DailyUsagePoint(
+        date: DateTime.parse(json['date'].toString()),
+        uploadBytes: (json['upload_bytes'] as num?)?.toInt() ?? 0,
+        downloadBytes: (json['download_bytes'] as num?)?.toInt() ?? 0,
+        totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One calendar month's total traffic (bytes), aggregated client-side.
+class MonthlyUsagePoint {
+  MonthlyUsagePoint({required this.month, required this.bytes});
+
+  /// First day of the month (day = 1).
+  final DateTime month;
+  final int bytes;
+}
+
+/// Long-history daily usage. Mirrors DailyUsageHistoryResponse from
+/// schemas/usage.py (GET /me/usage-history). Sourced from the daily rollup
+/// (Splynx backfill), reaching years further back than per-session accounting.
+class UsageHistory {
+  UsageHistory({
+    required this.start,
+    required this.end,
+    required this.totalUploadBytes,
+    required this.totalDownloadBytes,
+    required this.totalBytes,
+    this.points = const [],
+  });
+
+  final DateTime start;
+  final DateTime end;
+  final int totalUploadBytes;
+  final int totalDownloadBytes;
+  final int totalBytes;
+  final List<DailyUsagePoint> points;
+
+  factory UsageHistory.fromJson(Map<String, dynamic> json) => UsageHistory(
+        start: DateTime.parse(json['start'].toString()),
+        end: DateTime.parse(json['end'].toString()),
+        totalUploadBytes: (json['total_upload_bytes'] as num?)?.toInt() ?? 0,
+        totalDownloadBytes:
+            (json['total_download_bytes'] as num?)?.toInt() ?? 0,
+        totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
+        points: (json['points'] as List? ?? const [])
+            .map((e) => DailyUsagePoint.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+
+  /// Aggregate the daily points into calendar-month totals, ascending. Gaps
+  /// (months with no recorded usage) are simply absent — same as the daily
+  /// source, which isn't zero-filled.
+  List<MonthlyUsagePoint> toMonthly() {
+    final byMonth = <String, int>{};
+    for (final p in points) {
+      final key = '${p.date.year}-${p.date.month.toString().padLeft(2, '0')}';
+      byMonth[key] = (byMonth[key] ?? 0) + p.totalBytes;
+    }
+    final out = byMonth.entries.map((e) {
+      final parts = e.key.split('-');
+      return MonthlyUsagePoint(
+        month: DateTime(int.parse(parts[0]), int.parse(parts[1])),
+        bytes: e.value,
+      );
+    }).toList()
+      ..sort((a, b) => a.month.compareTo(b.month));
+    return out;
+  }
+}
+
 DateTime? _toDate(dynamic v) {
   if (v == null) return null;
   return DateTime.tryParse(v.toString())?.toLocal();

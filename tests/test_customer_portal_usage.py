@@ -39,6 +39,59 @@ class TestCustomerPortalUsagePage:
         usage_summary_stats.assert_not_called()
         get_fup_status.assert_not_called()
 
+    def test_get_usage_history_aggregates_months(
+        self, db_session, subscription
+    ) -> None:
+        from datetime import date
+
+        from app.models.usage import SubscriberDailyUsage
+        from app.services.customer_portal_flow_services import get_usage_history
+
+        gb = 1024**3
+        rows = [
+            (date(2020, 1, 5), 1 * gb, 2 * gb),  # Jan: 3 GB
+            (date(2020, 1, 15), 0, 1 * gb),  # Jan: +1 GB -> 4 GB
+            (date(2020, 2, 10), 1 * gb, 1 * gb),  # Feb: 2 GB
+        ]
+        for i, (d, up, down) in enumerate(rows):
+            db_session.add(
+                SubscriberDailyUsage(
+                    subscription_id=subscription.id,
+                    splynx_service_id=7000 + i,
+                    usage_date=d,
+                    upload_bytes=up,
+                    download_bytes=down,
+                )
+            )
+        db_session.commit()
+
+        out = get_usage_history(
+            db_session, {"subscription_id": str(subscription.id)}, months=12
+        )
+
+        assert out["has_history"] is True
+        assert out["months_shown"] == 2
+        assert out["since"] == "Jan 2020"
+        assert out["total_gb"] == 6.0
+        assert out["average_gb"] == 3.0
+        assert [r["label"] for r in out["chart_records"]] == ["Jan", "Feb"]
+        assert out["chart_records"][0]["value"] == 4.0
+        assert out["chart_records"][0]["download_value"] == 3.0
+        assert out["chart_records"][0]["upload_value"] == 1.0
+        assert out["chart_records"][1]["value"] == 2.0
+
+    def test_get_usage_history_empty_without_history(
+        self, db_session, subscription
+    ) -> None:
+        from app.services.customer_portal_flow_services import get_usage_history
+
+        out = get_usage_history(
+            db_session, {"subscription_id": str(subscription.id)}, months=12
+        )
+        assert out["has_history"] is False
+        assert out["chart_records"] == []
+        assert out["total_gb"] == 0.0
+
     def test_get_usage_page_returns_full_chart_records_with_paginated_table(
         self, db_session, subscription
     ) -> None:
@@ -228,6 +281,10 @@ class TestCustomerUsageRoute:
             patch(
                 "app.web.customer.routes.customer_portal.get_usage_page",
                 return_value=usage_page,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.get_usage_history",
+                return_value={"has_history": False, "chart_records": []},
             ),
             patch(
                 "app.web.customer.routes.resolve_customer_subscription",

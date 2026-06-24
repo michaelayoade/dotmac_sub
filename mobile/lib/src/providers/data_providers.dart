@@ -335,6 +335,21 @@ final usageSummaryProvider = FutureProvider.autoDispose
   return ref.watch(usageRepositoryProvider).usageSummary(period);
 });
 
+/// Selected look-back window (days) for the long-history usage chart.
+/// 365 = 1Y, 730 = 2Y, 3660 = full archive (the endpoint's max).
+final usageHistoryDaysProvider = StateProvider.autoDispose<int>((ref) {
+  cacheFor(ref);
+  return 365;
+});
+
+/// Long-history daily usage (GET /me/usage-history), aggregated to months in
+/// the UI. Keyed by the look-back window in days.
+final usageHistoryProvider =
+    FutureProvider.autoDispose.family<UsageHistory, int>((ref, days) async {
+  cacheFor(ref);
+  return ref.watch(usageRepositoryProvider).usageHistory(days: days);
+});
+
 /// Current throughput for the active subscription (connection banner).
 /// Errors (e.g. no active subscription) just mean "no signal" — callers
 /// read it via asData and omit the figure.

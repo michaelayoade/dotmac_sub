@@ -821,6 +821,89 @@ def get_usage_page(
     }
 
 
+def get_usage_history(db: Session, customer: dict, months: int = 12) -> dict:
+    """Monthly long-history usage for the portal usage page.
+
+    Aggregated from the historical daily rollup (Splynx ``traffic_counter``
+    backfill via ``SubscriberDailyUsage``), which reaches years further back
+    than the live per-session / bandwidth sources. Returns Chart.js-ready
+    monthly records (same shape as ``_serialize_usage_chart_records`` so the
+    existing records-chart Alpine component can render them) plus the monthly
+    average and the lifetime total.
+    """
+    empty: dict[str, Any] = {
+        "has_history": False,
+        "chart_records": [],
+        "average_gb": 0.0,
+        "total_gb": 0.0,
+        "since": None,
+        "months_shown": 0,
+    }
+    subscription_id_str = _resolve_usage_subscription_id(db, customer)
+    if not subscription_id_str:
+        return empty
+
+    from app.models.usage import SubscriberDailyUsage
+
+    rows = (
+        db.query(
+            SubscriberDailyUsage.usage_date,
+            SubscriberDailyUsage.upload_bytes,
+            SubscriberDailyUsage.download_bytes,
+        )
+        .filter(
+            SubscriberDailyUsage.subscription_id == coerce_uuid(subscription_id_str)
+        )
+        .order_by(SubscriberDailyUsage.usage_date)
+        .all()
+    )
+    if not rows:
+        return empty
+
+    gb = 1024**3
+    # (year, month) -> [download_bytes, upload_bytes]
+    by_month: dict[tuple[int, int], list[int]] = {}
+    total_bytes = 0
+    for usage_date, up, down in rows:
+        up_i, down_i = int(up or 0), int(down or 0)
+        total_bytes += up_i + down_i
+        agg = by_month.setdefault((usage_date.year, usage_date.month), [0, 0])
+        agg[0] += down_i
+        agg[1] += up_i
+
+    month_abbr = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]  # fmt: skip
+    ordered = sorted(by_month.items())
+    chart = ordered[-months:] if len(ordered) > months else ordered
+    chart_records: list[dict[str, Any]] = []
+    monthly_gb: list[float] = []
+    for (y, m), (down, up) in chart:
+        value = round((down + up) / gb, 2)
+        monthly_gb.append(value)
+        chart_records.append(
+            {
+                "label": month_abbr[m - 1],
+                "full_label": f"{month_abbr[m - 1]} {y}",
+                "value": value,
+                "download_value": round(down / gb, 2),
+                "upload_value": round(up / gb, 2),
+                "unit": "GB",
+            }
+        )
+    avg_gb = round(sum(monthly_gb) / len(monthly_gb), 2) if monthly_gb else 0.0
+    (first_y, first_m), _ = ordered[0]
+    return {
+        "has_history": True,
+        "chart_records": chart_records,
+        "average_gb": avg_gb,
+        "total_gb": round(total_bytes / gb, 2),
+        "since": f"{month_abbr[first_m - 1]} {first_y}",
+        "months_shown": len(chart_records),
+    }
+
+
 def get_services_page(
     db: Session,
     customer: dict,
