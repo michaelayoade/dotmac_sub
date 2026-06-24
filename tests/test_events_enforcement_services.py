@@ -735,6 +735,31 @@ class TestEnforcementHandler:
         assert subscription.status == SubscriptionStatus.suspended
 
     @patch("app.services.events.handlers.enforcement.settings_spec")
+    def test_usage_exhausted_payload_block_overrides_global_throttle(
+        self, mock_settings, db_session, subscription
+    ):
+        def settings_side_effect(db, domain, key):
+            if key == "fup_action":
+                return "throttle"
+            return None
+
+        mock_settings.resolve_value.side_effect = settings_side_effect
+        subscription.status = SubscriptionStatus.active
+        db_session.flush()
+
+        handler = EnforcementHandler()
+        event = self._make_event(
+            EventType.usage_exhausted,
+            payload={"action": "block"},
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+        handler.handle(db_session, event)
+
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
+
+    @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_usage_exhausted_none_action_is_noop(self, mock_settings, db_session):
         mock_settings.resolve_value.return_value = "none"
         handler = EnforcementHandler()
@@ -813,6 +838,44 @@ class TestEnforcementHandler:
         acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
+            subscription_id=sub_id,
+            account_id=acc_id,
+        )
+        handler.handle(db_session, event)
+
+        mock_apply_profile.assert_called_once_with(
+            db_session, str(acc_id), str(throttle_profile_id)
+        )
+        mock_disconnect.assert_called_once_with(
+            db_session, str(acc_id), reason="fup_throttle"
+        )
+
+    @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
+    @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
+    @patch("app.services.events.handlers.enforcement.settings_spec")
+    def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
+        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+    ):
+        throttle_profile_id = uuid.uuid4()
+
+        def settings_side_effect(db, domain, key):
+            if key == "fup_action":
+                return "block"
+            if key == "fup_throttle_radius_profile_id":
+                return str(throttle_profile_id)
+            if key == "refresh_sessions_on_profile_change":
+                return "true"
+            return None
+
+        mock_settings.resolve_value.side_effect = settings_side_effect
+        mock_apply_profile.return_value = 1
+
+        handler = EnforcementHandler()
+        sub_id = uuid.uuid4()
+        acc_id = uuid.uuid4()
+        event = self._make_event(
+            EventType.usage_exhausted,
+            payload={"action": "reduce_speed"},
             subscription_id=sub_id,
             account_id=acc_id,
         )
