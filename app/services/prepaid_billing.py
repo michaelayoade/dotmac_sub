@@ -36,7 +36,9 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.common import round_money
 
@@ -143,32 +145,51 @@ def _period_charge(
     return charge, (currency or "NGN"), period_days
 
 
+def _prepaid_monthly_invoicing_enabled(db: Session) -> bool:
+    """Whether the invoice cycle (not drawdown) owns MONTHLY-cycle prepaid.
+
+    Mirrors the gate in ``billing_automation.run_invoice_cycle`` and
+    ``collections._core``: only when this flag is on does the invoice cycle bill
+    monthly prepaid in advance — so only then must drawdown exclude it.
+    """
+    value = settings_spec.resolve_value(
+        db, SettingDomain.billing, "prepaid_monthly_invoicing_enabled"
+    )
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _due_prepaid_subscriptions(db: Session, now: datetime) -> list[Subscription]:
     """Active prepaid subscriptions of active subscribers that are due or new.
 
-    Excludes prepaid on MONTHLY-cycle offers: those are billed in advance by the
-    invoice cycle (``prepaid_monthly_invoicing_enabled``) and chased by dunning,
-    so drawing them down here as well would double-bill. Drawdown owns
-    daily/weekly/balance prepaid; the invoice cycle owns monthly prepaid. Mirrors
-    the monthly gate in ``billing_automation.run_invoice_cycle`` and
-    ``collections._core`` so the two engines stay mutually exclusive.
+    When ``prepaid_monthly_invoicing_enabled`` is ON, prepaid on MONTHLY-cycle
+    offers is billed in advance by the invoice cycle and chased by dunning, so we
+    exclude it here to avoid double-billing — drawdown then owns only
+    daily/weekly/balance prepaid. When the flag is OFF (default), the invoice
+    cycle does NOT bill monthly prepaid, so drawdown owns ALL prepaid; excluding
+    monthly here would leave those customers billed by neither engine. This keeps
+    the two engines mutually exclusive AND jointly exhaustive.
     """
-    monthly_offer_ids = select(CatalogOffer.id).where(
-        CatalogOffer.billing_cycle == BillingCycle.monthly
-    )
-    return (
+    query = (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.billing_mode == BillingMode.prepaid)
         .filter(Subscription.status == SubscriptionStatus.active)
         .filter(Subscriber.status == SubscriberStatus.active)
-        .filter(Subscription.offer_id.not_in(monthly_offer_ids))
         .filter(
             (Subscription.next_billing_at.is_(None))
             | (Subscription.next_billing_at <= now)
         )
-        .all()
     )
+    if _prepaid_monthly_invoicing_enabled(db):
+        monthly_offer_ids = select(CatalogOffer.id).where(
+            CatalogOffer.billing_cycle == BillingCycle.monthly
+        )
+        query = query.filter(Subscription.offer_id.not_in(monthly_offer_ids))
+    return query.all()
 
 
 def run_prepaid_charges(
