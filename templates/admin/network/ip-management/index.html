@@ -401,20 +401,22 @@
             <select data-pool-filter class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
                 <option value="">All Pools</option>
                 {% for pool in pools %}
-                <option value="{{ pool.id }}">{{ pool.name }}</option>
+                <option value="{{ pool.id }}" {% if pool_filter and pool_filter == pool.id|string %}selected{% endif %}>{{ pool.name }}</option>
                 {% endfor %}
             </select>
             {% endif %}
             <form method="get" action="/admin/network/ip-management" class="ml-auto flex items-center gap-2">
+            <input type="hidden" name="tab" value="addresses">
             <input type="hidden" name="page" value="{{ pagination.page if pagination else 1 }}">
             {% if pool_filter %}
             <input type="hidden" name="pool_filter" value="{{ pool_filter }}">
             {% endif %}
             <input type="text" name="search" value="{{ search or '' }}" placeholder="Search addresses..."
+                   data-address-search
                    class="w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
             <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Search</button>
-            {% if search %}
-            <a href="/admin/network/ip-management" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+            {% if search or pool_filter %}
+            <a href="/admin/network/ip-management?tab=addresses" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
             {% endif %}
         </form>
         </div>
