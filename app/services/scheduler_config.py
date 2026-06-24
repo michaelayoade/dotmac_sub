@@ -137,9 +137,13 @@ def _sync_scheduled_task(
     enabled: bool,
     interval_seconds: int,
 ) -> None:
+    # Match by NAME (the stable logical identity), not task_name. Matching by
+    # task_name meant a task rename/move (e.g. run_dunning -> run_billing_
+    # enforcement) found no row and INSERTED a new one, leaving the old row as a
+    # duplicate name. Matching by name updates the task_name in place instead.
     tasks = list(
         db.query(ScheduledTask)
-        .filter(ScheduledTask.task_name == task_name)
+        .filter(ScheduledTask.name == name)
         .order_by(ScheduledTask.created_at.desc())
         .all()
     )
@@ -158,12 +162,15 @@ def _sync_scheduled_task(
         db.commit()
         return
     changed = False
+    # Defensive dedupe: delete any stray duplicate rows for this name (the
+    # unique constraint prevents new ones, but pre-existing data may have them).
+    # Intentional history drop: the surplus rows are hard-deleted; nothing has a
+    # FK to scheduled_tasks.id, so no dependent records are affected.
     for duplicate in tasks[1:]:
-        if duplicate.enabled:
-            duplicate.enabled = False
-            changed = True
-    if task.name != name:
-        task.name = name
+        db.delete(duplicate)
+        changed = True
+    if task.task_name != task_name:
+        task.task_name = task_name
         changed = True
     if task.interval_seconds != interval_seconds:
         task.interval_seconds = interval_seconds
