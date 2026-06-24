@@ -8,15 +8,14 @@ noise nor learn the payload schema. Authenticated-but-malformed bodies get
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.api import zabbix_webhook
-from app.api.zabbix_webhook import router as zabbix_router
-from app.db import get_db
 
 _SECRET = "test-zabbix-secret"
 
@@ -32,51 +31,70 @@ _VALID_PAYLOAD = {
 
 
 @pytest.fixture
-def client(db_session, monkeypatch):
+def zabbix_auth(monkeypatch):
     monkeypatch.setattr(zabbix_webhook, "get_zabbix_webhook_token", lambda: _SECRET)
 
-    app = FastAPI()
-    app.include_router(zabbix_router, prefix="/api/v1")
+    async def _inline_threadpool(func, *args, **kwargs):
+        return func(*args, **kwargs)
 
-    def _override_db():
-        yield db_session
-
-    app.dependency_overrides[get_db] = _override_db
-    return TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr(zabbix_webhook, "run_in_threadpool", _inline_threadpool)
 
 
 _URL = "/api/v1/zabbix/webhook/alert"
 
 
-def test_unauthenticated_request_is_401_not_422(client):
+def _request(content: bytes) -> Request:
+    async def _receive():
+        return {"type": "http.request", "body": content, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": _URL,
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        _receive,
+    )
+
+
+def _call(db_session, content: bytes, *, token: str | None = None):
+    return asyncio.run(
+        zabbix_webhook.receive_zabbix_alert(
+            request=_request(content),
+            db=db_session,
+            x_zabbix_token=token,
+        )
+    )
+
+
+def test_unauthenticated_request_is_401_not_422(db_session, zabbix_auth):
     """Garbage body without a token must be rejected at auth, before parsing."""
-    resp = client.post(
-        _URL,
-        content=b"not even json",
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 401
+    with pytest.raises(HTTPException) as exc:
+        _call(db_session, b"not even json")
+    assert exc.value.status_code == 401
 
 
-def test_wrong_token_is_401(client):
-    resp = client.post(
-        _URL,
-        content=json.dumps(_VALID_PAYLOAD),
-        headers={"X-Zabbix-Token": "wrong", "Content-Type": "application/json"},
-    )
-    assert resp.status_code == 401
+def test_wrong_token_is_401(db_session, zabbix_auth):
+    with pytest.raises(HTTPException) as exc:
+        _call(db_session, json.dumps(_VALID_PAYLOAD).encode(), token="wrong")
+    assert exc.value.status_code == 401
 
 
-def test_authenticated_invalid_payload_is_422_and_logged(client, caplog):
+def test_authenticated_invalid_payload_is_422_and_logged(
+    db_session, zabbix_auth, caplog
+):
     """A real (authenticated) but malformed payload returns 422 and logs the
     raw body so the Zabbix action template can be reconciled."""
     with caplog.at_level("WARNING"):
-        resp = client.post(
-            _URL,
-            content=json.dumps({"unexpected": "shape"}),
-            headers={"X-Zabbix-Token": _SECRET, "Content-Type": "application/json"},
-        )
-    assert resp.status_code == 422
+        with pytest.raises(HTTPException) as exc:
+            _call(
+                db_session,
+                json.dumps({"unexpected": "shape"}).encode(),
+                token=_SECRET,
+            )
+    assert exc.value.status_code == 422
     assert any(
         r.message == "zabbix_webhook_invalid_payload"
         or getattr(r, "event", None) == "zabbix_webhook_invalid_payload"
@@ -84,13 +102,7 @@ def test_authenticated_invalid_payload_is_422_and_logged(client, caplog):
     )
 
 
-def test_authenticated_valid_payload_creates_alert(client):
-    resp = client.post(
-        _URL,
-        content=json.dumps(_VALID_PAYLOAD),
-        headers={"X-Zabbix-Token": _SECRET, "Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["alert_id"]
+def test_authenticated_valid_payload_creates_alert(db_session, zabbix_auth):
+    body = _call(db_session, json.dumps(_VALID_PAYLOAD).encode(), token=_SECRET)
+    assert body.status == "ok"
+    assert body.alert_id
