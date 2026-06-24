@@ -66,11 +66,11 @@ def _sitting_credit_payment(db_session, sub, amount: Decimal):
     )
 
 
-def _open_invoice(db_session, sub, balance: Decimal) -> Invoice:
+def _open_invoice(db_session, sub, balance: Decimal, *, currency: str = "NGN") -> Invoice:
     inv = Invoice(
         account_id=sub.id,
         status=InvoiceStatus.issued,
-        currency="NGN",
+        currency=currency,
         total=balance,
         balance_due=balance,
     )
@@ -223,6 +223,112 @@ def test_existing_allocation_recalc_does_not_consume_credit_again(db_session):
     assert inv.status == InvoiceStatus.paid
     assert inv.balance_due == Decimal("0.00")
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("25.00")
+
+
+def test_account_credit_balance_is_currency_scoped(db_session):
+    sub = _native_subscriber(db_session, suffix="CurrencyScope")
+    db_session.add_all(
+        [
+            LedgerEntry(
+                account_id=sub.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("100.00"),
+                currency="NGN",
+                memo="ngn credit",
+            ),
+            LedgerEntry(
+                account_id=sub.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("10.00"),
+                currency="USD",
+                memo="usd credit",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("100.00")
+    assert get_account_credit_balance(
+        db_session, str(sub.id), currency="USD"
+    ) == Decimal("10.00")
+    assert get_account_credit_balance(
+        db_session, str(sub.id), currency=None
+    ) == Decimal("110.00")
+
+
+def test_inactive_allocation_does_not_strand_restored_credit(db_session):
+    sub = _native_subscriber(db_session, suffix="InactiveAllocation")
+    payment = Payment(
+        account_id=sub.id,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    inv = _open_invoice(db_session, sub, Decimal("100.00"))
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=inv.id,
+            amount=Decimal("100.00"),
+            memo="old allocation",
+            is_active=False,
+        )
+    )
+    db_session.add_all(
+        [
+            LedgerEntry(
+                account_id=sub.id,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("100.00"),
+                currency="NGN",
+                memo="restored unallocated credit",
+            ),
+            LedgerEntry(
+                account_id=sub.id,
+                invoice_id=inv.id,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("100.00"),
+                currency="NGN",
+                memo="old invoice credit",
+                is_active=False,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = settle_open_invoices_from_credit(db_session, str(sub.id))
+    db_session.commit()
+
+    db_session.refresh(inv)
+    allocation = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .filter(PaymentAllocation.invoice_id == inv.id)
+        .one()
+    )
+    active_invoice_credits = (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.payment_id == payment.id)
+        .filter(LedgerEntry.invoice_id == inv.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
+        .filter(LedgerEntry.is_active.is_(True))
+        .count()
+    )
+
+    assert result.applied == Decimal("100.00")
+    assert allocation.is_active is True
+    assert inv.status == InvoiceStatus.paid
+    assert inv.balance_due == Decimal("0.00")
+    assert active_invoice_credits == 1
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
 
 
 def test_no_credit_is_noop(db_session):
