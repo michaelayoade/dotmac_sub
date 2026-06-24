@@ -60,6 +60,7 @@ def test_enforces_on_transition_into_throttled():
     result, emitted = _run(prior_action_status=None)
     assert result["enforced"] == 1
     assert len(emitted) == 1
+    assert emitted[0][2]["action"] == "reduce_speed"
 
 
 def test_does_not_re_enforce_when_already_throttled():
