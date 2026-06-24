@@ -273,6 +273,7 @@ class TestCollectionsTask:
 
                     mock_session.close.assert_called_once()
 
+
 class TestBillingMasterSwitchGates:
     """Customer-impacting billing tasks must no-op while billing_enabled is off.
 

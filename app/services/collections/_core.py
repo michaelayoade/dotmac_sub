@@ -790,9 +790,7 @@ def _account_has_prepaid_service(db: Session, account: Subscriber) -> bool:
     )
 
 
-def _prepaid_balance_gate_skip_reason(
-    db: Session, account: Subscriber
-) -> str | None:
+def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str | None:
     """Return why prepaid enforcement should not cut service, or None.
 
     Monthly prepaid creates invoices so AR aging, notifications and case
@@ -1598,7 +1596,10 @@ class BillingEnforcementReconciler:
             SettingDomain.collections,
             "billing_enforcement_settle_credit_before_dunning_enabled",
         )
-        if not (enabled is True or str(enabled).strip().lower() in {"1", "true", "yes", "on"}):
+        if not (
+            enabled is True
+            or str(enabled).strip().lower() in {"1", "true", "yes", "on"}
+        ):
             return {
                 "credit_accounts_scanned": 0,
                 "credit_accounts_settled": 0,
@@ -1655,18 +1656,18 @@ class BillingEnforcementReconciler:
                 result = settle_open_invoices_from_credit(db, account_id)
                 if result.changed:
                     total_applied += result.applied
-                    stats["credit_accounts_settled"] = int(
-                        stats["credit_accounts_settled"]
-                    ) + 1
+                    stats["credit_accounts_settled"] = (
+                        int(stats["credit_accounts_settled"]) + 1
+                    )
                     stats["credit_invoices_touched"] = int(
                         stats["credit_invoices_touched"]
                     ) + len(result.invoices_touched)
                 db.commit()
             except Exception:
                 db.rollback()
-                stats["credit_settlement_errors"] = int(
-                    stats["credit_settlement_errors"]
-                ) + 1
+                stats["credit_settlement_errors"] = (
+                    int(stats["credit_settlement_errors"]) + 1
+                )
                 logger.exception(
                     "billing_enforcement_credit_settlement_failed",
                     extra={
@@ -1682,7 +1683,7 @@ class BillingEnforcementReconciler:
         db: Session, payload: BillingEnforcementRunRequest
     ) -> BillingEnforcementRunResponse:
         run_at = payload.run_at or datetime.now(UTC)
-        credit_stats = {
+        credit_stats: dict[str, int | str] = {
             "credit_accounts_scanned": 0,
             "credit_accounts_settled": 0,
             "credit_invoices_touched": 0,
@@ -1690,8 +1691,10 @@ class BillingEnforcementReconciler:
             "credit_applied": "0.00",
         }
         if not payload.dry_run:
-            credit_stats = BillingEnforcementReconciler._settle_due_credit_before_dunning(
-                db, run_at
+            credit_stats = (
+                BillingEnforcementReconciler._settle_due_credit_before_dunning(
+                    db, run_at
+                )
             )
         dunning = DunningWorkflow.run(
             db,

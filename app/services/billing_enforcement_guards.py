@@ -70,9 +70,7 @@ def _setting_bool(
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _setting_int(
-    db: Session, domain: SettingDomain, key: str, default: int
-) -> int:
+def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> int:
     value = settings_spec.resolve_value(db, domain, key)
     try:
         return int(str(value))
@@ -107,7 +105,10 @@ def notification_delivery_health(db: Session) -> EnforcementHealth:
 
     task_enabled = (
         db.query(ScheduledTask.enabled)
-        .filter(ScheduledTask.task_name == "app.tasks.notifications.deliver_notification_queue")
+        .filter(
+            ScheduledTask.task_name
+            == "app.tasks.notifications.deliver_notification_queue"
+        )
         .order_by(ScheduledTask.updated_at.desc())
         .limit(1)
         .scalar()
@@ -337,7 +338,9 @@ def billing_enforcement_health(db: Session) -> EnforcementHealth:
     ):
         notification = notification_delivery_health(db)
         reasons.extend(notification.reasons)
-        details.update({f"notification_{k}": v for k, v in notification.details.items()})
+        details.update(
+            {f"notification_{k}": v for k, v in notification.details.items()}
+        )
     if _setting_bool(
         db,
         SettingDomain.collections,
@@ -349,4 +352,3 @@ def billing_enforcement_health(db: Session) -> EnforcementHealth:
         details.update({f"payment_{k}": v for k, v in payment.details.items()})
 
     return EnforcementHealth(ok=not reasons, reasons=reasons, details=details)
-

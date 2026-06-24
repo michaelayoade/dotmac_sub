@@ -650,7 +650,9 @@ def test_prepaid_balance_skip_does_not_advance_dunning_step(
     response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
 
     case = (
-        db_session.query(DunningCase).filter(DunningCase.account_id == subscriber.id).one()
+        db_session.query(DunningCase)
+        .filter(DunningCase.account_id == subscriber.id)
+        .one()
     )
     log = (
         db_session.query(DunningActionLog)
@@ -781,12 +783,18 @@ def test_billing_enforcement_health_keeps_notification_gate_optional(
 
     def _resolve_value(_db, domain, key):
         settings = {
-            (SettingDomain.collections, "billing_enforcement_health_gates_enabled"): True,
+            (
+                SettingDomain.collections,
+                "billing_enforcement_health_gates_enabled",
+            ): True,
             (
                 SettingDomain.collections,
                 "billing_enforcement_require_notification_health",
             ): False,
-            (SettingDomain.collections, "billing_enforcement_require_payment_health"): True,
+            (
+                SettingDomain.collections,
+                "billing_enforcement_require_payment_health",
+            ): True,
         }
         return settings.get((domain, key))
 
@@ -818,21 +826,25 @@ def test_billing_enforcement_health_keeps_notification_gate_optional(
     assert health.details["payment_dead_letters"] == 1
 
 
-def test_billing_enforcement_health_can_require_notifications(
-    db_session, monkeypatch
-):
+def test_billing_enforcement_health_can_require_notifications(db_session, monkeypatch):
     """Turning the notification gate on makes notification failures blocking."""
     from app.models.domain_settings import SettingDomain
     from app.services import billing_enforcement_guards as guards
 
     def _resolve_value(_db, domain, key):
         settings = {
-            (SettingDomain.collections, "billing_enforcement_health_gates_enabled"): True,
+            (
+                SettingDomain.collections,
+                "billing_enforcement_health_gates_enabled",
+            ): True,
             (
                 SettingDomain.collections,
                 "billing_enforcement_require_notification_health",
             ): True,
-            (SettingDomain.collections, "billing_enforcement_require_payment_health"): False,
+            (
+                SettingDomain.collections,
+                "billing_enforcement_require_payment_health",
+            ): False,
         }
         return settings.get((domain, key))
 
