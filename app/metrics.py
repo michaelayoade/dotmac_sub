@@ -237,6 +237,32 @@ class _BillingHealthCollector(Collector):
             "1 if last-24h payment volume collapsed vs the 7-day baseline",
             1.0 if snap.payment_volume_collapsed else 0.0,
         )
+        yield gauge(
+            "billing_enforcement_covered_but_locked",
+            "Accounts under a billing lock whose ledger balance is >= 0 "
+            "(wrongful-suspension drift; should be 0)",
+            snap.covered_but_locked,
+        )
+
+        # §6.3 per-runner heartbeat freshness (label = task).
+        stale = GaugeMetricFamily(
+            "billing_runner_heartbeat_stale",
+            "1 if an enabled critical runner has no fresh success heartbeat",
+            labels=["task"],
+        )
+        age = GaugeMetricFamily(
+            "billing_runner_heartbeat_age_seconds",
+            "Seconds since a critical runner last succeeded",
+            labels=["task"],
+        )
+        for r in snap.runners:
+            if not r.enabled:
+                continue
+            stale.add_metric([r.task_name], 1.0 if r.stale else 0.0)
+            if r.age_seconds is not None:
+                age.add_metric([r.task_name], max(r.age_seconds, 0.0))
+        yield stale
+        yield age
 
 
 REGISTRY.register(_BillingHealthCollector())

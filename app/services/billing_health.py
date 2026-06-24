@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -34,12 +34,35 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.scheduler import ScheduledTask
+from app.services.job_heartbeat import get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
 PAYMENT_VOLUME_MIN_RATIO = 0.4  # alert if last-24h volume < 40% of 7d daily avg
 # Don't cry "collapse" on naturally low-traffic systems: require a real baseline.
 PAYMENT_BASELINE_MIN_DAILY = 5.0
+
+# A runner is "stale" if it has not succeeded within interval x this multiplier.
+HEARTBEAT_STALE_MULTIPLIER = 3.0
+# Critical billing/collections runners whose silence is a revenue/enforcement
+# risk. Only the ENABLED ones are judged (a disabled runner is intentional).
+_CRITICAL_RUNNERS = (
+    "app.tasks.billing.run_invoice_cycle",
+    "app.tasks.collections.run_billing_enforcement",
+    "app.tasks.billing.mark_invoices_overdue",
+    "app.tasks.billing.check_billing_switch",
+)
+
+
+@dataclass(frozen=True)
+class RunnerHeartbeat:
+    task_name: str
+    enabled: bool
+    interval_seconds: int | None
+    last_success: datetime | None
+    age_seconds: float | None
+    stale: bool
 
 
 @dataclass(frozen=True)
@@ -53,6 +76,14 @@ class BillingHealthSnapshot:
     payments_7d_daily_avg: float
     payment_volume_ratio: float | None
     payment_volume_collapsed: bool
+    # §6.3 runner heartbeats / §6.6 enforcement drift (defaults keep older
+    # call sites and tests valid).
+    runners: tuple[RunnerHeartbeat, ...] = ()
+    covered_but_locked: int = 0
+
+    @property
+    def stale_runners(self) -> list[str]:
+        return [r.task_name for r in self.runners if r.stale]
 
     @property
     def anomalies(self) -> list[str]:
@@ -63,6 +94,10 @@ class BillingHealthSnapshot:
             out.append("invoice_scan_count_low")
         if self.payment_volume_collapsed:
             out.append("payment_volume_collapse")
+        if self.stale_runners:
+            out.append("runner_heartbeat_stale")
+        if self.covered_but_locked > 0:
+            out.append("enforcement_covered_but_locked")
         return out
 
 
@@ -143,6 +178,75 @@ def payment_volume(
     return int(count_24h), daily_avg, ratio, collapsed
 
 
+def runner_heartbeats(
+    db: Session, now: datetime | None = None
+) -> list[RunnerHeartbeat]:
+    """Freshness of critical runners' last SUCCESS (Redis heartbeat).
+
+    Only ENABLED runners are judged stale (a disabled runner is intentional).
+    A runner that has never succeeded while enabled is stale (covers a freshly
+    armed-but-dead consumer); it self-clears after the first success.
+    """
+    now = now or datetime.now(UTC)
+    out: list[RunnerHeartbeat] = []
+    for task_name in _CRITICAL_RUNNERS:
+        row = db.execute(
+            select(ScheduledTask.enabled, ScheduledTask.interval_seconds)
+            .where(ScheduledTask.task_name == task_name)
+            .limit(1)
+        ).first()
+        enabled = bool(row[0]) if row else False
+        interval = int(row[1]) if row and row[1] else None
+        if not enabled:
+            out.append(RunnerHeartbeat(task_name, False, interval, None, None, False))
+            continue
+        last = get_last_success(task_name)
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        age = (now - last).total_seconds() if last else None
+        if interval:
+            stale = last is None or (
+                age is not None and age > interval * HEARTBEAT_STALE_MULTIPLIER
+            )
+        else:
+            stale = last is None
+        out.append(RunnerHeartbeat(task_name, True, interval, last, age, stale))
+    return out
+
+
+def covered_but_locked(db: Session) -> int:
+    """§6.6 drift: accounts still under a billing lock (overdue/prepaid) whose
+    local ledger available balance is >= 0 — i.e. covered yet suspended
+    (wrongful-suspension drift). Mirrors get_available_balance for NGN:
+    unallocated credit - unallocated debit - open invoice balance.
+    """
+    sql = text(
+        """
+        WITH locked AS (
+            SELECT DISTINCT s.subscriber_id AS acct
+            FROM enforcement_locks el
+            JOIN subscriptions s ON s.id = el.subscription_id
+            WHERE el.is_active AND el.reason IN ('overdue', 'prepaid')
+        )
+        SELECT count(*) FROM locked WHERE (
+            COALESCE((SELECT sum(le.amount) FROM ledger_entries le
+                WHERE le.account_id = acct AND le.invoice_id IS NULL
+                  AND le.entry_type = 'credit' AND le.is_active
+                  AND le.currency = 'NGN'), 0)
+          - COALESCE((SELECT sum(le.amount) FROM ledger_entries le
+                WHERE le.account_id = acct AND le.invoice_id IS NULL
+                  AND le.entry_type = 'debit' AND le.is_active
+                  AND le.currency = 'NGN'), 0)
+          - COALESCE((SELECT sum(i.balance_due) FROM invoices i
+                WHERE i.account_id = acct AND i.balance_due > 0
+                  AND i.status IN ('issued', 'partially_paid', 'overdue')
+                  AND i.currency = 'NGN'), 0)
+        ) >= 0
+        """
+    )
+    return int(db.execute(sql).scalar() or 0)
+
+
 def billing_health_snapshot(
     db: Session, now: datetime | None = None
 ) -> BillingHealthSnapshot:
@@ -159,4 +263,6 @@ def billing_health_snapshot(
         payments_7d_daily_avg=avg7,
         payment_volume_ratio=ratio,
         payment_volume_collapsed=collapsed,
+        runners=tuple(runner_heartbeats(db, now=now)),
+        covered_but_locked=covered_but_locked(db),
     )

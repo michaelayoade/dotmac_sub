@@ -126,6 +126,8 @@ def check_billing_switch_task() -> dict:
             "payments_24h": health.payments_24h,
             "payments_7d_daily_avg": health.payments_7d_daily_avg,
             "payment_volume_ratio": health.payment_volume_ratio,
+            "stale_runners": health.stale_runners,
+            "covered_but_locked": health.covered_but_locked,
             "anomalies": sorted(anomalies),
         }
         if "paid_invoices_with_balance" in anomalies:
@@ -150,6 +152,18 @@ def check_billing_switch_task() -> dict:
                 health.payments_24h,
                 health.payments_7d_daily_avg,
                 health.payment_volume_ratio,
+            )
+        if "runner_heartbeat_stale" in anomalies:
+            logger.error(
+                "billing_runner_heartbeat_stale: no fresh success for %s — a billing/"
+                "collections runner may be stalled or dead",
+                ",".join(health.stale_runners),
+            )
+        if "enforcement_covered_but_locked" in anomalies:
+            logger.error(
+                "billing_enforcement_covered_but_locked: %d accounts under a billing "
+                "lock despite ledger balance >= 0 — wrongful-suspension drift",
+                health.covered_but_locked,
             )
         return result
     finally:
