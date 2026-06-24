@@ -356,10 +356,12 @@ class EnforcementHandler:
                 account_id,
             )
             return
-        action = (
-            settings_spec.resolve_value(db, SettingDomain.usage, "fup_action")
-            or "throttle"
+        action = event.payload.get("action") or settings_spec.resolve_value(
+            db, SettingDomain.usage, "fup_action"
         )
+        if action == "reduce_speed":
+            action = "throttle"
+        action = action or "throttle"
         if action not in {"throttle", "suspend", "block", "none"}:
             action = "throttle"
         if action == "none":
