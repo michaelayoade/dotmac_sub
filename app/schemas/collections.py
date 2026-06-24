@@ -101,3 +101,8 @@ class BillingEnforcementRunResponse(BaseModel):
     dunning_cases_created: int
     dunning_actions_created: int
     dunning_skipped: int
+    credit_accounts_scanned: int = 0
+    credit_accounts_settled: int = 0
+    credit_invoices_touched: int = 0
+    credit_settlement_errors: int = 0
+    credit_applied: str = "0.00"

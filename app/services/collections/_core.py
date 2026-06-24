@@ -22,7 +22,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.collections import (
     BillingEnforcementRunRequest,
@@ -215,6 +215,7 @@ def _resolve_overdue_days(
     invoice: Invoice,
     run_at: datetime,
     account: Subscriber | None = None,
+    db: Session | None = None,
 ) -> int:
     """Calculate days overdue, accounting for account grace period.
 
@@ -231,10 +232,23 @@ def _resolve_overdue_days(
     delta = run_at.date() - invoice.due_at.date()
     raw_days = max(delta.days, 0)
 
-    # Subtract grace period if account has one configured
+    # Subtract the account grace period. If a migrated account has no explicit
+    # value, fall back to the billing-mode default so dunning can be governed
+    # centrally instead of cutting immediately on null account data.
     grace_period = 0
     if account and account.grace_period_days is not None:
         grace_period = int(account.grace_period_days)
+    elif account and db is not None:
+        setting_key = (
+            "prepaid_default_grace_period_days"
+            if account.billing_mode == BillingMode.prepaid
+            else "postpaid_default_grace_period_days"
+        )
+        value = settings_spec.resolve_value(db, SettingDomain.billing, setting_key)
+        try:
+            grace_period = int(str(value or 0))
+        except (TypeError, ValueError):
+            grace_period = 0
 
     return max(raw_days - grace_period, 0)
 
@@ -585,6 +599,8 @@ def _create_throttle_notification(
 
     notification = Notification(
         channel=NotificationChannel.email,
+        event_type="account_throttled",
+        category="billing",
         recipient=email,
         subject="Service Speed Reduced - Payment Overdue",
         body=f"Your internet speed has been reduced due to payment being {days_overdue} days overdue. "
@@ -618,6 +634,8 @@ def _create_suspension_warning_notification(
     )
     notification = Notification(
         channel=NotificationChannel.email,
+        event_type="suspension_warning",
+        category="billing",
         recipient=email,
         subject="Suspension Warning - Payment Overdue",
         body=body,
@@ -660,6 +678,8 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
 
     notification = Notification(
         channel=NotificationChannel.email,
+        event_type="account_suspended",
+        category="billing",
         recipient=email,
         subject="Account Suspended",
         body="Your account has been suspended due to non-payment. Please make a payment to restore service.",
@@ -712,7 +732,13 @@ _ENFORCING_ACTIONS = frozenset(
     {DunningAction.suspend, DunningAction.reject, DunningAction.throttle}
 )
 _NON_ADVANCING_DUNNING_OUTCOMES = frozenset(
-    {"balance_cleared", "shielded", "prepaid_balance_available"}
+    {
+        "balance_cleared",
+        "shielded",
+        "prepaid_balance_available",
+        "notice_grace_active",
+        "enforcement_health_blocked",
+    }
 )
 
 
@@ -773,6 +799,33 @@ def _prepaid_balance_gate_skip_reason(
     return None
 
 
+def _minimum_enforcement_age_skip_reason(
+    db: Session, account: Subscriber, day_offset: int
+) -> str | None:
+    """Block service-affecting action until the notice runway has elapsed."""
+    value = settings_spec.resolve_value(
+        db,
+        SettingDomain.collections,
+        "billing_enforcement_min_enforcing_day_offset",
+    )
+    try:
+        minimum_days = int(str(value if value is not None else 3))
+    except (TypeError, ValueError):
+        minimum_days = 3
+    if minimum_days <= 0:
+        return None
+    if day_offset < minimum_days:
+        logger.info(
+            "Dunning enforcement skipped for account %s: day_offset %s < "
+            "minimum enforcing day %s",
+            account.id,
+            day_offset,
+            minimum_days,
+        )
+        return "notice_grace_active"
+    return None
+
+
 def _execute_dunning_action(
     db: Session,
     case: DunningCase,
@@ -820,6 +873,26 @@ def _execute_dunning_action(
                 shield,
             )
             return "shielded"
+        minimum_age_skip = _minimum_enforcement_age_skip_reason(
+            db, subscriber, day_offset
+        )
+        if minimum_age_skip:
+            return minimum_age_skip
+        from app.services.billing_enforcement_guards import (
+            billing_enforcement_health,
+        )
+
+        health = billing_enforcement_health(db)
+        if not health.ok:
+            logger.warning(
+                "Dunning %s blocked for account %s by billing enforcement "
+                "health gate: reasons=%s details=%s",
+                action.value,
+                account_id,
+                ",".join(health.reasons),
+                health.details,
+            )
+            return "enforcement_health_blocked"
 
         # Phase 6 (audit-first): record whether this enforcing dunning action
         # would be deferred by the enforcement time-of-day window — WITHOUT
@@ -1289,7 +1362,8 @@ class DunningWorkflow(ListResponseMixin):
 
             # Calculate max overdue days accounting for grace period
             max_days = max(
-                _resolve_overdue_days(inv, run_at, account) for inv in account_invoices
+                _resolve_overdue_days(inv, run_at, account, db)
+                for inv in account_invoices
             )
 
             # If all invoices are within grace period, skip dunning
@@ -1489,12 +1563,113 @@ class BillingEnforcementReconciler:
     """
 
     @staticmethod
+    def _settle_due_credit_before_dunning(
+        db: Session, run_at: datetime
+    ) -> dict[str, int | str]:
+        """Apply payment-backed credit to due invoices before escalation."""
+        enabled = settings_spec.resolve_value(
+            db,
+            SettingDomain.collections,
+            "billing_enforcement_settle_credit_before_dunning_enabled",
+        )
+        if not (enabled is True or str(enabled).strip().lower() in {"1", "true", "yes", "on"}):
+            return {
+                "credit_accounts_scanned": 0,
+                "credit_accounts_settled": 0,
+                "credit_invoices_touched": 0,
+                "credit_settlement_errors": 0,
+                "credit_applied": "0.00",
+            }
+
+        from app.services.billing._common import get_account_credit_balance
+        from app.services.billing.reconcile_unposted import (
+            settle_open_invoices_from_credit,
+        )
+
+        account_ids = [
+            str(row[0])
+            for row in (
+                db.query(Invoice.account_id)
+                .filter(Invoice.is_active.is_(True))
+                .filter(Invoice.balance_due > 0)
+                .filter(
+                    Invoice.status.in_(
+                        [
+                            InvoiceStatus.issued,
+                            InvoiceStatus.partially_paid,
+                            InvoiceStatus.overdue,
+                        ]
+                    )
+                )
+                .filter(
+                    or_(
+                        Invoice.status == InvoiceStatus.overdue,
+                        and_(
+                            Invoice.due_at.is_not(None),
+                            Invoice.due_at <= run_at,
+                        ),
+                    )
+                )
+                .distinct()
+                .all()
+            )
+        ]
+        stats: dict[str, int | str] = {
+            "credit_accounts_scanned": len(account_ids),
+            "credit_accounts_settled": 0,
+            "credit_invoices_touched": 0,
+            "credit_settlement_errors": 0,
+            "credit_applied": "0.00",
+        }
+        total_applied = Decimal("0.00")
+        for account_id in account_ids:
+            try:
+                if get_account_credit_balance(db, account_id) <= 0:
+                    continue
+                result = settle_open_invoices_from_credit(db, account_id)
+                if result.changed:
+                    total_applied += result.applied
+                    stats["credit_accounts_settled"] = int(
+                        stats["credit_accounts_settled"]
+                    ) + 1
+                    stats["credit_invoices_touched"] = int(
+                        stats["credit_invoices_touched"]
+                    ) + len(result.invoices_touched)
+                db.commit()
+            except Exception:
+                db.rollback()
+                stats["credit_settlement_errors"] = int(
+                    stats["credit_settlement_errors"]
+                ) + 1
+                logger.exception(
+                    "billing_enforcement_credit_settlement_failed",
+                    extra={
+                        "event": "billing_enforcement_credit_settlement_failed",
+                        "account_id": account_id,
+                    },
+                )
+        stats["credit_applied"] = str(total_applied)
+        return stats
+
+    @staticmethod
     def run(
         db: Session, payload: BillingEnforcementRunRequest
     ) -> BillingEnforcementRunResponse:
+        run_at = payload.run_at or datetime.now(UTC)
+        credit_stats = {
+            "credit_accounts_scanned": 0,
+            "credit_accounts_settled": 0,
+            "credit_invoices_touched": 0,
+            "credit_settlement_errors": 0,
+            "credit_applied": "0.00",
+        }
+        if not payload.dry_run:
+            credit_stats = BillingEnforcementReconciler._settle_due_credit_before_dunning(
+                db, run_at
+            )
         dunning = DunningWorkflow.run(
             db,
-            DunningRunRequest(run_at=payload.run_at, dry_run=payload.dry_run),
+            DunningRunRequest(run_at=run_at, dry_run=payload.dry_run),
         )
         return BillingEnforcementRunResponse(
             run_at=dunning.run_at,
@@ -1506,6 +1681,11 @@ class BillingEnforcementReconciler:
             dunning_cases_created=dunning.cases_created,
             dunning_actions_created=dunning.actions_created,
             dunning_skipped=dunning.skipped,
+            credit_accounts_scanned=int(credit_stats["credit_accounts_scanned"]),
+            credit_accounts_settled=int(credit_stats["credit_accounts_settled"]),
+            credit_invoices_touched=int(credit_stats["credit_invoices_touched"]),
+            credit_settlement_errors=int(credit_stats["credit_settlement_errors"]),
+            credit_applied=str(credit_stats["credit_applied"]),
         )
 
 

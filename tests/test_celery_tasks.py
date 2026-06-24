@@ -176,6 +176,11 @@ class TestCollectionsTask:
                         "cases_created": 3,
                         "actions_created": 2,
                         "skipped": 1,
+                        "credit_accounts_scanned": 0,
+                        "credit_accounts_settled": 0,
+                        "credit_invoices_touched": 0,
+                        "credit_settlement_errors": 0,
+                        "credit_applied": "0.00",
                     }
 
     def test_run_dunning_alias_uses_unified_enforcer(self):

@@ -29,6 +29,11 @@ def run_billing_enforcement() -> dict[str, int | str]:
             "cases_created": int(result.cases_created),
             "actions_created": int(result.actions_created),
             "skipped": int(result.skipped),
+            "credit_accounts_scanned": int(result.credit_accounts_scanned),
+            "credit_accounts_settled": int(result.credit_accounts_settled),
+            "credit_invoices_touched": int(result.credit_invoices_touched),
+            "credit_settlement_errors": int(result.credit_settlement_errors),
+            "credit_applied": str(result.credit_applied),
         }
         logger.info(
             "Billing enforcement run completed: accounts_scanned=%d cases_created=%d "
