@@ -22,6 +22,7 @@ from app.models.billing import (
 )
 from app.models.catalog import (
     AccessType,
+    BillingMode,
     CatalogOffer,
     OfferPrice,
     PriceBasis,
@@ -32,7 +33,14 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.service_extension import (
+    ServiceExtension,
+    ServiceExtensionEntry,
+    ServiceExtensionScope,
+    ServiceExtensionStatus,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 
 TOKEN = "crm-test-token"
@@ -204,6 +212,8 @@ def test_subscriber_list_embeds_services_billing_and_session_state(
     db_session, crm_auth
 ):
     subscriber = _subscriber(db_session)
+    subscriber.billing_mode = BillingMode.prepaid
+    subscriber.billing_day = 7
     offer = _offer(db_session)
     subscription = _subscription(db_session, subscriber, offer)
     _billing(db_session, subscriber, subscription)
@@ -221,6 +231,8 @@ def test_subscriber_list_embeds_services_billing_and_session_state(
     assert body["meta"]["total"] >= 1
     row = body["data"][0]
     assert row["subscriber_number"] == subscriber.subscriber_number
+    assert row["billing_mode"] == "prepaid"
+    assert row["billing_day"] == 7
     assert row["services"][0]["plan_name"] == "Fiber 50"
     assert row["services"][0]["speed"] == "50/10 Mbps"
     assert row["billing"]["balance"] == 5000.0
@@ -345,6 +357,86 @@ def test_billing_risk_source_batches_page_aggregates(db_session, crm_auth):
     assert row["blocked_date"] == "2026-06-19T00:00:00Z"
     assert row["service_plan"] == "Fiber 50"
     assert len(statements) <= 20
+
+
+def test_service_extension_endpoints_expose_compensation_for_crm(
+    db_session, crm_auth
+):
+    subscriber = _subscriber(db_session)
+    subscriber.splynx_customer_id = 11038
+    offer = _offer(db_session)
+    subscription = _subscription(db_session, subscriber, offer)
+    actor = SystemUser(
+        first_name="Aisha",
+        last_name="Ibrahim",
+        email=f"aisha-{uuid.uuid4().hex}@example.com",
+    )
+    db_session.add(actor)
+    db_session.flush()
+    extension = ServiceExtension(
+        reason="Customer Link disconnection",
+        window_start=datetime(2026, 6, 1, 8, 0, tzinfo=UTC),
+        window_end=datetime(2026, 6, 2, 8, 0, tzinfo=UTC),
+        days=2,
+        scope_type=ServiceExtensionScope.subscribers,
+        scope_subscriber_ids=[str(subscriber.id)],
+        status=ServiceExtensionStatus.applied,
+        affected_count=1,
+        skipped_count=0,
+        created_by=str(actor.id),
+        applied_by=str(actor.id),
+        applied_at=datetime(2026, 6, 3, 9, 0, tzinfo=UTC),
+    )
+    db_session.add(extension)
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            previous_next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+            new_next_billing_at=datetime(2026, 7, 3, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+
+    listing = _call_route(
+        crm_routes.service_extensions,
+        _request({"page": "1", "per_page": "10"}),
+        db_session,
+    )
+    detail = _call_route(
+        crm_routes.service_extension_detail,
+        str(extension.id),
+        db_session,
+    )
+    subscriber_rows = _call_route(
+        crm_routes.subscriber_service_extensions,
+        str(subscriber.id),
+        db_session,
+    )
+
+    assert listing.status_code == 200
+    listed = next(
+        item for item in listing.json()["data"] if item["id"] == str(extension.id)
+    )
+    assert listed["reason"] == "Customer Link disconnection"
+    assert listed["created_by"]["name"] == "Aisha Ibrahim"
+    assert detail.status_code == 200
+    detail_row = detail.json()["data"]
+    assert (
+        detail_row["affected_customers"][0]["customer_id"]
+        == subscriber.splynx_customer_id
+    )
+    assert (
+        detail_row["affected_customers"][0]["new_next_billing_at"]
+        == "2026-07-03T00:00:00Z"
+    )
+    assert subscriber_rows.status_code == 200
+    assert (
+        subscriber_rows.json()["data"][0]["entry"]["previous_next_billing_at"]
+        == "2026-07-01T00:00:00Z"
+    )
 
 
 def test_status_writeback_rejects_active_and_logs(db_session, crm_auth):

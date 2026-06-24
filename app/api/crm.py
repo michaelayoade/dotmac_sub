@@ -354,6 +354,40 @@ def billing_risk_source(
     return _envelope(rows, {**meta, "total": total})
 
 
+@router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
+def service_extensions(
+    request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    page, per_page, meta = _pagination(request)
+    rows, total = crm_api.service_extension_rows(
+        db, page=page, per_page=per_page
+    )
+    return _envelope(rows, {**meta, "total": total})
+
+
+@router.get(
+    "/service-extensions/{extension_id}", dependencies=[Depends(require_crm_bearer)]
+)
+def service_extension_detail(
+    extension_id: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    row = crm_api.service_extension_detail(db, extension_id)
+    if row is None:
+        _error(status.HTTP_404_NOT_FOUND, "Service extension not found.")
+    return _envelope(row)
+
+
+@router.get(
+    "/subscribers/{subscriber_id}/service-extensions",
+    dependencies=[Depends(require_crm_bearer)],
+)
+def subscriber_service_extensions(
+    subscriber_id: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    subscriber = _subscriber_or_404(db, subscriber_id)
+    return _envelope(crm_api.service_extensions_for_subscriber(db, subscriber.id))
+
+
 @router.get("/finance/transactions", dependencies=[Depends(require_crm_bearer)])
 def finance_transactions(
     request: Request, db: Session = Depends(get_db)

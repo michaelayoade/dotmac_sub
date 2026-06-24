@@ -27,7 +27,9 @@ from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network_monitoring import PopSite
+from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
+from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 
 ACTIVE_INVOICE_STATUSES = (
@@ -65,6 +67,13 @@ def money(value: Any) -> float:
 
 def enum_value(value: Any) -> str | None:
     return getattr(value, "value", value)
+
+
+def _uuid_or_none(value: str | uuid.UUID | None) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def subscriber_name(subscriber: Subscriber) -> str:
@@ -295,6 +304,189 @@ def billing_summary(db: Session, subscriber: Subscriber) -> dict[str, Any]:
         "blocked_date": utc_iso(_blocked_date_query(db, subscriber.id)),
         "total_paid": money(_total_paid_query(db, subscriber.id)),
     }
+
+
+def _system_user_name(user: SystemUser) -> str:
+    rendered = (
+        user.display_name
+        or f"{user.first_name or ''} {user.last_name or ''}".strip()
+        or user.email
+    )
+    return rendered or str(user.id)
+
+
+def _actor_map(db: Session, actor_ids: list[str | None]) -> dict[str, dict[str, Any]]:
+    parsed_ids = sorted(
+        {
+            actor_id
+            for actor_id in (_uuid_or_none(value) for value in actor_ids)
+            if actor_id is not None
+        }
+    )
+    if not parsed_ids:
+        return {}
+    rows = list(
+        db.scalars(select(SystemUser).where(SystemUser.id.in_(parsed_ids))).all()
+    )
+    return {
+        str(row.id): {
+            "id": str(row.id),
+            "name": _system_user_name(row),
+            "email": row.email,
+        }
+        for row in rows
+    }
+
+
+def _actor_payload(
+    actor_id: str | None, actors: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    if not actor_id:
+        return None
+    resolved = actors.get(str(actor_id))
+    if resolved:
+        return resolved
+    return {"id": str(actor_id), "name": None, "email": None}
+
+
+def _service_extension_entry_payload(
+    entry: ServiceExtensionEntry,
+    *,
+    subscriber: Subscriber | None = None,
+) -> dict[str, Any]:
+    return {
+        "entry_id": str(entry.id),
+        "subscriber_id": str(entry.subscriber_id),
+        "customer_id": subscriber.splynx_customer_id if subscriber else None,
+        "subscriber_number": subscriber.subscriber_number if subscriber else None,
+        "name": subscriber_name(subscriber) if subscriber else None,
+        "subscription_id": str(entry.subscription_id),
+        "previous_next_billing_at": utc_iso(entry.previous_next_billing_at),
+        "new_next_billing_at": utc_iso(entry.new_next_billing_at),
+        "created_at": utc_iso(entry.created_at),
+    }
+
+
+def _service_extension_payload(
+    extension: ServiceExtension,
+    *,
+    actors: dict[str, dict[str, Any]] | None = None,
+    entries: list[ServiceExtensionEntry] | None = None,
+) -> dict[str, Any]:
+    actor_lookup = actors or {}
+    payload = {
+        "id": str(extension.id),
+        "reason": extension.reason,
+        "window_start": utc_iso(extension.window_start),
+        "window_end": utc_iso(extension.window_end),
+        "days": extension.days,
+        "scope_type": enum_value(extension.scope_type),
+        "scope_id": str(extension.scope_id) if extension.scope_id else None,
+        "scope_subscriber_ids": extension.scope_subscriber_ids or [],
+        "status": enum_value(extension.status),
+        "affected_count": extension.affected_count,
+        "skipped_count": extension.skipped_count,
+        "created_by": _actor_payload(extension.created_by, actor_lookup),
+        "applied_by": _actor_payload(extension.applied_by, actor_lookup),
+        "applied_at": utc_iso(extension.applied_at),
+        "created_at": utc_iso(extension.created_at),
+    }
+    if entries is not None:
+        payload["affected_customers"] = [
+            _service_extension_entry_payload(entry) for entry in entries
+        ]
+    return payload
+
+
+def service_extension_rows(
+    db: Session, *, page: int, per_page: int
+) -> tuple[list[dict[str, Any]], int]:
+    total = db.scalar(select(func.count(ServiceExtension.id))) or 0
+    rows = list(
+        db.scalars(
+            select(ServiceExtension)
+            .order_by(
+                func.coalesce(
+                    ServiceExtension.applied_at,
+                    ServiceExtension.created_at,
+                ).desc(),
+                ServiceExtension.id.desc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+        ).all()
+    )
+    actors = _actor_map(
+        db,
+        [actor for row in rows for actor in (row.created_by, row.applied_by)],
+    )
+    return [_service_extension_payload(row, actors=actors) for row in rows], int(total)
+
+
+def service_extension_detail(
+    db: Session, extension_id: str
+) -> dict[str, Any] | None:
+    parsed = _uuid_or_none(extension_id)
+    if parsed is None:
+        return None
+    extension = db.get(ServiceExtension, parsed)
+    if extension is None:
+        return None
+    entries = list(
+        db.scalars(
+            select(ServiceExtensionEntry)
+            .where(ServiceExtensionEntry.extension_id == extension.id)
+            .order_by(ServiceExtensionEntry.created_at.desc())
+        ).all()
+    )
+    subscribers = {
+        row.id: row
+        for row in db.scalars(
+            select(Subscriber).where(
+                Subscriber.id.in_([entry.subscriber_id for entry in entries])
+            )
+        ).all()
+    }
+    actors = _actor_map(db, [extension.created_by, extension.applied_by])
+    payload = _service_extension_payload(extension, actors=actors)
+    payload["affected_customers"] = [
+        _service_extension_entry_payload(
+            entry, subscriber=subscribers.get(entry.subscriber_id)
+        )
+        for entry in entries
+    ]
+    return payload
+
+
+def service_extensions_for_subscriber(
+    db: Session, subscriber_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    rows = list(
+        db.scalars(
+            select(ServiceExtensionEntry)
+            .where(ServiceExtensionEntry.subscriber_id == subscriber_id)
+            .options(
+                joinedload(ServiceExtensionEntry.extension),
+            )
+            .order_by(ServiceExtensionEntry.created_at.desc())
+        ).all()
+    )
+    subscriber = db.get(Subscriber, subscriber_id)
+    actors = _actor_map(
+        db,
+        [
+            actor
+            for row in rows
+            for actor in (row.extension.created_by, row.extension.applied_by)
+            if row.extension is not None
+        ],
+    )
+    data = []
+    for row in rows:
+        item = _service_extension_payload(row.extension, actors=actors)
+        item["entry"] = _service_extension_entry_payload(row, subscriber=subscriber)
+        data.append(item)
+    return data
 
 
 def billing_by_subscriber(
@@ -602,6 +794,8 @@ def subscriber_payload(
         "email": subscriber.email,
         "phone": subscriber.phone,
         "status": enum_value(subscriber.status),
+        "billing_mode": enum_value(subscriber.billing_mode),
+        "billing_day": subscriber.billing_day,
         "address": address_text(subscriber, list(subscriber.addresses or [])),
         "location": location_label(db, subscriber),
         "created_at": utc_iso(subscriber.created_at),
