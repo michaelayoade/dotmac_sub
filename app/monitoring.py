@@ -113,6 +113,7 @@ def _setup_sentry(
         import sentry_sdk
         from sentry_sdk.integrations.celery import CeleryIntegration
         from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
         from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
     except ImportError:
         logger.warning(
@@ -132,6 +133,17 @@ def _setup_sentry(
                 FastApiIntegration(transaction_style="endpoint"),
                 SqlalchemyIntegration(),
                 CeleryIntegration(),
+                # Capture ERROR/CRITICAL logs as events (INFO+ as breadcrumbs).
+                # Without this, logger.error/critical never reach GlitchTip —
+                # only unhandled request/task exceptions did — so deliberate
+                # alerts (e.g. the hourly billing-enforcement health guard's
+                # logger.critical when notifications/payments degrade) were
+                # silently swallowed. event_level=ERROR keeps it non-noisy
+                # (warnings stay breadcrumbs).
+                LoggingIntegration(
+                    level=logging.INFO,
+                    event_level=logging.ERROR,
+                ),
             ],
             # Don't send PII by default
             send_default_pii=False,
