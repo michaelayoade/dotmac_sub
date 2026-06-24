@@ -414,6 +414,15 @@ class AuthController extends StateNotifier<AuthState> {
     await Sentry.configureScope((scope) => scope.setUser(null));
   }
 
+  /// Soft-delete (cancel) the account, then sign out. The server cancels the
+  /// subscriber (blocking future login); [logout] then clears the local session
+  /// so the user lands back on the sign-in screen.
+  Future<void> deleteAccount({String? reason}) async {
+    Log.breadcrumb('delete_account', category: 'auth');
+    await _repo.requestAccountDeletion(reason: reason);
+    await logout();
+  }
+
   void onSessionExpired() {
     // Fire-and-forget: clearing the disk cache must not block the redirect.
     _ref.read(responseCacheProvider).clear();

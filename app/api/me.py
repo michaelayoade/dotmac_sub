@@ -69,6 +69,8 @@ from app.schemas.notification import (
 )
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
+    AccountDeletionRequest,
+    AccountDeletionResponse,
     SubscriberContactCreate,
     SubscriberContactRead,
     SubscriberContactUpdate,
@@ -103,6 +105,7 @@ from app.schemas.vas import (
     VasVerifyResponse,
     VasWalletOverviewResponse,
 )
+from app.services import account_deletion as account_deletion_service
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
@@ -692,6 +695,33 @@ def my_topup_verify(
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
         credit_added=result.get("credit_added"),
+    )
+
+
+@router.post("/account/deletion-request", response_model=AccountDeletionResponse)
+def my_account_deletion_request(
+    payload: AccountDeletionRequest | None = None,
+    request: Request = None,  # type: ignore[assignment]
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Request deletion of the caller's account (in-app, App Store 5.1.1(v)).
+
+    Records the request and notifies the customer; operations end service and
+    delete personal data per the privacy policy (statutory billing/tax records
+    are retained where required). The client signs the user out afterwards.
+    """
+    subscriber_id = _subscriber_id(principal)
+    result = account_deletion_service.request_deletion(
+        db,
+        subscriber_id,
+        reason=payload.reason if payload else None,
+        request=request,
+    )
+    return AccountDeletionResponse(
+        status=result["status"],
+        requested_at=result["requested_at"],
+        already_requested=result["already_requested"],
     )
 
 

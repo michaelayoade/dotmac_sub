@@ -844,6 +844,8 @@ def create_invoice_payment_intent(
         "reference": gateway_context.reference,
         "amount": amount,
         "currency": "NGN",
+        "invoice_number": invoice_number,
+        "customer_email": _resolve_customer_email(db, customer),
         "checkout_metadata": checkout_metadata,
         "charged": False,
         "checkout_url": None,

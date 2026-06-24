@@ -162,6 +162,19 @@ class AuthRepository {
     };
   }
 
+  /// POST /me/account/deletion-request — soft-delete (cancel) the account.
+  /// The server sets status=canceled (blocks future login) and records the
+  /// request; the caller should then [logout] to clear the local session.
+  Future<void> requestAccountDeletion({String? reason}) async {
+    await guard(() => dio.post(
+          '/me/account/deletion-request',
+          data: {
+            if (reason != null && reason.trim().isNotEmpty)
+              'reason': reason.trim(),
+          },
+        ));
+  }
+
   /// POST /auth/logout (best-effort) then clear local tokens.
   Future<void> logout() async {
     final refresh = await storage.readRefreshToken();
