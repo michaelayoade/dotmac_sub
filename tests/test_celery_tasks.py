@@ -81,9 +81,15 @@ class TestBillingTask:
                     "app.tasks.billing.billing_enforcement_health",
                     return_value=enforcement,
                 ):
-                    with patch(
-                        "app.tasks.billing.notification_delivery_health",
-                        return_value=notification,
+                    with (
+                        patch(
+                            "app.tasks.billing.notification_delivery_health",
+                            return_value=notification,
+                        ),
+                        patch(
+                            "app.services.billing_health.billing_health_snapshot",
+                            return_value=MagicMock(anomalies=[]),
+                        ),
                     ):
                         from app.tasks.billing import check_billing_switch_task
 
@@ -119,9 +125,15 @@ class TestBillingTask:
                     "app.tasks.billing.billing_enforcement_health",
                     return_value=enforcement,
                 ):
-                    with patch(
-                        "app.tasks.billing.notification_delivery_health",
-                        return_value=notification,
+                    with (
+                        patch(
+                            "app.tasks.billing.notification_delivery_health",
+                            return_value=notification,
+                        ),
+                        patch(
+                            "app.services.billing_health.billing_health_snapshot",
+                            return_value=MagicMock(anomalies=[]),
+                        ),
                     ):
                         from app.tasks.billing import check_billing_switch_task
 
@@ -132,6 +144,50 @@ class TestBillingTask:
         assert result["notification_delivery_health"]["ok"] is False
         assert "billing_notification_delivery_unhealthy" in caplog.text
         assert "critical_notifications_failed" in caplog.text
+        mock_session.close.assert_called_once()
+
+    def test_check_billing_switch_task_survives_snapshot_failure(self, caplog):
+        """A monitoring snapshot error must NOT crash the hourly billing guard
+        nor mask the config/enforcement/notification alerts."""
+        mock_session = MagicMock()
+        enforcement = MagicMock(ok=True, reasons=[], details={})
+        notification = MagicMock(
+            ok=False,
+            reasons=["critical_notifications_failed"],
+            details={"recent_failed": 10},
+        )
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch(
+                "app.tasks.billing.check_billing_switch",
+                return_value={"ok": True, "expected": True, "actual": True},
+            ):
+                with patch(
+                    "app.tasks.billing.billing_enforcement_health",
+                    return_value=enforcement,
+                ):
+                    with (
+                        patch(
+                            "app.tasks.billing.notification_delivery_health",
+                            return_value=notification,
+                        ),
+                        patch(
+                            "app.services.billing_health.billing_health_snapshot",
+                            side_effect=ValueError("snapshot boom"),
+                        ),
+                    ):
+                        from app.tasks.billing import check_billing_switch_task
+
+                        with caplog.at_level(logging.ERROR, logger="app.tasks.billing"):
+                            result = check_billing_switch_task()
+
+        # Task completed despite the snapshot failure.
+        assert result["ok"] is True
+        # Monitoring block was skipped (no billing_health key), but the existing
+        # notification alert still fired.
+        assert "billing_health" not in result
+        assert "billing_notification_delivery_unhealthy" in caplog.text
+        assert "billing_health_snapshot_failed" in caplog.text
         mock_session.close.assert_called_once()
 
 
