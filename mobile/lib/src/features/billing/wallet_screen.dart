@@ -212,12 +212,8 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                       ),
                     ),
                   ]),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    onPressed: () => context.push('/bills'),
-                    icon: const Icon(Icons.bolt_outlined, size: 18),
-                    label: const Text('Airtime, data & bills'),
-                  ),
+                  // "Airtime, data & bills" (VAS) entry hidden until the VTPass
+                  // bill-pay flow goes live — see /bills (PayBillsScreen).
                 ],
               ),
             ),
