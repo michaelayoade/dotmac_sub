@@ -534,6 +534,22 @@ def build_beat_schedule() -> dict:
             86400,
         )
         usage_interval_seconds = max(usage_interval_seconds, 300)
+        usage_metering_interval_seconds = _effective_int(
+            session,
+            SettingDomain.usage,
+            "usage_metering_interval_seconds",
+            "USAGE_METERING_INTERVAL_SECONDS",
+            60,
+        )
+        usage_metering_interval_seconds = max(usage_metering_interval_seconds, 60)
+        fup_evaluation_interval_seconds = _effective_int(
+            session,
+            SettingDomain.usage,
+            "fup_evaluation_interval_seconds",
+            "FUP_EVALUATION_INTERVAL_SECONDS",
+            60,
+        )
+        fup_evaluation_interval_seconds = max(fup_evaluation_interval_seconds, 60)
         _sync_scheduled_task(
             session,
             name="usage_rating_runner",
@@ -598,22 +614,25 @@ def build_beat_schedule() -> dict:
             interval_seconds=radius_reap_interval_seconds,
         )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
-        # Gated by the same usage flag; no point metering faster than every 5 min.
+        # Gated by the same usage flag. This follows the RADIUS accounting
+        # cadence instead of the daily usage-rating cadence so FUP decisions
+        # are applied within minutes of imported usage.
         _sync_scheduled_task(
             session,
             name="usage_metering_runner",
             task_name="app.tasks.usage.meter_usage_into_quota",
             enabled=usage_enabled,
-            interval_seconds=max(usage_interval_seconds, 300),
+            interval_seconds=usage_metering_interval_seconds,
         )
         # Evaluate FUP rules against the metered usage and apply / auto-lift
-        # throttle/block. Without this the FUP engine never runs on a schedule.
+        # throttle/block. Keep this separate from daily usage rating; capped
+        # plans need near-real-time enforcement.
         _sync_scheduled_task(
             session,
             name="fup_evaluation_runner",
             task_name="app.tasks.usage.evaluate_fup_rules",
             enabled=usage_enabled,
-            interval_seconds=max(usage_interval_seconds, 300),
+            interval_seconds=fup_evaluation_interval_seconds,
         )
         zabbix_usage_enabled_by_default = _zabbix_configured_default()
         zabbix_usage_enabled = _effective_bool(

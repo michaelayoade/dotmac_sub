@@ -15,7 +15,6 @@ from app.services.enforcement import (
     _resolve_effective_profile,
     _setting_bool,
     apply_radius_profile_to_account,
-    apply_subscription_address_list_block,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
     remove_subscription_address_list_block,
@@ -67,15 +66,13 @@ class EnforcementHandler:
             self._handle_invoice_overdue(db, event)
 
     def _shadow_write_access_state(self, db: Session, subscription_id: str) -> None:
-        """Phase 3 shadow write — mirror the derived access_state to
-        ``subscription.access_state`` and external RADIUS radusergroup.
-        Gated by the ``radius.group_routing_enabled`` DomainSetting,
-        defaults OFF so the new path is dormant until explicitly enabled.
+        """Mirror the derived access state locally, and to radusergroup when
+        group routing is enabled.
 
-        Failures are logged and swallowed — the legacy block path is still
-        authoritative until phase 7."""
-        if not _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False):
-            return
+        ``subscription.access_state`` is now an operational truth for portals
+        and audits, so keep it current even while the external radusergroup
+        path remains feature-flagged off.
+        """
         sub = db.get(Subscription, subscription_id)
         if not sub:
             return
@@ -84,6 +81,13 @@ class EnforcementHandler:
         )
         captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
         state = derive_access_state(sub.status, captive_redirect_enabled=captive)
+        target = state.value if state else None
+        if getattr(sub, "access_state", None) != target:
+            sub.access_state = target
+            db.flush()
+
+        if not _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False):
+            return
         try:
             result = set_subscription_access_state(db, str(subscription_id), state)
             logger.info(
@@ -95,6 +99,22 @@ class EnforcementHandler:
         except Exception as exc:
             logger.warning(
                 "shadow access_state write failed for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+    def _enqueue_subscription_session_cleanup(
+        self, subscription_id: str, *, reason: str
+    ) -> None:
+        try:
+            from app.tasks.enforcement import cleanup_subscription_block_sessions
+
+            cleanup_subscription_block_sessions.delay(
+                str(subscription_id), reason=reason
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to enqueue session cleanup for subscription %s: %s",
                 subscription_id,
                 exc,
             )
@@ -160,16 +180,9 @@ class EnforcementHandler:
         # No-op unless DomainSetting radius.group_routing_enabled is true.
         self._shadow_write_access_state(db, str(subscription_id))
 
-        # Disconnect sessions and apply address list block
-        try:
-            disconnect_subscription_sessions(db, str(subscription_id), reason=reason)
-            apply_subscription_address_list_block(db, str(subscription_id))
-        except Exception as exc:
-            logger.error(
-                "Failed to disconnect sessions for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        # Slow NAS cleanup runs out-of-band so the authoritative DB/RADIUS
+        # reject state is not held hostage by session disconnect latency.
+        self._enqueue_subscription_session_cleanup(str(subscription_id), reason=reason)
 
     def _handle_subscription_block(
         self, db: Session, event: Event, reason: str
@@ -384,26 +397,18 @@ class EnforcementHandler:
             if not captive:
                 action = "suspend"
             else:
-                try:
-                    disconnect_subscription_sessions(
-                        db, str(subscription_id), reason="fup_block"
-                    )
-                    apply_subscription_address_list_block(db, str(subscription_id))
-                    self._persist_fup_state(
-                        db,
-                        str(subscription_id),
-                        offer_id,
-                        rule_id,
-                        action_status="blocked",
-                        cap_resets_at=cap_resets_at_raw,
-                        notes="FUP captive redirect applied",
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to apply FUP captive redirect for subscription %s: %s",
-                        subscription_id,
-                        exc,
-                    )
+                self._persist_fup_state(
+                    db,
+                    str(subscription_id),
+                    offer_id,
+                    rule_id,
+                    action_status="blocked",
+                    cap_resets_at=cap_resets_at_raw,
+                    notes="FUP captive redirect applied",
+                )
+                self._enqueue_subscription_session_cleanup(
+                    str(subscription_id), reason="fup_block"
+                )
                 return
         if action == "suspend":
             from app.models.enforcement_lock import EnforcementReason

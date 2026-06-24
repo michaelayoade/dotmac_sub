@@ -36,6 +36,7 @@ from app.tasks.events import (
     mark_stale_processing_events,
     retry_failed_events,
 )
+from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.exports import run_export_job, run_scheduled_export
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
@@ -189,6 +190,7 @@ __all__ = [
     "retry_failed_events",
     "mark_stale_processing_events",
     "cleanup_old_events",
+    "cleanup_subscription_block_sessions",
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",

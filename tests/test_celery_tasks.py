@@ -633,6 +633,7 @@ class TestDailyRunnerQueueRouting:
             "app.tasks.collections.run_billing_enforcement",
             "app.tasks.collections.run_dunning",
             "app.tasks.catalog.expire_subscriptions",
+            "app.tasks.enforcement.cleanup_subscription_block_sessions",
             "app.tasks.usage.run_usage_rating",
             "app.tasks.usage.evaluate_fup_rules",
         ):

@@ -152,8 +152,48 @@ def _fup_should_enforce(
     return False
 
 
+_FUP_EVALUATION_LOCK_KEY = 778_003
+
+
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
 def evaluate_fup_rules() -> dict[str, int]:
+    from sqlalchemy import func, select
+
+    lock_db = SessionLocal()
+    try:
+        bind = lock_db.bind
+        is_pg = bind is not None and bind.dialect.name == "postgresql"
+        if is_pg:
+            acquired = lock_db.execute(
+                select(func.pg_try_advisory_lock(_FUP_EVALUATION_LOCK_KEY))
+            ).scalar()
+            # Commit immediately after taking the session-level advisory lock.
+            # The lock survives commit, and the connection is no longer left
+            # "idle in transaction" while the FUP sweep runs.
+            lock_db.commit()
+            if not acquired:
+                logger.info("FUP evaluation skipped: another run is still active")
+                return {
+                    "processed": 0,
+                    "enforced": 0,
+                    "submonthly_no_data": 0,
+                    "reset": 0,
+                    "notifications": 0,
+                    "skipped_locked": 1,
+                }
+        try:
+            return _evaluate_fup_rules_locked()
+        finally:
+            if is_pg:
+                lock_db.execute(
+                    select(func.pg_advisory_unlock(_FUP_EVALUATION_LOCK_KEY))
+                )
+                lock_db.commit()
+    finally:
+        lock_db.close()
+
+
+def _evaluate_fup_rules_locked() -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
 
     Runs periodically to check usage against FUP thresholds and apply
@@ -162,10 +202,12 @@ def evaluate_fup_rules() -> dict[str, int]:
     """
     from datetime import UTC, datetime
 
+    from sqlalchemy import or_
+
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.models.domain_settings import SettingDomain
     from app.models.fup import FupPolicy
-    from app.models.fup_state import FupActionStatus
+    from app.models.fup_state import FupActionStatus, FupState
     from app.services import settings_spec
     from app.services.events import emit_event
     from app.services.events.types import EventType
@@ -204,11 +246,25 @@ def evaluate_fup_rules() -> dict[str, int]:
         )
         warn_ratio = float(_parsed[0]) if _parsed else 0.8
 
-        # Find all active subscriptions that have FUP policies
+        enforced_states = (
+            FupActionStatus.notified,
+            FupActionStatus.throttled,
+            FupActionStatus.blocked,
+        )
+        # Find active subscriptions with FUP policies, plus subscriptions
+        # already under FUP control. The latter matters for cap-boundary
+        # auto-lift: a blocked subscription is suspended, so an active-only
+        # scan would never clear it after the reset window.
         subscriptions = (
             session.query(Subscription)
             .join(FupPolicy, FupPolicy.offer_id == Subscription.offer_id)
-            .filter(Subscription.status == SubscriptionStatus.active)
+            .outerjoin(FupState, FupState.subscription_id == Subscription.id)
+            .filter(
+                or_(
+                    Subscription.status == SubscriptionStatus.active,
+                    FupState.action_status.in_(enforced_states),
+                )
+            )
             .filter(FupPolicy.is_active.is_(True))
             .all()
         )

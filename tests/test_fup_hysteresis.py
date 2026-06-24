@@ -13,10 +13,12 @@ from uuid import uuid4
 
 def _run(prior_action_status):
     sub = MagicMock(id=uuid4(), offer_id=uuid4(), subscriber_id=uuid4())
+    lock_session = MagicMock()
+    lock_session.bind.dialect.name = "sqlite"
     session = MagicMock()
-    (
-        session.query.return_value.join.return_value.filter.return_value.filter.return_value.all.return_value
-    ) = [sub]
+    query = session.query.return_value
+    joined = query.join.return_value.outerjoin.return_value
+    joined.filter.return_value.filter.return_value.all.return_value = [sub]
 
     state = None
     if prior_action_status is not None:
@@ -39,7 +41,7 @@ def _run(prior_action_status):
     emitted = []
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=session),
+        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
             "app.services.usage._resolve_or_create_quota_bucket",

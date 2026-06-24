@@ -321,6 +321,18 @@ def seed_usage_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("USAGE_RATING_INTERVAL_SECONDS", "86400"),
     )
+    usage_settings.ensure_by_key(
+        db,
+        key="usage_metering_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("USAGE_METERING_INTERVAL_SECONDS", "60"),
+    )
+    usage_settings.ensure_by_key(
+        db,
+        key="fup_evaluation_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("FUP_EVALUATION_INTERVAL_SECONDS", "60"),
+    )
     accounting_enabled_raw = os.getenv("RADIUS_ACCOUNTING_IMPORT_ENABLED", "true")
     usage_settings.ensure_by_key(
         db,
