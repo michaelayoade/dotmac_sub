@@ -686,13 +686,33 @@ def billing_risk_rows(
     db: Session, *, page: int, per_page: int
 ) -> tuple[list[dict[str, Any]], int]:
     subscribers, total = list_subscribers(db, page=page, per_page=per_page)
-    services = services_by_subscriber(db, [item.id for item in subscribers])
+    subscriber_ids = [item.id for item in subscribers]
+    services = services_by_subscriber(db, subscriber_ids)
     billing = billing_by_subscriber(db, subscribers)
+    payments = latest_payments_by_subscriber(db, subscriber_ids)
+    pop_site_ids = {
+        subscriber.pop_site_id for subscriber in subscribers if subscriber.pop_site_id
+    }
+    pop_names = (
+        {
+            pop_id: name
+            for pop_id, name in db.execute(
+                select(PopSite.id, PopSite.name).where(PopSite.id.in_(pop_site_ids))
+            ).all()
+        }
+        if pop_site_ids
+        else {}
+    )
     rows: list[dict[str, Any]] = []
     for subscriber in subscribers:
         primary_service = next(iter(services.get(subscriber.id, [])), {})
-        payment = latest_payment(db, subscriber.id)
         summary = billing[subscriber.id]
+        payment = payments.get(subscriber.id, {})
+        location = (
+            pop_names.get(subscriber.pop_site_id)
+            if subscriber.pop_site_id
+            else subscriber.city or subscriber.region or address_text(subscriber)
+        )
         rows.append(
             {
                 "id": str(subscriber.id),
@@ -700,7 +720,7 @@ def billing_risk_rows(
                 "email": subscriber.email,
                 "phone": subscriber.phone,
                 "status": enum_value(subscriber.status),
-                "location": location_label(db, subscriber),
+                "location": location,
                 "service_plan": primary_service.get("plan_name"),
                 "speed": primary_service.get("speed"),
                 "balance": summary["balance"],
@@ -709,10 +729,8 @@ def billing_risk_rows(
                 "invoiced_until": summary["invoiced_until"],
                 "blocked_date": summary["blocked_date"],
                 "total_paid": summary["total_paid"],
-                "last_payment_date": utc_iso(payment.paid_at or payment.created_at)
-                if payment
-                else None,
-                "last_payment_amount": money(payment.amount) if payment else 0.0,
+                "last_payment_date": payment.get("last_payment_date"),
+                "last_payment_amount": payment.get("last_payment_amount", 0.0),
             }
         )
     return rows, total

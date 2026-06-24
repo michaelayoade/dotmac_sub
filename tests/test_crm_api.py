@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import event
 from starlette.requests import Request
 
 from app.api import crm as crm_routes
@@ -29,6 +30,8 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.collections import DunningCase
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 
@@ -278,6 +281,70 @@ def test_finance_and_session_endpoints(db_session, crm_auth):
     assert payments.json()["data"][0]["amount"] == 10000.0
     assert sessions.status_code == 200
     assert sessions.json()["data"][0]["bytes_downloaded"] == 456
+
+
+def test_billing_risk_source_batches_page_aggregates(db_session, crm_auth):
+    offer = _offer(db_session)
+    subscribers = []
+    for _ in range(3):
+        subscriber = _subscriber(db_session)
+        subscription = _subscription(db_session, subscriber, offer)
+        _billing(db_session, subscriber, subscription)
+        subscribers.append((subscriber, subscription))
+
+    target, target_subscription = subscribers[0]
+    db_session.add(
+        Payment(
+            account_id=target.id,
+            amount=Decimal("12500.00"),
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 6, 20, tzinfo=UTC),
+        )
+    )
+    db_session.add(
+        EnforcementLock(
+            subscriber_id=target.id,
+            subscription_id=target_subscription.id,
+            reason=EnforcementReason.overdue,
+            source="test",
+            created_at=datetime(2026, 6, 18, tzinfo=UTC),
+        )
+    )
+    db_session.add(
+        DunningCase(
+            account_id=target.id,
+            started_at=datetime(2026, 6, 19, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        response = _call_route(
+            crm_routes.billing_risk_source,
+            _request({"page": "1", "per_page": "3"}),
+            db_session,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"]["total"] >= 3
+    row = next(item for item in body["data"] if item["id"] == str(target.id))
+    assert row["balance"] == 5000.0
+    assert row["total_paid"] == 22500.0
+    assert row["last_payment_amount"] == 12500.0
+    assert row["last_payment_date"] == "2026-06-20T00:00:00Z"
+    assert row["blocked_date"] == "2026-06-19T00:00:00Z"
+    assert row["service_plan"] == "Fiber 50"
+    assert len(statements) <= 20
 
 
 def test_status_writeback_rejects_active_and_logs(db_session, crm_auth):
