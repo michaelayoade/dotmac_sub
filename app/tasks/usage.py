@@ -24,6 +24,39 @@ def run_usage_rating():
 
 @celery_app.task(name="app.tasks.usage.import_radius_accounting")
 def import_radius_accounting():
+    from sqlalchemy import func, select
+
+    lock_db = SessionLocal()
+    try:
+        bind = lock_db.bind
+        is_pg = bind is not None and bind.dialect.name == "postgresql"
+        if is_pg:
+            acquired = lock_db.execute(
+                select(func.pg_try_advisory_lock(_RADIUS_ACCOUNTING_IMPORT_LOCK_KEY))
+            ).scalar()
+            lock_db.commit()
+            if not acquired:
+                logger.info("RADIUS accounting import skipped: another run is active")
+                return {
+                    "ok": True,
+                    "processed": 0,
+                    "created_or_updated": 0,
+                    "cursor": None,
+                    "skipped_locked": 1,
+                }
+        try:
+            return _import_radius_accounting_locked()
+        finally:
+            if is_pg:
+                lock_db.execute(
+                    select(func.pg_advisory_unlock(_RADIUS_ACCOUNTING_IMPORT_LOCK_KEY))
+                )
+                lock_db.commit()
+    finally:
+        lock_db.close()
+
+
+def _import_radius_accounting_locked():
     session = SessionLocal()
     try:
         result = usage_service.import_radius_accounting(session)
@@ -162,6 +195,7 @@ def _fup_should_enforce(
 
 
 _FUP_EVALUATION_LOCK_KEY = 778_003
+_RADIUS_ACCOUNTING_IMPORT_LOCK_KEY = 778_004
 
 
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")

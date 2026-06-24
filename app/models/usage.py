@@ -92,6 +92,11 @@ class RadiusAccountingSession(Base):
             "ix_radius_accounting_sessions_subscription_id",
             "subscription_id",
         ),
+        Index(
+            "ix_radius_accounting_sessions_credential_session",
+            "access_credential_id",
+            "session_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

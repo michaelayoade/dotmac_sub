@@ -657,6 +657,51 @@ class TestDailyRunnerQueueRouting:
 
 
 class TestUsageMeteringTask:
+    def test_radius_accounting_import_skips_when_locked(self):
+        lock_session = MagicMock()
+        lock_session.bind.dialect.name = "postgresql"
+        lock_session.execute.return_value.scalar.return_value = False
+
+        with patch("app.tasks.usage.SessionLocal", return_value=lock_session):
+            from app.tasks.usage import import_radius_accounting
+
+            result = import_radius_accounting()
+
+        assert result["skipped_locked"] == 1
+        assert result["processed"] == 0
+        lock_session.commit.assert_called_once()
+        lock_session.close.assert_called_once()
+
+    def test_radius_accounting_import_runs_under_lock(self):
+        lock_session = MagicMock()
+        lock_session.bind.dialect.name = "sqlite"
+        work_session = MagicMock()
+
+        with (
+            patch(
+                "app.tasks.usage.SessionLocal",
+                side_effect=[lock_session, work_session],
+            ),
+            patch(
+                "app.services.usage.import_radius_accounting",
+                return_value={
+                    "ok": True,
+                    "processed": 2,
+                    "created_or_updated": 1,
+                    "cursor": 123,
+                },
+            ) as mock_import,
+        ):
+            from app.tasks.usage import import_radius_accounting
+
+            result = import_radius_accounting()
+
+        assert result["processed"] == 2
+        mock_import.assert_called_once_with(work_session)
+        work_session.commit.assert_called_once()
+        work_session.close.assert_called_once()
+        lock_session.close.assert_called_once()
+
     def test_meter_usage_queues_targeted_fup_for_changed_subscriptions(self):
         mock_session = MagicMock()
         changed = ["11111111-1111-1111-1111-111111111111"]
