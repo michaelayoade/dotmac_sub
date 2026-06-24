@@ -109,9 +109,9 @@ services:
     - -c
     - max_replication_slots=5
     - -c
-    - archive_mode=on
+    - archive_mode=off
     - -c
-    - "archive_command=test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
+    - "archive_command=/bin/true"
     - -c
     - archive_timeout=300
     volumes:
