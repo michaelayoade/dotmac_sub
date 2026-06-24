@@ -169,6 +169,7 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
     any_creds_desired = False
     any_ip_desired = False
     access_mismatch = False
+    ipv4_cache_mismatch = False
     for sub in subs:
         desired = derive_desired_connectivity(sub.status)
         any_creds_desired = any_creds_desired or desired.credentials_active
@@ -178,6 +179,15 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
         )
         match = desired_access == sub.access_state
         access_mismatch = access_mismatch or not match
+        # ipv4_cache (INV-4 / R2): the served column is a PROJECTION of the
+        # active assignment, not a second source of truth. When an IP is
+        # retained (active/suspended), the column must equal the assignment IP;
+        # divergence is the drift that the reconciler will own. Report-only —
+        # this gauge sizes the cutover that removes the accounting dual-write.
+        col_ip = _norm(sub.ipv4_address)
+        assign_ip = _active_assignment_ip(db, sub)
+        cache_match = (not desired.ip_retained) or (col_ip == assign_ip)
+        ipv4_cache_mismatch = ipv4_cache_mismatch or not cache_match
         sub_reports.append(
             {
                 "id": str(sub.id),
@@ -185,6 +195,9 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
                 "desired_access_state": desired_access,
                 "actual_access_state": sub.access_state,
                 "match": match,
+                "served_ipv4": col_ip or None,
+                "assignment_ipv4": assign_ip or None,
+                "ipv4_cache_match": cache_match,
             }
         )
 
@@ -221,6 +234,8 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
         diffs.append("credentials_active")
     if not ip_match:
         diffs.append("ip_active")
+    if ipv4_cache_mismatch:
+        diffs.append("ipv4_cache")
 
     if diffs:
         try:
@@ -246,6 +261,9 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
             "desired": any_ip_desired,
             "actual": actual_ip_active > 0,
             "match": ip_match,
+        },
+        "ipv4_cache": {
+            "match": not ipv4_cache_mismatch,
         },
         "diffs": diffs,
     }

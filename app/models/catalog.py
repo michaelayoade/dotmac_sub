@@ -806,6 +806,14 @@ class Subscription(Base):
     login: Mapped[str | None] = mapped_column(String(120))
     ipv4_address: Mapped[str | None] = mapped_column(String(64))
     ipv6_address: Mapped[str | None] = mapped_column(String(128))
+    # OBSERVED framed address from live RADIUS accounting (display/diagnostics
+    # only). Kept SEPARATE from ipv4_address/ipv6_address, which are the
+    # DESIRED/served IP owned by the IP assignment + connectivity reconciler.
+    # Splitting observed from desired stops the live IP overwriting the desired
+    # IP and being re-emitted by the RADIUS sweep — see
+    # docs/designs/CONNECTIVITY_STATE_MACHINE.md §3.1.
+    last_seen_framed_ipv4: Mapped[str | None] = mapped_column(String(64))
+    last_seen_framed_ipv6: Mapped[str | None] = mapped_column(String(128))
     mac_address: Mapped[str | None] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(
