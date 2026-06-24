@@ -113,6 +113,7 @@ def _setup_sentry(
         import sentry_sdk
         from sentry_sdk.integrations.celery import CeleryIntegration
         from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
         from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
     except ImportError:
         logger.warning(
@@ -132,6 +133,10 @@ def _setup_sentry(
                 FastApiIntegration(transaction_style="endpoint"),
                 SqlalchemyIntegration(),
                 CeleryIntegration(),
+                LoggingIntegration(
+                    level=logging.WARNING,
+                    event_level=logging.ERROR,
+                ),
             ],
             # Don't send PII by default
             send_default_pii=False,

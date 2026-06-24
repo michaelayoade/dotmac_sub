@@ -105,7 +105,7 @@ def check_billing_switch_task() -> dict:
                 enforcement.details,
             )
         if not notification.ok:
-            logger.warning(
+            logger.error(
                 "billing_notification_delivery_unhealthy: reasons=%s details=%s",
                 ",".join(notification.reasons),
                 notification.details,
