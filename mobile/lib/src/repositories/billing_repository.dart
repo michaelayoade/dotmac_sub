@@ -134,11 +134,24 @@ class BillingRepository {
     return (data as Map).cast<String, dynamic>();
   }
 
-  /// POST /payments/initiate — begin hosted checkout for one of my invoices.
-  Future<PaymentInitiation> initiatePayment(String invoiceId) async {
+  /// POST /payments/initiate — pay one invoice via the chosen method.
+  /// [provider] picks the gateway for a new card; [paymentMethodId] charges a
+  /// saved card server-side (returns charged=true); [idempotencyKey] makes that
+  /// charge safe against a double-submit.
+  Future<PaymentInitiation> initiatePayment(
+    String invoiceId, {
+    String? provider,
+    String? paymentMethodId,
+    String? idempotencyKey,
+  }) async {
     final data = await guard(() => dio.post(
           '/payments/initiate',
-          data: {'invoice_id': invoiceId},
+          data: {
+            'invoice_id': invoiceId,
+            if (provider != null) 'provider': provider,
+            if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
+            if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
+          },
         ));
     return PaymentInitiation.fromJson(data as Map<String, dynamic>);
   }

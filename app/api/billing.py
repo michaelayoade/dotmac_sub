@@ -1157,25 +1157,38 @@ def initiate_payment(
     checkout with the provider SDK, after which it calls ``/payments/verify``.
     """
     customer = _require_subscriber(principal)
-    context = customer_payments.get_payment_page(db, customer, str(payload.invoice_id))
-    if context is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Invoice not found, not payable, or not on your account",
+    # Unified pay-with flow (mirrors top-up): a saved card is charged server-side
+    # (charged=True → skip the webview), a gateway choice returns checkout
+    # context, and the verified payment is allocated to this invoice.
+    try:
+        result = customer_payments.create_invoice_payment_intent(
+            db,
+            customer,
+            str(payload.invoice_id),
+            provider=payload.provider,
+            payment_method_id=(
+                str(payload.payment_method_id) if payload.payment_method_id else None
+            ),
+            idempotency_key=payload.idempotency_key,
         )
-    invoice = context["invoice"]
-    raw_amount = getattr(invoice, "balance_due", None)
-    if raw_amount is None:
-        raw_amount = getattr(invoice, "total", 0)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Resolve the email the gateway webview needs (the customer dict carries none).
+    from app.models.subscriber import Subscriber
+
+    sub = db.get(Subscriber, customer["subscriber_id"])
+    email = (getattr(sub, "email", None) or None) if sub else None
     return PaymentInitiateResponse(
-        invoice_id=invoice.id,
-        invoice_number=getattr(invoice, "invoice_number", None),
-        amount=Decimal(str(raw_amount or 0)),
-        currency=getattr(invoice, "currency", "NGN"),
-        provider_type=context["provider_type"],
-        provider_public_key=context.get("provider_public_key"),
-        payment_reference=context["payment_reference"],
-        customer_email=context.get("customer_email"),
+        invoice_id=payload.invoice_id,
+        invoice_number=result.get("invoice_number"),
+        amount=Decimal(str(result.get("amount") or 0)),
+        currency=result.get("currency", "NGN"),
+        provider_type=result["provider_type"],
+        provider_public_key=result.get("provider_public_key"),
+        payment_reference=result["reference"],
+        customer_email=email,
+        charged=result.get("charged", False),
+        checkout_url=result.get("checkout_url"),
     )
 
 
