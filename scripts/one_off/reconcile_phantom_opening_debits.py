@@ -41,9 +41,7 @@ from app.services.common import round_money, to_decimal
 
 OPENING_MEMO = "Prepaid opening balance @ cutover"
 LEGACY_REVERSAL_MEMO = "Reversal of prepaid opening balance cutover debit [id={id}]"
-REVERSAL_MEMO = (
-    "Reversal of phantom prepaid opening balance cutover debit [id={id}]"
-)
+REVERSAL_MEMO = "Reversal of phantom prepaid opening balance cutover debit [id={id}]"
 REVERSAL_CORRECTION_MEMO = (
     "Correction: remove excess opening-balance reversal credit [id={id}]"
 )
@@ -260,24 +258,28 @@ def _candidate_row(candidate: Candidate) -> dict[str, str]:
 def _write_csv(path: Path, candidates: list[Candidate]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [_candidate_row(candidate) for candidate in candidates]
-    fieldnames = list(rows[0].keys()) if rows else [
-        "classification",
-        "eligible",
-        "ledger_entry_id",
-        "account_id",
-        "subscriber_status",
-        "subscriber_number",
-        "subscriber_name",
-        "deposit",
-        "debit_amount",
-        "existing_reversal",
-        "remaining_to_reverse",
-        "currency",
-        "source",
-        "category",
-        "memo",
-        "created_at",
-    ]
+    fieldnames = (
+        list(rows[0].keys())
+        if rows
+        else [
+            "classification",
+            "eligible",
+            "ledger_entry_id",
+            "account_id",
+            "subscriber_status",
+            "subscriber_number",
+            "subscriber_name",
+            "deposit",
+            "debit_amount",
+            "existing_reversal",
+            "remaining_to_reverse",
+            "currency",
+            "source",
+            "category",
+            "memo",
+            "created_at",
+        ]
+    )
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
