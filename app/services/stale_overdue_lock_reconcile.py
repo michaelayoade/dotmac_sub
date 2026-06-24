@@ -48,9 +48,7 @@ class ReconcileItem:
     other_active_locks: list[str]  # active lock reasons besides 'overdue'
     available_balance: str | None = None
     min_balance: str | None = None
-    action: str = (
-        ""  # would_restore|would_clear_lock_only|restored|lock_cleared_not_restored|lock_cleared
-    )
+    action: str = ""  # would_restore|would_clear_lock_only|restored|lock_cleared_not_restored|lock_cleared
     detail: str = ""
 
 

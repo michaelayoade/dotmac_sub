@@ -66,7 +66,9 @@ def _sitting_credit_payment(db_session, sub, amount: Decimal):
     )
 
 
-def _open_invoice(db_session, sub, balance: Decimal, *, currency: str = "NGN") -> Invoice:
+def _open_invoice(
+    db_session, sub, balance: Decimal, *, currency: str = "NGN"
+) -> Invoice:
     inv = Invoice(
         account_id=sub.id,
         status=InvoiceStatus.issued,
