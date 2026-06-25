@@ -89,18 +89,20 @@ class QuotaCard extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               b.isUnlimited
-                  ? Fmt.gb(b.usedGb)
+                  ? '${Fmt.gb(b.usedGb)} used'
                   : '${Fmt.gb(b.usedGb)} / ${Fmt.gb(b.allowanceGb ?? 0)}',
               style: theme.textTheme.headlineSmall,
             ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              value: fraction,
-              minHeight: 10,
-              borderRadius: BorderRadius.circular(5),
-              color: overLimit ? theme.colorScheme.error : null,
-            ),
+            // Capped plans get an allowance bar + "X left"; unlimited plans don't
+            // (no cap to draw against — the "Unlimited" chip says it all).
             if (!b.isUnlimited) ...[
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                value: fraction,
+                minHeight: 10,
+                borderRadius: BorderRadius.circular(5),
+                color: overLimit ? theme.colorScheme.error : null,
+              ),
               const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -174,11 +176,18 @@ class MonthlyUsageCard extends ConsumerWidget {
         padding: EdgeInsets.only(bottom: 12),
         child: CardSkeleton(height: 240),
       ),
-      // A failed long-history fetch shouldn't break the page — just omit it.
-      error: (_, __) => const SizedBox.shrink(),
+      // Stay present (in addition to Speed), but degrade gracefully — a failed
+      // fetch (e.g. endpoint not yet available) shows a muted note, not nothing.
+      error: (_, __) => const _UsageHistoryPlaceholder(
+        message: 'Usage history isn\'t available right now.',
+      ),
       data: (h) {
         final months = h.toMonthly();
-        if (months.length < 2) return const SizedBox.shrink();
+        if (months.length < 2) {
+          return const _UsageHistoryPlaceholder(
+            message: 'Your monthly usage trend will appear here.',
+          );
+        }
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: _MonthlyUsageBody(
@@ -190,6 +199,37 @@ class MonthlyUsageCard extends ConsumerWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Compact stand-in for the monthly usage-history card when there isn't enough
+/// data yet (or the endpoint is unavailable) — keeps the section visible.
+class _UsageHistoryPlaceholder extends StatelessWidget {
+  const _UsageHistoryPlaceholder({required this.message});
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Usage history', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Text(message,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

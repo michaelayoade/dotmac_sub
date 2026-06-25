@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/usage.dart';
 import '../../providers/data_providers.dart';
-import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 
 /// Look-back windows for the speed chart, in hours.
@@ -50,10 +49,21 @@ class SpeedHistoryCard extends ConsumerWidget {
                   ref.read(speedRangeHoursProvider.notifier).state = h,
             ),
             const SizedBox(height: 12),
-            AsyncValueView(
-              value: series,
-              onRetry: () => ref.invalidate(bandwidthSeriesProvider(hours)),
-              skeleton: const CardSkeleton(height: 180),
+            // Degrade gracefully: a 403/unavailable connection shows a muted
+            // note (this account may have no live-bandwidth mapping), not an
+            // alarming error.
+            series.when(
+              loading: () => const CardSkeleton(height: 180),
+              error: (_, __) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    'Speed data isn\'t available for this connection.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ),
+              ),
               data: (pts) => _SpeedBody(points: pts, hours: hours),
             ),
           ],
