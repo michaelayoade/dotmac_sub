@@ -34,6 +34,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
@@ -238,6 +239,8 @@ def _effective_unit_price(
     subscription: Subscription,
     catalog_amount: Decimal,
     now: datetime,
+    *,
+    include_override: bool = True,
 ) -> Decimal:
     """Effective per-cycle price for a subscription.
 
@@ -248,9 +251,17 @@ def _effective_unit_price(
     [discount_start_at, discount_end_at] window (open-ended where null,
     bounds inclusive) is then applied: percentage is percent-off, fixed
     is an absolute reduction. Never returns below 0.00.
+
+    ``include_override=False`` skips the per-offer unit_price override (but still
+    applies the subscription-level discount); plan-change proration uses this for
+    the *new* plan's side, whose catalog price hasn't been snapshotted yet.
     """
     base = catalog_amount
-    if subscription.unit_price is not None and subscription.unit_price > 0:
+    if (
+        include_override
+        and subscription.unit_price is not None
+        and subscription.unit_price > 0
+    ):
         base = subscription.unit_price
     price = Decimal(str(base))
     if subscription.discount and subscription.discount_value is not None:
@@ -354,30 +365,75 @@ def _addon_recurring_price(db: Session, add_on_id) -> tuple[Decimal, str] | None
     return round_money(price.amount or 0), str(price.currency or "NGN")
 
 
+def _active_ip_route_count(db: Session, subscriber_id, prefix_length: int) -> int:
+    """Count active additional routed blocks of a given prefix for a subscriber.
+
+    The route↔add-on tie is convention-by-prefix (no FK) and is only reconciled
+    when an admin re-saves the subscription form, so a block released or
+    deactivated by any other lifecycle/IPAM path can leave the add-on billing
+    forever. This lets the recurring-add-on biller keep public-IP billing
+    coupled to whether the block is actually still routing.
+    """
+    return (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber_id)
+        .filter(SubscriberAdditionalRoute.prefix_length == prefix_length)
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .count()
+    )
+
+
 def _bill_recurring_addons(
     db: Session,
     invoice: Invoice,
     subscription: Subscription,
     period_start: datetime,
     period_end: datetime,
+    usage_start: datetime,
+    usage_end: datetime,
     tax_rate_id,
-    run_at: datetime,
 ) -> int:
-    """Add an invoice line per active recurring add-on on this subscription, so
-    the monthly bill is base plan + recurring add-ons (e.g. extra IP blocks).
+    """Add an invoice line per recurring add-on active during the billing period,
+    so the monthly bill is base plan + recurring add-ons (e.g. extra IP blocks).
     Returns the number of lines added. One-time add-ons are skipped (no recurring
-    price); add-ons in a different currency than the invoice are skipped."""
+    price); add-ons in a different currency than the invoice are skipped.
+
+    Each line is prorated to the add-on's own active overlap with the billing
+    period (intersected with the subscription's service window): an add-on that
+    started or ended mid-period is billed only for the portion it was active —
+    not the full period, and not skipped outright. Add-ons that don't overlap the
+    period at all (start in a later period, or already ended before it) are
+    excluded.
+
+    Public-IP add-ons can additionally be coupled to live routing: when the
+    ``billing.bill_ip_addon_requires_active_route`` setting is on, the billed
+    quantity is capped to the number of active matching ``SubscriberAdditionalRoute``
+    blocks (and the line skipped entirely when none remain), so a released or
+    deactivated block stops billing even if the add-on's ``end_at`` was never set.
+    Default OFF keeps the deploy behaviour-neutral until route data is audited.
+    """
+    # Add-ons that OVERLAP [period_start, period_end): started before the period
+    # ends and not yet ended when it begins. (Proration below handles the partial
+    # overlap; a degenerate row that slips through bills 0 and is skipped.)
     rows = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
         .filter(SubscriptionAddOn.subscription_id == subscription.id)
         .filter(
-            (SubscriptionAddOn.end_at.is_(None)) | (SubscriptionAddOn.end_at > run_at)
+            (SubscriptionAddOn.start_at.is_(None))
+            | (SubscriptionAddOn.start_at < period_end)
+        )
+        .filter(
+            (SubscriptionAddOn.end_at.is_(None))
+            | (SubscriptionAddOn.end_at > period_start)
         )
         .all()
     )
     added = 0
     tax_application = _default_tax_application(db)
+    require_active_route = _setting_truthy(
+        db, "bill_ip_addon_requires_active_route", default=False
+    )
     for sub_addon, add_on in rows:
         priced = _addon_recurring_price(db, add_on.id)
         if priced is None:
@@ -386,7 +442,62 @@ def _bill_recurring_addons(
         if currency != (invoice.currency or "NGN"):
             continue
         qty = Decimal(str(sub_addon.quantity or 1))
-        amount = round_money(unit * qty)
+
+        # Keep public-IP add-on billing coupled to live routing: bill at most the
+        # number of active matching routes, skipping entirely when none remain.
+        # Only applies to public-IP add-ons that declare a prefix length.
+        if (
+            require_active_route
+            and add_on.ip_is_public
+            and add_on.ip_prefix_length is not None
+        ):
+            active_routes = _active_ip_route_count(
+                db, subscription.subscriber_id, add_on.ip_prefix_length
+            )
+            billable_qty = min(int(qty), active_routes)
+            if billable_qty <= 0:
+                logger.warning(
+                    "ip_addon_no_active_route_skip",
+                    extra={
+                        "event": "ip_addon_no_active_route_skip",
+                        "subscription_id": str(subscription.id),
+                        "subscriber_id": str(subscription.subscriber_id),
+                        "add_on_id": str(add_on.id),
+                        "prefix_length": add_on.ip_prefix_length,
+                        "addon_quantity": int(qty),
+                    },
+                )
+                continue
+            if billable_qty != int(qty):
+                logger.warning(
+                    "ip_addon_quantity_capped_to_routes",
+                    extra={
+                        "event": "ip_addon_quantity_capped_to_routes",
+                        "subscription_id": str(subscription.id),
+                        "subscriber_id": str(subscription.subscriber_id),
+                        "add_on_id": str(add_on.id),
+                        "prefix_length": add_on.ip_prefix_length,
+                        "addon_quantity": int(qty),
+                        "active_routes": active_routes,
+                    },
+                )
+                qty = Decimal(str(billable_qty))
+
+        # Prorate to the add-on's own active overlap with the billing period,
+        # clipped to the subscription's service window. In the steady case (add-on
+        # active for the whole period) the ratio is 1, so amount == unit * qty;
+        # a mid-period start/end bills only the active portion.
+        addon_start = _as_utc(sub_addon.start_at) or period_start
+        addon_end = _as_utc(sub_addon.end_at) or period_end
+        addon_usage_start = max(usage_start, addon_start)
+        addon_usage_end = min(usage_end, addon_end)
+        amount = _prorated_amount(
+            round_money(unit * qty),
+            period_start,
+            period_end,
+            addon_usage_start,
+            addon_usage_end,
+        )
         if amount <= Decimal("0.00"):
             continue
         db.add(
@@ -1094,7 +1205,14 @@ def run_invoice_cycle(
         summary["lines_created"] += 1
         # Bill active recurring add-ons (e.g. extra IP blocks) on the same invoice.
         summary["lines_created"] += _bill_recurring_addons(
-            db, invoice, subscription, period_start, period_end, tax_rate_id, run_at
+            db,
+            invoice,
+            subscription,
+            period_start,
+            period_end,
+            usage_start,
+            usage_end,
+            tax_rate_id,
         )
         subscription.next_billing_at = period_end
 
@@ -1383,12 +1501,15 @@ def generate_prorated_invoice(
     if line_amount <= Decimal("0.00"):
         return None
 
-    # Check for existing prorated invoice for this period
+    # Check for existing prorated invoice for this period. Key on the
+    # day-floored period_start (not the raw activation timestamp): two
+    # activations on the same day would otherwise carry sub-second-different
+    # billing_period_start values, miss this dedupe, and mint a second proration.
     existing = (
         db.query(InvoiceLine)
         .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
         .filter(InvoiceLine.subscription_id == subscription.id)
-        .filter(Invoice.billing_period_start == activation_date)
+        .filter(Invoice.billing_period_start == period_start)
         .filter(Invoice.billing_period_end == period_end)
         .filter(InvoiceLine.is_active.is_(True))
         .filter(Invoice.is_active.is_(True))
@@ -1410,7 +1531,9 @@ def generate_prorated_invoice(
         invoice_number=next_invoice_number(db),
         status=InvoiceStatus.issued,
         currency=currency or "NGN",
-        billing_period_start=activation_date,
+        # Store the day-floored period_start so the dedupe above is stable across
+        # re-activations on the same day (issued_at keeps the exact instant).
+        billing_period_start=period_start,
         billing_period_end=period_end,
         issued_at=activation_date,
         due_at=activation_date + timedelta(days=due_days),
@@ -1770,11 +1893,16 @@ def generate_cancellation_credit(
     if not last_line or not last_line.amount:
         return  # Never billed
 
-    # Calculate unused portion
-    _as_utc(subscription.start_at) or now
-    cycle = BillingCycle.monthly  # fallback
-    if subscription.offer and subscription.offer.billing_cycle:
-        cycle = subscription.offer.billing_cycle
+    # Calculate unused portion. Resolve the cycle the same way the invoice
+    # runner and proration do — from the active recurring price (version-aware) —
+    # so the credit window matches how the subscription was actually billed,
+    # falling back to the offer's cycle then monthly.
+    _, _, resolved_cycle = _resolve_price(db, subscription)
+    cycle = resolved_cycle or (
+        subscription.offer.billing_cycle
+        if subscription.offer and subscription.offer.billing_cycle
+        else BillingCycle.monthly
+    )
 
     period_start = _as_utc(subscription.next_billing_at)
     if period_start:

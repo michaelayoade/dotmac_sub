@@ -106,8 +106,9 @@ function bandwidthChart(config = {}) {
             if (this.liveStream) {
                 if (this.timeRange !== '1h') return 'Live paused (history view)';
                 if (this.liveStatus === 'live') return 'Live';
-                if (this.liveStatus === 'error') return 'Live read unavailable';
-                return 'Connecting…';
+                // No fresh sample (no queue mapping) or mid-reconnect: don't
+                // claim "Live" or flash an error on routine SSE reconnects.
+                return 'Waiting for data';
             }
             return 'Speed history';
         },
@@ -463,8 +464,14 @@ function bandwidthChart(config = {}) {
                         this.currentUpload = data.upload_bps || 0;
                     }
                     if (this.liveStream) {
-                        this.liveStatus = 'live';
-                        this.liveUpdatedAt = data.timestamp || new Date().toISOString();
+                        // Only claim "Live" when the backend actually has a
+                        // sample for this sub (has_sample). Subscribers with no
+                        // queue mapping get a steady stream of default-zero
+                        // events — show "Waiting for data", not a fake live 0.
+                        // Absent field (other producers) defaults to fresh.
+                        const fresh = data.has_sample !== false;
+                        this.liveStatus = fresh ? 'live' : 'waiting';
+                        if (fresh) this.liveUpdatedAt = data.timestamp || new Date().toISOString();
                     }
 
                     // Update peak if necessary
