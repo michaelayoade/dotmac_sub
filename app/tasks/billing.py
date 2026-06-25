@@ -7,7 +7,7 @@ from app.services.billing_enforcement_guards import (
     billing_enforcement_health,
     notification_delivery_health,
 )
-from app.services.billing_settings import check_billing_switch
+from app.services.billing_settings import billing_enabled, check_billing_switch
 from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
@@ -15,11 +15,10 @@ logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
 
-@celery_app.task(name="app.tasks.billing.run_invoice_cycle")
 @idempotent_task(
     key_func=lambda: f"billing_cycle:{datetime.now(UTC).strftime('%Y-%m-%d')}"
 )
-def run_invoice_cycle() -> dict[str, int]:
+def _run_invoice_cycle_idempotent() -> dict[str, int]:
     logger.info("Starting billing invoice cycle")
     session = SessionLocal()
     try:
@@ -39,6 +38,18 @@ def run_invoice_cycle() -> dict[str, int]:
         raise
     finally:
         session.close()
+
+
+@celery_app.task(name="app.tasks.billing.run_invoice_cycle")
+def run_invoice_cycle() -> dict[str, int | str]:
+    session = SessionLocal()
+    try:
+        if not billing_enabled(session):
+            logger.info("billing invoice cycle skipped: local billing disabled")
+            return {"skipped": "billing_disabled"}
+    finally:
+        session.close()
+    return _run_invoice_cycle_idempotent()
 
 
 @celery_app.task(name="app.tasks.billing.mark_invoices_overdue")
