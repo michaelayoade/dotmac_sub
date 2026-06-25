@@ -38,10 +38,13 @@ EVENT_HEADER = "X-Webhook-Event"
 # CRM ticket events that should refresh the local copy.
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
+CHAT_EVENTS = {"message.outbound"}
 
 
-def _verify_signature(raw_body: bytes, presented: str | None) -> None:
-    secret = settings.crm_webhook_secret
+def _verify_signature(
+    raw_body: bytes, presented: str | None, secret: str | None = None
+) -> None:
+    secret = secret if secret is not None else settings.crm_webhook_secret
     if not secret:
         logger.error("crm_webhook_secret_not_configured")
         raise HTTPException(
@@ -128,3 +131,61 @@ async def receive_crm_event(request: Request) -> dict:
         ) from exc
 
     return {"status": "queued", "event": event_type, "ticket_id": ticket_id}
+
+
+@router.post("/chat")
+async def receive_crm_chat_event(
+    request: Request, db: Session = Depends(get_db)
+) -> dict:
+    """Wake a backgrounded mobile app when an agent replies in a chat.
+
+    The CRM's chat WebSocket only delivers while the app is foregrounded, so this
+    signed webhook fans an agent reply out to the subscriber's devices via FCM.
+    It carries no authoritative state — the app pulls history with its visitor
+    token — so message bodies here are advisory only.
+    """
+    raw_body = await request.body()
+    _verify_signature(
+        raw_body,
+        request.headers.get(SIGNATURE_HEADER),
+        secret=settings.crm_chat_webhook_secret,
+    )
+
+    event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
+    if event_type and event_type not in CHAT_EVENTS:
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        ) from None
+    if not isinstance(payload, dict):
+        payload = {}
+
+    # The CRM wraps event data under "payload" (event envelope); tolerate a flat
+    # body too so the contract isn't brittle.
+    inner = payload.get("payload")
+    body = inner if isinstance(inner, dict) else payload
+
+    subscriber_id = str(body.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        # Reseller-originated or unmapped chats have no device to wake; ack so
+        # the CRM doesn't retry.
+        return {"status": "ignored", "reason": "no_subscriber"}
+
+    from app.services import push as push_service
+
+    preview = str(body.get("preview") or "").strip() or "You have a new message."
+    push_service.send_push(
+        db,
+        subscriber_id,
+        title="New message from support",
+        body=preview,
+        data={
+            "type": "chat_message",
+            "conversation_id": str(body.get("conversation_id") or ""),
+        },
+    )
+    return {"status": "ok", "event": event_type}

@@ -16,7 +16,16 @@ class TicketsScreen extends ConsumerWidget {
     final tickets = ref.watch(ticketsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Support')),
+      appBar: AppBar(
+        title: const Text('Support'),
+        actions: [
+          IconButton(
+            tooltip: 'Live chat',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () => context.go('/chat'),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.go('/support/new'),
         icon: const Icon(Icons.add),

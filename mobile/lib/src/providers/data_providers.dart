@@ -17,6 +17,7 @@ import '../models/ticket.dart';
 import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
 import '../repositories/catalog_repository.dart';
+import '../repositories/chat_repository.dart';
 import '../repositories/contact_repository.dart';
 import '../models/reseller.dart';
 import '../models/service_location.dart';
@@ -40,6 +41,9 @@ final usageRepositoryProvider = Provider<UsageRepository>(
 
 final catalogRepositoryProvider = Provider<CatalogRepository>(
     (ref) => CatalogRepository(ref.watch(apiClientProvider).dio));
+
+final chatRepositoryProvider = Provider<ChatRepository>(
+    (ref) => ChatRepository(ref.watch(apiClientProvider).dio));
 
 final supportRepositoryProvider = Provider<SupportRepository>(
     (ref) => SupportRepository(ref.watch(apiClientProvider).dio));
