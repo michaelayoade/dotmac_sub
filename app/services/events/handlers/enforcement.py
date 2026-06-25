@@ -371,6 +371,10 @@ class EnforcementHandler:
         offer_id = event.payload.get("offer_id")
         rule_id = event.payload.get("rule_id")
         cap_resets_at_raw = event.payload.get("cap_resets_at")
+        # Set when a FUP "block" is downgraded to a full suspend (no captive
+        # redirect), so the persisted state distinguishes it from a non-payment
+        # suspension.
+        fup_block_downgraded = False
 
         if action == "block":
             # The soft captive walled-garden is opt-in per customer. A blocked
@@ -383,6 +387,18 @@ class EnforcementHandler:
             captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
             if not captive:
                 action = "suspend"
+                # A FUP cap is becoming a full (offline) suspension rather than a
+                # captive walled-garden because this customer hasn't opted into
+                # captive redirect. Surface it: in subscription status this then
+                # looks like any other suspension, so make the FUP cause visible.
+                logger.warning(
+                    "fup_block_downgraded_to_suspend subscription=%s account=%s "
+                    "rule=%s — captive redirect not enabled; applying full suspend",
+                    subscription_id,
+                    account_id,
+                    rule_id,
+                )
+                fup_block_downgraded = True
             else:
                 try:
                     disconnect_subscription_sessions(
@@ -430,7 +446,11 @@ class EnforcementHandler:
                     rule_id,
                     action_status="blocked",
                     cap_resets_at=cap_resets_at_raw,
-                    notes="FUP suspension applied",
+                    notes=(
+                        "FUP cap: block downgraded to suspend (captive not enabled)"
+                        if fup_block_downgraded
+                        else "FUP suspension applied"
+                    ),
                 )
             except ValueError as e:
                 logger.info(

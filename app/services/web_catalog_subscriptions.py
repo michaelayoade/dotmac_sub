@@ -1988,7 +1988,7 @@ def _validate_additional_routes_match_addon(
 
 
 def _priced_public_ip_addon_by_prefix(db: Session, prefix_length: int) -> AddOn | None:
-    return (
+    matches = (
         db.query(AddOn)
         .join(AddOnPrice, AddOnPrice.add_on_id == AddOn.id)
         .filter(AddOn.is_active.is_(True))
@@ -1997,8 +1997,29 @@ def _priced_public_ip_addon_by_prefix(db: Session, prefix_length: int) -> AddOn 
         .filter(AddOnPrice.is_active.is_(True))
         .filter(AddOnPrice.price_type == PriceType.recurring)
         .order_by(AddOn.name.asc(), AddOnPrice.created_at.asc())
-        .first()
+        .all()
     )
+    # An add-on can have more than one active recurring price row, so dedupe by
+    # add-on before judging ambiguity.
+    unique: list[AddOn] = []
+    seen_ids: set = set()
+    for add_on in matches:
+        if add_on.id not in seen_ids:
+            seen_ids.add(add_on.id)
+            unique.append(add_on)
+    if len(unique) > 1:
+        # The route→add-on tie is by prefix length, not a FK; two priced add-ons
+        # of the same prefix mean the route silently maps to whichever sorts
+        # first and may be billed the wrong price. Surface it.
+        logger.warning(
+            "ambiguous_public_ip_addon_prefix: %d priced add-ons for /%d (%s) — "
+            "using '%s'; prefix→add-on mapping is not unique",
+            len(unique),
+            prefix_length,
+            ", ".join(a.name for a in unique),
+            unique[0].name,
+        )
+    return unique[0] if unique else None
 
 
 def _priced_public_ip_addons_for_routes(

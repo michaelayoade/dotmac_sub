@@ -98,11 +98,16 @@
     </div>
     {% endif %}
 
-    {# Auto-refreshing KPI section (polls every 30s via HTMX) #}
+    {# KPIs — refresh on demand (no auto-poll). #}
+    <div class="mb-2 flex justify-end">
+        <button hx-get="/admin/network/monitoring/kpi"
+                hx-target="#monitoring-kpi-container" hx-swap="innerHTML"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Refresh
+        </button>
+    </div>
     <div id="monitoring-kpi-container"
-         hx-get="/admin/network/monitoring/kpi"
-         hx-trigger="every 30s"
-         hx-swap="innerHTML"
          class="animate-fade-in-up" style="animation-delay: 50ms;">
         {% include "admin/network/monitoring/_kpi_partial.html" %}
     </div>
@@ -242,12 +247,17 @@
     </div>
     {% endif %}
 
-    {# Live Bandwidth Section — auto-refreshes every 15s via HTMX so the NOC
-       view tracks current network throughput without a manual refresh. #}
+    {# Bandwidth Section — refresh on demand (no auto-poll); the NOC pulls fresh
+       network throughput with the Refresh button. #}
+    <div class="mb-2 flex justify-end">
+        <button hx-get="/admin/network/monitoring/bandwidth"
+                hx-target="#monitoring-bandwidth-container" hx-swap="innerHTML"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Refresh
+        </button>
+    </div>
     <div id="monitoring-bandwidth-container"
-         hx-get="/admin/network/monitoring/bandwidth"
-         hx-trigger="every 15s"
-         hx-swap="innerHTML"
          class="animate-fade-in-up" style="animation-delay: 75ms;">
         {% include "admin/network/monitoring/_bandwidth_partial.html" %}
     </div>
