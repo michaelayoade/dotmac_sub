@@ -93,6 +93,18 @@ class DashboardScreen extends ConsumerWidget {
       }
     }
 
+    // Quota / fair-use headroom, for plans where it applies. Capped plans show
+    // remaining allowance; unlimited-with-FUP plans show GB left at full speed.
+    // Null (card hidden) for truly unlimited plans with no fair-use policy.
+    String? quotaLeftValue;
+    var quotaLeftLabel = 'Data left';
+    if (currentQuota != null && currentQuota.remainingGb != null) {
+      quotaLeftValue = Fmt.gb(currentQuota.remainingGb!);
+    } else if (fup?.gbUntilThrottle != null && (fup?.thresholdGb ?? 0) > 0) {
+      quotaLeftValue = Fmt.gb(fup!.gbUntilThrottle!);
+      quotaLeftLabel = 'Full-speed';
+    }
+
     // Expiry urgency: lift a renew prompt to the banner area when the current
     // service is within 3 days of lapsing (the payment banner takes priority).
     // An *active* service is never "expired" — a momentarily-stale billing date
@@ -286,24 +298,38 @@ class DashboardScreen extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 10),
-            // Row 2: usage this subscription period · next bill date
+            // Row 2: usage this subscription period · (quota/FUP left) · next bill
             Row(
               children: [
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Data used over the whole billing/subscription period —
-                    // meaningful for capped and unlimited plans alike.
+                    // Total data used over the whole billing/subscription period
+                    // (not quota remaining) — for capped and unlimited alike.
                     label: 'This period',
                     value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
-                    highlight: (currentQuota != null &&
-                            (currentQuota.usedFraction ?? 0) >= 0.9) ||
-                        (fup?.isApproaching ?? false) ||
+                    highlight: (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
                     onTap: () => context.go('/usage'),
                   ),
                 ),
                 const SizedBox(width: 10),
+                // Quota / fair-use remaining — only for plans where it applies.
+                if (quotaLeftValue != null) ...[
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.data_saver_off_outlined,
+                      label: quotaLeftLabel,
+                      value: quotaLeftValue,
+                      highlight: (currentQuota != null &&
+                              (currentQuota.usedFraction ?? 0) >= 0.9) ||
+                          (fup?.isApproaching ?? false) ||
+                          (fup?.needsAttention ?? false),
+                      onTap: () => context.go('/usage'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: _StatCard(
                     icon: Icons.event_outlined,
@@ -316,9 +342,12 @@ class DashboardScreen extends ConsumerWidget {
                     onTap: () => context.go('/billing'),
                   ),
                 ),
-                // Keep the two row-2 cards the same width as row 1's three.
-                const SizedBox(width: 10),
-                const Expanded(child: SizedBox()),
+                // Keep widths aligned with row 1's three cards when there's no
+                // quota/FUP card to show.
+                if (quotaLeftValue == null) ...[
+                  const SizedBox(width: 10),
+                  const Expanded(child: SizedBox()),
+                ],
               ],
             ),
             const SizedBox(height: 20),
