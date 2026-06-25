@@ -1491,6 +1491,14 @@ class TestRunInvoiceCycle:
             calls.append((args[1], args[2]))
 
         monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
+        monkeypatch.setattr(
+            billing_automation, "_hourly_notifications_enabled", lambda db: False
+        )
+        monkeypatch.setattr(
+            billing_automation.enforcement_window,
+            "within_send_window",
+            lambda db, run_at: True,
+        )
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
@@ -1599,6 +1607,14 @@ class TestRunInvoiceCycle:
             calls.append((args[1], args[2]))
 
         monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
+        monkeypatch.setattr(
+            billing_automation, "_hourly_notifications_enabled", lambda db: False
+        )
+        monkeypatch.setattr(
+            billing_automation.enforcement_window,
+            "within_send_window",
+            lambda db, run_at: True,
+        )
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
