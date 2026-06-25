@@ -202,6 +202,50 @@ def test_get_onu_status_summary_uses_zabbix_directly(db_session, monkeypatch):
     assert summary["low_signal"] == 1
 
 
+def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
+    db_session, monkeypatch
+):
+    """On a cold per-OLT cache (request path), the OLT's ONTs must be counted as
+    offline via unmonitored_total — not silently dropped from the totals."""
+    olt = OLTDevice(
+        name="Cold Cache OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        zabbix_host_id="30303",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add_all(
+        [OntUnit(serial_number=f"ONT-COLD-{i}", olt_device_id=olt.id) for i in range(3)]
+    )
+    db_session.commit()
+
+    def _cold_cache(olt, onts=None, **_kwargs):
+        return {
+            "total_count": 0,
+            "online_count": 0,
+            "offline_count": 0,
+            "low_signal_count": 0,
+            "cache_miss": True,
+        }
+
+    def _no_live_walk(*_args, **_kwargs):
+        raise AssertionError("request path must not do a live snapshot walk")
+
+    monkeypatch.setattr(
+        zabbix_ont_status, "get_olt_ont_summary_from_zabbix", _cold_cache
+    )
+    monkeypatch.setattr(
+        zabbix_ont_status, "get_olt_ont_snapshot_from_zabbix", _no_live_walk
+    )
+
+    summary = monitoring_service.get_onu_status_summary(db_session)
+
+    assert summary["total"] == 3
+    assert summary["offline"] == 3
+    assert summary["online"] == 0
+
+
 def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatch):
     olt = OLTDevice(
         name="OLT Link Summary OLT",

@@ -12,7 +12,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
-from app.services.topology.affected import affected_customers, downstream_nodes
+from app.services.topology.affected import (
+    _dist_to_core,
+    affected_customers,
+    downstream_nodes,
+)
 
 # status is a free-form String column; these are the only legal values.
 _OUTAGE_STATUSES = frozenset({"open", "resolved"})
@@ -120,13 +124,17 @@ def open_incident_for_path(session: Session, path) -> OutageIncident | None:
     # membership in sync with the declare-side affected_count (both computed via
     # downstream_nodes), so a counted customer always sees the banner. Only
     # reached during an active outage that didn't already match cheaply.
-    if customer_access_id is not None:
-        for incident in incidents:
-            if incident.root_node_id is None:
-                continue
+    root_incidents = [i for i in incidents if i.root_node_id is not None]
+    if customer_access_id is not None and root_incidents:
+        # _dist_to_core is root-independent; compute the full-graph BFS ONCE and
+        # reuse it across incidents rather than recomputing inside each
+        # downstream_nodes call (this runs on the customer connection-status
+        # request path, possibly with many open incidents during a wide outage).
+        dist = _dist_to_core(session)
+        for incident in root_incidents:
             root = session.get(NetworkDevice, incident.root_node_id)
             if root is not None and customer_access_id in downstream_nodes(
-                session, root
+                session, root, dist=dist
             ):
                 return incident
     return None

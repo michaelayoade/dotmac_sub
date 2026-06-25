@@ -1301,7 +1301,7 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
             .filter(OntUnit.olt_device_id == olt.id)
             .all()
         )
-        monitored_ont_ids.update(str(ont.id) for ont in onts)
+        ont_ids = [str(ont.id) for ont in onts]
         # On the request path (refresh=False) read cache only; the warmer
         # (refresh=True) is the sole live fetcher, so a user never blocks on a
         # per-OLT Zabbix round trip.
@@ -1310,15 +1310,19 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
             olt, onts, refresh=refresh, cached_only=cached_only
         )
         if summary.get("total_count", 0):
+            monitored_ont_ids.update(ont_ids)
             online += int(summary.get("online_count", 0) or 0)
             offline += int(summary.get("offline_count", 0) or 0)
             low_signal += int(summary.get("low_signal_count", 0) or 0)
             continue
         if cached_only:
             # Cold cache on the request path — skip the live snapshot walk; the
-            # warmer will populate it shortly.
+            # warmer will populate it shortly. Leave these ONTs OUT of
+            # monitored_ont_ids so unmonitored_total counts them as offline
+            # rather than dropping them from the totals entirely.
             continue
 
+        monitored_ont_ids.update(ont_ids)
         snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
         online += sum(1 for item in snapshot.values() if item.online)
         offline += sum(1 for item in snapshot.values() if not item.online)
