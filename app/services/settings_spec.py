@@ -1576,6 +1576,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Bill backdated (arrears) periods instead of fast-forwarding",
     ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="bill_ip_addon_requires_active_route",
+        env_var="BILLING_IP_ADDON_REQUIRES_ACTIVE_ROUTE",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Bill public-IP add-ons only for active routed blocks "
+            "(cap quantity to live routes; audit route data before enabling)"
+        ),
+    ),
     # ── Prepaid customer defaults ──
     SettingSpec(
         domain=SettingDomain.billing,
