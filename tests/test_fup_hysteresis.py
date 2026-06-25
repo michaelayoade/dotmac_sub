@@ -47,7 +47,17 @@ def _run(prior_action_status):
         ),
         patch("app.services.fup.evaluate_rules", return_value=[rule_result]),
         patch("app.services.events.emit_event", lambda *a, **k: emitted.append(a)),
-        patch("app.services.settings_spec.resolve_value", return_value=None),
+        # A throttle profile must be configured for reduce_speed to actually
+        # enforce; otherwise enforcement is (correctly) skipped. This test
+        # exercises transition/cooldown logic, so configure one.
+        patch(
+            "app.services.settings_spec.resolve_value",
+            side_effect=lambda session, domain, key: (
+                "throttle-profile"
+                if key == "fup_throttle_radius_profile_id"
+                else None
+            ),
+        ),
         patch("app.tasks.usage._maybe_queue_repeat_upsell", lambda *a, **k: None),
     ):
         from app.tasks.usage import evaluate_fup_rules

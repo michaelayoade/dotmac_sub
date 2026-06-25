@@ -179,6 +179,7 @@ def evaluate_fup_rules() -> dict[str, int]:
         processed = 0
         enforced = 0
         submonthly_no_data = 0
+        throttle_unconfigured = 0
         reset = 0
         # Customer notifications to emit AFTER the enforcement commit, so a
         # notification failure can't roll back enforcement state. Each entry:
@@ -203,6 +204,17 @@ def evaluate_fup_rules() -> dict[str, int]:
             str(_thr_raw) if _thr_raw is not None else None
         )
         warn_ratio = float(_parsed[0]) if _parsed else 0.8
+
+        # When the FUP "reduce_speed" action has no throttle RADIUS profile
+        # configured, the enforcement handler can't actually throttle — it
+        # silently no-ops while the customer would still be told their speed was
+        # reduced. Read the profile once so the loop can skip that dishonest
+        # notification and surface the misconfiguration instead.
+        throttle_profile_configured = bool(
+            settings_spec.resolve_value(
+                session, SettingDomain.usage, "fup_throttle_radius_profile_id"
+            )
+        )
 
         # Find all active subscriptions that have FUP policies
         subscriptions = (
@@ -347,6 +359,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                                     "rule_name": rule_result.get("name"),
                                     "threshold_gb": rule_result.get("threshold_gb"),
                                     "used_gb": current_usage,
+                                    "cap_resets_at": cap_resets_at,
                                 }
                             )
                         _maybe_queue_repeat_upsell(
@@ -354,6 +367,21 @@ def evaluate_fup_rules() -> dict[str, int]:
                         )
                         break
                     elif rule_result.get("action") == "reduce_speed":
+                        # No throttle profile → the handler can't actually reduce
+                        # speed. Skip the no-op enforcement AND the customer
+                        # notification (don't claim a throttle that didn't happen);
+                        # count it so the misconfiguration is visible to ops.
+                        if not throttle_profile_configured:
+                            throttle_unconfigured += 1
+                            logger.warning(
+                                "FUP reduce_speed triggered for sub %s rule %s but "
+                                "no throttle profile configured "
+                                "(usage.fup_throttle_radius_profile_id) — not "
+                                "enforced and customer NOT notified",
+                                sub.id,
+                                rule_result.get("rule_id"),
+                            )
+                            break
                         if _fup_should_enforce(
                             prior_status=prior_status,
                             target_status="throttled",
@@ -385,6 +413,7 @@ def evaluate_fup_rules() -> dict[str, int]:
                                     "rule_name": rule_result.get("name"),
                                     "threshold_gb": rule_result.get("threshold_gb"),
                                     "used_gb": current_usage,
+                                    "cap_resets_at": cap_resets_at,
                                 }
                             )
                         _maybe_queue_repeat_upsell(
@@ -437,12 +466,13 @@ def evaluate_fup_rules() -> dict[str, int]:
         notified = _emit_fup_notifications(session, pending_notifs)
         logger.info(
             "FUP evaluation: %d processed, %d enforced, %d reset, %d notified, "
-            "%d sub-monthly no-data",
+            "%d sub-monthly no-data, %d throttle-unconfigured",
             processed,
             enforced,
             reset,
             notified,
             submonthly_no_data,
+            throttle_unconfigured,
         )
         return {
             "processed": processed,
@@ -450,10 +480,57 @@ def evaluate_fup_rules() -> dict[str, int]:
             "reset": reset,
             "notified": notified,
             "submonthly_no_data": submonthly_no_data,
+            "throttle_unconfigured": throttle_unconfigured,
         }
     except Exception:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.tasks.usage.lift_expired_fup_enforcement")
+def lift_expired_fup_enforcement() -> dict[str, int]:
+    """Queue-independent safety-net that lifts FUP enforcement past its reset.
+
+    The primary reset is inline in ``evaluate_fup_rules`` (billing queue); if
+    that queue stalls, throttled/blocked customers would never be auto-lifted
+    after their consumption window ends. This standalone sweep reads
+    ``list_pending_reset`` and lifts each state independently, so reset survives
+    a billing-queue outage. Idempotent — an already-cleared state is a no-op.
+    """
+    from datetime import UTC, datetime
+
+    from app.services.enforcement import lift_fup_enforcement
+    from app.services.fup_state import fup_state
+
+    session = SessionLocal()
+    lifted = 0
+    errors = 0
+    try:
+        now = datetime.now(UTC)
+        pending = fup_state.list_pending_reset(session, now)
+        for state in pending:
+            try:
+                result = lift_fup_enforcement(session, str(state.subscription_id))
+                if result.get("lifted"):
+                    lifted += 1
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                errors += 1
+                logger.error(
+                    "Failed safety-net FUP lift for subscription %s: %s",
+                    state.subscription_id,
+                    exc,
+                )
+        logger.info(
+            "FUP reset safety-net: %d pending, %d lifted, %d errors",
+            len(pending),
+            lifted,
+            errors,
+        )
+        return {"pending": len(pending), "lifted": lifted, "errors": errors}
     finally:
         session.close()
 
@@ -527,20 +604,44 @@ def _maybe_queue_repeat_upsell(session, sub, bucket, rule_result, pending_notifs
         logger.warning("repeat-upsell check failed", exc_info=True)
 
 
-def _build_fup_notification(kind: str, rule_name, threshold_gb, used_gb):
+def _fup_reset_phrase(cap_resets_at) -> str:
+    """' on <date>' when a reset time is known, else ''. The FUP allowance resets
+    at its window boundary (currently the calendar-month/quota-period end), which
+    is NOT necessarily the subscriber's billing 'cycle' anchor — so the copy must
+    not claim 'your next cycle'."""
+    if not cap_resets_at:
+        return ""
+    from datetime import datetime
+
+    try:
+        if isinstance(cap_resets_at, str):
+            value = datetime.fromisoformat(cap_resets_at)
+        else:
+            value = cap_resets_at
+        return f" on {value.date().isoformat()}"
+    except (ValueError, TypeError, AttributeError):
+        return ""
+
+
+def _build_fup_notification(
+    kind: str, rule_name, threshold_gb, used_gb, cap_resets_at=None
+):
     """(subject, body) for a customer FUP notification."""
     plan = rule_name or "your plan"
+    when = _fup_reset_phrase(cap_resets_at)
     if kind == "blocked":
         return (
             "Service paused",
             f"You've reached the fair-usage limit on {plan}. Service is paused "
-            "until your next cycle — top up to restore it.",
+            f"until your data allowance resets{when} — or top up data to restore "
+            "it now.",
         )
     if kind == "throttled":
         return (
             "Speed reduced",
             f"You've reached the fair-usage limit on {plan}. Your speed is "
-            "reduced until your next cycle — top up to restore full speed.",
+            f"reduced until your data allowance resets{when} — or top up data to "
+            "restore full speed now.",
         )
     if kind == "repeat_upsell":
         return (
@@ -589,7 +690,11 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
             subscriber = session.get(Subscriber, n["subscriber_id"])
             email = getattr(subscriber, "email", None)
             subject, body = _build_fup_notification(
-                n["kind"], n.get("rule_name"), n.get("threshold_gb"), n.get("used_gb")
+                n["kind"],
+                n.get("rule_name"),
+                n.get("threshold_gb"),
+                n.get("used_gb"),
+                n.get("cap_resets_at"),
             )
             channels = _FUP_NOTIFICATION_CHANNELS.get(n["kind"], ("push",))
             created_any = False
