@@ -569,6 +569,41 @@ def _avg_bps(points: list[tuple[datetime, float, float]]) -> float | None:
     return sum(rx + tx for _, rx, tx in points) / len(points)
 
 
+async def _peak_directions(
+    db: Session, sub_ids: list, start: datetime, end: datetime
+) -> tuple[float | None, float | None]:
+    """Exact peak (download, upload) bits/s over ``[start, end]`` from the
+    metrics store (VictoriaMetrics ``max_over_time`` at raw resolution), maxed
+    across the subscriber's subscriptions. Best-effort: returns ``(None, None)``
+    when the metrics store is unavailable or the window has no data, so the
+    caller can simply omit the figure rather than report a misleading 0."""
+    if not sub_ids:
+        return None, None
+    try:
+        from app.services.bandwidth import to_subscriber_directions
+        from app.services.metrics_store import get_metrics_store
+
+        store = get_metrics_store()
+        down = up = 0.0
+        seen = False
+        for sub_id in sub_ids:
+            try:
+                peak = await store.get_peak_bandwidth(str(sub_id), start, end)
+            except Exception as exc:  # pragma: no cover - metrics store dependent
+                logger.debug("usage-summary peak failed for %s: %s", sub_id, exc)
+                continue
+            d, u = to_subscriber_directions(
+                peak.get("rx_peak_bps", 0), peak.get("tx_peak_bps", 0)
+            )
+            if d or u:
+                seen = True
+            down, up = max(down, d), max(up, u)
+        return (down, up) if seen else (None, None)
+    except Exception as exc:  # pragma: no cover - metrics store dependent
+        logger.debug("usage-summary peak unavailable: %s", exc)
+        return None, None
+
+
 async def get_usage_summary(
     db: Session, subscriber_id: str, period: str, now: datetime | None = None
 ) -> dict:
@@ -660,6 +695,7 @@ async def get_usage_summary(
             if measured > 0:
                 total = measured
                 total_source, authoritative = "samples", False
+        peak_down, peak_up = await _peak_directions(db, sub_ids, start, end)
         return {
             "period": period,
             "start": start,
@@ -670,6 +706,8 @@ async def get_usage_summary(
             "bucket": "day",
             "series": _series_payload(series),
             "average_bps": _avg_bps(points),
+            "peak_download_bps": peak_down,
+            "peak_upload_bps": peak_up,
         }
 
     # Sub-day / week windows — throughput series drives both chart and total.

@@ -292,6 +292,38 @@ def test_cycle_unlimited_bucket_falls_back_to_measured(
     assert out["is_authoritative"] is False
 
 
+def test_cycle_includes_peak_over_window(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """The cycle summary carries exact peak (download/upload) over the window."""
+
+    async def _no_vm(db, sub_ids, start, end):
+        return []
+
+    async def _peak(db, sub_ids, start, end):
+        return (123_000_000.0, 45_000_000.0)  # 123 / 45 Mbps
+
+    monkeypatch.setattr(svc, "_vm_points", _no_vm)
+    monkeypatch.setattr(svc, "_peak_directions", _peak)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=500,
+            used_gb=40,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+    assert out["peak_download_bps"] == 123_000_000.0
+    assert out["peak_upload_bps"] == 45_000_000.0
+
+
 def test_window_with_no_data_falls_back_without_false_zero(
     db_session, subscriber, subscription
 ):

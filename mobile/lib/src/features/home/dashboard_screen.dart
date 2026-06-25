@@ -86,10 +86,13 @@ class DashboardScreen extends ConsumerWidget {
     // always-available credit balance (/me/balance), not the feature-gated VAS
     // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
     final balance = ref.watch(balanceProvider).asData?.value;
-    // Peak download throughput this period (~30d window) for its own tile.
-    final peak = ref.watch(peakBandwidthProvider).asData?.value;
-    final peakBps = peak?.peakDownloadBps;
-    final peakValue = peak == null
+    // Peak download throughput for the "Peak" tile. Prefer the exact
+    // billing-cycle peak from the cycle summary; fall back to the ~30d stats
+    // window until that ships. Both are subscriber-perspective download bps.
+    final peak30 = ref.watch(peakBandwidthProvider).asData?.value;
+    final peakBps = cycleSummary?.peakDownloadBps ?? peak30?.peakDownloadBps;
+    final peakLoaded = cycleSummary != null || peak30 != null;
+    final peakValue = !peakLoaded
         ? null // still loading
         : (peakBps == null || peakBps <= 0
             ? '—'

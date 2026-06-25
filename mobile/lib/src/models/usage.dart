@@ -260,6 +260,8 @@ class UsageSummary {
     required this.isAuthoritative,
     this.bucket,
     this.averageBps,
+    this.peakDownloadBps,
+    this.peakUploadBps,
     this.series = const [],
     this.fup,
   });
@@ -275,6 +277,11 @@ class UsageSummary {
   /// Mean throughput over the window (rx+tx bits/s) — the "average speed".
   /// Null for windows with no samples (e.g. "all").
   final double? averageBps;
+
+  /// Exact peak throughput over the window (subscriber bits/s). Populated for
+  /// the billing cycle; null when unavailable.
+  final double? peakDownloadBps;
+  final double? peakUploadBps;
   final List<UsageSeriesPoint> series;
   final FupStatus? fup;
 
@@ -287,6 +294,8 @@ class UsageSummary {
         isAuthoritative: json['is_authoritative'] as bool? ?? false,
         bucket: json['bucket'] as String?,
         averageBps: (json['average_bps'] as num?)?.toDouble(),
+        peakDownloadBps: (json['peak_download_bps'] as num?)?.toDouble(),
+        peakUploadBps: (json['peak_upload_bps'] as num?)?.toDouble(),
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),
