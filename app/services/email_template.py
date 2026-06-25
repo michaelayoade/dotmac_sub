@@ -17,6 +17,7 @@ from app.services.branding_config import get_brand
 logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+_FULL_HTML_DOCUMENT_RE = re.compile(r"<!doctype\b|<html\b", re.IGNORECASE)
 DOTMAC_RED = "#FF0000"
 DOTMAC_GREEN = "#008000"
 DOTMAC_WHITE = "#F4F4F9"
@@ -24,6 +25,10 @@ DOTMAC_WHITE = "#F4F4F9"
 
 def looks_like_html(body: str | None) -> bool:
     return bool(_HTML_TAG_RE.search(body or ""))
+
+
+def looks_like_full_html_document(body: str | None) -> bool:
+    return bool(_FULL_HTML_DOCUMENT_RE.search(body or ""))
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -96,6 +101,9 @@ def render_email_bodies(
     is kept as the text/plain part. Input that already contains HTML is
     wrapped as-is and converted to a readable text/plain part.
     """
+    if looks_like_full_html_document(body):
+        return body, html_to_text(body)
+
     if looks_like_html(body):
         html = wrap_email_html(
             body,
