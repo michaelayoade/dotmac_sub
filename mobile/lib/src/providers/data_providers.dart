@@ -372,11 +372,13 @@ final bandwidthSeriesProvider =
 );
 
 /// Live throughput for the active subscription (connection banner). Streams
-/// fresh samples while the dashboard is open; autoDispose stops the poll when
-/// it closes. Errors (e.g. no active subscription) surface as a no-signal
-/// value, so callers read it via asData and omit the figure.
+/// fresh samples while the dashboard is open and stops on dispose. NOTE: no
+/// cacheFor() here on purpose — cacheFor keepAlive()s the link for ~5 min,
+/// which for a periodic poll means it keeps hitting the backend long after the
+/// dashboard closes. Plain autoDispose cancels the poll the moment the banner
+/// is gone. Errors (e.g. no active subscription) surface as a no-signal value,
+/// so callers read it via asData and omit the figure.
 final liveBandwidthProvider = StreamProvider.autoDispose<LiveBandwidth>((ref) {
-  cacheFor(ref);
   return ref.watch(usageRepositoryProvider).liveBandwidthStream();
 });
 

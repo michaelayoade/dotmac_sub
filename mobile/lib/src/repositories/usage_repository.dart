@@ -83,12 +83,13 @@ class UsageRepository {
 
   /// Live throughput as a stream — emits immediately, then re-polls every
   /// [interval] so the connection banner tracks current speed. Backend live
-  /// data advances at ~30s (the MikroTik poller cadence), so a tighter poll
-  /// just smooths the figure. A failed tick (e.g. no active subscription)
-  /// yields a no-signal value rather than terminating the stream; autoDispose
-  /// on the provider stops polling when the dashboard goes away.
+  /// data advances at ~30s (the MikroTik poller cadence), so the poll is paced
+  /// to that rather than spinning faster for no new data. A failed tick (e.g.
+  /// no active subscription) yields a no-signal value rather than terminating
+  /// the stream; autoDispose on the provider stops polling when the dashboard
+  /// goes away.
   Stream<LiveBandwidth> liveBandwidthStream({
-    Duration interval = const Duration(seconds: 5),
+    Duration interval = const Duration(seconds: 15),
     String period = '1h',
   }) async* {
     Future<LiveBandwidth> tick() async {
