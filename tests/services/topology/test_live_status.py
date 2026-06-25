@@ -125,3 +125,27 @@ def test_live_status_at_stamped_only_on_change(db_session):
     db_session.refresh(n)
     assert n.live_status == "down"
     assert n.live_status_at != datetime(2020, 1, 1, tzinfo=UTC)
+
+
+def test_disabled_or_maintenance_host_is_unknown(db_session):
+    # A host Zabbix isn't actively monitoring (disabled) or in maintenance must
+    # not surface as "up" off a stale availability — it reads unknown.
+    db_session.add_all([_node("10", "disabled"), _node("11", "maint")])
+    db_session.flush()
+    hosts = [
+        {"hostid": "10", "available": "1", "status": "1", "interfaces": []},
+        {
+            "hostid": "11",
+            "available": "1",
+            "maintenance_status": "1",
+            "interfaces": [],
+        },
+    ]
+    warm_topology_status(db_session, _FakeClient(hosts, []))
+    by_host = {
+        n.zabbix_hostid: n.live_status
+        for n in db_session.query(NetworkDevice).all()
+        if n.zabbix_hostid
+    }
+    assert by_host["10"] == "unknown"
+    assert by_host["11"] == "unknown"

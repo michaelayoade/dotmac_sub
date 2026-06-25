@@ -62,9 +62,11 @@ def sync_devices_to_zabbix() -> dict[str, Any]:
                 "olt_created": result["olt"]["created"],
                 "olt_updated": result["olt"]["updated"],
                 "olt_failed": result["olt"]["failed"],
+                "olt_disabled": result["olt"].get("disabled", 0),
                 "nas_created": result["nas"]["created"],
                 "nas_updated": result["nas"]["updated"],
                 "nas_failed": result["nas"]["failed"],
+                "nas_disabled": result["nas"].get("disabled", 0),
             },
         )
 
@@ -106,8 +108,8 @@ def sync_devices_to_zabbix() -> dict[str, Any]:
 def sync_single_olt_to_zabbix(olt_id: str) -> dict[str, Any]:
     """Sync a single OLT to Zabbix immediately.
 
-    Called when an OLT is created or updated to ensure Zabbix
-    host is updated without waiting for the periodic sync.
+    Available to enqueue (e.g. on OLT create/update) so a host is synced
+    without waiting for the 5-minute periodic ``sync_devices_to_zabbix``.
 
     Args:
         olt_id: UUID of the OLT device as string.
@@ -177,8 +179,8 @@ def sync_single_olt_to_zabbix(olt_id: str) -> dict[str, Any]:
 def sync_single_nas_to_zabbix(nas_id: str) -> dict[str, Any]:
     """Sync a single NAS device to Zabbix immediately.
 
-    Called when a NAS device is created or updated to ensure Zabbix
-    host is updated without waiting for the periodic sync.
+    Available to enqueue (e.g. on NAS create/update) so a host is synced
+    without waiting for the 5-minute periodic ``sync_devices_to_zabbix``.
 
     Args:
         nas_id: UUID of the NAS device as string.

@@ -556,11 +556,15 @@ def get_olt_ont_summary_from_zabbix(
     onts: list[OntUnit] | None = None,
     *,
     refresh: bool = False,
+    cached_only: bool = False,
 ) -> dict[str, int | str]:
     """Get online/offline ONT counts directly from Zabbix.
 
     ``refresh=True`` bypasses the cache read and forces a live fetch (and a
     fresh cache write), so the background warmer keeps the TTL from lapsing.
+    ``cached_only=True`` (the request path) returns a cache-miss placeholder
+    instead of fanning out a live Zabbix fetch on a cold cache — that work is
+    left to the warmer so a user request never blocks on per-OLT round trips.
     """
     if not zabbix_configured() or not getattr(olt, "zabbix_host_id", None):
         return {
@@ -579,6 +583,14 @@ def get_olt_ont_summary_from_zabbix(
         cached_summary = app_cache.get_json(summary_cache_key)
         if isinstance(cached_summary, dict):
             return cached_summary  # type: ignore[return-value]
+        if cached_only:
+            return {
+                "online_count": 0,
+                "offline_count": 0,
+                "total_count": 0,
+                "low_signal_count": 0,
+                "cache_miss": True,
+            }
 
     try:
         client = ZabbixClient.from_env()

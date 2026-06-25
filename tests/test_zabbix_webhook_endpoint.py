@@ -109,3 +109,43 @@ def test_authenticated_valid_payload_creates_alert(db_session, zabbix_auth):
     body = _call(db_session, json.dumps(_VALID_PAYLOAD).encode(), token=_SECRET)
     assert body.status == "ok"
     assert body.alert_id
+
+
+def test_valid_payload_is_committed(db_session, zabbix_auth):
+    """Regression guard: the alert must survive a commit, not be rolled back on
+    session close (the inbound path previously only flushed)."""
+    from uuid import UUID
+
+    from app.models.network_monitoring import Alert
+
+    body = _call(db_session, json.dumps(_VALID_PAYLOAD).encode(), token=_SECRET)
+    assert body.alert_id
+    assert db_session.get(Alert, UUID(body.alert_id)) is not None
+
+
+def test_event_value_recovery_overrides_problem_status(db_session, zabbix_auth):
+    """eventValue=0 (recovery) resolves the alert even when triggerStatus still
+    reads PROBLEM (suppressed/localized status)."""
+    _call(db_session, json.dumps(_VALID_PAYLOAD).encode(), token=_SECRET)
+
+    recovery = {
+        **_VALID_PAYLOAD,
+        "triggerStatus": "PROBLEM",
+        "eventValue": "0",
+        "eventId": "evt-recovery",
+    }
+    body = _call(db_session, json.dumps(recovery).encode(), token=_SECRET)
+    assert body.message == "Alert resolved"
+
+
+def test_dedup_does_not_collide_on_key_prefix(db_session, zabbix_auth):
+    """Key 'zabbix:1:2' is a substring of 'zabbix:1:20' — the exact-prefix match
+    must not treat the second host's PROBLEM as an update of the first."""
+    p1 = {**_VALID_PAYLOAD, "triggerId": "1", "hostId": "20", "eventId": "e1"}
+    b1 = _call(db_session, json.dumps(p1).encode(), token=_SECRET)
+
+    p2 = {**_VALID_PAYLOAD, "triggerId": "1", "hostId": "2", "eventId": "e2"}
+    b2 = _call(db_session, json.dumps(p2).encode(), token=_SECRET)
+
+    assert b2.message == "Alert created"
+    assert b2.alert_id != b1.alert_id
