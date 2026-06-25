@@ -561,6 +561,14 @@ def _series_payload(buckets: dict) -> list[dict]:
     ]
 
 
+def _avg_bps(points: list[tuple[datetime, float, float]]) -> float | None:
+    """Mean throughput (rx+tx bits/s) across the window's sample points — the
+    "average speed" figure. None when the window has no samples."""
+    if not points:
+        return None
+    return sum(rx + tx for _, rx, tx in points) / len(points)
+
+
 async def get_usage_summary(
     db: Session, subscriber_id: str, period: str, now: datetime | None = None
 ) -> dict:
@@ -570,23 +578,59 @@ async def get_usage_summary(
     tz = _subscriber_tz(db, subscriber_id)
 
     if period == "all":
-        total = _session_octets(db, sub_ids, since=None)
-        first = (
+        # Lifetime total. The daily rollup (Splynx traffic_counter backfill)
+        # reaches back to 2018; per-session accounting only to ~2023. Combine the
+        # two WITHOUT double-counting their overlap: the daily rollup is
+        # authoritative up to its last recorded day; sessions cover everything
+        # after that (the live post-cutover feed).
+        daily_total = 0
+        daily_first: datetime | None = None
+        daily_last_date = None
+        if sub_ids:
+            d_sum, d_min, d_max = (
+                db.query(
+                    func.coalesce(func.sum(SubscriberDailyUsage.upload_bytes), 0)
+                    + func.coalesce(func.sum(SubscriberDailyUsage.download_bytes), 0),
+                    func.min(SubscriberDailyUsage.usage_date),
+                    func.max(SubscriberDailyUsage.usage_date),
+                )
+                .filter(SubscriberDailyUsage.subscription_id.in_(sub_ids))
+                .one()
+            )
+            daily_total = int(d_sum or 0)
+            daily_last_date = d_max
+            if d_min is not None:
+                daily_first = datetime(d_min.year, d_min.month, d_min.day, tzinfo=UTC)
+        # Sessions strictly after the daily rollup's last day (or all sessions
+        # when there is no daily history at all), so the overlap isn't counted
+        # twice.
+        since = None
+        if daily_last_date is not None:
+            since = datetime(
+                daily_last_date.year,
+                daily_last_date.month,
+                daily_last_date.day,
+                tzinfo=UTC,
+            ) + timedelta(days=1)
+        total = daily_total + _session_octets(db, sub_ids, since=since)
+        first_session = (
             db.query(func.min(RadiusAccountingSession.session_start))
             .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
             .scalar()
             if sub_ids
             else None
         )
+        starts = [d for d in (daily_first, _as_utc(first_session)) if d is not None]
         return {
             "period": period,
-            "start": (_as_utc(first) or now),
+            "start": (min(starts) if starts else now),
             "end": now,
             "total_bytes": total,
-            "total_source": "sessions",
+            "total_source": "lifetime",
             "is_authoritative": True,
             "bucket": None,
             "series": [],
+            "average_bps": None,
         }
 
     if period == "cycle":
@@ -604,9 +648,8 @@ async def get_usage_summary(
             start, end = now - timedelta(days=30), now
             total = _session_octets(db, sub_ids, since=start)
             total_source, authoritative = "sessions", False
-        series = _integrate(
-            await _vm_points(db, sub_ids, start, end), "day", tz, end=end
-        )
+        points = await _vm_points(db, sub_ids, start, end)
+        series = _integrate(points, "day", tz, end=end)
         return {
             "period": period,
             "start": start,
@@ -616,6 +659,7 @@ async def get_usage_summary(
             "is_authoritative": authoritative,
             "bucket": "day",
             "series": _series_payload(series),
+            "average_bps": _avg_bps(points),
         }
 
     # Sub-day / week windows — throughput series drives both chart and total.
@@ -662,4 +706,5 @@ async def get_usage_summary(
         "is_authoritative": authoritative,
         "bucket": bucket,
         "series": _series_payload(series),
+        "average_bps": _avg_bps(points),
     }

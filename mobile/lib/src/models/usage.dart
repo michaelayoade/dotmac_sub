@@ -140,6 +140,29 @@ class LiveBandwidth {
       );
 }
 
+/// One point of the bandwidth-speed time series. Mirrors BandwidthSeriesPoint
+/// from app/api/bandwidth.py (GET /bandwidth/my/series). We bind only the
+/// subscriber-perspective download/upload rates.
+class BandwidthPoint {
+  BandwidthPoint({
+    required this.at,
+    required this.downloadBps,
+    required this.uploadBps,
+  });
+
+  final DateTime at;
+  final double downloadBps;
+  final double uploadBps;
+
+  double get totalBps => downloadBps + uploadBps;
+
+  factory BandwidthPoint.fromJson(Map<String, dynamic> json) => BandwidthPoint(
+        at: DateTime.parse(json['timestamp'].toString()).toLocal(),
+        downloadBps: (json['download_bps'] as num?)?.toDouble() ?? 0,
+        uploadBps: (json['upload_bps'] as num?)?.toDouble() ?? 0,
+      );
+}
+
 /// One bar of the usage chart. Mirrors UsageSeriesPoint from schemas/usage.py.
 class UsageSeriesPoint {
   UsageSeriesPoint({required this.bucketStart, required this.bytes});
@@ -222,6 +245,7 @@ class UsageSummary {
     required this.totalSource,
     required this.isAuthoritative,
     this.bucket,
+    this.averageBps,
     this.series = const [],
     this.fup,
   });
@@ -230,9 +254,13 @@ class UsageSummary {
   final DateTime start;
   final DateTime end;
   final int totalBytes;
-  final String totalSource; // samples | sessions | quota
+  final String totalSource; // samples | sessions | quota | lifetime
   final bool isAuthoritative;
   final String? bucket; // minute | hour | day | null
+
+  /// Mean throughput over the window (rx+tx bits/s) — the "average speed".
+  /// Null for windows with no samples (e.g. "all").
+  final double? averageBps;
   final List<UsageSeriesPoint> series;
   final FupStatus? fup;
 
@@ -244,6 +272,7 @@ class UsageSummary {
         totalSource: json['total_source'].toString(),
         isAuthoritative: json['is_authoritative'] as bool? ?? false,
         bucket: json['bucket'] as String?,
+        averageBps: (json['average_bps'] as num?)?.toDouble(),
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),

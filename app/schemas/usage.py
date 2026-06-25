@@ -153,6 +153,9 @@ class UsageSummaryResponse(BaseModel):
     is_authoritative: bool
     # Bucket width of the series: "minute" | "hour" | "day" | None (no chart).
     bucket: str | None = None
+    # Mean throughput over the window (rx+tx bits/s) — the "average speed".
+    # None for windows with no sample points (e.g. "all").
+    average_bps: float | None = None
     series: list[UsageSeriesPoint] = Field(default_factory=list)
     # Fair-Usage status for the caller (None when no FUP applies / unknown).
     fup: FupSummary | None = None
