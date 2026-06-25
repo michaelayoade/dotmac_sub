@@ -49,9 +49,9 @@ def _triggered_reduce_speed():
 def _run_evaluate(*, throttle_profile, should_enforce=True):
     sub = _sub()
     session = MagicMock()
-    session.query.return_value.join.return_value.filter.return_value.filter.return_value.all.return_value = [
-        sub
-    ]
+    query = session.query.return_value
+    joined = query.join.return_value.outerjoin.return_value
+    joined.filter.return_value.filter.return_value.all.return_value = [sub]
     fup_state_mock = MagicMock()
     fup_state_mock.get.return_value = None  # prior_status "none"
     bucket = MagicMock(used_gb=500, period_end=None)

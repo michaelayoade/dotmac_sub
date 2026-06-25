@@ -16,24 +16,47 @@ class TestBillingTask:
     def test_run_invoice_cycle_success(self):
         """Test successful invoice cycle run."""
         mock_session = MagicMock()
+        mock_session.close = MagicMock()
         mock_idempotency_session = MagicMock()
         # Mock scalars().first() to return None (no existing execution)
         mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.services.task_idempotency.SessionLocal",
-                return_value=mock_idempotency_session,
-            ):
+            with patch("app.tasks.billing.billing_enabled", return_value=True):
                 with patch(
-                    "app.tasks.billing.billing_automation_service.run_invoice_cycle"
-                ) as mock_run:
-                    from app.tasks.billing import run_invoice_cycle
+                    "app.services.task_idempotency.SessionLocal",
+                    return_value=mock_idempotency_session,
+                ):
+                    with patch(
+                        "app.tasks.billing.billing_automation_service.run_invoice_cycle"
+                    ) as mock_run:
+                        from app.tasks.billing import run_invoice_cycle
 
-                    run_invoice_cycle()
+                        run_invoice_cycle()
 
-                    mock_run.assert_called_once_with(mock_session)
-                    mock_session.close.assert_called_once()
+                        mock_run.assert_called_once()
+                        mock_session.close.assert_called()
+
+    def test_run_invoice_cycle_disabled_does_not_touch_idempotency(self):
+        """Disabled billing must not cache a succeeded daily idempotency result."""
+        mock_session = MagicMock()
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.billing.billing_enabled", return_value=False):
+                with patch(
+                    "app.services.task_idempotency.SessionLocal"
+                ) as mock_idempotency_session:
+                    with patch(
+                        "app.tasks.billing.billing_automation_service.run_invoice_cycle"
+                    ) as mock_run:
+                        from app.tasks.billing import run_invoice_cycle
+
+                        result = run_invoice_cycle()
+
+        assert result == {"skipped": "billing_disabled"}
+        mock_run.assert_not_called()
+        mock_idempotency_session.assert_not_called()
+        mock_session.close.assert_called_once()
 
     def test_run_invoice_cycle_exception_rollback(self):
         """Test exception triggers rollback."""
@@ -42,21 +65,22 @@ class TestBillingTask:
         mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.services.task_idempotency.SessionLocal",
-                return_value=mock_idempotency_session,
-            ):
+            with patch("app.tasks.billing.billing_enabled", return_value=True):
                 with patch(
-                    "app.tasks.billing.billing_automation_service.run_invoice_cycle",
-                    side_effect=Exception("Billing error"),
+                    "app.services.task_idempotency.SessionLocal",
+                    return_value=mock_idempotency_session,
                 ):
-                    from app.tasks.billing import run_invoice_cycle
+                    with patch(
+                        "app.tasks.billing.billing_automation_service.run_invoice_cycle",
+                        side_effect=Exception("Billing error"),
+                    ):
+                        from app.tasks.billing import run_invoice_cycle
 
-                    with pytest.raises(Exception, match="Billing error"):
-                        run_invoice_cycle()
+                        with pytest.raises(Exception, match="Billing error"):
+                            run_invoice_cycle()
 
-                    mock_session.rollback.assert_called_once()
-                    mock_session.close.assert_called_once()
+                        mock_session.rollback.assert_called_once()
+                        mock_session.close.assert_called()
 
     def test_check_billing_switch_task_reports_enforcement_health(self):
         """Hourly billing guard includes payment/enforcement health state."""
@@ -689,6 +713,7 @@ class TestDailyRunnerQueueRouting:
             "app.tasks.collections.run_billing_enforcement",
             "app.tasks.collections.run_dunning",
             "app.tasks.catalog.expire_subscriptions",
+            "app.tasks.enforcement.cleanup_subscription_block_sessions",
             "app.tasks.usage.run_usage_rating",
             "app.tasks.usage.evaluate_fup_rules",
         ):
@@ -709,3 +734,94 @@ class TestDailyRunnerQueueRouting:
             "app.tasks.collections.run_dunning",
         ):
             assert annotations[task]["time_limit"] >= 1800, task
+
+
+class TestUsageMeteringTask:
+    def test_radius_accounting_import_skips_when_locked(self):
+        lock_session = MagicMock()
+        lock_session.bind.dialect.name = "postgresql"
+        lock_session.execute.return_value.scalar.return_value = False
+
+        with patch("app.tasks.usage.SessionLocal", return_value=lock_session):
+            from app.tasks.usage import import_radius_accounting
+
+            result = import_radius_accounting()
+
+        assert result["skipped_locked"] == 1
+        assert result["processed"] == 0
+        lock_session.commit.assert_called_once()
+        lock_session.close.assert_called_once()
+
+    def test_radius_accounting_import_runs_under_lock(self):
+        lock_session = MagicMock()
+        lock_session.bind.dialect.name = "sqlite"
+        work_session = MagicMock()
+
+        with (
+            patch(
+                "app.tasks.usage.SessionLocal",
+                side_effect=[lock_session, work_session],
+            ),
+            patch(
+                "app.services.usage.import_radius_accounting",
+                return_value={
+                    "ok": True,
+                    "processed": 2,
+                    "created_or_updated": 1,
+                    "cursor": 123,
+                },
+            ) as mock_import,
+        ):
+            from app.tasks.usage import import_radius_accounting
+
+            result = import_radius_accounting()
+
+        assert result["processed"] == 2
+        mock_import.assert_called_once_with(work_session)
+        work_session.commit.assert_called_once()
+        work_session.close.assert_called_once()
+        lock_session.close.assert_called_once()
+
+    def test_meter_usage_queues_targeted_fup_for_changed_subscriptions(self):
+        mock_session = MagicMock()
+        changed = ["11111111-1111-1111-1111-111111111111"]
+
+        with (
+            patch("app.tasks.usage.SessionLocal", return_value=mock_session),
+            patch(
+                "app.services.usage.meter_usage_into_quota",
+                return_value={
+                    "metered": 1,
+                    "changed_subscription_ids": changed,
+                },
+            ),
+        ):
+            from app.tasks.usage import evaluate_fup_rules, meter_usage_into_quota
+
+            with patch.object(evaluate_fup_rules, "apply_async") as mock_apply:
+                result = meter_usage_into_quota()
+
+        assert result["changed_subscription_ids"] == changed
+        mock_session.commit.assert_called_once()
+        mock_apply.assert_called_once_with(
+            kwargs={"subscription_ids": changed, "source": "usage_metering"},
+            queue="billing",
+        )
+
+    def test_meter_usage_does_not_queue_fup_when_usage_unchanged(self):
+        mock_session = MagicMock()
+
+        with (
+            patch("app.tasks.usage.SessionLocal", return_value=mock_session),
+            patch(
+                "app.services.usage.meter_usage_into_quota",
+                return_value={"metered": 1, "changed_subscription_ids": []},
+            ),
+        ):
+            from app.tasks.usage import evaluate_fup_rules, meter_usage_into_quota
+
+            with patch.object(evaluate_fup_rules, "apply_async") as mock_apply:
+                meter_usage_into_quota()
+
+        mock_session.commit.assert_called_once()
+        mock_apply.assert_not_called()

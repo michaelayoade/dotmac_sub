@@ -548,6 +548,57 @@ class TestResolveTaxRateId:
         result = billing_automation._resolve_tax_rate_id(db_session, subscription)
         assert result == active.id
 
+    def test_catalog_positive_vat_percent_is_taxable_even_when_flag_false(
+        self, db_session, subscription
+    ):
+        """Imported offers may have vat_percent populated while with_vat is false."""
+        from app.models.billing import TaxRate
+
+        rate = TaxRate(
+            name="VAT 7.5%",
+            code="VAT75",
+            rate=Decimal("7.5000"),
+            is_active=True,
+        )
+        db_session.add(rate)
+        subscription.offer.with_vat = False
+        subscription.offer.vat_percent = Decimal("7.50")
+        db_session.commit()
+
+        result = billing_automation._resolve_tax_rate_id(db_session, subscription)
+
+        assert result == rate.id
+
+    def test_catalog_exempt_offer_blocks_default_vat(self, db_session, subscription):
+        from app.models.billing import TaxRate
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        rate = TaxRate(
+            name="VAT 7.5%",
+            code="VAT75",
+            rate=Decimal("7.5000"),
+            is_active=True,
+        )
+        db_session.add(rate)
+        db_session.flush()
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="default_tax_rate_id",
+                value_type=SettingValueType.string,
+                value_text=str(rate.id),
+                is_active=True,
+            )
+        )
+        subscription.offer.with_vat = False
+        subscription.offer.vat_percent = Decimal("0.00")
+        db_session.commit()
+
+        result = billing_automation._resolve_tax_rate_id(db_session, subscription)
+
+        assert result is None
+
 
 # =============================================================================
 # _prorated_amount Tests
@@ -1093,8 +1144,72 @@ class TestRunInvoiceCycle:
         assert len(lines) == 2
         addon_line = next(line for line in lines if "/29 IP" in line.description)
         assert Decimal(str(addon_line.amount)) == Decimal("25.00")
+        assert addon_line.billing_line_key is not None
         # base plan + add-on are both on the bill
         assert sum(Decimal(str(line.amount)) for line in lines) == Decimal("125.00")
+
+    def test_recurring_addon_starting_after_period_is_not_billed(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import InvoiceLine
+        from app.models.catalog import (
+            AddOn,
+            AddOnPrice,
+            AddOnType,
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionAddOn,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now_naive - timedelta(days=30)
+        subscription.next_billing_at = now_naive
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        add_on = AddOn(name="/29 IP", addon_type=AddOnType.extra_ip, is_active=True)
+        db_session.add(add_on)
+        db_session.flush()
+        db_session.add(
+            AddOnPrice(
+                add_on_id=add_on.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("25.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            SubscriptionAddOn(
+                subscription_id=subscription.id,
+                add_on_id=add_on.id,
+                quantity=1,
+                start_at=now_naive + timedelta(days=45),
+            )
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        addon_lines = (
+            db_session.query(InvoiceLine)
+            .filter(InvoiceLine.description.like("/29 IP%"))
+            .all()
+        )
+        assert addon_lines == []
 
     def test_skips_subscription_without_price(
         self, db_session, subscription, subscriber_account
@@ -1377,6 +1492,14 @@ class TestRunInvoiceCycle:
             calls.append((args[1], args[2]))
 
         monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
+        monkeypatch.setattr(
+            billing_automation, "_hourly_notifications_enabled", lambda db: False
+        )
+        monkeypatch.setattr(
+            billing_automation.enforcement_window,
+            "within_send_window",
+            lambda db, run_at: True,
+        )
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
@@ -1485,6 +1608,14 @@ class TestRunInvoiceCycle:
             calls.append((args[1], args[2]))
 
         monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
+        monkeypatch.setattr(
+            billing_automation, "_hourly_notifications_enabled", lambda db: False
+        )
+        monkeypatch.setattr(
+            billing_automation.enforcement_window,
+            "within_send_window",
+            lambda db, run_at: True,
+        )
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
@@ -2450,6 +2581,8 @@ class TestDefaultTaxRate:
     def test_resolve_returns_configured_default(self, db_session, subscription):
         rate = self._tax_rate(db_session)
         self._add_setting(db_session, "default_tax_rate_id", str(rate.id))
+        subscription.offer.with_vat = True
+        db_session.commit()
         assert (
             billing_automation._resolve_tax_rate_id(db_session, subscription) == rate.id
         )
@@ -2457,10 +2590,14 @@ class TestDefaultTaxRate:
     def test_inactive_default_is_ignored(self, db_session, subscription):
         rate = self._tax_rate(db_session, active=False)
         self._add_setting(db_session, "default_tax_rate_id", str(rate.id))
+        subscription.offer.with_vat = True
+        db_session.commit()
         assert billing_automation._resolve_tax_rate_id(db_session, subscription) is None
 
     def test_bad_default_id_is_ignored(self, db_session, subscription):
         self._add_setting(db_session, "default_tax_rate_id", "not-a-uuid")
+        subscription.offer.with_vat = True
+        db_session.commit()
         assert billing_automation._resolve_tax_rate_id(db_session, subscription) is None
 
     def test_default_tax_application_modes(self, db_session):
