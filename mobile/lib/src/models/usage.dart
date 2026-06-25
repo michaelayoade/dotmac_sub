@@ -222,6 +222,7 @@ class UsageSummary {
     required this.totalSource,
     required this.isAuthoritative,
     this.bucket,
+    this.averageBps,
     this.series = const [],
     this.fup,
   });
@@ -230,9 +231,13 @@ class UsageSummary {
   final DateTime start;
   final DateTime end;
   final int totalBytes;
-  final String totalSource; // samples | sessions | quota
+  final String totalSource; // samples | sessions | quota | lifetime
   final bool isAuthoritative;
   final String? bucket; // minute | hour | day | null
+
+  /// Mean throughput over the window (rx+tx bits/s) — the "average speed".
+  /// Null for windows with no samples (e.g. "all").
+  final double? averageBps;
   final List<UsageSeriesPoint> series;
   final FupStatus? fup;
 
@@ -244,6 +249,7 @@ class UsageSummary {
         totalSource: json['total_source'].toString(),
         isAuthoritative: json['is_authoritative'] as bool? ?? false,
         bucket: json['bucket'] as String?,
+        averageBps: (json['average_bps'] as num?)?.toDouble(),
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),

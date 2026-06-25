@@ -66,17 +66,21 @@ class DashboardScreen extends ConsumerWidget {
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final fup = todaySummary?.fup;
-    // Data the current service has consumed this billing cycle — the headline
-    // data figure on Home: meaningful for capped AND unlimited plans, unlike
-    // "data left" which reads as 0/empty on an unlimited plan. Falls back to
-    // today's total when the cycle aggregate isn't populated yet, so the card
-    // is never a misleading empty 0.
-    final dataUsedCycle =
-        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    // Headline data figure on Home = usage this billing/subscription period
+    // (cycle): meaningful for capped AND unlimited plans, unlike "data left"
+    // which reads as 0/empty on an unlimited plan. Falls back to today's total
+    // only while the cycle aggregate is still loading (null), so the card
+    // reflects the period rather than a single day.
+    final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    final dataUsed = (dataUsedCycle != null && dataUsedCycle > 0)
-        ? dataUsedCycle
-        : dataToday;
+    final dataUsed = cycleSummary?.totalBytes ?? dataToday;
+    // Average speed over the cycle (mean throughput) for the at-a-glance stat.
+    final avgBps = cycleSummary?.averageBps;
+    final avgSpeed = cycleSummary == null
+        ? null // still loading
+        : (avgBps == null
+            ? '—'
+            : '${(avgBps / 1e6).toStringAsFixed(avgBps >= 1e7 ? 0 : 1)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -240,7 +244,7 @@ class DashboardScreen extends ConsumerWidget {
             }),
             const SizedBox(height: 16),
 
-            // --- At-a-glance summary ---
+            // --- At-a-glance summary (2x2) ---
             Row(
               children: [
                 Expanded(
@@ -260,15 +264,28 @@ class DashboardScreen extends ConsumerWidget {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Data used on the current service this billing cycle —
-                    // meaningful for capped and unlimited plans alike (replaces
-                    // the old "data left", which read as 0 on unlimited plans).
-                    label: 'Data used',
+                    // Data used on the current service this billing/subscription
+                    // period — meaningful for capped and unlimited plans alike.
+                    label: 'This month',
                     value: dataUsed == null ? null : Fmt.bytes(dataUsed),
                     highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
+                    onTap: () => context.go('/usage'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.speed_outlined,
+                    // Mean throughput over the cycle (subscriber perspective).
+                    label: 'Avg speed',
+                    value: avgSpeed,
                     onTap: () => context.go('/usage'),
                   ),
                 ),
