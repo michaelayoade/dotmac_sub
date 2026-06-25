@@ -34,9 +34,12 @@ def _current_year() -> int:
 
 
 def _attach_globals(templates: Jinja2Templates) -> None:
+    from app.config import settings
+
     templates.env.globals.setdefault("brand", get_brand())
     templates.env.globals.setdefault("current_year", _current_year)
     templates.env.globals.setdefault("app_version", get_app_version)
+    templates.env.globals.setdefault("chat_live_enabled", settings.chat_live_enabled)
 
 
 def _backfill_loaded_template_instances() -> None:
