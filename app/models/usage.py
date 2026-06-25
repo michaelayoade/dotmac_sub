@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -153,6 +155,55 @@ class RadiusAccountingSession(Base):
     access_credential = relationship("AccessCredential")
     radius_client = relationship("RadiusClient")
     nas_device = relationship("NasDevice")
+
+
+class SubscriberDailyUsage(Base):
+    """Daily upload/download volume per subscription.
+
+    Imported from Splynx ``traffic_counter`` (one row per service per day,
+    history back to 2018). This is the long-history daily rollup — distinct
+    from :class:`RadiusAccountingSession` (per-session detail, 2023+) and
+    :class:`QuotaBucket` (per-billing-cycle). ``splynx_service_id`` +
+    ``usage_date`` is the natural key from the source table, used for an
+    idempotent re-runnable import.
+    """
+
+    __tablename__ = "subscriber_daily_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "splynx_service_id",
+            "usage_date",
+            name="uq_subscriber_daily_usage_service_date",
+        ),
+        Index(
+            "ix_subscriber_daily_usage_subscription_date",
+            "subscription_id",
+            "usage_date",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=True
+    )
+    # Source service id from Splynx (traffic_counter.service_id). Retained for
+    # traceability and as the idempotency key even when a subscription mapping
+    # is missing (deleted service).
+    splynx_service_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    usage_date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    upload_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    download_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    source: Mapped[str] = mapped_column(
+        String(40), default="splynx_traffic_counter", nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    subscription = relationship("Subscription")
 
 
 class UsageRecord(Base):

@@ -42,10 +42,15 @@ def ip_management(
     page: int = 1,
     search: str | None = None,
     pool_filter: str | None = None,
+    tab: str | None = None,
     notice: str | None = None,
     warning: str | None = None,
 ):
     """IP address management page - consolidated view with tabs."""
+    allowed_tabs = {"overview", "addresses", "assignments", "calculator"}
+    active_tab = tab if tab in allowed_tabs else None
+    if active_tab is None:
+        active_tab = "addresses" if search or pool_filter else "overview"
     state = web_network_ip_service.build_ip_management_data(
         db,
         page=page,
@@ -59,6 +64,7 @@ def ip_management(
     context.update(
         {
             **state,
+            "tab": active_tab,
             "notice": notice,
             "warning": warning,
             "activities": web_network_ip_actions_service.activity_for_types(

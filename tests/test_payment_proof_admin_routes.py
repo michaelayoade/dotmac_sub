@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.db import get_db
 from app.services import payment_proofs as svc
@@ -291,45 +292,61 @@ class TestProofFileEndpointAuth:
 
 
 class TestAdminPagesRender:
-    def _client(self, db_session) -> TestClient:
-        from app.web.admin.billing_payment_proofs import router as web_router
+    def _request(self, path: str) -> Request:
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": path,
+                "query_string": b"",
+                "headers": [],
+            }
+        )
 
-        app = FastAPI()
-        app.include_router(web_router, prefix="/admin")
-
-        def _db():
-            yield db_session
-
-        app.dependency_overrides[get_db] = _db
-        app.dependency_overrides[require_user_auth] = lambda: _admin_principal()
-        return TestClient(app)
+    def _text(self, response) -> str:
+        return response.body.decode()
 
     def test_list_and_detail_pages_render(self, db_session, proof_env) -> None:
-        client = self._client(db_session)
+        from app.web.admin.billing_payment_proofs import (
+            payment_proofs_detail,
+            payment_proofs_list,
+        )
+
         with (
             patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
             patch("app.web.admin.get_sidebar_stats", return_value={}),
         ):
-            resp = client.get("/admin/billing/payment-proofs")
+            resp = payment_proofs_list(
+                request=self._request("/admin/billing/payment-proofs"),
+                page=1,
+                per_page=25,
+                db=db_session,
+            )
+            text = self._text(resp)
             assert resp.status_code == 200
-            assert "Bank Transfer Proofs" in resp.text
-            assert "TRF-FILE" in resp.text
-            assert "sticky left-0 z-30 min-w-56" in resp.text
-            assert "sticky left-0 z-20 min-w-56" in resp.text
+            assert "Bank Transfer Proofs" in text
+            assert "TRF-FILE" in text
+            assert "sticky left-0 z-30 min-w-56" in text
+            assert "sticky left-0 z-20 min-w-56" in text
             assert (
                 f'href="/admin/billing/payment-proofs/{proof_env["proof"]["id"]}"'
-                in resp.text
+                in text
             )
 
-            detail = client.get(
-                f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+            detail = payment_proofs_detail(
+                request=self._request(
+                    f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+                ),
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                db=db_session,
             )
+            detail_text = self._text(detail)
             assert detail.status_code == 200
             # Claimed amount prefills the verify form; both review forms render.
-            assert 'name="amount"' in detail.text
-            assert 'value="5000.00"' in detail.text
-            assert "/verify" in detail.text
-            assert "/reject" in detail.text
+            assert 'name="amount"' in detail_text
+            assert 'value="5000.00"' in detail_text
+            assert "/verify" in detail_text
+            assert "/reject" in detail_text
 
     def test_detail_page_shows_duplicate_warning_and_error(
         self, db_session, proof_env
@@ -342,26 +359,38 @@ class TestAdminPagesRender:
             reference="TRF-FILE",
             file_path=str(proof_env["receipt"]),
         )
-        client = self._client(db_session)
+        from app.web.admin.billing_payment_proofs import payment_proofs_detail
+
         with (
             patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
             patch("app.web.admin.get_sidebar_stats", return_value={}),
         ):
-            detail = client.get(
-                f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
-                "?error=Reference+already+verified"
+            detail = payment_proofs_detail(
+                request=self._request(
+                    f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+                ),
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                error="Reference already verified",
+                db=db_session,
             )
+            detail_text = self._text(detail)
             assert detail.status_code == 200
-            assert "Possible duplicate submission" in detail.text
-            assert "Reference already verified" in detail.text
+            assert "Possible duplicate submission" in detail_text
+            assert "Reference already verified" in detail_text
 
     def test_unknown_proof_renders_404_page(self, db_session, proof_env) -> None:
-        client = self._client(db_session)
+        from app.web.admin.billing_payment_proofs import payment_proofs_detail
+
         with (
             patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
             patch("app.web.admin.get_sidebar_stats", return_value={}),
         ):
-            resp = client.get(f"/admin/billing/payment-proofs/{uuid.uuid4()}")
+            proof_id = uuid.uuid4()
+            resp = payment_proofs_detail(
+                request=self._request(f"/admin/billing/payment-proofs/{proof_id}"),
+                proof_id=proof_id,
+                db=db_session,
+            )
             assert resp.status_code == 404
 
 

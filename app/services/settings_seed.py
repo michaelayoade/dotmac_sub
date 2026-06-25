@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
 from app.services.domain_settings import (
     DomainSettings,
     audit_settings,
@@ -2131,14 +2132,16 @@ def seed_network_policy_settings(db: Session) -> None:
         value_text=os.getenv("NETWORK_DEFAULT_FIBER_STRAND_STATUS", "available"),
     )
     api_kick_enabled_raw = os.getenv(
-        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "false"
+        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "true"
     )
-    network_settings.ensure_by_key(
+    network_settings.upsert_by_key(
         db,
         key="mikrotik_api_session_kick_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=api_kick_enabled_raw,
-        value_json=api_kick_enabled_raw.lower() in {"1", "true", "yes", "on"},
+        payload=DomainSettingUpdate(
+            value_type=SettingValueType.boolean,
+            value_text=api_kick_enabled_raw,
+            value_json=api_kick_enabled_raw.lower() in {"1", "true", "yes", "on"},
+        ),
     )
     network_settings.ensure_by_key(
         db,

@@ -31,7 +31,11 @@ from sqlalchemy.orm import Session
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
-from app.models.usage import QuotaBucket, RadiusAccountingSession
+from app.models.usage import (
+    QuotaBucket,
+    RadiusAccountingSession,
+    SubscriberDailyUsage,
+)
 from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,68 @@ def _subscription_ids(db: Session, subscriber_id: str) -> list:
         .filter(Subscription.subscriber_id == subscriber_id)
         .all()
     ]
+
+
+def get_daily_usage_history(
+    db: Session, subscriber_id: str, *, days: int = 365
+) -> dict:
+    """Daily upload/download volume for the caller, summed across their
+    subscriptions, from the historical daily rollup (``SubscriberDailyUsage``).
+
+    ``days`` bounds the window back from today (subscriber timezone). Days with
+    no recorded usage are simply absent from ``points`` (not zero-filled).
+    """
+    sub_ids = _subscription_ids(db, subscriber_id)
+    tz = _subscriber_tz(db, subscriber_id)
+    end = datetime.now(tz).date()
+    start = end - timedelta(days=max(days, 1))
+    empty = {
+        "start": start,
+        "end": end,
+        "total_upload_bytes": 0,
+        "total_download_bytes": 0,
+        "total_bytes": 0,
+        "points": [],
+    }
+    if not sub_ids:
+        return empty
+    rows = (
+        db.query(
+            SubscriberDailyUsage.usage_date,
+            func.sum(SubscriberDailyUsage.upload_bytes),
+            func.sum(SubscriberDailyUsage.download_bytes),
+        )
+        .filter(
+            SubscriberDailyUsage.subscription_id.in_(sub_ids),
+            SubscriberDailyUsage.usage_date >= start,
+            SubscriberDailyUsage.usage_date <= end,
+        )
+        .group_by(SubscriberDailyUsage.usage_date)
+        .order_by(SubscriberDailyUsage.usage_date)
+        .all()
+    )
+    points = []
+    tot_up = tot_down = 0
+    for d, up, down in rows:
+        up, down = int(up or 0), int(down or 0)
+        tot_up += up
+        tot_down += down
+        points.append(
+            {
+                "date": d,
+                "upload_bytes": up,
+                "download_bytes": down,
+                "total_bytes": up + down,
+            }
+        )
+    return {
+        "start": start,
+        "end": end,
+        "total_upload_bytes": tot_up,
+        "total_download_bytes": tot_down,
+        "total_bytes": tot_up + tot_down,
+        "points": points,
+    }
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:

@@ -170,19 +170,33 @@ def _write_subscription_ips_from_accounting(
     ipv4: str | None,
     ipv6: str | None,
 ) -> None:
-    """Mirror of the MAC write-back: the framed address on a live accounting
-    row is the subscriber's current address, so keep Subscription.ipv4_address
-    / ipv6_address (what the portal and mobile dashboard render) in sync."""
+    """Record the OBSERVED framed address from a live accounting row.
+
+    The observed live IP goes to ``last_seen_framed_ipv4/ipv6`` (display /
+    diagnostics, never enforcement). It is kept SEPARATE from
+    ``ipv4_address``/``ipv6_address`` — the DESIRED/served IP owned by the IP
+    assignment + connectivity reconciler — so the observed value can't overwrite
+    the desired IP and be re-emitted by the RADIUS sweep
+    (CONNECTIVITY_STATE_MACHINE.md §3.1). A legacy dual-write into the served
+    column is retained for ACTIVE subs only (the portal still reads it) until
+    the reconciler-as-sole-writer cutover."""
     if not subscription_id or not (ipv4 or ipv6):
         return
     subscription = db.get(Subscription, subscription_id)
     if not subscription:
         return
-    # Only mirror the framed address for an ACTIVE subscription. For a
+    # OBSERVED → last_seen_framed_* (any status; observational, safe).
+    if ipv4 and subscription.last_seen_framed_ipv4 != ipv4:
+        subscription.last_seen_framed_ipv4 = ipv4
+    if ipv6 and subscription.last_seen_framed_ipv6 != ipv6:
+        subscription.last_seen_framed_ipv6 = ipv6
+
+    # LEGACY dual-write into the served-IP column, ACTIVE subs only. For a
     # suspended/blocked/terminated sub the accounting row can carry a stale or
     # reject-pool address; copying that into the served-IP column makes it the
     # new "desired" IP that the RADIUS sweep then re-emits — a self-reinforcing
-    # wrong-IP loop. The column is only authoritative while service is live.
+    # wrong-IP loop. Removed in the sole-writer cutover once the connectivity
+    # shadow gauge shows ipv4_cache drift is ~0; behaviour unchanged until then.
     if subscription.status != SubscriptionStatus.active:
         return
     if ipv4 and subscription.ipv4_address != ipv4:

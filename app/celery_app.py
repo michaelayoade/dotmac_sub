@@ -344,6 +344,15 @@ def _log_task_postrun(task_id=None, task=None, state=None, retval=None, **_kwarg
             result_type=type(retval).__name__ if retval is not None else None,
         ),
     )
+    # Record a success heartbeat so the billing-health monitor can detect a
+    # stalled/dead runner (ScheduledTask.last_run_at is not maintained by beat).
+    if state == "SUCCESS" and task is not None and getattr(task, "name", None):
+        try:
+            from app.services.job_heartbeat import record_success
+
+            record_success(task.name)
+        except Exception:
+            logger.debug("heartbeat record failed", exc_info=True)
 
 
 @task_failure.connect

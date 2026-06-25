@@ -137,9 +137,13 @@ def _sync_scheduled_task(
     enabled: bool,
     interval_seconds: int,
 ) -> None:
+    # Match by NAME (the stable logical identity), not task_name. Matching by
+    # task_name meant a task rename/move (e.g. run_dunning -> run_billing_
+    # enforcement) found no row and INSERTED a new one, leaving the old row as a
+    # duplicate name. Matching by name updates the task_name in place instead.
     tasks = list(
         db.query(ScheduledTask)
-        .filter(ScheduledTask.task_name == task_name)
+        .filter(ScheduledTask.name == name)
         .order_by(ScheduledTask.created_at.desc())
         .all()
     )
@@ -158,12 +162,15 @@ def _sync_scheduled_task(
         db.commit()
         return
     changed = False
+    # Defensive dedupe: delete any stray duplicate rows for this name (the
+    # unique constraint prevents new ones, but pre-existing data may have them).
+    # Intentional history drop: the surplus rows are hard-deleted; nothing has a
+    # FK to scheduled_tasks.id, so no dependent records are affected.
     for duplicate in tasks[1:]:
-        if duplicate.enabled:
-            duplicate.enabled = False
-            changed = True
-    if task.name != name:
-        task.name = name
+        db.delete(duplicate)
+        changed = True
+    if task.task_name != task_name:
+        task.task_name = task_name
         changed = True
     if task.interval_seconds != interval_seconds:
         task.interval_seconds = interval_seconds
@@ -914,6 +921,33 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.radius.audit_ip_consistency",
             enabled=ip_consistency_audit_enabled,
             interval_seconds=ip_consistency_audit_interval_seconds,
+        )
+        # Connectivity shadow audit (read-only full-base sweep; quantifies
+        # desired-vs-actual drift per dimension — the cutover-readiness gauge for
+        # the connectivity reconciler). Shares the audit cadence defaults.
+        connectivity_shadow_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.radius,
+            "connectivity_shadow_audit_enabled",
+            "RADIUS_CONNECTIVITY_SHADOW_AUDIT_ENABLED",
+            True,
+        )
+        connectivity_shadow_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.radius,
+            "connectivity_shadow_audit_interval_seconds",
+            "RADIUS_CONNECTIVITY_SHADOW_AUDIT_INTERVAL_SECONDS",
+            21600,  # Every 6 hours
+        )
+        connectivity_shadow_audit_interval_seconds = max(
+            connectivity_shadow_audit_interval_seconds, 900
+        )
+        _sync_scheduled_task(
+            session,
+            name="connectivity_shadow_audit",
+            task_name="app.tasks.radius.connectivity_shadow_audit",
+            enabled=connectivity_shadow_audit_enabled,
+            interval_seconds=connectivity_shadow_audit_interval_seconds,
         )
         # Subscription expiration enforcement (runs daily)
         subscription_expiration_enabled = _effective_bool(

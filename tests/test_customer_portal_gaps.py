@@ -819,6 +819,10 @@ class TestCustomerUsageRoute:
                 return_value=usage_page,
             ),
             patch(
+                "app.web.customer.routes.customer_portal.get_usage_history",
+                return_value={"has_history": False, "chart_records": []},
+            ),
+            patch(
                 "app.web.customer.routes.resolve_customer_subscription",
                 return_value=subscription,
             ),

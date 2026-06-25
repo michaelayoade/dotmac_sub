@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
+from app.services.network.ip import clear_released_ipv4_allocation_type
 
 logger = logging.getLogger(__name__)
 
@@ -92,17 +93,18 @@ def release_service_ips_for_subscription(
 
     # v4 — exclude management/ONT
     v4_rows = db.execute(
-        select(IPAssignment, IPv4Address.allocation_type, IPv4Address.ont_unit_id)
+        select(IPAssignment, IPv4Address)
         .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
         .where(IPAssignment.subscriber_id == sid)
         .where(IPAssignment.is_active.is_(True))
         .where(IPAssignment.ip_version == IPVersion.ipv4)
     ).all()
-    for assignment, alloc, ont in v4_rows:
-        if _is_reserved_v4(alloc, ont):
+    for assignment, address in v4_rows:
+        if _is_reserved_v4(address.allocation_type, address.ont_unit_id):
             reserved_skipped += 1
             continue
         assignment.is_active = False
+        clear_released_ipv4_allocation_type(db, address)
         released += 1
 
     # v6 — no management/ONT marker exists on v6 addresses
@@ -293,6 +295,8 @@ def apply_backlog_cleanup(
         assignment = db.get(IPAssignment, coerce_uuid(item["assignment_id"]))
         if assignment is not None and assignment.is_active:
             assignment.is_active = False
+            if assignment.ip_version == IPVersion.ipv4:
+                clear_released_ipv4_allocation_type(db, assignment.ipv4_address)
             released.append(str(assignment.id))
     if released:
         db.commit()

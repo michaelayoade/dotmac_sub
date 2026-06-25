@@ -5,41 +5,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from pydantic import ValidationError
+from starlette.requests import Request
 
 from app.api.reconcile_webhooks import (
+    GenieACSBootstrapPayload,
     _serial_from_device_id,
+    genieacs_bootstrap_webhook,
 )
-from app.api.reconcile_webhooks import (
-    router as reconcile_router,
-)
-from app.db import get_db
 from app.models.network import OLTDevice, OntSyncStatus, OntUnit
 from app.services.network.reconcile import (
     ReconcileFailure,
     ReconcileFailureReason,
     ReconcileResult,
 )
-
-# ── App fixture ─────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def client(db_session):
-    """A FastAPI client wired to the webhook router with the project's
-    db_session fixture overriding ``get_db``."""
-    app = FastAPI()
-    app.include_router(reconcile_router, prefix="/api/v1")
-
-    def _override_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    app.dependency_overrides[get_db] = _override_db
-    return TestClient(app)
 
 
 @pytest.fixture
@@ -95,6 +75,26 @@ def _stub_result(success: bool, **overrides) -> ReconcileResult:
     return ReconcileResult(**defaults)
 
 
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/reconcile/webhooks/genieacs/bootstrap",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+
+
+def _call_bootstrap(db_session, payload: dict) -> dict:
+    return genieacs_bootstrap_webhook(
+        GenieACSBootstrapPayload(**payload),
+        _request(),
+        db_session,
+    )
+
+
 # ── _serial_from_device_id ──────────────────────────────────────────────────
 
 
@@ -112,7 +112,7 @@ def test_serial_from_device_id_returns_none_on_malformed():
 
 
 def test_bootstrap_webhook_triggers_reconcile_for_known_serial(
-    client, ont, monkeypatch
+    db_session, ont, monkeypatch
 ):
     captured: dict = {}
 
@@ -124,15 +124,13 @@ def test_bootstrap_webhook_triggers_reconcile_for_known_serial(
 
     monkeypatch.setattr("app.api.reconcile_webhooks.reconcile_ont", _fake_reconcile)
 
-    response = client.post(
-        "/api/v1/reconcile/webhooks/genieacs/bootstrap",
-        json={
+    body = _call_bootstrap(
+        db_session,
+        {
             "device_id": f"00259E-HG8546M-{ont.serial_number}",
             "event": "0 BOOTSTRAP",
         },
     )
-    assert response.status_code == 200
-    body = response.json()
     assert body["status"] == "ok"
     assert body["sync_status"] == "synced"
     assert body["ont_unit_id"] == str(ont.id)
@@ -142,7 +140,7 @@ def test_bootstrap_webhook_triggers_reconcile_for_known_serial(
     assert captured["proposed_change"] is None
 
 
-def test_bootstrap_webhook_returns_ignored_for_unknown_serial(client, monkeypatch):
+def test_bootstrap_webhook_returns_ignored_for_unknown_serial(db_session, monkeypatch):
     """GenieACS may inform about devices the inventory doesn't know yet
     (autofind not yet authorized). Return 200/ignored so GenieACS stops
     retrying."""
@@ -151,55 +149,47 @@ def test_bootstrap_webhook_returns_ignored_for_unknown_serial(client, monkeypatc
         lambda *a, **k: pytest.fail("reconcile should not run for unknown serials"),
     )
 
-    response = client.post(
-        "/api/v1/reconcile/webhooks/genieacs/bootstrap",
-        json={
+    body = _call_bootstrap(
+        db_session,
+        {
             "device_id": "00259E-HG8546M-HWTCUNKNOWN",
             "event": "0 BOOTSTRAP",
         },
     )
-    assert response.status_code == 200
-    body = response.json()
     assert body["status"] == "ignored"
     assert body["reason"] == "unknown_serial"
 
 
-def test_bootstrap_webhook_returns_400_for_malformed_device_id(client):
-    response = client.post(
-        "/api/v1/reconcile/webhooks/genieacs/bootstrap",
-        json={"device_id": "nodashes"},
-    )
-    assert response.status_code == 400
-    assert "extract serial" in response.json()["detail"]
+def test_bootstrap_webhook_returns_400_for_malformed_device_id(db_session):
+    with pytest.raises(HTTPException) as exc:
+        _call_bootstrap(db_session, {"device_id": "nodashes"})
+    assert exc.value.status_code == 400
+    assert "extract serial" in exc.value.detail
 
 
 def test_bootstrap_webhook_surfaces_failure_with_actionable_for_cr_failed(
-    client, ont, monkeypatch
+    db_session, ont, monkeypatch
 ):
     monkeypatch.setattr(
         "app.api.reconcile_webhooks.reconcile_ont",
         lambda *a, **k: _stub_result(False),
     )
 
-    response = client.post(
-        "/api/v1/reconcile/webhooks/genieacs/bootstrap",
-        json={
+    body = _call_bootstrap(
+        db_session,
+        {
             "device_id": f"00259E-HG8546M-{ont.serial_number}",
             "event": "0 BOOTSTRAP",
         },
     )
-    assert response.status_code == 200
-    body = response.json()
     assert body["status"] == "failed"
     assert body["sync_status"] == "out_of_sync"
     assert body["failure_reason"] == ReconcileFailureReason.ACS_CR_FAILED
     assert body["actionable"] is True
 
 
-def test_bootstrap_webhook_validates_payload_shape(client):
+def test_bootstrap_webhook_validates_payload_shape():
     """Pydantic rejects malformed payloads with 422."""
-    response = client.post(
-        "/api/v1/reconcile/webhooks/genieacs/bootstrap",
-        json={"unknown_field": "x"},
-    )
-    assert response.status_code == 422
+    with pytest.raises(ValidationError) as exc:
+        GenieACSBootstrapPayload(**{"unknown_field": "x"})
+    assert exc.value.errors()[0]["loc"] == ("device_id",)

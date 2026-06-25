@@ -20,6 +20,7 @@ from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
 from app.services import service_extensions as svc
+from app.web.admin.billing_extensions import _subscriber_scope_inputs
 
 _WIN_START = datetime(2026, 6, 10, 8, 0, tzinfo=UTC)
 _WIN_END = datetime(2026, 6, 10, 20, 0, tzinfo=UTC)
@@ -224,6 +225,20 @@ def test_subscribers_scope_requires_ids(db_session, subscriber, catalog_offer):
     assert exc.value.status_code == 400
 
 
+def test_subscriber_scope_inputs_prefers_selected_uuid_and_keeps_legacy_textarea():
+    selected = str(uuid4())
+
+    assert _subscriber_scope_inputs([selected], "ACC-IGNORED") == ([selected], True)
+    assert _subscriber_scope_inputs(["ACC-EXT-1\nACC-EXT-2"], None) == (
+        ["ACC-EXT-1", "ACC-EXT-2"],
+        False,
+    )
+    assert _subscriber_scope_inputs(None, "ACC-EXT-3\n\nACC-EXT-4") == (
+        ["ACC-EXT-3", "ACC-EXT-4"],
+        False,
+    )
+
+
 def test_subscribers_scope_resolves_customer_identifiers(
     db_session, subscriber, catalog_offer
 ):
@@ -283,7 +298,8 @@ def test_subscriber_uuid_scope_skips_identity_resolution(
         window_end=_WIN_END,
         days=1,
         scope_type=ServiceExtensionScope.subscribers,
-        subscriber_ids=[str(subscriber.id)],
+        subscriber_ids=[str(subscriber.id), str(subscriber.id)],
+        subscriber_ids_resolved=True,
     )
 
     assert ext.scope_subscriber_ids == [str(subscriber.id)]
@@ -291,11 +307,34 @@ def test_subscriber_uuid_scope_skips_identity_resolution(
     preview = svc.preview_extension(db_session, ext)
     assert preview["total_count"] == 1
     assert preview["extendable_count"] == 1
+    assert [item.id for item in preview["selected_subscribers"]] == [subscriber.id]
 
     applied = svc.apply_extension(db_session, str(ext.id))
     assert applied.affected_count == 1
     db_session.refresh(subscription)
     assert _naive(subscription.next_billing_at) == datetime(2026, 7, 2)
+
+
+def test_resolved_subscriber_scope_rejects_missing_uuid(
+    db_session, subscriber, catalog_offer
+):
+    _sub(db_session, subscriber, catalog_offer)
+    missing = uuid4()
+
+    with pytest.raises(HTTPException) as exc:
+        svc.create_extension(
+            db_session,
+            reason="outage",
+            window_start=_WIN_START,
+            window_end=_WIN_END,
+            days=1,
+            scope_type=ServiceExtensionScope.subscribers,
+            subscriber_ids=[str(missing)],
+            subscriber_ids_resolved=True,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == f"Could not find customer: {missing}"
 
 
 def test_subscribers_scope_reports_unknown_customer(

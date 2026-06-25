@@ -1,5 +1,6 @@
 """Admin billing service-extension (outage compensation) routes."""
 
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -43,6 +44,38 @@ def _parse_window(value: str, label: str) -> datetime:
         raise HTTPException(
             status_code=400, detail=f"Invalid {label} date/time"
         ) from exc
+
+
+def _subscriber_scope_inputs(
+    subscriber_ids: list[str] | None,
+    subscriber_identifiers: str | None,
+) -> tuple[list[str] | None, bool]:
+    selected_ids: list[str] = []
+    pasted_identifiers: list[str] = []
+    for raw_value in subscriber_ids or []:
+        for item in str(raw_value or "").splitlines():
+            value = item.strip()
+            if value:
+                selected_ids.append(value)
+    for item in str(subscriber_identifiers or "").splitlines():
+        value = item.strip()
+        if value:
+            pasted_identifiers.append(value)
+    if selected_ids:
+        if all(_is_uuid(value) for value in selected_ids):
+            return selected_ids, True
+        return [*selected_ids, *pasted_identifiers], False
+    if pasted_identifiers:
+        return pasted_identifiers, False
+    return None, False
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 @router.get(
@@ -90,16 +123,15 @@ def service_extension_create(
     days: int = Form(...),
     scope_type: str = Form(...),
     scope_id: str | None = Form(None),
-    subscriber_ids: str | None = Form(None),
+    subscriber_ids: list[str] | None = Form(None),
+    subscriber_identifiers: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     try:
         scope = ServiceExtensionScope(scope_type)
-        ids = [
-            line.strip()
-            for line in str(subscriber_ids or "").splitlines()
-            if line.strip()
-        ]
+        ids, ids_resolved = _subscriber_scope_inputs(
+            subscriber_ids, subscriber_identifiers
+        )
         extension = service_extensions_service.create_extension(
             db,
             reason=reason,
@@ -108,7 +140,8 @@ def service_extension_create(
             days=days,
             scope_type=scope,
             scope_id=scope_id or None,
-            subscriber_ids=ids or None,
+            subscriber_ids=ids,
+            subscriber_ids_resolved=ids_resolved,
             created_by=web_admin_service.get_actor_id(request),
         )
     except Exception as exc:

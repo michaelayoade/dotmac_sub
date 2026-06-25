@@ -416,3 +416,48 @@ def test_yesterday_does_not_fall_back_to_unbounded_sessions(
     )
     assert out["total_bytes"] == 0
     assert out["total_source"] == "samples"
+
+
+# --- daily usage history (Splynx traffic_counter backfill) -----------------
+
+
+def test_daily_usage_history_sums_and_scopes(db_session, subscriber, subscription):
+    from datetime import date
+
+    from app.models.usage import SubscriberDailyUsage
+
+    for i, (up, down) in enumerate([(100, 900), (200, 800)]):
+        db_session.add(
+            SubscriberDailyUsage(
+                subscription_id=subscription.id,
+                splynx_service_id=5000 + i,
+                usage_date=date(2020, 1, 1 + i),
+                upload_bytes=up,
+                download_bytes=down,
+            )
+        )
+    # A row for someone else's subscription must not leak into the caller's total.
+    db_session.add(
+        SubscriberDailyUsage(
+            subscription_id=None,
+            splynx_service_id=9999,
+            usage_date=date(2020, 1, 1),
+            upload_bytes=10**9,
+            download_bytes=10**9,
+        )
+    )
+    db_session.commit()
+
+    out = svc.get_daily_usage_history(db_session, str(subscriber.id), days=3660)
+    assert out["total_upload_bytes"] == 300
+    assert out["total_download_bytes"] == 1700
+    assert out["total_bytes"] == 2000
+    assert len(out["points"]) == 2
+    assert out["points"][0]["date"] == date(2020, 1, 1)
+    assert out["points"][0]["total_bytes"] == 1000
+
+
+def test_daily_usage_history_empty_for_no_subscriptions(db_session, subscriber):
+    out = svc.get_daily_usage_history(db_session, str(subscriber.id), days=30)
+    assert out["points"] == []
+    assert out["total_bytes"] == 0
