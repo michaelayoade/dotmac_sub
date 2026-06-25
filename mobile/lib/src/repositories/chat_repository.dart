@@ -27,7 +27,8 @@ class ChatRepository {
 
   /// Open (or resume) a session. [endpoint] is the broker path:
   /// `/me/chat/session` (customer) or `/reseller/chat/session` (reseller).
-  Future<ChatSession> openSession({String endpoint = '/me/chat/session'}) async {
+  Future<ChatSession> openSession(
+      {String endpoint = '/me/chat/session'}) async {
     final data = await guard(() => _dio.post(endpoint, data: const {}));
     final session = ChatSession.fromJson(data as Map<String, dynamic>);
     _crm = Dio(BaseOptions(
@@ -60,7 +61,8 @@ class ChatRepository {
           '/session/${s.sessionId}/messages',
           queryParameters: {'limit': limit},
         ));
-    final list = (data as Map<String, dynamic>)['messages'] as List? ?? const [];
+    final list =
+        (data as Map<String, dynamic>)['messages'] as List? ?? const [];
     return list
         .map((m) => ChatMessage.fromHistory(m as Map<String, dynamic>))
         .toList();
