@@ -641,6 +641,16 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=fup_evaluation_interval_seconds,
         )
+        # Queue-independent backstop: lift FUP enforcement whose reset boundary
+        # has passed even if the billing queue (where evaluate_fup_rules runs) is
+        # stalled, so customers aren't left throttled/blocked past their window.
+        _sync_scheduled_task(
+            session,
+            name="fup_reset_safety_net",
+            task_name="app.tasks.usage.lift_expired_fup_enforcement",
+            enabled=usage_enabled,
+            interval_seconds=max(usage_interval_seconds, 300),
+        )
         zabbix_usage_enabled_by_default = _zabbix_configured_default()
         zabbix_usage_enabled = _effective_bool(
             session,
@@ -1264,11 +1274,14 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(dashboard_cache_seconds, 60),
         )
+        # Default 120s, below the 180s snapshot cache TTL, so the key is
+        # re-warmed before it lapses (a 180s==180s interval let it expire just
+        # before the next write, exposing cold-cache reads).
         ont_snapshot_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
             "ont_snapshot_cache_refresh_interval_seconds",
-            180,
+            120,
         )
         _sync_scheduled_task(
             session,
@@ -1802,10 +1815,15 @@ def build_beat_schedule() -> dict:
         zabbix_device_sync_interval = max(
             zabbix_device_sync_interval, 60
         )  # Min: 1 minute
+        # Retire the old un-time-limited copy that lived in zabbix_ingestion; the
+        # surviving task in zabbix_sync carries soft/hard time limits.
+        _retire_scheduled_task(
+            session, "app.tasks.zabbix_ingestion.sync_devices_to_zabbix"
+        )
         _sync_scheduled_task(
             session,
             name="zabbix_device_sync",
-            task_name="app.tasks.zabbix_ingestion.sync_devices_to_zabbix",
+            task_name="app.tasks.zabbix_sync.sync_devices_to_zabbix",
             enabled=zabbix_device_sync_enabled,
             interval_seconds=zabbix_device_sync_interval,
         )

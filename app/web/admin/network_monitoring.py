@@ -242,6 +242,22 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/monitoring/bandwidth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_bandwidth_partial(request: Request, db: Session = Depends(get_db)):
+    """HTMX partial: auto-refreshing live network bandwidth + per-NAS throughput."""
+    context = {
+        "request": request,
+        **web_network_monitoring_service.monitoring_bandwidth_context(db),
+    }
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_bandwidth_partial.html", context
+    )
+
+
+@router.get(
     "/alarms",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],

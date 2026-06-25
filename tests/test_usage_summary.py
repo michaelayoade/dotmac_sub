@@ -162,11 +162,67 @@ def test_all_sums_session_octets_including_active(db_session, subscriber, subscr
         svc.get_usage_summary(db_session, str(subscriber.id), "all", now=now)
     )
 
-    assert out["total_source"] == "sessions"
+    # "lifetime" now: with no daily-rollup rows it is exactly the session total.
+    assert out["total_source"] == "lifetime"
     assert out["is_authoritative"] is True
     assert out["bucket"] is None
     assert out["series"] == []
     assert out["total_bytes"] == 1000 + 500 + 2000 + 300  # includes active
+
+
+def test_all_combines_daily_rollup_with_post_cutoff_sessions(
+    db_session, subscriber, subscription
+):
+    """Lifetime 'all' = full daily rollup + only the sessions AFTER the rollup's
+    last day, so the overlap between the two backfills isn't double-counted."""
+    from datetime import date
+
+    from app.models.usage import SubscriberDailyUsage
+
+    # Daily rollup: 2 days in early 2020 (pre-session history), 3 GB total.
+    for i, (up, down) in enumerate([(1_000, 2_000), (0, 3_000)]):
+        db_session.add(
+            SubscriberDailyUsage(
+                subscription_id=subscription.id,
+                splynx_service_id=4000 + i,
+                usage_date=date(2020, 1, 1 + i),
+                upload_bytes=up,
+                download_bytes=down,
+            )
+        )
+    # An OVERLAP session inside the rollup window — must NOT be added again.
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="overlap",
+            status_type=AccountingStatus.stop,
+            session_start=datetime(2020, 1, 1, 6, 0, tzinfo=UTC),
+            input_octets=9_999,
+            output_octets=9_999,
+        )
+    )
+    # A session AFTER the rollup's last day (live post-cutover) — counted.
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="post",
+            status_type=AccountingStatus.stop,
+            session_start=datetime(2026, 6, 10, 12, 0, tzinfo=UTC),
+            input_octets=500,
+            output_octets=700,
+        )
+    )
+    db_session.commit()
+
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "all", now=now)
+    )
+
+    # 6000 (daily) + 1200 (post-cutoff session); the 2020 overlap session excluded.
+    assert out["total_bytes"] == 6_000 + 1_200
+    assert out["total_source"] == "lifetime"
+    assert out["start"].date() == date(2020, 1, 1)  # earliest = daily rollup start
 
 
 def test_cycle_uses_rated_quota_bucket(db_session, subscriber, subscription):
@@ -189,6 +245,51 @@ def test_cycle_uses_rated_quota_bucket(db_session, subscriber, subscription):
     assert out["is_authoritative"] is True
     assert out["total_bytes"] == 2 * (1024**3)
     assert out["bucket"] == "day"
+
+
+def test_cycle_unlimited_bucket_falls_back_to_measured(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """An unlimited/unmetered plan has a rated bucket with used_gb=0; the cycle
+    total must reflect real session traffic instead of a false 0."""
+
+    # No metrics store in tests — return an empty series cleanly so the fallback
+    # to session octets runs (the real call would error and poison the session).
+    async def _no_vm(db, sub_ids, start, end):
+        return []
+
+    monkeypatch.setattr(svc, "_vm_points", _no_vm)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=None,  # unlimited
+            used_gb=0,
+        )
+    )
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="cyc-1",
+            status_type=AccountingStatus.interim,
+            session_start=now - timedelta(days=1),
+            session_end=None,
+            input_octets=3_000,
+            output_octets=2_000,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+
+    # VM series is empty here, so it falls back to session octets.
+    assert out["total_bytes"] == 5_000
+    assert out["total_source"] == "samples"
+    assert out["is_authoritative"] is False
 
 
 def test_window_with_no_data_falls_back_without_false_zero(

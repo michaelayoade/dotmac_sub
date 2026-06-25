@@ -15,6 +15,7 @@ from app.models.network_monitoring import (
     AlertSeverity,
     AlertStatus,
     MetricType,
+    NetworkDevice,
 )
 
 
@@ -34,6 +35,26 @@ def find_device_by_zabbix_host_id(
         return ("nas", nas.id)
 
     return (None, None)
+
+
+def find_network_device_id_by_zabbix_host_id(
+    db: Session, zabbix_host_id: str
+) -> UUID | None:
+    """Resolve the topology NetworkDevice id for a Zabbix host.
+
+    ``Alert.device_id`` is a FK to ``network_devices`` (which the topology
+    reconcile links to the underlying OLT/NAS), so correlating an alert to a
+    device goes through this row — not the raw OLT/NAS id.
+    """
+    if not zabbix_host_id:
+        return None
+    node = db.scalars(
+        select(NetworkDevice).where(
+            NetworkDevice.zabbix_hostid == zabbix_host_id,
+            NetworkDevice.is_active.is_(True),
+        )
+    ).first()
+    return node.id if node else None
 
 
 def get_or_create_zabbix_alert_rule(db: Session) -> AlertRule:
@@ -61,11 +82,14 @@ def find_open_zabbix_alert(
     rule_id: UUID,
     zabbix_event_key: str,
 ) -> Alert | None:
+    # The dedup key is written as the first line of ``notes`` followed by a
+    # newline. Match on that exact prefix rather than a substring so e.g. key
+    # ``zabbix:1:2`` can't collide with ``zabbix:1:20`` (a substring of it).
     return db.scalars(
         select(Alert)
         .where(
             Alert.rule_id == rule_id,
-            Alert.notes.contains(zabbix_event_key),
+            Alert.notes.startswith(f"{zabbix_event_key}\n"),
             Alert.status != AlertStatus.resolved,
         )
         .order_by(Alert.triggered_at.desc())

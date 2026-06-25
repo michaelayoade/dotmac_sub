@@ -350,13 +350,50 @@ final usageHistoryProvider =
   return ref.watch(usageRepositoryProvider).usageHistory(days: days);
 });
 
-/// Current throughput for the active subscription (connection banner).
-/// Errors (e.g. no active subscription) just mean "no signal" — callers
-/// read it via asData and omit the figure.
-final liveBandwidthProvider =
-    FutureProvider.autoDispose<LiveBandwidth>((ref) async {
+/// Selected range (hours back) for the speed-history chart.
+/// 1h / 6h / 24h / 7d / 30d.
+final speedRangeHoursProvider = StateProvider.autoDispose<int>((ref) {
   cacheFor(ref);
-  return ref.watch(usageRepositoryProvider).liveBandwidth();
+  return 24;
+});
+
+/// Bandwidth-speed time series (GET /bandwidth/my/series) over the selected
+/// look-back window in hours. VM-backed, so it reaches as far as VM retention.
+final bandwidthSeriesProvider =
+    FutureProvider.autoDispose.family<List<BandwidthPoint>, int>(
+  (ref, hours) async {
+    cacheFor(ref);
+    final end = DateTime.now();
+    final start = end.subtract(Duration(hours: hours));
+    return ref
+        .watch(usageRepositoryProvider)
+        .bandwidthSeries(start: start, end: end);
+  },
+);
+
+/// On-demand switch for live bandwidth polling. Off by default, so the
+/// connection banner takes a single reading instead of polling every few
+/// seconds; the user opts into continuous live updates from the banner.
+final liveBandwidthEnabledProvider = StateProvider.autoDispose<bool>((ref) {
+  cacheFor(ref);
+  return false;
+});
+
+/// Throughput for the active subscription (connection banner). By default a
+/// single on-load reading; when the user enables live it streams fresh samples.
+/// Intentionally does not use cacheFor(): cacheFor keepAlive()s the provider,
+/// which would keep a periodic live poll running after the dashboard closes.
+/// Errors (e.g. no active subscription) surface as a no-signal value, so
+/// callers read it via asData and omit the figure.
+final liveBandwidthProvider = StreamProvider.autoDispose<LiveBandwidth>((ref) {
+  final repo = ref.watch(usageRepositoryProvider);
+  if (ref.watch(liveBandwidthEnabledProvider)) {
+    return repo.liveBandwidthStream();
+  }
+  // On-demand off: one-shot fetch, no periodic polling.
+  return Stream.fromFuture(
+    repo.liveBandwidth().catchError((_) => LiveBandwidth()),
+  );
 });
 
 final sessionsProvider =

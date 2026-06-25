@@ -1,0 +1,90 @@
+{% from "components/ui/macros.html" import card %}
+{# Live network bandwidth — polled every 15s via HTMX from /monitoring/bandwidth.
+   Sourced from VictoriaMetrics aggregates (~1min cadence). #}
+<div class="grid gap-6 lg:grid-cols-3">
+    {# Bandwidth Overview Card (2/3 width) #}
+    {% call card("Bandwidth Overview", color="emerald") %}
+    {% if bandwidth.has_data %}
+    <div class="grid gap-6 sm:grid-cols-2">
+        <div class="rounded-lg border border-emerald-100 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/20">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+                </svg>
+                <span class="text-xs font-medium text-emerald-600 dark:text-emerald-400">Download (Rx)</span>
+            </div>
+            <p class="mt-2 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{{ bandwidth.total_rx_formatted }}</p>
+        </div>
+        <div class="rounded-lg border border-amber-100 bg-amber-50 p-4 dark:border-amber-900/40 dark:bg-amber-900/20">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/>
+                </svg>
+                <span class="text-xs font-medium text-amber-600 dark:text-amber-400">Upload (Tx)</span>
+            </div>
+            <p class="mt-2 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{{ bandwidth.total_tx_formatted }}</p>
+        </div>
+    </div>
+    {% if bandwidth.top_users %}
+    <div class="mt-4">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Top Consumers</h4>
+        <div class="space-y-2">
+            {% for user in bandwidth.top_users %}
+            <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <span class="text-sm font-mono text-slate-700 dark:text-slate-300">{{ user.subscription_id[:12] }}...</span>
+                <span class="text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{{ user.total_formatted }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="text-center py-8">
+        <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No bandwidth data</h3>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Connect a bandwidth poller to start collecting metrics. Configure RADIUS accounting or SNMP traffic counters.</p>
+    </div>
+    {% endif %}
+    {% endcall %}
+
+    {# NAS Throughput Card (1/3 width) #}
+    {% call card("NAS Throughput", color="blue") %}
+    {% if nas_throughput.has_data and nas_throughput.items %}
+    <div class="space-y-3">
+        {% for nas in nas_throughput.items[:8] %}
+        {% set max_bps = nas_throughput.items[0].rx_bps + nas_throughput.items[0].tx_bps if nas_throughput.items else 1 %}
+        {% set this_total = nas.rx_bps + nas.tx_bps %}
+        {% set pct = ((this_total / max_bps) * 100) | round(0) | int if max_bps > 0 else 0 %}
+        <div class="rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/60">
+            <div class="flex items-center justify-between mb-1.5">
+                <span class="text-sm font-medium text-slate-900 dark:text-white">{{ nas.name }}</span>
+            </div>
+            <div class="flex items-center gap-4 text-xs mb-1.5">
+                <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                    {{ nas.rx_formatted }}
+                </span>
+                <span class="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                    {{ nas.tx_formatted }}
+                </span>
+            </div>
+            <div class="h-1 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+                <div class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-blue-500" style="width: {{ pct }}%"></div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-8">
+        <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No NAS data</h3>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Per-device throughput appears when bandwidth metrics include NAS identifiers.</p>
+    </div>
+    {% endif %}
+    {% endcall %}
+</div>

@@ -10,6 +10,7 @@ import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../usage/fup_card.dart';
+import '../usage/speed_history_card.dart';
 import '../usage/usage_section.dart';
 
 /// The Service tab — one coherent home for everything about the customer's
@@ -53,6 +54,7 @@ class ServiceTabScreen extends ConsumerWidget {
           ref.invalidate(usageSummaryProvider(period));
           ref.invalidate(quotaBucketsProvider);
           ref.invalidate(usageHistoryProvider);
+          ref.invalidate(bandwidthSeriesProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(subscriptionsProvider);
           if (service != null) ref.invalidate(addonsProvider(service.id));
@@ -170,6 +172,8 @@ class ServiceTabScreen extends ConsumerWidget {
               const SizedBox(height: 20),
             ],
             const MonthlyUsageCard(),
+            const SpeedHistoryCard(),
+            const SizedBox(height: 12),
             UsageSection(
               period: period,
               summary: summary,

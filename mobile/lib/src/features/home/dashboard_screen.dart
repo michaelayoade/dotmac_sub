@@ -66,17 +66,26 @@ class DashboardScreen extends ConsumerWidget {
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final fup = todaySummary?.fup;
-    // Data the current service has consumed this billing cycle — the headline
-    // data figure on Home: meaningful for capped AND unlimited plans, unlike
-    // "data left" which reads as 0/empty on an unlimited plan. Falls back to
-    // today's total when the cycle aggregate isn't populated yet, so the card
-    // is never a misleading empty 0.
-    final dataUsedCycle =
-        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    // Two separate at-a-glance usage figures: today, and the whole billing/
+    // subscription period (cycle) — the latter meaningful for capped AND
+    // unlimited plans, unlike "data left" which reads as 0 on unlimited.
+    final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    final dataUsed = (dataUsedCycle != null && dataUsedCycle > 0)
-        ? dataUsedCycle
-        : dataToday;
+    // Total data used this subscription period. Prefer the cycle total; if that
+    // reads 0 (unmetered/unlimited plans accrue no quota used_gb, and the
+    // server-side measured fallback may not be live yet) use the cycle chart
+    // series, then today's total, so a period with real traffic never shows 0.
+    int? dataPeriod;
+    if (cycleSummary != null) {
+      final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
+      dataPeriod = cycleSummary.totalBytes > 0
+          ? cycleSummary.totalBytes
+          : (seriesSum > 0 ? seriesSum : (dataToday ?? 0));
+    }
+    // Wallet (account credit) balance for its own at-a-glance card. Uses the
+    // always-available credit balance (/me/balance), not the feature-gated VAS
+    // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
+    final balance = ref.watch(balanceProvider).asData?.value;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -92,6 +101,18 @@ class DashboardScreen extends ConsumerWidget {
           currentQuota = b;
         }
       }
+    }
+
+    // Quota / fair-use headroom, for plans where it applies. Capped plans show
+    // remaining allowance; unlimited-with-FUP plans show GB left at full speed.
+    // Null (card hidden) for truly unlimited plans with no fair-use policy.
+    String? quotaLeftValue;
+    var quotaLeftLabel = 'Data left';
+    if (currentQuota != null && currentQuota.remainingGb != null) {
+      quotaLeftValue = Fmt.gb(currentQuota.remainingGb!);
+    } else if (fup?.gbUntilThrottle != null && (fup?.thresholdGb ?? 0) > 0) {
+      quotaLeftValue = Fmt.gb(fup!.gbUntilThrottle!);
+      quotaLeftLabel = 'Full-speed';
     }
 
     // Expiry urgency: lift a renew prompt to the banner area when the current
@@ -193,6 +214,12 @@ class DashboardScreen extends ConsumerWidget {
               live: activeSession != null
                   ? ref.watch(liveBandwidthProvider).asData?.value
                   : null,
+              liveEnabled: ref.watch(liveBandwidthEnabledProvider),
+              onToggleLive: activeSession != null
+                  ? () => ref
+                      .read(liveBandwidthEnabledProvider.notifier)
+                      .update((v) => !v)
+                  : null,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
@@ -241,17 +268,30 @@ class DashboardScreen extends ConsumerWidget {
             const SizedBox(height: 16),
 
             // --- At-a-glance summary ---
+            // Row 1: wallet balance · amount due · usage today
             Row(
               children: [
                 Expanded(
                   child: _StatCard(
                     icon: Icons.account_balance_wallet_outlined,
-                    // Say "Amount due" in words when owing, so the state isn't
-                    // conveyed by the red colour alone (accessibility).
-                    label: (outstanding ?? 0) > 0 ? 'Amount due' : 'Balance',
+                    label: 'Wallet',
+                    value: balance == null
+                        ? null
+                        : Fmt.moneyCompact(
+                            balance.creditBalance, balance.currency),
+                    onTap: () => context.push('/wallet'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.receipt_long_outlined,
+                    label: 'Amount due',
                     value: outstanding == null
                         ? null
                         : Fmt.moneyCompact(outstanding, currency),
+                    // Colour alone shouldn't convey the owing state, but the
+                    // label already says "Amount due"; highlight when > 0.
                     highlight: (outstanding ?? 0) > 0,
                     onTap: () => context.go('/billing'),
                   ),
@@ -259,23 +299,50 @@ class DashboardScreen extends ConsumerWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _StatCard(
+                    icon: Icons.today_outlined,
+                    label: 'Today',
+                    value: dataToday == null ? null : Fmt.bytes(dataToday),
+                    onTap: () => context.go('/usage'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Row 2: usage this subscription period · (quota/FUP left) · next bill
+            Row(
+              children: [
+                Expanded(
+                  child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Data used on the current service this billing cycle —
-                    // meaningful for capped and unlimited plans alike (replaces
-                    // the old "data left", which read as 0 on unlimited plans).
-                    label: 'Data used',
-                    value: dataUsed == null ? null : Fmt.bytes(dataUsed),
-                    highlight: (currentQuota != null &&
-                            (currentQuota.usedFraction ?? 0) >= 0.9) ||
-                        (fup?.isApproaching ?? false) ||
+                    // Total data used over the whole billing/subscription period
+                    // (not quota remaining) — for capped and unlimited alike.
+                    label: 'This period',
+                    value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
+                    highlight: (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
                     onTap: () => context.go('/usage'),
                   ),
                 ),
                 const SizedBox(width: 10),
+                // Quota / fair-use remaining — only for plans where it applies.
+                if (quotaLeftValue != null) ...[
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.data_saver_off_outlined,
+                      label: quotaLeftLabel,
+                      value: quotaLeftValue,
+                      highlight: (currentQuota != null &&
+                              (currentQuota.usedFraction ?? 0) >= 0.9) ||
+                          (fup?.isApproaching ?? false) ||
+                          (fup?.needsAttention ?? false),
+                      onTap: () => context.go('/usage'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: _StatCard(
-                    icon: Icons.hourglass_bottom_outlined,
+                    icon: Icons.event_outlined,
                     label: expiryStatLabel,
                     value: expiryStatValue,
                     // Urgent when expiring within 3 days or genuinely expired
@@ -285,6 +352,12 @@ class DashboardScreen extends ConsumerWidget {
                     onTap: () => context.go('/billing'),
                   ),
                 ),
+                // Keep widths aligned with row 1's three cards when there's no
+                // quota/FUP card to show.
+                if (quotaLeftValue == null) ...[
+                  const SizedBox(width: 10),
+                  const Expanded(child: SizedBox()),
+                ],
               ],
             ),
             const SizedBox(height: 20),
@@ -419,6 +492,8 @@ class _ConnectionBanner extends StatelessWidget {
     this.serviceActive = false,
     this.ipAddress,
     this.live,
+    this.liveEnabled = false,
+    this.onToggleLive,
   });
 
   /// Whether the displayed subscription is active. An active account that is
@@ -438,6 +513,12 @@ class _ConnectionBanner extends StatelessWidget {
 
   /// Current throughput, when the bandwidth poller has a recent sample.
   final LiveBandwidth? live;
+
+  /// Whether continuous live polling is on (drives the toggle's state).
+  final bool liveEnabled;
+
+  /// Toggles on-demand live polling. Null hides the control (e.g. offline).
+  final VoidCallback? onToggleLive;
 
   @override
   Widget build(BuildContext context) {
@@ -493,6 +574,29 @@ class _ConnectionBanner extends StatelessWidget {
             child: Text(text,
                 style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
           ),
+          // On-demand live toggle — only when connected. Off by default so the
+          // banner takes a single reading instead of polling continuously.
+          if (session != null && onToggleLive != null)
+            InkWell(
+              onTap: onToggleLive,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(liveEnabled ? Icons.bolt : Icons.bolt_outlined,
+                        size: 16, color: fg),
+                    const SizedBox(width: 2),
+                    Text(liveEnabled ? 'Live' : 'Go live',
+                        style: TextStyle(
+                            color: fg,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );

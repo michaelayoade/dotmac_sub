@@ -1263,7 +1263,10 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
     """Aggregate binary ONT monitoring status directly from Zabbix.
 
     ``refresh=True`` forces a live per-OLT fetch (used by the background warmer)
-    instead of reading the per-OLT summary cache.
+    instead of reading the per-OLT summary cache. With ``refresh=False`` (the
+    request path) the read is strictly cache-only: a cold per-OLT cache yields
+    no counts for that OLT rather than a live Zabbix fan-out on the request
+    thread — the warmer fills the cache on its own cadence.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
@@ -1299,11 +1302,21 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
             .all()
         )
         monitored_ont_ids.update(str(ont.id) for ont in onts)
-        summary = get_olt_ont_summary_from_zabbix(olt, onts, refresh=refresh)
+        # On the request path (refresh=False) read cache only; the warmer
+        # (refresh=True) is the sole live fetcher, so a user never blocks on a
+        # per-OLT Zabbix round trip.
+        cached_only = not refresh
+        summary = get_olt_ont_summary_from_zabbix(
+            olt, onts, refresh=refresh, cached_only=cached_only
+        )
         if summary.get("total_count", 0):
             online += int(summary.get("online_count", 0) or 0)
             offline += int(summary.get("offline_count", 0) or 0)
             low_signal += int(summary.get("low_signal_count", 0) or 0)
+            continue
+        if cached_only:
+            # Cold cache on the request path — skip the live snapshot walk; the
+            # warmer will populate it shortly.
             continue
 
         snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)

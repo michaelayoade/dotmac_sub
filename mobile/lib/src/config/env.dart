@@ -58,7 +58,7 @@ class Brand {
   const Brand._();
 
   static const String name = String.fromEnvironment('BRAND_MOBILE_APP_NAME',
-      defaultValue: 'DotMac Self-Care');
+      defaultValue: 'Dotmac Selfcare');
 
   static const String tagline = String.fromEnvironment(
     'BRAND_TAGLINE',

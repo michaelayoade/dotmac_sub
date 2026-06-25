@@ -48,6 +48,13 @@ function bandwidthChart(config = {}) {
         enableLive: config.enableLive !== false,
         directLiveEndpoint: config.directLiveEndpoint || null,
         directLivePollMs: config.directLivePollMs || 5000,
+        // Customer-portal live: drive the live UI from the /my/live SSE stream
+        // (cookie-auth) instead of the admin directLiveEndpoint poll.
+        liveStream: config.liveStream || false,
+
+        // Whether live updates are currently running. Off by default — live is
+        // on-demand (the user starts it via toggleLive), not on page load.
+        liveActive: false,
 
         // State
         chart: null,
@@ -67,13 +74,14 @@ function bandwidthChart(config = {}) {
         peakUpload: 0,
         totalDownload: 0,
         totalUpload: 0,
-        liveStatus: config.directLiveEndpoint ? 'waiting' : 'history',
+        liveStatus: (config.directLiveEndpoint || config.liveStream) ? 'waiting' : 'history',
         liveSource: '',
         liveInterface: '',
         liveUpdatedAt: null,
 
-        // Time range
-        timeRange: '24h',
+        // Time range. Live stream only flows on the 1h view, so default there
+        // when live so customers see real-time speed without first switching.
+        timeRange: config.liveStream ? '1h' : '24h',
         timeRanges: [
             { value: '1h', label: '1h' },
             { value: '24h', label: '24h' },
@@ -89,11 +97,20 @@ function bandwidthChart(config = {}) {
         get totalDownloadFormatted() { return formatBytes(this.totalDownload); },
         get totalUploadFormatted() { return formatBytes(this.totalUpload); },
         get liveStatusLabel() {
-            if (!this.directLiveEndpoint) return 'Speed history';
-            if (this.liveStatus === 'live') return 'Live from MikroTik';
-            if (this.liveStatus === 'offline') return 'PPP session offline';
-            if (this.liveStatus === 'error') return 'Live read unavailable';
-            return 'Waiting for MikroTik';
+            if (this.directLiveEndpoint) {
+                if (this.liveStatus === 'live') return 'Live from MikroTik';
+                if (this.liveStatus === 'offline') return 'PPP session offline';
+                if (this.liveStatus === 'error') return 'Live read unavailable';
+                return 'Waiting for MikroTik';
+            }
+            if (this.liveStream) {
+                if (this.timeRange !== '1h') return 'Live paused (history view)';
+                if (this.liveStatus === 'live') return 'Live';
+                // No fresh sample (no queue mapping) or mid-reconnect: don't
+                // claim "Live" or flash an error on routine SSE reconnects.
+                return 'Waiting for data';
+            }
+            return 'Speed history';
         },
         get liveUpdatedAtFormatted() {
             if (!this.liveUpdatedAt) return '';
@@ -115,8 +132,32 @@ function bandwidthChart(config = {}) {
             this.isDestroyed = false;
             await this.loadData();
             this.initChart();
-            this.connectSSE();
-            this.startDirectLivePolling();
+            // Live updates are on-demand: the user starts them with the Live
+            // button (toggleLive). Nothing streams or polls on page load.
+        },
+
+        // Start/stop live updates on demand (SSE for the customer stream, or the
+        // direct poll for the admin endpoint). Off by default so neither runs
+        // until the user asks.
+        toggleLive() {
+            if (this.liveActive) {
+                this.liveActive = false;
+                this.stopDirectLivePolling();
+                if (this.eventSource) {
+                    this.eventSource.close();
+                    this.eventSource = null;
+                }
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
+                }
+                this.liveStatus = 'paused';
+            } else {
+                this.liveActive = true;
+                this.liveStatus = 'waiting';
+                this.connectSSE();
+                this.startDirectLivePolling();
+            }
         },
 
         // Cleanup
@@ -236,7 +277,7 @@ function bandwidthChart(config = {}) {
 
         startDirectLivePolling() {
             this.stopDirectLivePolling();
-            if (this.isDestroyed || !this.directLiveEndpoint) {
+            if (this.isDestroyed || !this.directLiveEndpoint || !this.liveActive) {
                 return;
             }
             this.loadDirectLive();
@@ -396,6 +437,8 @@ function bandwidthChart(config = {}) {
         connectSSE() {
             if (this.isDestroyed) return;
             if (!this.enableLive) return;
+            // On-demand: never (re)connect while live is paused.
+            if (!this.liveActive) return;
             if (this.eventSource) {
                 this.eventSource.close();
                 this.eventSource = null;
@@ -419,6 +462,16 @@ function bandwidthChart(config = {}) {
                     if (!this.directLiveEndpoint) {
                         this.currentDownload = data.download_bps || 0;
                         this.currentUpload = data.upload_bps || 0;
+                    }
+                    if (this.liveStream) {
+                        // Only claim "Live" when the backend actually has a
+                        // sample for this sub (has_sample). Subscribers with no
+                        // queue mapping get a steady stream of default-zero
+                        // events — show "Waiting for data", not a fake live 0.
+                        // Absent field (other producers) defaults to fresh.
+                        const fresh = data.has_sample !== false;
+                        this.liveStatus = fresh ? 'live' : 'waiting';
+                        if (fresh) this.liveUpdatedAt = data.timestamp || new Date().toISOString();
                     }
 
                     // Update peak if necessary
@@ -456,6 +509,7 @@ function bandwidthChart(config = {}) {
 
                 source.addEventListener('error', (event) => {
                     console.error('SSE error:', event);
+                    if (this.liveStream) this.liveStatus = 'error';
                     if (this.eventSource === source) {
                         source.close();
                         this.eventSource = null;

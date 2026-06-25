@@ -31,7 +31,7 @@ class QuotaBucket {
 
   /// Total data available this period (included + rolled-over + top-ups).
   double? get allowanceGb =>
-      includedGb == null ? null : includedGb! + rolloverGb + topupGb;
+      isUnlimited ? null : includedGb! + rolloverGb + topupGb;
 
   double? get remainingGb {
     final a = allowanceGb;
@@ -48,7 +48,9 @@ class QuotaBucket {
     return f.clamp(0.0, 1.0);
   }
 
-  bool get isUnlimited => includedGb == null;
+  /// Unmetered plan: no included allowance on file (null) or an explicit 0,
+  /// which is how "unlimited" offers are rated (no GB cap to count against).
+  bool get isUnlimited => includedGb == null || includedGb! <= 0;
 
   factory QuotaBucket.fromJson(Map<String, dynamic> json) => QuotaBucket(
         id: json['id'].toString(),
@@ -140,6 +142,29 @@ class LiveBandwidth {
       );
 }
 
+/// One point of the bandwidth-speed time series. Mirrors BandwidthSeriesPoint
+/// from app/api/bandwidth.py (GET /bandwidth/my/series). We bind only the
+/// subscriber-perspective download/upload rates.
+class BandwidthPoint {
+  BandwidthPoint({
+    required this.at,
+    required this.downloadBps,
+    required this.uploadBps,
+  });
+
+  final DateTime at;
+  final double downloadBps;
+  final double uploadBps;
+
+  double get totalBps => downloadBps + uploadBps;
+
+  factory BandwidthPoint.fromJson(Map<String, dynamic> json) => BandwidthPoint(
+        at: DateTime.parse(json['timestamp'].toString()).toLocal(),
+        downloadBps: (json['download_bps'] as num?)?.toDouble() ?? 0,
+        uploadBps: (json['upload_bps'] as num?)?.toDouble() ?? 0,
+      );
+}
+
 /// One bar of the usage chart. Mirrors UsageSeriesPoint from schemas/usage.py.
 class UsageSeriesPoint {
   UsageSeriesPoint({required this.bucketStart, required this.bytes});
@@ -222,6 +247,7 @@ class UsageSummary {
     required this.totalSource,
     required this.isAuthoritative,
     this.bucket,
+    this.averageBps,
     this.series = const [],
     this.fup,
   });
@@ -230,9 +256,13 @@ class UsageSummary {
   final DateTime start;
   final DateTime end;
   final int totalBytes;
-  final String totalSource; // samples | sessions | quota
+  final String totalSource; // samples | sessions | quota | lifetime
   final bool isAuthoritative;
   final String? bucket; // minute | hour | day | null
+
+  /// Mean throughput over the window (rx+tx bits/s) — the "average speed".
+  /// Null for windows with no samples (e.g. "all").
+  final double? averageBps;
   final List<UsageSeriesPoint> series;
   final FupStatus? fup;
 
@@ -244,6 +274,7 @@ class UsageSummary {
         totalSource: json['total_source'].toString(),
         isAuthoritative: json['is_authoritative'] as bool? ?? false,
         bucket: json['bucket'] as String?,
+        averageBps: (json['average_bps'] as num?)?.toDouble(),
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),

@@ -63,12 +63,20 @@ def warm_topology_status() -> dict[str, Any]:
     if not zabbix_configured():
         return {"skipped": "zabbix_token_missing"}
 
-    from app.services.topology.live_status import warm_topology_status as _warm
+    from app.services.topology.live_status import (
+        touch_warm_heartbeat,
+    )
+    from app.services.topology.live_status import (
+        warm_topology_status as _warm,
+    )
 
     db = db_session_adapter.create_session()
     try:
         result = _warm(db, ZabbixClient.from_env())
         db.commit()
+        # Stamp the heartbeat only after a successful refresh so a stalled/failing
+        # warmer ages out and stops good states being trusted (see selfcare).
+        touch_warm_heartbeat()
         return result
     except ZabbixClientError as exc:
         db.rollback()

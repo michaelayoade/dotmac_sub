@@ -29,8 +29,17 @@ async def live_bandwidth_events(
             break
 
         current = {"rx_bps": 0.0, "tx_bps": 0.0}
+        # True once we have a genuine reading (live traffic from VM, or a recent
+        # stored sample — even an idle 0 bps one). Stays False when the poller
+        # has no data for this subscription, so the chart shows "Waiting for
+        # data" instead of a misleading live 0 bps.
+        has_sample = False
         try:
             current = await metrics_store.get_current_bandwidth(str(subscription_id))
+            if (current.get("rx_bps", 0) or 0) > 0 or (
+                current.get("tx_bps", 0) or 0
+            ) > 0:
+                has_sample = True
         except Exception:
             logger.debug(
                 "Failed to fetch current bandwidth for subscription %s",
@@ -39,7 +48,7 @@ async def live_bandwidth_events(
             )
 
         try:
-            if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
+            if not has_sample:
                 with db_session_adapter.read_session() as sse_db:
                     cutoff = datetime.now(UTC) - timedelta(minutes=2)
                     latest_sample = (
@@ -56,6 +65,7 @@ async def live_bandwidth_events(
                             "rx_bps": float(latest_sample.rx_bps or 0),
                             "tx_bps": float(latest_sample.tx_bps or 0),
                         }
+                        has_sample = True
         except Exception:
             logger.debug(
                 "Failed to enrich SSE bandwidth stream for subscription %s",
@@ -65,6 +75,8 @@ async def live_bandwidth_events(
 
         yield {
             "event": "bandwidth",
-            "data": json.dumps(live_event_payload(current, datetime.now(UTC))),
+            "data": json.dumps(
+                live_event_payload(current, datetime.now(UTC), has_sample=has_sample)
+            ),
         }
         await asyncio.sleep(1)
