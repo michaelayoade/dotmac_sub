@@ -31,12 +31,12 @@ from app.tasks.crm_ticket_push import (
     push_comment_to_crm,
     push_ticket_to_crm,
 )
+from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
     mark_stale_processing_events,
     retry_failed_events,
 )
-from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.exports import run_export_job, run_scheduled_export
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
