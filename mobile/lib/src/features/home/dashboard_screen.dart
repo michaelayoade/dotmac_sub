@@ -71,16 +71,24 @@ class DashboardScreen extends ConsumerWidget {
     // unlimited plans, unlike "data left" which reads as 0 on unlimited.
     final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    // Total data used this subscription period. Prefer the cycle total; if that
-    // reads 0 (unmetered/unlimited plans accrue no quota used_gb, and the
-    // server-side measured fallback may not be live yet) use the cycle chart
-    // series, then today's total, so a period with real traffic never shows 0.
+    // Total data used this subscription period = RADIUS session octets over the
+    // cycle window (server-authoritative). Until that's deployed, fall back to
+    // summing the loaded sessions started in the window, then the (retention-
+    // limited) throughput series, then today — so it's never a false 0 and never
+    // the under-counted series when session data is available.
     int? dataPeriod;
     if (cycleSummary != null) {
+      final cycleStart = cycleSummary.start;
+      final sessionSum = (sessItems ?? const <AccountingSession>[])
+          .where((s) =>
+              s.sessionStart != null && !s.sessionStart!.isBefore(cycleStart))
+          .fold<int>(0, (a, s) => a + s.totalOctets);
       final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
       dataPeriod = cycleSummary.totalBytes > 0
           ? cycleSummary.totalBytes
-          : (seriesSum > 0 ? seriesSum : (dataToday ?? 0));
+          : (sessionSum > 0
+              ? sessionSum
+              : (seriesSum > 0 ? seriesSum : (dataToday ?? 0)));
     }
     // Wallet (account credit) balance for its own at-a-glance card. Uses the
     // always-available credit balance (/me/balance), not the feature-gated VAS

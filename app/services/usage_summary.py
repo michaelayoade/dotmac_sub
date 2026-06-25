@@ -11,8 +11,10 @@ octets, no intra-session history):
   - week/cycle charts: the same throughput series from the bandwidth pipeline,
     which routes to VictoriaMetrics for >24h ranges (Postgres hot retention is
     ~24h).
-  - authoritative totals: ``QuotaBucket.used_gb`` for the billing cycle, and the
-    sum of session octets for "all". These never depend on interim accounting.
+  - authoritative totals: the sum of RADIUS session octets over the window for
+    both the billing cycle and "all" (the rated quota bucket only defines the
+    cycle window; it isn't the usage total — it's 0 on unlimited plans and lags
+    actual usage). These never depend on interim accounting.
 
 When interim accounting isn't flowing (no ``BandwidthSample`` rows / no metrics
 store), sub-day series come back empty and the total falls back to session
@@ -671,30 +673,23 @@ async def get_usage_summary(
     if period == "cycle":
         buckets = _current_quota(db, sub_ids, now)
         if buckets:
+            # The rated bucket defines the billing-cycle WINDOW only.
             starts = [d for b in buckets if (d := _as_utc(b.period_start)) is not None]
             ends = [d for b in buckets if (d := _as_utc(b.period_end)) is not None]
             start = min(starts) if starts else now
             end = min(min(ends), now) if ends else now
-            used_gb = sum(float(b.used_gb or 0) for b in buckets)
-            total = int(used_gb * _GB_BYTES)
-            total_source, authoritative = "quota", True
         else:
-            # No rated cycle on file — approximate a 30-day window from sessions.
+            # No rated cycle on file — approximate a 30-day window.
             start, end = now - timedelta(days=30), now
-            total = _session_octets(db, sub_ids, since=start)
-            total_source, authoritative = "sessions", False
+        # Period usage = RADIUS session-accounting octets over the window (the
+        # authoritative byte counters), NOT the rated quota bucket: quota reads 0
+        # on unlimited plans and lags actual usage, and the throughput series
+        # under-counts due to short metrics retention (~days). Sum the exact
+        # per-session octets for sessions started in the window.
+        total = _session_octets(db, sub_ids, since=start)
+        total_source, authoritative = "sessions", True
         points = await _vm_points(db, sub_ids, start, end)
         series = _integrate(points, "day", tz, end=end)
-        # Unlimited / unmetered plans don't accrue used_gb, so a rated bucket can
-        # read 0 even with real traffic this period. Fall back to the measured
-        # series, then session octets, so "this period" isn't a false zero.
-        if total == 0:
-            measured = int(round(sum(series.values())))
-            if measured == 0:
-                measured = _session_octets(db, sub_ids, since=start)
-            if measured > 0:
-                total = measured
-                total_source, authoritative = "samples", False
         peak_down, peak_up = await _peak_directions(db, sub_ids, start, end)
         return {
             "period": period,
