@@ -55,7 +55,9 @@ def _run(prior_action_status):
         patch(
             "app.services.settings_spec.resolve_value",
             side_effect=lambda session, domain, key: (
-                "throttle-profile" if key == "fup_throttle_radius_profile_id" else None
+                "throttle-profile"
+                if key == "fup_throttle_radius_profile_id"
+                else None
             ),
         ),
         patch("app.tasks.usage._maybe_queue_repeat_upsell", lambda *a, **k: None),

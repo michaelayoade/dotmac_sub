@@ -113,7 +113,7 @@
             </div>
             {% set total = reseller_subscribers_total|default(reseller_subscribers|length) %}
             {% set current_page = page|default(1) %}
-            {% set rows_per_page = per_page|default(50) %}
+            {% set rows_per_page = per_page|default(25) %}
             {% set start_item = ((current_page - 1) * rows_per_page) + 1 if total else 0 %}
             {% set end_item = [current_page * rows_per_page, total] | min if total else 0 %}
             <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -267,7 +267,7 @@
             <form method="post" action="/admin/resellers/{{ reseller.id }}/users/link" class="mt-4 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="page" value="{{ page|default(1) }}" />
-                <input type="hidden" name="per_page" value="{{ per_page|default(50) }}" />
+                <input type="hidden" name="per_page" value="{{ per_page|default(25) }}" />
                 <div>
                     <label for="subscriber_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber</label>
                     <div class="relative mt-2" data-typeahead-url="/api/v1/search/reseller-subscribers" data-typeahead-min="2" data-typeahead-limit="8">
@@ -292,7 +292,7 @@
             <form method="post" action="/admin/resellers/{{ reseller.id }}/users/create" class="mt-4 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="page" value="{{ page|default(1) }}" />
-                <input type="hidden" name="per_page" value="{{ per_page|default(50) }}" />
+                <input type="hidden" name="per_page" value="{{ per_page|default(25) }}" />
                 <div class="grid gap-4 sm:grid-cols-2">
                     <div>
                         <label for="first_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">First Name</label>

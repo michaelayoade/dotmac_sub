@@ -98,11 +98,20 @@
            STEP 1: Plan Selection
            ══════════════════════════════════════════════ #}
         <div {% if is_new %}x-show="step === 1" x-transition{% endif %}>
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+        <div x-data="{ billingMode: '{{ subscription.billing_mode or "prepaid" }}', commercialTermsOpen: false }"
+             class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Plan Selection</h2>
+                {% if commercial_policy.rows %}
+                <button type="button"
+                        @click="commercialTermsOpen = true"
+                        class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-amber-800 dark:hover:bg-amber-900/20 dark:hover:text-amber-300 dark:focus:ring-offset-slate-800">
+                    Pricing rules
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">?</span>
+                </button>
+                {% endif %}
             </div>
-            <div class="p-6 space-y-6" x-data="{ billingMode: '{{ subscription.billing_mode or "prepaid" }}' }">
+            <div class="p-6 space-y-6">
                 {# Show account/subscriber selectors only if no context provided #}
                 {% if not has_subscriber_context %}
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
@@ -191,40 +200,57 @@
                 <div x-show="billingMode === 'prepaid'" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
                     {{ billing_mode_prepaid_notice }}
                 </div>
+            </div>
 
-                {% if commercial_policy.rows %}
-                <div class="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
-                    <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Effective Commercial Terms</h3>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscription selections above plus customer and global billing defaults.</p>
+            {% if commercial_policy.rows %}
+            <div x-show="commercialTermsOpen"
+                 x-transition.opacity
+                 x-cloak
+                 class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 p-4 backdrop-blur-sm"
+                 @click.self.prevent.stop="commercialTermsOpen = false"
+                 @keydown.escape.window="commercialTermsOpen = false">
+                <div class="flex max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800" @click.stop>
+                    <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <div>
+                            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Effective commercial terms</h3>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription selections plus customer and global billing defaults.</p>
+                        </div>
+                        <button type="button"
+                                @click="commercialTermsOpen = false"
+                                class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:hover:bg-slate-700 dark:hover:text-slate-200 dark:focus:ring-offset-slate-800"
+                                aria-label="Close pricing rules">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
                     </div>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                            <thead class="bg-white/70 dark:bg-slate-900/20">
-                                <tr>
-                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Setting</th>
-                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effective</th>
-                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
-                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Global Default</th>
-                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Override</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                                {% for row in commercial_policy.rows %}
-                                <tr>
-                                    <td class="px-3 py-2 text-slate-700 dark:text-slate-200">{{ row.label }}</td>
-                                    <td class="px-3 py-2 text-slate-900 dark:text-white">{{ row.effective }}</td>
-                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.source }}</td>
-                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
-                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
+                    <div class="overflow-y-auto p-6">
+                        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Setting</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effective</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Global Default</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Override</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                                    {% for row in commercial_policy.rows %}
+                                    <tr>
+                                        <td class="px-3 py-2 text-slate-700 dark:text-slate-200">{{ row.label }}</td>
+                                        <td class="px-3 py-2 text-slate-900 dark:text-white">{{ row.effective }}</td>
+                                        <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.source }}</td>
+                                        <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
+                                        <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-                {% endif %}
             </div>
+            {% endif %}
         </div>
 
         {# Advanced options - collapsible #}
@@ -320,28 +346,6 @@
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ subscription.service_description }}</textarea>
                     </div>
                 </div>
-            </div>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
-            </div>
-            <div class="divide-y divide-slate-200 dark:divide-slate-700">
-                {% if activities %}
-                {% for activity in activities %}
-                <div class="px-6 py-4">
-                    <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
-                    {% if activity.description %}
-                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
-                    {% endif %}
-                    {% if activity.occurred_at %}
-                    <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
-                    {% endif %}
-                </div>
-                {% endfor %}
-                {% else %}
-                <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
-                {% endif %}
             </div>
         </div>
         {% endif %}
@@ -650,6 +654,31 @@
             </div>
         </div>
     </form>
+
+    {% if subscription.id %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+        </div>
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% if activities %}
+            {% for activity in activities %}
+            <div class="px-6 py-4">
+                <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                {% if activity.description %}
+                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                {% endif %}
+                {% if activity.occurred_at %}
+                <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
 </div>
 <script>
 function subscriptionProvisioning() {
