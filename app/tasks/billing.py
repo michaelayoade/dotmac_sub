@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime
+from typing import cast
 
 from app.celery_app import celery_app
 from app.services import billing_automation as billing_automation_service
@@ -41,7 +42,7 @@ def _run_invoice_cycle_idempotent() -> dict[str, int]:
 
 
 @celery_app.task(name="app.tasks.billing.run_invoice_cycle")
-def run_invoice_cycle() -> dict[str, int | str]:
+def run_invoice_cycle() -> dict[str, object]:
     session = SessionLocal()
     try:
         if not billing_enabled(session):
@@ -49,7 +50,7 @@ def run_invoice_cycle() -> dict[str, int | str]:
             return {"skipped": "billing_disabled"}
     finally:
         session.close()
-    return _run_invoice_cycle_idempotent()
+    return cast(dict[str, object], _run_invoice_cycle_idempotent())
 
 
 @celery_app.task(name="app.tasks.billing.mark_invoices_overdue")
