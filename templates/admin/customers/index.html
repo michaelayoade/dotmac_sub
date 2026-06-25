@@ -693,9 +693,14 @@ function customersPage() {
             document.addEventListener('customers-select-all', (e) => {
                 const { customers, checked } = e.detail;
                 if (checked) {
-                    this.selectedIds = customers.map(c => ({ id: c.id, type: c.type }));
+                    customers.forEach((customer) => {
+                        if (!this.selectedIds.find((item) => item.id === customer.id)) {
+                            this.selectedIds.push({ id: customer.id, type: customer.type });
+                        }
+                    });
                 } else {
-                    this.selectedIds = [];
+                    const visibleIds = new Set(customers.map((customer) => customer.id));
+                    this.selectedIds = this.selectedIds.filter((item) => !visibleIds.has(item.id));
                 }
             });
 
@@ -706,8 +711,8 @@ function customersPage() {
 
             document.body.addEventListener('htmx:afterSwap', (e) => {
                 if (e.detail.target.id === 'customers-table') {
-                    this.clearSelection();
                     this.syncTableState();
+                    this.applySelectionToDom();
                 }
             });
 
@@ -864,6 +869,38 @@ function customersPage() {
             }
         },
 
+        syncSelectionFromDom() {
+            const selectedById = new Map(this.selectedIds.map((item) => [item.id, item]));
+            document.querySelectorAll('#customers-table [data-customer-checkbox]').forEach((cb) => {
+                const id = String(cb.dataset.id || '').trim();
+                if (id) selectedById.delete(id);
+            });
+            document.querySelectorAll('#customers-table [data-customer-checkbox]:checked').forEach((cb) => {
+                const id = String(cb.dataset.id || '').trim();
+                if (!id) return;
+                selectedById.set(id, {
+                    id,
+                    type: cb.dataset.type || 'person'
+                });
+            });
+            this.selectedIds = Array.from(selectedById.values());
+            this.applySelectionToDom();
+        },
+
+        applySelectionToDom() {
+            const selectedIds = new Set(this.selectedIds.map((item) => item.id));
+            const checkboxes = Array.from(document.querySelectorAll('#customers-table [data-customer-checkbox]'));
+            checkboxes.forEach((cb) => {
+                cb.checked = selectedIds.has(String(cb.dataset.id || '').trim());
+            });
+
+            const selectAll = document.querySelector('#customers-table [data-select-all]');
+            if (selectAll) {
+                selectAll.checked = checkboxes.length > 0 && checkboxes.every((cb) => cb.checked);
+                selectAll.indeterminate = checkboxes.some((cb) => cb.checked) && !selectAll.checked;
+            }
+        },
+
         syncFiltersFromForm() {
             const filters = this.currentFilters();
             this.searchQuery = filters.search;
@@ -926,6 +963,7 @@ function customersPage() {
         },
 
         buildScopePayload(extra = {}) {
+            this.syncSelectionFromDom();
             return {
                 customer_ids: this.selectedIds,
                 filters: this.currentFilters(),
@@ -1012,6 +1050,7 @@ function customersPage() {
         },
 
         openBulkUpdateModal() {
+            this.syncSelectionFromDom();
             if (!this.ensureTargetScope()) return;
             this.actionsOpen = false;
             this.resetBulkUpdateForm();
@@ -1019,6 +1058,7 @@ function customersPage() {
         },
 
         openSendMessageModal() {
+            this.syncSelectionFromDom();
             if (!this.ensureTargetScope()) return;
             this.actionsOpen = false;
             this.sendMessageSelectionSnapshot = null;
@@ -1299,7 +1339,12 @@ function customersPage() {
                     const deliveryMessage = dispatch.queued
                         ? ' Delivery has been started.'
                         : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
-                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${result.suppressed_count ? ` ${result.suppressed_count} were suppressed by customer preferences.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                    const matched = result.matched_count || 0;
+                    const created = result.created_count || 0;
+                    const queued = result.queued_count || 0;
+                    const skipped = result.skipped?.length || 0;
+                    const suppressed = result.suppressed_count || 0;
+                    alert(`Matched ${matched} customer(s). Created ${created} notification(s); queued ${queued}.${deliveryMessage}${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${suppressed ? ` ${suppressed} suppressed by customer preferences.` : ''}`);
                 } else {
                     const error = await response.json().catch(() => ({}));
                     alert(error.detail || 'Failed to queue the message. Please try again.');
