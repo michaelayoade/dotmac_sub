@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess  # nosec
+import time
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any
@@ -114,16 +115,32 @@ def monitoring_index_context(
     return data
 
 
+_BANDWIDTH_CTX_CACHE: dict[str, Any] = {"value": None, "expires_at": 0.0}
+_BANDWIDTH_CTX_TTL_SECONDS = 10.0
+
+
 def monitoring_bandwidth_context(db: Session) -> dict[str, object]:
     """Build context for the auto-refreshing live bandwidth partial.
 
     Mirrors the bandwidth/nas_throughput slice of ``monitoring_page_data`` so
     the network-wide throughput panel can poll independently of the full page.
+
+    The result is the same network-wide aggregate for every viewer, so it is
+    cached ~10s and shared process-wide: the 15s HTMX poll then issues the
+    VictoriaMetrics fan-out (5 blocking instant queries) at most once per
+    window regardless of how many NOC tabs are open, instead of once per tab.
     """
-    return {
+    now = time.monotonic()
+    cached = _BANDWIDTH_CTX_CACHE
+    if cached["value"] is not None and now < cached["expires_at"]:
+        return cached["value"]
+    value: dict[str, object] = {
         "bandwidth": _get_bandwidth_summary(),
         "nas_throughput": _get_nas_throughput_summary(db),
     }
+    cached["value"] = value
+    cached["expires_at"] = now + _BANDWIDTH_CTX_TTL_SECONDS
+    return value
 
 
 def monitoring_kpi_context(

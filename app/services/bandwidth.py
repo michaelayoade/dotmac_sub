@@ -53,12 +53,20 @@ def add_directions_to_series(result: dict) -> dict:
     return result
 
 
-def live_event_payload(current: dict, now: datetime) -> dict:
+def live_event_payload(
+    current: dict, now: datetime, *, has_sample: bool = True
+) -> dict:
     """Build one SSE bandwidth event from a samples-based current dict.
 
     Carries both NAS-perspective rx/tx and the subscriber-perspective
     download/upload — the chart JS binds to download_bps/upload_bps only,
-    so an SSE producer that omits them renders as a flat-zero live chart."""
+    so an SSE producer that omits them renders as a flat-zero live chart.
+
+    ``has_sample`` distinguishes a genuine reading (incl. an idle 0 bps) from a
+    default-zero emitted because the poller has no data for this subscription
+    (no queue mapping). The chart uses it to show "Live" only when there really
+    is a sample, and "Waiting for data" otherwise instead of a fake live 0 bps.
+    """
     download_bps, upload_bps = to_subscriber_directions(
         current.get("rx_bps", 0), current.get("tx_bps", 0)
     )
@@ -68,6 +76,7 @@ def live_event_payload(current: dict, now: datetime) -> dict:
         "tx_bps": float(current.get("tx_bps", 0) or 0),
         "download_bps": download_bps,
         "upload_bps": upload_bps,
+        "has_sample": bool(has_sample),
     }
 
 
