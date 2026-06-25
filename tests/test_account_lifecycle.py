@@ -169,9 +169,7 @@ class TestRestoreSubscription:
         assert subscription.status == SubscriptionStatus.active
         assert subscriber.status == SubscriberStatus.active
 
-    def test_restore_skips_duplicate_login_when_active_sibling_exists(
-        self, db_session
-    ):
+    def test_restore_skips_duplicate_login_when_active_sibling_exists(self, db_session):
         """Payment clears the lock but does not violate active login uniqueness."""
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)

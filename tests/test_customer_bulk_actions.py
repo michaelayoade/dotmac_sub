@@ -55,13 +55,27 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
 
     assert "syncSelectionFromDom()" in page_template
     assert "applySelectionToDom()" in page_template
-    assert "document.querySelectorAll('#customers-table [data-customer-checkbox]:checked')" in page_template
-    assert "document.querySelectorAll('#customers-table [data-customer-checkbox]')" in page_template
+    assert (
+        "document.querySelectorAll('#customers-table [data-customer-checkbox]:checked')"
+        in page_template
+    )
+    assert (
+        "document.querySelectorAll('#customers-table [data-customer-checkbox]')"
+        in page_template
+    )
     assert "this.syncSelectionFromDom();" in page_template
     assert "this.applySelectionToDom();" in page_template
-    assert "this.clearSelection();" not in page_template.split("htmx:afterSwap", 1)[1].split("});", 1)[0]
-    assert "this.selectedIds.push({ id: customer.id, type: customer.type });" in page_template
-    assert "this.selectedIds.filter((item) => !visibleIds.has(item.id))" in page_template
+    assert (
+        "this.clearSelection();"
+        not in page_template.split("htmx:afterSwap", 1)[1].split("});", 1)[0]
+    )
+    assert (
+        "this.selectedIds.push({ id: customer.id, type: customer.type });"
+        in page_template
+    )
+    assert (
+        "this.selectedIds.filter((item) => !visibleIds.has(item.id))" in page_template
+    )
     assert "Matched ${matched} customer(s)." in page_template
     assert "skipped due to missing contact details" in page_template
     assert "suppressed by customer preferences" in page_template
