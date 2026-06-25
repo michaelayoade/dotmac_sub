@@ -24,6 +24,30 @@ UNKNOWN = "unknown"
 
 _CHUNK = 200
 
+# Heartbeat written on every warm run so the customer-facing connection-status
+# reader can tell whether live_status is being refreshed. If the warmer dies,
+# this key ages out and good states stop being trusted (see topology.selfcare).
+# TTL is far longer than the staleness window so the timestamp survives to be
+# age-compared (a TTL-expired key reads as "missing", which we treat as
+# unknown-freshness, not stale — see selfcare._warm_is_stale).
+WARM_HEARTBEAT_KEY = "topology:live_status:warmed_at"
+_WARM_HEARTBEAT_TTL_SECONDS = 86_400
+
+
+def touch_warm_heartbeat(now: datetime | None = None) -> None:
+    """Record that the live_status warmer just ran (advisory, cache-only).
+
+    Called from the warm task after a successful refresh — kept out of the pure
+    ``warm_topology_status`` service function so that has no cache side effects.
+    """
+    try:
+        from app.services.app_cache import set_json
+
+        stamp = (now or _now()).isoformat()
+        set_json(WARM_HEARTBEAT_KEY, stamp, _WARM_HEARTBEAT_TTL_SECONDS)
+    except Exception:  # cache is advisory; never fail the warm over it
+        pass
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -40,7 +64,17 @@ def _availability(zhost: dict) -> str:
     Prefers an explicit host-level ``available`` (1 up, 2 down); falls back to
     interface availability (main interface first) for Zabbix 6+ where host-level
     availability was removed.
+
+    A host Zabbix isn't actively monitoring — disabled (``status==1``) or in
+    maintenance (``maintenance_status==1``) — can't be trusted to report real
+    reachability; its ``available`` is stale, so we return ``unknown`` rather
+    than reading a leftover "up". Otherwise a host we deliberately disabled
+    (e.g. a deactivated device) would surface to customers as healthy.
     """
+    if str(zhost.get("status")) == "1":  # 0=enabled, 1=disabled
+        return UNKNOWN
+    if str(zhost.get("maintenance_status")) == "1":
+        return UNKNOWN
     top = str(zhost.get("available") or "")
     if top == "1":
         return UP

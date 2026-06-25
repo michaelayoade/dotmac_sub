@@ -86,8 +86,22 @@ def monitoring_page_data(
 
 
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """No-op: data is now fetched directly from Zabbix on demand."""
-    pass
+    """Enqueue a cache warm so the page's ``?refresh=1`` actually refreshes.
+
+    The dashboard reads warmed caches (it no longer fans out to Zabbix on the
+    request thread), so a manual refresh means asking the warmer to re-populate
+    them now rather than fetching inline. Best-effort: a broker hiccup must not
+    break the page render.
+    """
+    try:
+        from app.tasks.monitoring_warm import warm_monitoring_caches
+
+        warm_monitoring_caches.delay()
+    except Exception:
+        logger.warning(
+            "monitoring_refresh_dispatch_failed",
+            extra={"event": "monitoring_refresh_dispatch_failed"},
+        )
 
 
 def monitoring_index_context(
