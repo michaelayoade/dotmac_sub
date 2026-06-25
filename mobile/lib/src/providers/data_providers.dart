@@ -350,6 +350,27 @@ final usageHistoryProvider =
   return ref.watch(usageRepositoryProvider).usageHistory(days: days);
 });
 
+/// Selected range (hours back) for the speed-history chart.
+/// 1h / 6h / 24h / 7d / 30d.
+final speedRangeHoursProvider = StateProvider.autoDispose<int>((ref) {
+  cacheFor(ref);
+  return 24;
+});
+
+/// Bandwidth-speed time series (GET /bandwidth/my/series) over the selected
+/// look-back window in hours. VM-backed, so it reaches as far as VM retention.
+final bandwidthSeriesProvider =
+    FutureProvider.autoDispose.family<List<BandwidthPoint>, int>(
+  (ref, hours) async {
+    cacheFor(ref);
+    final end = DateTime.now();
+    final start = end.subtract(Duration(hours: hours));
+    return ref
+        .watch(usageRepositoryProvider)
+        .bandwidthSeries(start: start, end: end);
+  },
+);
+
 /// Current throughput for the active subscription (connection banner).
 /// Errors (e.g. no active subscription) just mean "no signal" — callers
 /// read it via asData and omit the figure.

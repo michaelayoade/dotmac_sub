@@ -52,6 +52,27 @@ class UsageRepository {
     return UsageHistory.fromJson(data as Map<String, dynamic>);
   }
 
+  /// GET /bandwidth/my/series — bandwidth-speed time series for the caller's
+  /// subscription over [start]..[end]. Source auto-selects Postgres (<24h) or
+  /// VictoriaMetrics (older), so history reaches as far back as VM retention.
+  Future<List<BandwidthPoint>> bandwidthSeries({
+    required DateTime start,
+    required DateTime end,
+    String interval = 'auto',
+  }) async {
+    final data = await guard(
+      () => dio.get('/bandwidth/my/series', queryParameters: {
+        'start_at': start.toUtc().toIso8601String(),
+        'end_at': end.toUtc().toIso8601String(),
+        'interval': interval,
+      }),
+    );
+    final list = (data as Map<String, dynamic>)['data'] as List? ?? const [];
+    return list
+        .map((e) => BandwidthPoint.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   /// GET /bandwidth/my/stats — current throughput for the subscriber's active
   /// subscription (subscriber-perspective download/upload).
   Future<LiveBandwidth> liveBandwidth({String period = '1h'}) async {

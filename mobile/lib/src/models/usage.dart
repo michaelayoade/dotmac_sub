@@ -140,6 +140,29 @@ class LiveBandwidth {
       );
 }
 
+/// One point of the bandwidth-speed time series. Mirrors BandwidthSeriesPoint
+/// from app/api/bandwidth.py (GET /bandwidth/my/series). We bind only the
+/// subscriber-perspective download/upload rates.
+class BandwidthPoint {
+  BandwidthPoint({
+    required this.at,
+    required this.downloadBps,
+    required this.uploadBps,
+  });
+
+  final DateTime at;
+  final double downloadBps;
+  final double uploadBps;
+
+  double get totalBps => downloadBps + uploadBps;
+
+  factory BandwidthPoint.fromJson(Map<String, dynamic> json) => BandwidthPoint(
+        at: DateTime.parse(json['timestamp'].toString()).toLocal(),
+        downloadBps: (json['download_bps'] as num?)?.toDouble() ?? 0,
+        uploadBps: (json['upload_bps'] as num?)?.toDouble() ?? 0,
+      );
+}
+
 /// One bar of the usage chart. Mirrors UsageSeriesPoint from schemas/usage.py.
 class UsageSeriesPoint {
   UsageSeriesPoint({required this.bucketStart, required this.bytes});
