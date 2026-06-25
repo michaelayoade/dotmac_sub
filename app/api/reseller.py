@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.chat import ChatSessionResponse
+from app.services import chat_session as chat_session_service
 from app.services import reseller_portal
 from app.services.auth_dependencies import require_user_auth
 
@@ -79,6 +81,20 @@ def _reseller_id(db: Session, principal: dict) -> str:
     if not reseller_id:
         raise HTTPException(status_code=403, detail="A reseller account is required")
     return reseller_id
+
+
+@router.post("/chat/session", response_model=ChatSessionResponse)
+def my_reseller_chat_session(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Open (or resume) a live-chat session with DotMac support.
+
+    Reseller chats land in the same general support pool as customer chats; the
+    session is tagged with the reseller for agent context only.
+    """
+    reseller_id = _reseller_id(db, principal)
+    return chat_session_service.broker_reseller_session(db, reseller_id, principal)
 
 
 @router.get("/dashboard")

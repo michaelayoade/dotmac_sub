@@ -56,6 +56,7 @@ from app.schemas.catalog import (
     PlanOfferSummary,
     SubscriptionRead,
 )
+from app.schemas.chat import ChatSessionResponse
 from app.schemas.common import ListResponse
 from app.schemas.gis import (
     MyLocationRead,
@@ -110,6 +111,7 @@ from app.services import account_deletion as account_deletion_service
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
+from app.services import chat_session as chat_session_service
 from app.services import customer_location_requests as location_service
 from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
@@ -724,6 +726,21 @@ def my_account_deletion_request(
         requested_at=result["requested_at"],
         already_requested=result["already_requested"],
     )
+
+
+@router.post("/chat/session", response_model=ChatSessionResponse)
+def my_chat_session(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Open (or resume) a live-chat session with support.
+
+    The sub asserts the authenticated subscriber's identity to the CRM and
+    returns an opaque visitor token plus the URLs the client uses to talk to the
+    CRM chat widget directly (WebSocket for real-time, REST for send/history).
+    """
+    subscriber_id = _subscriber_id(principal)
+    return chat_session_service.broker_customer_session(db, subscriber_id)
 
 
 @router.get("/notifications", response_model=ListResponse[NotificationRead])
