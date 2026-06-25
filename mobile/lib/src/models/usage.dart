@@ -129,16 +129,28 @@ class AccountingSession {
 /// perspective. Mirrors BandwidthStats from api/bandwidth.py (we bind only
 /// the download/upload fields — rx/tx are NAS-perspective).
 class LiveBandwidth {
-  LiveBandwidth({this.downloadBps, this.uploadBps});
+  LiveBandwidth({
+    this.downloadBps,
+    this.uploadBps,
+    this.peakDownloadBps,
+    this.peakUploadBps,
+  });
 
   final double? downloadBps;
   final double? uploadBps;
+
+  /// Peak throughput over the requested window (subscriber perspective).
+  /// Populated by /bandwidth/my/stats; null on the live one-shot.
+  final double? peakDownloadBps;
+  final double? peakUploadBps;
 
   bool get hasSignal => (downloadBps ?? 0) > 0 || (uploadBps ?? 0) > 0;
 
   factory LiveBandwidth.fromJson(Map<String, dynamic> json) => LiveBandwidth(
         downloadBps: (json['download_bps'] as num?)?.toDouble(),
         uploadBps: (json['upload_bps'] as num?)?.toDouble(),
+        peakDownloadBps: (json['peak_download_bps'] as num?)?.toDouble(),
+        peakUploadBps: (json['peak_upload_bps'] as num?)?.toDouble(),
       );
 }
 
