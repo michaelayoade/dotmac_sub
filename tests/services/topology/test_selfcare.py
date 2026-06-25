@@ -81,9 +81,7 @@ def test_stale_warm_downgrades_healthy_to_unknown(
     assert out["status"] == "unknown"
 
 
-def test_fresh_warm_keeps_healthy(
-    db_session, subscriber, subscription, monkeypatch
-):
+def test_fresh_warm_keeps_healthy(db_session, subscriber, subscription, monkeypatch):
     _fiber(db_session, subscriber, "up")
     fresh = datetime.now(UTC).isoformat()
     monkeypatch.setattr("app.services.app_cache.get_json", lambda key: fresh)

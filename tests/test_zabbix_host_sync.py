@@ -249,8 +249,7 @@ def test_create_or_update_host_creates_when_adoption_ambiguous() -> None:
 def test_create_or_update_host_recreates_on_missing_host() -> None:
     client = _AdoptFakeClient(
         update_error=ZabbixClientError(
-            "Zabbix API error: No permissions to referred object or it "
-            "does not exist!"
+            "Zabbix API error: No permissions to referred object or it does not exist!"
         )
     )
 
