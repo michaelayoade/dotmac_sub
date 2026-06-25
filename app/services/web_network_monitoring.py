@@ -134,7 +134,7 @@ def monitoring_bandwidth_context(db: Session) -> dict[str, object]:
     cached = _BANDWIDTH_CTX_CACHE
     if cached["value"] is not None and now < cached["expires_at"]:
         return cached["value"]
-    value = {
+    value: dict[str, object] = {
         "bandwidth": _get_bandwidth_summary(),
         "nas_throughput": _get_nas_throughput_summary(db),
     }
