@@ -175,7 +175,10 @@ def _parse_item_value(item_value: str | None) -> float:
     if not item_value:
         return 0.0
     value = item_value.strip()
-    multipliers = {"k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12, "p": 1e15, "e": 1e18}
+    # Only the SI suffixes Zabbix actually emits for bandwidth/throughput. 'e'
+    # is deliberately excluded: it's the float exponent marker, so treating a
+    # trailing 'e' as a multiplier would misparse scientific notation.
+    multipliers = {"k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12}
     try:
         if value and value[-1].lower() in multipliers:
             return float(value[:-1]) * multipliers[value[-1].lower()]
@@ -281,12 +284,17 @@ def _persist_zabbix_alert(
     closes — the table would stay empty in production.
     """
     try:
-        response = _write_zabbix_alert(db, payload)
+        response, emit_resolved = _write_zabbix_alert(db, payload)
         db.commit()
-        return response
     except Exception:
         db.rollback()
         raise
+    # Emit only AFTER the alert is durably committed. _emit_network_alert fans
+    # out a webhook on its own session; emitting before commit would deliver a
+    # phantom "problem"/"resolved" for an alert that a failed commit rolled back.
+    if emit_resolved is not None:
+        _emit_network_alert(payload, resolved=emit_resolved)
+    return response
 
 
 def _emit_network_alert(payload: ZabbixAlertPayload, *, resolved: bool) -> None:
@@ -331,8 +339,13 @@ def _emit_network_alert(payload: ZabbixAlertPayload, *, resolved: bool) -> None:
 
 def _write_zabbix_alert(
     db: Session, payload: ZabbixAlertPayload
-) -> ZabbixWebhookResponse:
-    """Convert a validated Zabbix alert into Alert/AlertEvent records."""
+) -> tuple[ZabbixWebhookResponse, bool | None]:
+    """Convert a validated Zabbix alert into Alert/AlertEvent records.
+
+    Returns ``(response, emit_resolved)`` where ``emit_resolved`` is ``None``
+    (no event to emit — update or no-op), ``False`` (newly opened problem), or
+    ``True`` (recovery). The caller emits the network_alert event after commit.
+    """
     logger.info(
         "zabbix_webhook_received",
         extra={
@@ -391,9 +404,12 @@ def _write_zabbix_alert(
                 extra={"alert_id": str(existing_alert.id)},
             )
 
-            return _response(
-                alert_id=str(existing_alert.id),
-                message="Alert updated",
+            return (
+                _response(
+                    alert_id=str(existing_alert.id),
+                    message="Alert updated",
+                ),
+                None,
             )
         else:
             # Create new alert
@@ -433,11 +449,13 @@ def _write_zabbix_alert(
                 "zabbix_alert_created",
                 extra={"alert_id": str(alert.id)},
             )
-            _emit_network_alert(payload, resolved=False)
 
-            return _response(
-                alert_id=str(alert.id),
-                message="Alert created",
+            return (
+                _response(
+                    alert_id=str(alert.id),
+                    message="Alert created",
+                ),
+                False,
             )
     else:
         # This is a recovery (OK/RESOLVED)
@@ -458,18 +476,20 @@ def _write_zabbix_alert(
                 "zabbix_alert_resolved",
                 extra={"alert_id": str(existing_alert.id)},
             )
-            _emit_network_alert(payload, resolved=True)
 
-            return _response(
-                alert_id=str(existing_alert.id),
-                message="Alert resolved",
+            return (
+                _response(
+                    alert_id=str(existing_alert.id),
+                    message="Alert resolved",
+                ),
+                True,
             )
         else:
             logger.info(
                 "zabbix_alert_resolve_no_match",
                 extra={"trigger_id": payload.trigger_id},
             )
-            return _response(message="No matching alert to resolve")
+            return (_response(message="No matching alert to resolve"), None)
 
 
 @router.post("/webhook/sync", response_model=dict[str, Any])
