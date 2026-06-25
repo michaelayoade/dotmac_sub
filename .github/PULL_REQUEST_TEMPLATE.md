@@ -8,6 +8,14 @@
 - Tests run:
 - Manual checks:
 
+## Version Impact
+
+Apply exactly one label when this PR changes deployable behavior or shipped artifacts:
+`version:patch`, `version:minor`, `version:major`, or `version:none`.
+
+- Version impact:
+- If `version:none`: Version impact: none because ...
+
 ## UI / Design Review
 
 Complete this section for any UI-facing change. Use `N/A` where appropriate.
