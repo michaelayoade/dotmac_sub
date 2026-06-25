@@ -169,6 +169,49 @@ class TestRestoreSubscription:
         assert subscription.status == SubscriptionStatus.active
         assert subscriber.status == SubscriberStatus.active
 
+    def test_restore_skips_duplicate_login_when_active_sibling_exists(
+        self, db_session
+    ):
+        """Payment clears the lock but does not violate active login uniqueness."""
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        _make_subscription(
+            db_session,
+            subscriber,
+            offer,
+            login="100008817",
+            status=SubscriptionStatus.active,
+        )
+        duplicate = _make_subscription(
+            db_session,
+            subscriber,
+            offer,
+            login="100008817",
+            status=SubscriptionStatus.pending,
+        )
+        suspend_subscription(
+            db_session,
+            str(duplicate.id),
+            reason=EnforcementReason.overdue,
+            source="dunning_case:1",
+            emit=False,
+        )
+
+        restored = restore_subscription(
+            db_session,
+            str(duplicate.id),
+            trigger="payment",
+            resolved_by="payment:pay-123",
+            emit=False,
+        )
+
+        assert restored is False
+        assert duplicate.status == SubscriptionStatus.suspended
+        assert not has_active_lock(
+            db_session, str(duplicate.id), EnforcementReason.overdue
+        )
+        assert subscriber.status == SubscriberStatus.active
+
     def test_dual_lock_partial_restore(self, db_session):
         """Overdue + FUP locks. Payment clears overdue but FUP remains."""
         subscriber = _make_subscriber(db_session)
