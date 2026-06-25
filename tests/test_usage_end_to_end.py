@@ -104,7 +104,9 @@ def test_sessions_meter_into_quota_and_match_cycle_summary(db_session, subscribe
     out = _run_async(
         svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
     )
-    assert out["total_source"] == "quota"
+    # Cycle total is the RADIUS session-octet sum over the window (the same
+    # 2 GB + 1 GB metered above), not the rated quota bucket.
+    assert out["total_source"] == "sessions"
     assert out["is_authoritative"] is True
     assert out["total_bytes"] == 3 * _GB
 
