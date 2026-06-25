@@ -66,21 +66,14 @@ class DashboardScreen extends ConsumerWidget {
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final fup = todaySummary?.fup;
-    // Headline data figure on Home = usage this billing/subscription period
-    // (cycle): meaningful for capped AND unlimited plans, unlike "data left"
-    // which reads as 0/empty on an unlimited plan. Falls back to today's total
-    // only while the cycle aggregate is still loading (null), so the card
-    // reflects the period rather than a single day.
+    // Two separate at-a-glance usage figures: today, and the whole billing/
+    // subscription period (cycle) — the latter meaningful for capped AND
+    // unlimited plans, unlike "data left" which reads as 0 on unlimited.
     final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    final dataUsed = cycleSummary?.totalBytes ?? dataToday;
-    // Average speed over the cycle (mean throughput) for the at-a-glance stat.
-    final avgBps = cycleSummary?.averageBps;
-    final avgSpeed = cycleSummary == null
-        ? null // still loading
-        : (avgBps == null
-            ? '—'
-            : '${(avgBps / 1e6).toStringAsFixed(avgBps >= 1e7 ? 0 : 1)} Mbps');
+    final dataPeriod = cycleSummary?.totalBytes;
+    // Wallet balance — its own at-a-glance card (separate from amount due).
+    final wallet = ref.watch(walletProvider).asData?.value;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -244,18 +237,30 @@ class DashboardScreen extends ConsumerWidget {
             }),
             const SizedBox(height: 16),
 
-            // --- At-a-glance summary (2x2) ---
+            // --- At-a-glance summary ---
+            // Row 1: wallet balance · amount due · usage today
             Row(
               children: [
                 Expanded(
                   child: _StatCard(
                     icon: Icons.account_balance_wallet_outlined,
-                    // Say "Amount due" in words when owing, so the state isn't
-                    // conveyed by the red colour alone (accessibility).
-                    label: (outstanding ?? 0) > 0 ? 'Amount due' : 'Balance',
+                    label: 'Wallet',
+                    value: wallet == null
+                        ? null
+                        : Fmt.moneyCompact(wallet.balance, wallet.currency),
+                    onTap: () => context.push('/wallet'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.receipt_long_outlined,
+                    label: 'Amount due',
                     value: outstanding == null
                         ? null
                         : Fmt.moneyCompact(outstanding, currency),
+                    // Colour alone shouldn't convey the owing state, but the
+                    // label already says "Amount due"; highlight when > 0.
                     highlight: (outstanding ?? 0) > 0,
                     onTap: () => context.go('/billing'),
                   ),
@@ -263,11 +268,25 @@ class DashboardScreen extends ConsumerWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _StatCard(
+                    icon: Icons.today_outlined,
+                    label: 'Today',
+                    value: dataToday == null ? null : Fmt.bytes(dataToday),
+                    onTap: () => context.go('/usage'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Row 2: usage this subscription period · next bill date
+            Row(
+              children: [
+                Expanded(
+                  child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Data used on the current service this billing/subscription
-                    // period — meaningful for capped and unlimited plans alike.
-                    label: 'This month',
-                    value: dataUsed == null ? null : Fmt.bytes(dataUsed),
+                    // Data used over the whole billing/subscription period —
+                    // meaningful for capped and unlimited plans alike.
+                    label: 'This period',
+                    value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
                     highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
@@ -275,24 +294,10 @@ class DashboardScreen extends ConsumerWidget {
                     onTap: () => context.go('/usage'),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.speed_outlined,
-                    // Mean throughput over the cycle (subscriber perspective).
-                    label: 'Avg speed',
-                    value: avgSpeed,
-                    onTap: () => context.go('/usage'),
-                  ),
-                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _StatCard(
-                    icon: Icons.hourglass_bottom_outlined,
+                    icon: Icons.event_outlined,
                     label: expiryStatLabel,
                     value: expiryStatValue,
                     // Urgent when expiring within 3 days or genuinely expired
@@ -302,6 +307,9 @@ class DashboardScreen extends ConsumerWidget {
                     onTap: () => context.go('/billing'),
                   ),
                 ),
+                // Keep the two row-2 cards the same width as row 1's three.
+                const SizedBox(width: 10),
+                const Expanded(child: SizedBox()),
               ],
             ),
             const SizedBox(height: 20),
