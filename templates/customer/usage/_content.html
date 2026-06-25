@@ -79,14 +79,25 @@
                 </svg>
                 {% if bandwidth_chart_live %}Live Bandwidth{% else %}Bandwidth Speed History{% endif %}
             </h2>
-            <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-700">
-                <template x-for="range in timeRanges" :key="range.value">
-                    <button @click="setTimeRange(range.value)"
-                            :class="timeRange === range.value ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
-                            class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-                            x-text="range.label">
-                    </button>
-                </template>
+            <div class="flex items-center gap-2">
+                {% if bandwidth_chart_live %}
+                {# On-demand live toggle — off by default, so nothing streams/polls until asked. #}
+                <button @click="toggleLive()"
+                        :class="liveActive ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300 hover:border-slate-400 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'"
+                        class="inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors">
+                    <span class="h-2 w-2 rounded-full" :class="liveActive ? 'bg-white animate-pulse' : 'bg-slate-400'"></span>
+                    <span x-text="liveActive ? 'Live' : 'Go live'"></span>
+                </button>
+                {% endif %}
+                <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-700">
+                    <template x-for="range in timeRanges" :key="range.value">
+                        <button @click="setTimeRange(range.value)"
+                                :class="timeRange === range.value ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
+                                class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
+                                x-text="range.label">
+                        </button>
+                    </template>
+                </div>
             </div>
         </div>
         <div class="p-6">

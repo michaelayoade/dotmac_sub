@@ -1071,7 +1071,8 @@ class TestRunInvoiceCycle:
                 subscription_id=subscription.id,
                 add_on_id=add_on.id,
                 quantity=1,
-                start_at=now_naive,
+                # Active before the period starts → billed for the full period.
+                start_at=now_naive - timedelta(days=30),
             )
         )
         db_session.commit()
@@ -1551,6 +1552,295 @@ class TestRunInvoiceCycle:
             complete_record.dunning_escalations_sent
             == summary["dunning_escalations_sent"]
         )
+
+
+# =============================================================================
+# Recurring add-on hardening: start_at guard, proration, IP-route coupling
+# =============================================================================
+
+
+class TestRecurringAddonHardening:
+    """start_at guard, proration, and IP-route coupling in _bill_recurring_addons."""
+
+    def _seed(
+        self,
+        db_session,
+        subscription,
+        subscriber_account,
+        *,
+        addon_start,
+        addon_end=None,
+        quantity=1,
+        ip_is_public=False,
+        ip_prefix_length=None,
+        sub_end_at=None,
+    ):
+        from app.models.catalog import (
+            AddOn,
+            AddOnPrice,
+            AddOnType,
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionAddOn,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now_naive - timedelta(days=30)
+        subscription.next_billing_at = now_naive - timedelta(days=1)
+        subscription.end_at = sub_end_at
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        add_on = AddOn(
+            name="/29 IP",
+            addon_type=AddOnType.extra_ip,
+            is_active=True,
+            ip_is_public=ip_is_public,
+            ip_prefix_length=ip_prefix_length,
+        )
+        db_session.add(add_on)
+        db_session.flush()
+        db_session.add(
+            AddOnPrice(
+                add_on_id=add_on.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("25.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            SubscriptionAddOn(
+                subscription_id=subscription.id,
+                add_on_id=add_on.id,
+                quantity=quantity,
+                start_at=addon_start,
+                end_at=addon_end,
+            )
+        )
+        return now_naive
+
+    def _enable_route_guard(self, db_session):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="bill_ip_addon_requires_active_route",
+                value_type=SettingValueType.boolean,
+                value_text="true",
+                is_active=True,
+            )
+        )
+
+    def _add_routes(self, db_session, subscriber_account, *, prefix_length=29, count=1):
+        from app.models.network import SubscriberAdditionalRoute
+
+        for i in range(count):
+            db_session.add(
+                SubscriberAdditionalRoute(
+                    subscriber_id=subscriber_account.id,
+                    cidr=f"10.0.{i}.0/{prefix_length}",
+                    prefix_length=prefix_length,
+                    is_active=True,
+                )
+            )
+
+    def _addon_line(self, db_session, subscriber_account):
+        from app.models.billing import Invoice, InvoiceLine
+
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .first()
+        )
+        if invoice is None:
+            return None
+        lines = (
+            db_session.query(InvoiceLine)
+            .filter(InvoiceLine.invoice_id == invoice.id)
+            .all()
+        )
+        return next((line for line in lines if "/29 IP" in line.description), None)
+
+    def test_future_dated_addon_not_billed(
+        self, db_session, subscription, subscriber_account
+    ):
+        """An add-on starting in a later period (no overlap) is not billed yet."""
+        now_naive = self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            # Beyond period_end (period is ~[now-1d, now+~29d]).
+            addon_start=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=45),
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        assert self._addon_line(db_session, subscriber_account) is None
+
+    def test_addon_started_mid_period_is_prorated(
+        self, db_session, subscription, subscriber_account
+    ):
+        """An add-on that starts mid-period is billed only for its active part."""
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        # Period is ~[now-1d, now+~29d]; start 15 days in → ~half overlap.
+        self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=now_naive + timedelta(days=15),
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._addon_line(db_session, subscriber_account)
+        assert line is not None
+        assert Decimal("0.00") < Decimal(str(line.amount)) < Decimal("25.00")
+
+    def test_addon_ended_mid_period_is_billed_for_active_part(
+        self, db_session, subscription, subscriber_account
+    ):
+        """An add-on that ended mid-period is billed for the part it was active,
+        not skipped entirely (the old run_at filter dropped it)."""
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        # Active from period start, ended ~3 days in (before run_at=now).
+        self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=now_naive - timedelta(days=1),
+            addon_end=now_naive - timedelta(hours=12),
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._addon_line(db_session, subscriber_account)
+        assert line is not None
+        assert Decimal("0.00") < Decimal(str(line.amount)) < Decimal("25.00")
+
+    def test_addon_prorated_on_partial_period(
+        self, db_session, subscription, subscriber_account
+    ):
+        """An add-on on a service that ends mid-cycle is prorated, not billed full."""
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=now_naive - timedelta(days=1),
+            sub_end_at=now_naive + timedelta(days=14),
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._addon_line(db_session, subscriber_account)
+        assert line is not None
+        # Partial period → strictly between zero and the full ₦25 add-on price.
+        assert Decimal("0.00") < Decimal(str(line.amount)) < Decimal("25.00")
+
+    def test_ip_addon_skipped_when_no_active_route_and_guard_on(
+        self, db_session, subscription, subscriber_account
+    ):
+        """With the guard on, a public-IP add-on with no live route is not billed."""
+        now_naive = self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1),
+            ip_is_public=True,
+            ip_prefix_length=29,
+        )
+        self._enable_route_guard(db_session)
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        assert self._addon_line(db_session, subscriber_account) is None
+
+    def test_ip_addon_billed_when_active_route_present(
+        self, db_session, subscription, subscriber_account
+    ):
+        """With the guard on, a public-IP add-on with a live route bills normally."""
+        now_naive = self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1),
+            ip_is_public=True,
+            ip_prefix_length=29,
+        )
+        self._enable_route_guard(db_session)
+        self._add_routes(db_session, subscriber_account, prefix_length=29, count=1)
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._addon_line(db_session, subscriber_account)
+        assert line is not None
+        assert Decimal(str(line.amount)) == Decimal("25.00")
+
+    def test_ip_addon_quantity_capped_to_active_routes(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Billed quantity is capped to the number of active routes (qty 2 → 1)."""
+        now_naive = self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1),
+            quantity=2,
+            ip_is_public=True,
+            ip_prefix_length=29,
+        )
+        self._enable_route_guard(db_session)
+        self._add_routes(db_session, subscriber_account, prefix_length=29, count=1)
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._addon_line(db_session, subscriber_account)
+        assert line is not None
+        assert Decimal(str(line.quantity)) == Decimal("1")
+        assert Decimal(str(line.amount)) == Decimal("25.00")
+
+    def test_ip_addon_guard_off_bills_without_route(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Guard default-off: a public-IP add-on still bills with no route (neutral)."""
+        now_naive = self._seed(
+            db_session,
+            subscription,
+            subscriber_account,
+            addon_start=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1),
+            ip_is_public=True,
+            ip_prefix_length=29,
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        line = self._addon_line(db_session, subscriber_account)
+        assert line is not None
+        assert Decimal(str(line.amount)) == Decimal("25.00")
 
 
 # =============================================================================
@@ -2195,3 +2485,134 @@ class TestDefaultTaxRate:
             billing_automation._default_tax_application(db_session)
             == TaxApplication.exempt
         )
+
+
+# =============================================================================
+# Cancellation credit resolves the cycle from the active price, not the offer
+# =============================================================================
+
+
+class TestCancellationCreditCycle:
+    def test_credit_window_uses_price_cycle_not_offer_cycle(
+        self, db_session, subscription, subscriber_account
+    ):
+        """The unused-portion window comes from the active recurring price's
+        cycle (version/price-aware), matching the runner — not offer.billing_cycle."""
+        from app.models.billing import (
+            CreditNote,
+            Invoice,
+            InvoiceLine,
+            InvoiceStatus,
+        )
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now = datetime.now(UTC)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        # 3 days left; the active price bills WEEKLY.
+        subscription.next_billing_at = now + timedelta(days=3)
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("70.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.weekly,
+                is_active=True,
+            )
+        )
+        invoice = Invoice(
+            account_id=subscriber_account.id,
+            invoice_number="INV-CC-1",
+            status=InvoiceStatus.issued,
+            currency="NGN",
+        )
+        db_session.add(invoice)
+        db_session.flush()
+        db_session.add(
+            InvoiceLine(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description="Plan",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("70.00"),
+                amount=Decimal("70.00"),
+            )
+        )
+        db_session.commit()
+
+        billing_automation.generate_cancellation_credit(db_session, subscription)
+
+        credit = (
+            db_session.query(CreditNote)
+            .filter(CreditNote.account_id == subscriber_account.id)
+            .first()
+        )
+        assert credit is not None
+        # Weekly window: ~3/7 of ₦70 ≈ ₦30. The old offer-cycle (monthly) bug
+        # would credit ~3/30 ≈ ₦7.
+        assert credit.subtotal > Decimal("20.00")
+
+
+# =============================================================================
+# Prorated-invoice idempotency keys on the day-floored period, not the instant
+# =============================================================================
+
+
+class TestProratedInvoiceIdempotency:
+    def test_same_day_reactivation_does_not_duplicate(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Two activations on the same day must not mint a second proration."""
+        from app.models.billing import InvoiceLine
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.postpaid
+        subscriber_account.status = AccountStatus.active
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("300.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        # Mid-month activation (day 1 short-circuits proration).
+        base = datetime.now(UTC).replace(
+            day=15, hour=9, minute=0, second=0, microsecond=0
+        )
+        inv1 = billing_automation.generate_prorated_invoice(
+            db_session, subscription, activation_date=base
+        )
+        assert inv1 is not None
+
+        # Same day, a few seconds later — must dedupe to the floored period.
+        inv2 = billing_automation.generate_prorated_invoice(
+            db_session, subscription, activation_date=base + timedelta(seconds=5)
+        )
+        assert inv2 is None
+
+        lines = (
+            db_session.query(InvoiceLine)
+            .filter(InvoiceLine.subscription_id == subscription.id)
+            .all()
+        )
+        assert len(lines) == 1

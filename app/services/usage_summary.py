@@ -650,6 +650,16 @@ async def get_usage_summary(
             total_source, authoritative = "sessions", False
         points = await _vm_points(db, sub_ids, start, end)
         series = _integrate(points, "day", tz, end=end)
+        # Unlimited / unmetered plans don't accrue used_gb, so a rated bucket can
+        # read 0 even with real traffic this period. Fall back to the measured
+        # series, then session octets, so "this period" isn't a false zero.
+        if total == 0:
+            measured = int(round(sum(series.values())))
+            if measured == 0:
+                measured = _session_octets(db, sub_ids, since=start)
+            if measured > 0:
+                total = measured
+                total_source, authoritative = "samples", False
         return {
             "period": period,
             "start": start,

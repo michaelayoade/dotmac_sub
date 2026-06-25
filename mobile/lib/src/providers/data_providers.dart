@@ -371,13 +371,29 @@ final bandwidthSeriesProvider =
   },
 );
 
-/// Live throughput for the active subscription (connection banner). Streams
-/// fresh samples while the dashboard is open; autoDispose stops the poll when
-/// it closes. Errors (e.g. no active subscription) surface as a no-signal
-/// value, so callers read it via asData and omit the figure.
-final liveBandwidthProvider = StreamProvider.autoDispose<LiveBandwidth>((ref) {
+/// On-demand switch for live bandwidth polling. Off by default, so the
+/// connection banner takes a single reading instead of polling every few
+/// seconds; the user opts into continuous live updates from the banner.
+final liveBandwidthEnabledProvider = StateProvider.autoDispose<bool>((ref) {
   cacheFor(ref);
-  return ref.watch(usageRepositoryProvider).liveBandwidthStream();
+  return false;
+});
+
+/// Throughput for the active subscription (connection banner). By default a
+/// single on-load reading; when the user enables live it streams fresh samples.
+/// Intentionally does not use cacheFor(): cacheFor keepAlive()s the provider,
+/// which would keep a periodic live poll running after the dashboard closes.
+/// Errors (e.g. no active subscription) surface as a no-signal value, so
+/// callers read it via asData and omit the figure.
+final liveBandwidthProvider = StreamProvider.autoDispose<LiveBandwidth>((ref) {
+  final repo = ref.watch(usageRepositoryProvider);
+  if (ref.watch(liveBandwidthEnabledProvider)) {
+    return repo.liveBandwidthStream();
+  }
+  // On-demand off: one-shot fetch, no periodic polling.
+  return Stream.fromFuture(
+    repo.liveBandwidth().catchError((_) => LiveBandwidth()),
+  );
 });
 
 final sessionsProvider =

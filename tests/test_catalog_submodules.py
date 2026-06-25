@@ -1549,6 +1549,160 @@ class TestSubscriptions:
         )
         assert updated.status == SubscriptionStatus.active
 
+    def test_plan_change_clears_stale_offer_version_id(self, db_session, subscriber):
+        """Changing offer drops the previous offer's pinned version so price
+        resolution doesn't read the OLD plan's OfferVersionPrice."""
+        first_offer = _make_offer(db_session, name="Plan A")
+        second_offer = _make_offer(db_session, name="Plan B")
+        version = catalog_service.offer_versions.create(
+            db_session,
+            OfferVersionCreate(
+                offer_id=first_offer.id,
+                version_number=1,
+                name="Plan A v1",
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+            ),
+        )
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=first_offer.id,
+                offer_version_id=version.id,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+        assert sub.offer_version_id == version.id
+
+        updated = catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(offer_id=second_offer.id),
+        )
+
+        assert updated.offer_id == second_offer.id
+        assert updated.offer_version_id is None
+
+    def test_update_preserves_existing_end_at(
+        self, db_session, subscriber, catalog_offer
+    ):
+        """A routine update must not recompute end_at from start_at + contract
+        term and resurrect a past contract-end as a customer-visible expiry."""
+        from app.models.catalog import ContractTerm
+
+        now = datetime.now(UTC)
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.pending,
+                start_at=now - timedelta(days=400),
+                contract_term=ContractTerm.twelve_month,
+                # Explicit end_at deliberately later than start_at + 12 months
+                # (which would land in the past).
+                end_at=now + timedelta(days=330),
+            ),
+        )
+        assert sub.end_at is not None
+
+        # A routine update that does NOT supply end_at exercises the recompute
+        # block (status-independent); pending keeps it off the activation path.
+        updated = catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(status=SubscriptionStatus.pending),
+        )
+
+        end_at = updated.end_at
+        if end_at.tzinfo is None:
+            end_at = end_at.replace(tzinfo=UTC)
+        # Preserved (future), NOT recomputed to start_at + 12mo (~35 days ago).
+        assert end_at > now
+
+    def test_offer_change_rederives_billing_mode(self, db_session, subscriber):
+        """Switching a non-active sub to a different-mode offer re-derives
+        billing_mode (only Subscription.billing_mode gates invoicing)."""
+        from app.models.catalog import BillingMode
+
+        prepaid_offer = _make_offer(
+            db_session, name="Prepaid", billing_mode=BillingMode.prepaid
+        )
+        postpaid_offer = _make_offer(
+            db_session, name="Postpaid", billing_mode=BillingMode.postpaid
+        )
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=prepaid_offer.id,
+                billing_mode=BillingMode.prepaid,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+        assert sub.billing_mode == BillingMode.prepaid
+
+        updated = catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(offer_id=postpaid_offer.id),
+        )
+
+        assert updated.offer_id == postpaid_offer.id
+        assert updated.billing_mode == BillingMode.postpaid
+
+    def test_proration_uses_effective_old_price_not_catalog(
+        self, db_session, subscriber
+    ):
+        """Mid-cycle change credits the negotiated rate the customer pays, not
+        the raw catalog price (which over-credited discounted/override subs)."""
+        from app.services.catalog.subscriptions import _calculate_proration
+
+        offer_a = _make_offer(db_session, name="Plan A")
+        offer_b = _make_offer(db_session, name="Plan B")
+        catalog_service.offer_prices.create(
+            db_session,
+            OfferPriceCreate(
+                offer_id=offer_a.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+            ),
+        )
+        catalog_service.offer_prices.create(
+            db_session,
+            OfferPriceCreate(
+                offer_id=offer_b.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("80.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+            ),
+        )
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=offer_a.id,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+        # Negotiated rate (₦50) below the ₦100 catalog price, plus a mid-cycle anchor.
+        sub.unit_price = Decimal("50.00")
+        sub.next_billing_at = datetime.now(UTC) + timedelta(days=15)
+        db_session.flush()
+
+        result = _calculate_proration(db_session, sub, str(offer_b.id))
+
+        # Old side reflects the ₦50 the customer actually pays, not catalog ₦100.
+        assert result["old_price"] == Decimal("50.00")
+        assert result["new_price"] == Decimal("80.00")
+        # Credit (on ₦50) is below the charge (on ₦80) for the same remaining ratio.
+        assert result["credit_amount"] < result["charge_amount"]
+
     def test_update_subscription_offer_changes_inherited_radius_profile(
         self, db_session, subscriber
     ):
@@ -2287,3 +2441,75 @@ class TestSubscriptionUnitPriceDefault:
             ),
         )
         assert sub.unit_price == Decimal("9999")
+
+
+class TestPlanChangePolicyFeeDirection:
+    """The upgrade/downgrade fee direction must follow the EFFECTIVE prices the
+    customer pays, not raw catalog prices (M2)."""
+
+    def test_fee_direction_uses_effective_prices(self, db_session):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+        from app.services.catalog.subscriptions import _apply_plan_change_policy
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="upgrade_fee",
+                value_type=SettingValueType.string,
+                value_text="10",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+        base = {"net_amount": Decimal("10.00"), "credit_amount": Decimal("0.00")}
+
+        # Effective: negotiated ₦50 → new ₦80 is an UPGRADE → upgrade fee applies.
+        up = _apply_plan_change_policy(
+            db_session, dict(base), old_price=Decimal("50"), new_price=Decimal("80")
+        )
+        assert up.get("fee_amount") == Decimal("10.00")
+
+        # Raw catalog ₦100 → ₦80 would read as a downgrade → no upgrade fee.
+        down = _apply_plan_change_policy(
+            db_session, dict(base), old_price=Decimal("100"), new_price=Decimal("80")
+        )
+        assert not down.get("fee_amount")
+
+
+class TestPublicIpAddonPrefixMatch:
+    def test_ambiguous_prefix_warns_and_returns_first(self, db_session, caplog):
+        import logging
+
+        from app.models.catalog import AddOn, AddOnPrice, AddOnType, PriceType
+        from app.services.web_catalog_subscriptions import (
+            _priced_public_ip_addon_by_prefix,
+        )
+
+        for name in ("AAA /29", "BBB /29"):
+            add_on = AddOn(
+                name=name,
+                addon_type=AddOnType.extra_ip,
+                is_active=True,
+                ip_is_public=True,
+                ip_prefix_length=29,
+            )
+            db_session.add(add_on)
+            db_session.flush()
+            db_session.add(
+                AddOnPrice(
+                    add_on_id=add_on.id,
+                    price_type=PriceType.recurring,
+                    amount=Decimal("25.00"),
+                    currency="NGN",
+                    is_active=True,
+                )
+            )
+        db_session.commit()
+
+        with caplog.at_level(logging.WARNING):
+            result = _priced_public_ip_addon_by_prefix(db_session, 29)
+
+        assert result is not None
+        assert result.name == "AAA /29"  # deterministic (first by name)
+        assert "ambiguous_public_ip_addon_prefix" in caplog.text

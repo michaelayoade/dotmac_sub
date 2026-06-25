@@ -247,6 +247,51 @@ def test_cycle_uses_rated_quota_bucket(db_session, subscriber, subscription):
     assert out["bucket"] == "day"
 
 
+def test_cycle_unlimited_bucket_falls_back_to_measured(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """An unlimited/unmetered plan has a rated bucket with used_gb=0; the cycle
+    total must reflect real session traffic instead of a false 0."""
+
+    # No metrics store in tests — return an empty series cleanly so the fallback
+    # to session octets runs (the real call would error and poison the session).
+    async def _no_vm(db, sub_ids, start, end):
+        return []
+
+    monkeypatch.setattr(svc, "_vm_points", _no_vm)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=None,  # unlimited
+            used_gb=0,
+        )
+    )
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="cyc-1",
+            status_type=AccountingStatus.interim,
+            session_start=now - timedelta(days=1),
+            session_end=None,
+            input_octets=3_000,
+            output_octets=2_000,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+
+    # VM series is empty here, so it falls back to session octets.
+    assert out["total_bytes"] == 5_000
+    assert out["total_source"] == "samples"
+    assert out["is_authoritative"] is False
+
+
 def test_window_with_no_data_falls_back_without_false_zero(
     db_session, subscriber, subscription
 ):
