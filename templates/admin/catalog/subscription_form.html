@@ -322,28 +322,6 @@
                 </div>
             </div>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
-            </div>
-            <div class="divide-y divide-slate-200 dark:divide-slate-700">
-                {% if activities %}
-                {% for activity in activities %}
-                <div class="px-6 py-4">
-                    <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
-                    {% if activity.description %}
-                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
-                    {% endif %}
-                    {% if activity.occurred_at %}
-                    <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
-                    {% endif %}
-                </div>
-                {% endfor %}
-                {% else %}
-                <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
-                {% endif %}
-            </div>
-        </div>
         {% endif %}
 
         <div {% if is_new %}x-show="step === 2" x-transition{% endif %}>
@@ -650,6 +628,31 @@
             </div>
         </div>
     </form>
+
+    {% if subscription.id %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+        </div>
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% if activities %}
+            {% for activity in activities %}
+            <div class="px-6 py-4">
+                <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                {% if activity.description %}
+                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                {% endif %}
+                {% if activity.occurred_at %}
+                <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
 </div>
 <script>
 function subscriptionProvisioning() {
