@@ -96,8 +96,7 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
 
     # Per-NAS breakdown over active subs.
     nas_names: dict = {
-        nid: name
-        for nid, name in session.query(NasDevice.id, NasDevice.name).all()
+        nid: name for nid, name in session.query(NasDevice.id, NasDevice.name).all()
     }
     per_nas: dict = {}
     for sid in active_ids:
@@ -127,9 +126,11 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
         key=lambda r: (-r["active"], r["nas_name"] or ""),
     )
 
-    total_recent_samples = session.query(
-        func.count(BandwidthSample.id)
-    ).filter(BandwidthSample.sample_at >= cutoff).scalar()
+    total_recent_samples = (
+        session.query(func.count(BandwidthSample.id))
+        .filter(BandwidthSample.sample_at >= cutoff)
+        .scalar()
+    )
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -146,13 +147,9 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
         },
         "coverage_pct": {
             "live_now_vs_active": _pct(len(active_live), len(active_ids)),
-            "live_now_vs_active_with_nas": _pct(
-                len(active_live), len(active_with_nas)
-            ),
+            "live_now_vs_active_with_nas": _pct(len(active_live), len(active_with_nas)),
             "mapped_vs_active": _pct(len(active_mapped), len(active_ids)),
-            "nas_assigned_vs_active": _pct(
-                len(active_with_nas), len(active_ids)
-            ),
+            "nas_assigned_vs_active": _pct(len(active_with_nas), len(active_ids)),
         },
         "per_nas": nas_breakdown,
     }
@@ -161,9 +158,7 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
 def _print_summary(result: dict) -> None:
     t = result["totals"]
     c = result["coverage_pct"]
-    print(
-        f"\nLive bandwidth coverage  (window: last {result['window_minutes']} min)"
-    )
+    print(f"\nLive bandwidth coverage  (window: last {result['window_minutes']} min)")
     print("=" * 64)
     print(f"  active subscriptions ............. {t['active_subs']}")
     print(

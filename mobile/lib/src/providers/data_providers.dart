@@ -375,8 +375,7 @@ final bandwidthSeriesProvider =
 /// fresh samples while the dashboard is open; autoDispose stops the poll when
 /// it closes. Errors (e.g. no active subscription) surface as a no-signal
 /// value, so callers read it via asData and omit the figure.
-final liveBandwidthProvider =
-    StreamProvider.autoDispose<LiveBandwidth>((ref) {
+final liveBandwidthProvider = StreamProvider.autoDispose<LiveBandwidth>((ref) {
   cacheFor(ref);
   return ref.watch(usageRepositoryProvider).liveBandwidthStream();
 });
