@@ -3,6 +3,13 @@ import 'package:dio/dio.dart';
 import '../core/http.dart';
 import '../models/chat.dart';
 
+/// Origin presented to the CRM widget endpoints (must be in the
+/// ChatWidgetConfig.allowed_domains). Overridable at build time.
+const String _crmOrigin = String.fromEnvironment(
+  'CHAT_CRM_ORIGIN',
+  defaultValue: 'https://app.dotmac.io',
+);
+
 /// Live chat. Opens a session via the sub broker (which asserts the
 /// authenticated subscriber/reseller identity to the CRM), then talks to the
 /// CRM chat_widget channel directly with the opaque visitor token.
@@ -28,7 +35,13 @@ class ChatRepository {
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 20),
       contentType: Headers.jsonContentType,
-      headers: {'X-Visitor-Token': session.visitorToken},
+      headers: {
+        'X-Visitor-Token': session.visitorToken,
+        // Native clients send no browser Origin; the CRM widget endpoints
+        // enforce an allowed-domains check, so present the app's configured
+        // origin (must be in the ChatWidgetConfig.allowed_domains).
+        'Origin': _crmOrigin,
+      },
       validateStatus: (s) => s != null && s < 500,
     ));
     return session;
