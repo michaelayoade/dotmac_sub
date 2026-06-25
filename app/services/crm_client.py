@@ -360,6 +360,33 @@ class CRMClient:
         """Soft-delete a CRM subscriber (sets is_active=False CRM-side)."""
         self._request("DELETE", f"/api/v1/subscribers/{subscriber_id}")
 
+    def create_widget_session(
+        self,
+        *,
+        config_id: str,
+        email: str,
+        name: str | None = None,
+        crm_subscriber_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Mint an already-identified chat_widget visitor session (server-to-server).
+
+        The CRM trusts this caller (authenticated service JWT) to assert the
+        visitor's identity, so the client never calls the public, browser-driven
+        identify endpoint. Returns {session_id, visitor_token, conversation_id}.
+        """
+        payload: dict[str, Any] = {"config_id": config_id, "email": email}
+        if name:
+            payload["name"] = name
+        if crm_subscriber_id:
+            payload["crm_subscriber_id"] = crm_subscriber_id
+        if metadata:
+            payload["metadata"] = metadata
+        data = self._request(
+            "POST", "/api/v1/widget/internal/session", json_data=payload
+        )
+        return data if isinstance(data, dict) else {}
+
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""
         data = self._cached_get(

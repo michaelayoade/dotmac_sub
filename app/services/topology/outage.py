@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
-from app.services.topology.affected import affected_customers
+from app.services.topology.affected import (
+    _dist_to_core,
+    affected_customers,
+    downstream_nodes,
+)
 
 # status is a free-form String column; these are the only legal values.
 _OUTAGE_STATUSES = frozenset({"open", "resolved"})
@@ -85,28 +88,56 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
 
 def open_incident_for_path(session: Session, path) -> OutageIncident | None:
     """The open incident covering a customer's path, if any — matched on the
-    access node, any upstream hop, or the basestation. ``path`` is a
-    CustomerPath (duck-typed to avoid a circular import)."""
+    access node, any upstream hop, the basestation, or by sitting within an
+    incident's blast radius. ``path`` is a CustomerPath (duck-typed to avoid a
+    circular import)."""
     if path is None:
         return None
-    node_ids = set()
-    if getattr(path, "node", None) is not None:
-        node_ids.add(path.node.id)
+    customer_node_ids = set()
+    node = getattr(path, "node", None)
+    customer_access_id = node.id if node is not None else None
+    if customer_access_id is not None:
+        customer_node_ids.add(customer_access_id)
     for hop in getattr(path, "upstream_chain", None) or []:
-        node_ids.add(hop.id)
-    conds = []
-    if node_ids:
-        conds.append(OutageIncident.root_node_id.in_(node_ids))
-    if getattr(path, "basestation", None) is not None:
-        conds.append(OutageIncident.basestation_id == path.basestation.id)
-    if not conds:
-        return None
-    return (
+        customer_node_ids.add(hop.id)
+    basestation = getattr(path, "basestation", None)
+    basestation_id = basestation.id if basestation is not None else None
+
+    incidents = (
         session.query(OutageIncident)
-        .filter(OutageIncident.status == "open", or_(*conds))
+        .filter(OutageIncident.status == "open")
         .order_by(OutageIncident.started_at.desc())
-        .first()
+        .all()
     )
+    # Pass 1 (cheap): basestation match, or the incident root is on the
+    # customer's own (hop-capped) path.
+    for incident in incidents:
+        if basestation_id is not None and incident.basestation_id == basestation_id:
+            return incident
+        if (
+            incident.root_node_id is not None
+            and incident.root_node_id in customer_node_ids
+        ):
+            return incident
+    # Pass 2 (blast radius): the customer is downstream of an incident root that
+    # lies beyond their hop-capped upstream chain. This keeps the read-side
+    # membership in sync with the declare-side affected_count (both computed via
+    # downstream_nodes), so a counted customer always sees the banner. Only
+    # reached during an active outage that didn't already match cheaply.
+    root_incidents = [i for i in incidents if i.root_node_id is not None]
+    if customer_access_id is not None and root_incidents:
+        # _dist_to_core is root-independent; compute the full-graph BFS ONCE and
+        # reuse it across incidents rather than recomputing inside each
+        # downstream_nodes call (this runs on the customer connection-status
+        # request path, possibly with many open incidents during a wide outage).
+        dist = _dist_to_core(session)
+        for incident in root_incidents:
+            root = session.get(NetworkDevice, incident.root_node_id)
+            if root is not None and customer_access_id in downstream_nodes(
+                session, root, dist=dist
+            ):
+                return incident
+    return None
 
 
 def list_open_incidents(session: Session) -> list[OutageIncident]:

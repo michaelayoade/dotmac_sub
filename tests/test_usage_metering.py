@@ -89,6 +89,7 @@ def test_meters_capped_subscription_from_radius(db_session, subscriber):
 
     result = meter_usage_into_quota(db_session)
     assert result["metered"] == 1
+    assert result["changed_subscription_ids"] == [str(sub.id)]
 
     bucket = (
         db_session.query(QuotaBucket)
@@ -141,10 +142,11 @@ def test_metering_is_idempotent(db_session, subscriber):
     db_session.commit()
 
     meter_usage_into_quota(db_session)
-    meter_usage_into_quota(db_session)  # re-run must not double-count
+    result = meter_usage_into_quota(db_session)  # re-run must not double-count
     bucket = (
         db_session.query(QuotaBucket)
         .filter(QuotaBucket.subscription_id == sub.id)
         .one()
     )
     assert Decimal(str(bucket.used_gb)) == Decimal("3.00")
+    assert result["changed_subscription_ids"] == []

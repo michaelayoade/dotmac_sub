@@ -39,6 +39,7 @@ import '../features/service/data_bundle_screen.dart';
 import '../features/service/service_detail_screen.dart';
 import '../features/service/service_route.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/support/chat_screen.dart';
 import '../features/support/create_ticket_screen.dart';
 import '../features/support/ticket_detail_screen.dart';
 import '../features/support/tickets_screen.dart';
@@ -148,6 +149,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/wallet',
         builder: (_, __) => const WalletScreen(),
+      ),
+      GoRoute(
+        path: '/chat',
+        builder: (_, __) => const ChatScreen(),
       ),
       GoRoute(
         path: '/pay',

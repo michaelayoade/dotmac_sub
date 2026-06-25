@@ -8,7 +8,11 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.app_cache.refresh_dashboard_stats_cache")
+@celery_app.task(
+    name="app.tasks.app_cache.refresh_dashboard_stats_cache",
+    soft_time_limit=120,
+    time_limit=150,
+)
 def refresh_dashboard_stats_cache_task() -> dict[str, object]:
     db = db_session_adapter.create_session()
     try:
@@ -24,7 +28,11 @@ def refresh_dashboard_stats_cache_task() -> dict[str, object]:
         db.close()
 
 
-@celery_app.task(name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache")
+@celery_app.task(
+    name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache",
+    soft_time_limit=120,
+    time_limit=150,
+)
 def refresh_ont_zabbix_snapshot_cache_task() -> dict[str, object]:
     db = db_session_adapter.create_session()
     try:

@@ -285,10 +285,51 @@ def _effective_unit_price(
     return round_money(price)
 
 
+def _active_tax_rate_id(db: Session, tax_rate_id) -> bool:
+    rate = db.get(TaxRate, tax_rate_id)
+    return rate is not None and bool(rate.is_active)
+
+
+def _tax_rate_for_catalog_percent(db: Session, vat_percent: Decimal | None):
+    if vat_percent is None:
+        return None
+    percent = Decimal(str(vat_percent))
+    if percent <= Decimal("0.00"):
+        return None
+    candidates = {percent}
+    if percent > Decimal("1.00"):
+        candidates.add(percent / Decimal("100"))
+    else:
+        candidates.add(percent * Decimal("100"))
+    rates = db.query(TaxRate).filter(TaxRate.is_active.is_(True)).all()
+    for rate in rates:
+        current = Decimal(str(rate.rate))
+        if any(current == candidate for candidate in candidates):
+            return rate.id
+    return None
+
+
+def _resolve_offer_tax_rate_id(db: Session, offer: CatalogOffer | None):
+    """Resolve tax from the catalog offer's VAT flags.
+
+    The catalog is the service-level source of truth: a positive ``vat_percent``
+    means taxable even when older imported rows still have ``with_vat=false``;
+    ``with_vat=false`` without a positive percent means VAT-exempt.
+    """
+    if offer is None:
+        return _default_tax_rate_id(db)
+
+    percent = Decimal(str(offer.vat_percent or "0"))
+    if percent > Decimal("0.00"):
+        return _tax_rate_for_catalog_percent(db, percent) or _default_tax_rate_id(db)
+    if bool(offer.with_vat):
+        return _default_tax_rate_id(db)
+    return None
+
+
 def _resolve_tax_rate_id(db: Session, subscription: Subscription):
     def _is_active(tax_rate_id) -> bool:
-        rate = db.get(TaxRate, tax_rate_id)
-        return rate is not None and bool(rate.is_active)
+        return _active_tax_rate_id(db, tax_rate_id)
 
     if subscription.service_address_id:
         address = db.get(Address, subscription.service_address_id)
@@ -297,7 +338,7 @@ def _resolve_tax_rate_id(db: Session, subscription: Subscription):
     subscriber = db.get(Subscriber, subscription.subscriber_id)
     if subscriber and subscriber.tax_rate_id and _is_active(subscriber.tax_rate_id):
         return subscriber.tax_rate_id
-    return _default_tax_rate_id(db)
+    return _resolve_offer_tax_rate_id(db, subscription.offer)
 
 
 def _default_tax_rate_id(db: Session):
@@ -430,7 +471,9 @@ def _bill_recurring_addons(
         .all()
     )
     added = 0
-    tax_application = _default_tax_application(db)
+    tax_application = (
+        _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
+    )
     require_active_route = _setting_truthy(
         db, "bill_ip_addon_requires_active_route", default=False
     )
@@ -491,6 +534,21 @@ def _bill_recurring_addons(
         addon_end = _as_utc(sub_addon.end_at) or period_end
         addon_usage_start = max(usage_start, addon_start)
         addon_usage_end = min(usage_end, addon_end)
+        if addon_usage_start >= addon_usage_end:
+            continue
+        billing_line_key = _billing_line_key(
+            subscription.id, period_start, period_end, f"addon:{sub_addon.id}"
+        )
+        if _billing_line_key_exists(
+            db, billing_line_key
+        ) or _recurring_addon_line_exists(
+            db,
+            subscription.id,
+            sub_addon.id,
+            period_start,
+            period_end,
+        ):
+            continue
         amount = _prorated_amount(
             round_money(unit * qty),
             period_start,
@@ -512,10 +570,68 @@ def _bill_recurring_addons(
                 amount=amount,
                 tax_rate_id=tax_rate_id,
                 tax_application=tax_application,
+                metadata_={
+                    "kind": "recurring_addon",
+                    "subscription_add_on_id": str(sub_addon.id),
+                    "add_on_id": str(add_on.id),
+                    "billing_period_start": period_start.isoformat(),
+                    "billing_period_end": period_end.isoformat(),
+                },
+                billing_line_key=billing_line_key,
             )
         )
         added += 1
     return added
+
+
+def _billing_line_key(
+    subscription_id,
+    period_start: datetime,
+    period_end: datetime,
+    component: str,
+) -> str:
+    return (
+        f"subscription:{subscription_id}:"
+        f"{period_start.isoformat()}:{period_end.isoformat()}:{component}"
+    )
+
+
+def _billing_line_key_exists(db: Session, billing_line_key: str) -> bool:
+    return (
+        db.query(InvoiceLine.id)
+        .filter(InvoiceLine.billing_line_key == billing_line_key)
+        .filter(InvoiceLine.is_active.is_(True))
+        .first()
+        is not None
+    )
+
+
+def _recurring_addon_line_exists(
+    db: Session,
+    subscription_id,
+    subscription_add_on_id,
+    period_start: datetime,
+    period_end: datetime,
+) -> bool:
+    rows = (
+        db.query(InvoiceLine)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .filter(InvoiceLine.subscription_id == subscription_id)
+        .filter(Invoice.billing_period_start == period_start)
+        .filter(Invoice.billing_period_end == period_end)
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Invoice.is_active.is_(True))
+        .all()
+    )
+    wanted = str(subscription_add_on_id)
+    for line in rows:
+        metadata = line.metadata_ or {}
+        if (
+            metadata.get("kind") == "recurring_addon"
+            and metadata.get("subscription_add_on_id") == wanted
+        ):
+            return True
+    return False
 
 
 def _activate_pending_subscription(
@@ -1078,12 +1194,22 @@ def run_invoice_cycle(
             summary["skipped"] += 1
             continue
 
-        # Idempotency check 1: verify no invoice line exists for this subscription+period
+        offer_name = (
+            subscription.offer.name
+            if subscription.offer
+            else f"Subscription {subscription.id}"
+        )
+        description = f"{offer_name} ({period_start.date()} - {period_end.date()})"
+
+        # Idempotency check 1: verify no base invoice line exists for this
+        # subscription+period. Recurring add-ons have their own lines and must
+        # not cause the base service line to be skipped after a partial failure.
         # This catches cases where the invoice was created but next_billing_at wasn't updated
         existing_line_for_period = (
             db.query(InvoiceLine)
             .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
             .filter(InvoiceLine.subscription_id == subscription.id)
+            .filter(InvoiceLine.description == description)
             .filter(Invoice.billing_period_start == period_start)
             .filter(Invoice.billing_period_end == period_end)
             .filter(InvoiceLine.is_active.is_(True))
@@ -1176,6 +1302,7 @@ def run_invoice_cycle(
             db.query(InvoiceLine)
             .filter(InvoiceLine.invoice_id == invoice.id)
             .filter(InvoiceLine.subscription_id == subscription.id)
+            .filter(InvoiceLine.description == description)
             .filter(InvoiceLine.is_active.is_(True))
             .first()
         )
@@ -1183,13 +1310,14 @@ def run_invoice_cycle(
             summary["skipped"] += 1
             continue
 
-        tax_rate_id = _resolve_tax_rate_id(db, subscription)
-        offer_name = (
-            subscription.offer.name
-            if subscription.offer
-            else f"Subscription {subscription.id}"
+        billing_line_key = _billing_line_key(
+            subscription.id, period_start, period_end, "base"
         )
-        description = f"{offer_name} ({period_start.date()} - {period_end.date()})"
+        if _billing_line_key_exists(db, billing_line_key):
+            summary["skipped"] += 1
+            continue
+
+        tax_rate_id = _resolve_tax_rate_id(db, subscription)
         line = InvoiceLine(
             invoice_id=invoice.id,
             subscription_id=subscription.id,
@@ -1198,7 +1326,15 @@ def run_invoice_cycle(
             unit_price=round_money(line_amount),
             amount=round_money(line_amount),
             tax_rate_id=tax_rate_id,
-            tax_application=_default_tax_application(db),
+            tax_application=(
+                _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
+            ),
+            metadata_={
+                "kind": "base_subscription",
+                "billing_period_start": period_start.isoformat(),
+                "billing_period_end": period_end.isoformat(),
+            },
+            billing_line_key=billing_line_key,
         )
         db.add(line)
         summary["subscriptions_billed"] += 1
@@ -1354,8 +1490,13 @@ def run_invoice_cycle(
             summary["invoice_reminders_sent"] = 0
             summary["dunning_escalations_sent"] = 0
         else:
-            summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
-            summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
+            notification_summary = run_billing_notifications(db, run_at)
+            summary["invoice_reminders_sent"] = int(
+                notification_summary.get("invoice_reminders_sent", 0)
+            )
+            summary["dunning_escalations_sent"] = int(
+                notification_summary.get("dunning_escalations_sent", 0)
+            )
         db.commit()
 
         summary["run_id"] = run_id_str

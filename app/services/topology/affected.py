@@ -77,11 +77,19 @@ def _dist_to_core(session: Session) -> dict:
     return dist
 
 
-def downstream_nodes(session: Session, root: NetworkDevice) -> set:
+def downstream_nodes(
+    session: Session, root: NetworkDevice, *, dist: dict | None = None
+) -> set:
     """Node ids at/below ``root`` — root plus nodes reachable moving strictly
     away from core (increasing distance-to-core). Degrades to {root} when the
-    graph/core is unknown, so we never over-scope an outage."""
-    dist = _dist_to_core(session)
+    graph/core is unknown, so we never over-scope an outage.
+
+    ``dist`` is the (root-independent) distance-to-core map; callers that invoke
+    this repeatedly in one request can compute it once via ``_dist_to_core`` and
+    pass it in to avoid a full-graph BFS per call.
+    """
+    if dist is None:
+        dist = _dist_to_core(session)
     result = {root.id}
     queue: deque = deque([root.id])
     while queue:

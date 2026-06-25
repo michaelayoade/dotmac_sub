@@ -66,3 +66,34 @@ def test_connection_endpoint_registered():
 
     paths = {r.path for r in router.routes}
     assert "/me/subscriptions/{subscription_id}/connection" in paths
+
+
+def test_stale_warm_downgrades_healthy_to_unknown(
+    db_session, subscriber, subscription, monkeypatch
+):
+    from datetime import timedelta
+
+    _fiber(db_session, subscriber, "up")
+    old = (datetime.now(UTC) - timedelta(seconds=3600)).isoformat()
+    monkeypatch.setattr("app.services.app_cache.get_json", lambda key: old)
+    # Warmer heartbeat is old -> a "healthy" reading is stale -> unknown.
+    out = customer_connection_status(db_session, subscription)
+    assert out["status"] == "unknown"
+
+
+def test_fresh_warm_keeps_healthy(db_session, subscriber, subscription, monkeypatch):
+    _fiber(db_session, subscriber, "up")
+    fresh = datetime.now(UTC).isoformat()
+    monkeypatch.setattr("app.services.app_cache.get_json", lambda key: fresh)
+    out = customer_connection_status(db_session, subscription)
+    assert out["status"] == "healthy"
+
+
+def test_missing_heartbeat_keeps_healthy(
+    db_session, subscriber, subscription, monkeypatch
+):
+    _fiber(db_session, subscriber, "up")
+    # A missing heartbeat (Redis down / never warmed) must NOT blank everyone.
+    monkeypatch.setattr("app.services.app_cache.get_json", lambda key: None)
+    out = customer_connection_status(db_session, subscription)
+    assert out["status"] == "healthy"

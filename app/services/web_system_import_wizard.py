@@ -819,6 +819,7 @@ def rollback_import(
             is_secret=False,
         ),
     )
+    db.flush()
     db.expire_all()
     return {
         "import_id": import_id,

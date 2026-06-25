@@ -20,6 +20,13 @@ from app.services.zabbix import ZabbixClient, ZabbixClientError
 logger = logging.getLogger(__name__)
 
 HISTORY_THRESHOLD_SECONDS = 24 * 60 * 60
+# Interface counters are typically 32-bit (Counter32); a backwards step usually
+# means a wrap, not a reset. _MAX_PLAUSIBLE_BPS is a sanity ceiling above which
+# a computed rate is treated as a counter artifact (multi-wrap / reset spike)
+# and dropped rather than emitted. Zabbix trend rows are hourly.
+_COUNTER_32BIT_MODULUS = 2**32
+_MAX_PLAUSIBLE_BPS = 1e12  # 1 Tbps
+_TREND_INTERVAL_SECONDS = 3600
 HOSTS_CACHE_SECONDS = 60
 ITEMS_CACHE_SECONDS = 60
 USAGE_CACHE_SECONDS = 30
@@ -80,8 +87,6 @@ class ZabbixMetricsEngine:
     def __init__(self, client: ZabbixClient | None = None) -> None:
         self.client = client or ZabbixClient.from_env()
         self._cache = _TtlCache()
-        self._sample_lock = RLock()
-        self._previous_samples: dict[str, CounterSample] = {}
 
     def load_hosts(self) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
         cached = self._cache.get("hosts_all")
@@ -338,9 +343,6 @@ class ZabbixMetricsEngine:
             }
 
         item_by_id = {str(item.get("itemid")): item for item in all_items}
-        with self._sample_lock:
-            for item_id in item_by_id:
-                self._previous_samples.pop(item_id, None)
         rate_points = self._fetch_rate_points(all_items, start_at, end_at)
         points_by_host: dict[str, list[RatePoint]] = defaultdict(list)
         for point in rate_points:
@@ -482,7 +484,46 @@ class ZabbixMetricsEngine:
         rows = self.client.get_trends(
             item_ids=item_ids, time_from=start_ts, time_till=end_ts
         )
-        return self._rates_from_rows(rows, item_by_id, "value_avg")
+        # For a RATE item, trend value_avg is already the average throughput over
+        # the hour — differencing two rates is meaningless. Use it directly.
+        # COUNTER items keep the delta-of-value_avg approximation (avg counter
+        # value ~= mid-hour value, so the inter-hour delta ~= bytes transferred).
+        counter_rows: list[dict[str, Any]] = []
+        points: list[RatePoint] = []
+        for row in rows:
+            item = item_by_id.get(str(row.get("itemid") or ""))
+            if item is None:
+                continue
+            if self._units_are_rate(item):
+                point = self._rate_point_from_trend_avg(item, row)
+                if point is not None:
+                    points.append(point)
+            else:
+                counter_rows.append(row)
+        points.extend(self._rates_from_rows(counter_rows, item_by_id, "value_avg"))
+        return sorted(points, key=lambda point: point.timestamp)
+
+    def _rate_point_from_trend_avg(
+        self, item: dict[str, Any], row: dict[str, Any]
+    ) -> RatePoint | None:
+        try:
+            clock = int(row.get("clock") or 0)
+            avg = float(row.get("value_avg") or 0)
+        except (TypeError, ValueError):
+            return None
+        if clock <= 0 or avg < 0:
+            return None
+        bps = avg * 8.0 if self._counter_is_bytes(item) else avg
+        if bps > _MAX_PLAUSIBLE_BPS:
+            return None
+        bytes_delta = (bps / 8.0) * _TREND_INTERVAL_SECONDS
+        return RatePoint(
+            item_id=str(item.get("itemid")),
+            direction=self._direction(item),
+            timestamp=clock,
+            bps=max(0.0, bps),
+            bytes_delta=max(0.0, bytes_delta),
+        )
 
     def _rates_from_rows(
         self,
@@ -510,16 +551,18 @@ class ZabbixMetricsEngine:
             samples = sorted(samples, key=lambda item: item.clock)
             item = item_by_id[item_id]
             direction = self._direction(item)
-            previous = self._previous_samples.get(item_id)
+            # Rates are computed purely within this window. Seeding the first
+            # sample from cross-request state would difference it against an
+            # unrelated earlier request's last counter value over an arbitrary
+            # gap, corrupting the leading bucket; a window needs >=2 samples to
+            # yield its first rate, which is correct.
+            previous: CounterSample | None = None
             for sample in samples:
                 if previous:
                     point = self._rate_point(item, sample, previous, direction)
                     if point:
                         points.append(point)
                 previous = sample
-            if previous:
-                with self._sample_lock:
-                    self._previous_samples[item_id] = previous
         return sorted(points, key=lambda point: point.timestamp)
 
     def _rate_point(
@@ -531,10 +574,19 @@ class ZabbixMetricsEngine:
     ) -> RatePoint | None:
         delta = current.value - previous.value
         seconds = current.clock - previous.clock
-        if seconds <= 0 or delta < 0:
+        if seconds <= 0:
             return None
+        if delta < 0:
+            # Counter went backwards: either a 32-bit counter wrapped or the
+            # device reset (reboot). Try the wrap correction; the plausibility
+            # ceiling below rejects it if that guess was wrong (64-bit reset,
+            # multi-wrap), dropping the point instead of emitting a garbage
+            # spike or a usage hole.
+            delta += _COUNTER_32BIT_MODULUS
         bytes_delta = delta if self._counter_is_bytes(item) else delta / 8.0
         bps = (bytes_delta * 8.0) / seconds
+        if bps < 0 or bps > _MAX_PLAUSIBLE_BPS:
+            return None
         return RatePoint(
             item_id=current.item_id,
             direction=direction,
@@ -712,6 +764,12 @@ class ZabbixMetricsEngine:
     def _counter_is_bytes(item: dict[str, Any]) -> bool:
         units = str(item.get("units") or "").strip().lower()
         return units not in {"b", "bps", "bit", "bits"}
+
+    @staticmethod
+    def _units_are_rate(item: dict[str, Any]) -> bool:
+        """True when an item's units denote a per-second rate (not a counter)."""
+        units = str(item.get("units") or "").strip().lower()
+        return units.endswith("/s") or "bps" in units or "pps" in units
 
     def _subscription_identifiers(
         self,

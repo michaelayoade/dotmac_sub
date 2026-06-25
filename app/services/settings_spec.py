@@ -500,6 +500,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.usage,
+        key="usage_metering_interval_seconds",
+        env_var="USAGE_METERING_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=60,
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
+        key="fup_evaluation_interval_seconds",
+        env_var="FUP_EVALUATION_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=900,
+        min_value=60,
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
         key="radius_accounting_import_enabled",
         env_var="RADIUS_ACCOUNTING_IMPORT_ENABLED",
         value_type=SettingValueType.boolean,

@@ -30,6 +30,37 @@ _SAFE = {"up": "healthy", "problem": "degraded", "down": "outage"}
 # Customer-facing bad states that must persist before we surface them.
 _DEBOUNCED = frozenset({"degraded", "outage"})
 _DEFAULT_DWELL_SECONDS = 360
+# If the live_status warmer hasn't refreshed within this window, every node's
+# cached status is stale; a "healthy" reading is then untrustworthy and is
+# downgraded to "unknown" rather than telling a customer all-is-well through an
+# unobserved outage (warmer death, Zabbix token expiry, queue backlog).
+_WARM_STALE_SECONDS = 600
+
+
+def _warm_is_stale(now: datetime | None) -> bool:
+    """True only when the warmer's heartbeat is present but too old.
+
+    A *missing* heartbeat (Redis unavailable, or the warmer has never run) is
+    deliberately NOT treated as stale: blanking every customer to "unknown" on
+    a transient Redis hiccup is worse than the failure we're guarding against,
+    and a never-warmed node already reads "unknown" via its empty live_status.
+    We only downgrade when we have positive evidence the warm has gone cold —
+    a real timestamp that is older than the threshold.
+    """
+    from app.services.app_cache import get_json
+    from app.services.topology.live_status import WARM_HEARTBEAT_KEY
+
+    raw = get_json(WARM_HEARTBEAT_KEY)
+    if not raw:
+        return False
+    try:
+        warmed_at = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return False
+    if warmed_at.tzinfo is None:
+        warmed_at = warmed_at.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    return (now - warmed_at) > timedelta(seconds=_WARM_STALE_SECONDS)
 
 
 def _dwell_seconds(session: Session) -> int:
@@ -74,6 +105,10 @@ def customer_connection_status(
             status = "healthy"
         else:
             status = raw
+        # A "healthy" verdict is only as trustworthy as the warm behind it; if
+        # the warmer has stalled, say "unknown" instead of claiming all-is-well.
+        if status == "healthy" and _warm_is_stale(now):
+            status = "unknown"
     return {
         "basestation": path.basestation.name if path.basestation is not None else None,
         "status": status,

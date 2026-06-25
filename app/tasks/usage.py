@@ -24,6 +24,39 @@ def run_usage_rating():
 
 @celery_app.task(name="app.tasks.usage.import_radius_accounting")
 def import_radius_accounting():
+    from sqlalchemy import func, select
+
+    lock_db = SessionLocal()
+    try:
+        bind = lock_db.bind
+        is_pg = bind is not None and bind.dialect.name == "postgresql"
+        if is_pg:
+            acquired = lock_db.execute(
+                select(func.pg_try_advisory_lock(_RADIUS_ACCOUNTING_IMPORT_LOCK_KEY))
+            ).scalar()
+            lock_db.commit()
+            if not acquired:
+                logger.info("RADIUS accounting import skipped: another run is active")
+                return {
+                    "ok": True,
+                    "processed": 0,
+                    "created_or_updated": 0,
+                    "cursor": None,
+                    "skipped_locked": 1,
+                }
+        try:
+            return _import_radius_accounting_locked()
+        finally:
+            if is_pg:
+                lock_db.execute(
+                    select(func.pg_advisory_unlock(_RADIUS_ACCOUNTING_IMPORT_LOCK_KEY))
+                )
+                lock_db.commit()
+    finally:
+        lock_db.close()
+
+
+def _import_radius_accounting_locked():
     session = SessionLocal()
     try:
         result = usage_service.import_radius_accounting(session)
@@ -117,6 +150,15 @@ def meter_usage_into_quota():
     try:
         result = usage_service.meter_usage_into_quota(session)
         session.commit()
+        changed_subscription_ids = result.get("changed_subscription_ids") or []
+        if changed_subscription_ids:
+            evaluate_fup_rules.apply_async(
+                kwargs={
+                    "subscription_ids": changed_subscription_ids,
+                    "source": "usage_metering",
+                },
+                queue="billing",
+            )
         return result
     except Exception:
         session.rollback()
@@ -152,20 +194,74 @@ def _fup_should_enforce(
     return False
 
 
+_FUP_EVALUATION_LOCK_KEY = 778_003
+_RADIUS_ACCOUNTING_IMPORT_LOCK_KEY = 778_004
+
+
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
-def evaluate_fup_rules() -> dict[str, int]:
+def evaluate_fup_rules(
+    subscription_ids: list[str] | None = None,
+    source: str = "scheduled_full_sweep",
+) -> dict[str, int]:
+    from sqlalchemy import func, select
+
+    lock_db = SessionLocal()
+    try:
+        bind = lock_db.bind
+        is_pg = bind is not None and bind.dialect.name == "postgresql"
+        if is_pg:
+            acquired = lock_db.execute(
+                select(func.pg_try_advisory_lock(_FUP_EVALUATION_LOCK_KEY))
+            ).scalar()
+            # Commit immediately after taking the session-level advisory lock.
+            # The lock survives commit, and the connection is no longer left
+            # "idle in transaction" while the FUP sweep runs.
+            lock_db.commit()
+            if not acquired:
+                logger.info("FUP evaluation skipped: another run is still active")
+                return {
+                    "processed": 0,
+                    "enforced": 0,
+                    "submonthly_no_data": 0,
+                    "reset": 0,
+                    "notifications": 0,
+                    "skipped_locked": 1,
+                }
+        try:
+            return _evaluate_fup_rules_locked(
+                subscription_ids=subscription_ids,
+                source=source,
+            )
+        finally:
+            if is_pg:
+                lock_db.execute(
+                    select(func.pg_advisory_unlock(_FUP_EVALUATION_LOCK_KEY))
+                )
+                lock_db.commit()
+    finally:
+        lock_db.close()
+
+
+def _evaluate_fup_rules_locked(
+    *,
+    subscription_ids: list[str] | None = None,
+    source: str = "scheduled_full_sweep",
+) -> dict[str, int]:
     """Evaluate FUP rules for all active subscriptions and apply enforcement.
 
     Runs periodically to check usage against FUP thresholds and apply
     throttle/block/notify actions. Also handles time-based profile switching
     (e.g., night boost) and FUP state resets at period boundaries.
     """
+    import uuid
     from datetime import UTC, datetime
+
+    from sqlalchemy import or_
 
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.models.domain_settings import SettingDomain
     from app.models.fup import FupPolicy
-    from app.models.fup_state import FupActionStatus
+    from app.models.fup_state import FupActionStatus, FupState
     from app.services import settings_spec
     from app.services.events import emit_event
     from app.services.events.types import EventType
@@ -206,24 +302,64 @@ def evaluate_fup_rules() -> dict[str, int]:
         warn_ratio = float(_parsed[0]) if _parsed else 0.8
 
         # When the FUP "reduce_speed" action has no throttle RADIUS profile
-        # configured, the enforcement handler can't actually throttle — it
-        # silently no-ops while the customer would still be told their speed was
-        # reduced. Read the profile once so the loop can skip that dishonest
-        # notification and surface the misconfiguration instead.
+        # configured, the enforcement handler can't actually throttle. Read the
+        # profile once so the loop can skip that notification and surface the
+        # misconfiguration instead.
         throttle_profile_configured = bool(
             settings_spec.resolve_value(
                 session, SettingDomain.usage, "fup_throttle_radius_profile_id"
             )
         )
 
-        # Find all active subscriptions that have FUP policies
-        subscriptions = (
+        enforced_states = (
+            FupActionStatus.notified,
+            FupActionStatus.throttled,
+            FupActionStatus.blocked,
+        )
+        subscription_uuid_filter = None
+        if subscription_ids is not None:
+            subscription_uuid_filter = []
+            for raw_id in subscription_ids:
+                try:
+                    subscription_uuid_filter.append(uuid.UUID(str(raw_id)))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Skipping invalid FUP subscription id %r from %s",
+                        raw_id,
+                        source,
+                    )
+
+        # Find active subscriptions with FUP policies, plus subscriptions
+        # already under FUP control. The latter matters for cap-boundary
+        # auto-lift: a blocked subscription is suspended, so an active-only
+        # scan would never clear it after the reset window.
+        subscriptions_query = (
             session.query(Subscription)
             .join(FupPolicy, FupPolicy.offer_id == Subscription.offer_id)
-            .filter(Subscription.status == SubscriptionStatus.active)
+            .outerjoin(FupState, FupState.subscription_id == Subscription.id)
+            .filter(
+                or_(
+                    Subscription.status == SubscriptionStatus.active,
+                    FupState.action_status.in_(enforced_states),
+                )
+            )
             .filter(FupPolicy.is_active.is_(True))
-            .all()
         )
+        if subscription_uuid_filter is not None:
+            if not subscription_uuid_filter:
+                return {
+                    "processed": 0,
+                    "enforced": 0,
+                    "reset": 0,
+                    "notified": 0,
+                    "submonthly_no_data": 0,
+                    "throttle_unconfigured": 0,
+                    "targeted": 1,
+                }
+            subscriptions_query = subscriptions_query.filter(
+                Subscription.id.in_(subscription_uuid_filter)
+            )
+        subscriptions = subscriptions_query.all()
 
         for sub in subscriptions:
             processed += 1
@@ -465,8 +601,9 @@ def evaluate_fup_rules() -> dict[str, int]:
         # failure never rolls back enforcement state.
         notified = _emit_fup_notifications(session, pending_notifs)
         logger.info(
-            "FUP evaluation: %d processed, %d enforced, %d reset, %d notified, "
-            "%d sub-monthly no-data, %d throttle-unconfigured",
+            "FUP evaluation (%s): %d processed, %d enforced, %d reset, "
+            "%d notified, %d sub-monthly no-data, %d throttle-unconfigured",
+            source,
             processed,
             enforced,
             reset,
@@ -481,6 +618,7 @@ def evaluate_fup_rules() -> dict[str, int]:
             "notified": notified,
             "submonthly_no_data": submonthly_no_data,
             "throttle_unconfigured": throttle_unconfigured,
+            "targeted": int(subscription_ids is not None),
         }
     except Exception:
         session.rollback()

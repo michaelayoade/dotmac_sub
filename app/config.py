@@ -81,6 +81,24 @@ class Settings:
     # inbound HMAC-signed webhook deliveries.
     selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
 
+    # Live chat (bridges to the CRM chat_widget channel). Default OFF: the
+    # broker endpoints return 503 until a deploy flips this on deliberately.
+    chat_live_enabled: bool = os.getenv("CHAT_LIVE_ENABLED", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    # ChatWidgetConfig id in the CRM that customer + reseller sessions attach to
+    # (general support pool; same config for both surfaces).
+    crm_chat_config_id: str = os.getenv("CRM_CHAT_CONFIG_ID", "")
+    # Distinct from crm_webhook_secret: protects the inbound chat message_new
+    # webhook that drives mobile push.
+    crm_chat_webhook_secret: str = os.getenv("CRM_CHAT_WEBHOOK_SECRET", "")
+    # Visitor WebSocket URL handed to clients. Derived from crm_base_url
+    # (https→wss) + /ws/widget when left blank.
+    crm_chat_ws_url: str = os.getenv("CRM_CHAT_WS_URL", "")
+
     # Mono lookup API
     mono_secret_key: str = os.getenv("MONO_SECRET_KEY", "")
     mono_base_url: str = os.getenv("MONO_BASE_URL", "https://api.withmono.com")
