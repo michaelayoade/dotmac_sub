@@ -895,7 +895,7 @@ class TestAdminUsageTemplateDefaults:
         assert "liveStream: true" in usage_content
         assert "liveStream: config.liveStream" in js
 
-    def test_admin_monitoring_bandwidth_panel_auto_refreshes(self) -> None:
+    def test_admin_monitoring_bandwidth_panel_refreshes_on_demand(self) -> None:
         index = Path("templates/admin/network/monitoring/index.html").read_text(
             encoding="utf-8"
         )
@@ -903,10 +903,12 @@ class TestAdminUsageTemplateDefaults:
             "templates/admin/network/monitoring/_bandwidth_partial.html"
         ).read_text(encoding="utf-8")
 
-        # Network-wide bandwidth now polls a partial every 15s instead of being
-        # frozen at page load.
+        # Network-wide bandwidth refreshes on demand (a Refresh button targets
+        # the partial) rather than auto-polling every 15s.
         assert "/admin/network/monitoring/bandwidth" in index
-        assert 'hx-trigger="every 15s"' in index
+        assert 'hx-target="#monitoring-bandwidth-container"' in index
+        assert 'hx-trigger="every 15s"' not in index
+        assert 'hx-trigger="every 30s"' not in index
         assert "Bandwidth Overview" in partial
         assert "NAS Throughput" in partial
 

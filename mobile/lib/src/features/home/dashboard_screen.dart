@@ -72,8 +72,10 @@ class DashboardScreen extends ConsumerWidget {
     final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
     final dataPeriod = cycleSummary?.totalBytes;
-    // Wallet balance — its own at-a-glance card (separate from amount due).
-    final wallet = ref.watch(walletProvider).asData?.value;
+    // Wallet (account credit) balance for its own at-a-glance card. Uses the
+    // always-available credit balance (/me/balance), not the feature-gated VAS
+    // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
+    final balance = ref.watch(balanceProvider).asData?.value;
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -190,6 +192,12 @@ class DashboardScreen extends ConsumerWidget {
               live: activeSession != null
                   ? ref.watch(liveBandwidthProvider).asData?.value
                   : null,
+              liveEnabled: ref.watch(liveBandwidthEnabledProvider),
+              onToggleLive: activeSession != null
+                  ? () => ref
+                      .read(liveBandwidthEnabledProvider.notifier)
+                      .update((v) => !v)
+                  : null,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
@@ -245,9 +253,10 @@ class DashboardScreen extends ConsumerWidget {
                   child: _StatCard(
                     icon: Icons.account_balance_wallet_outlined,
                     label: 'Wallet',
-                    value: wallet == null
+                    value: balance == null
                         ? null
-                        : Fmt.moneyCompact(wallet.balance, wallet.currency),
+                        : Fmt.moneyCompact(
+                            balance.creditBalance, balance.currency),
                     onTap: () => context.push('/wallet'),
                   ),
                 ),
@@ -444,6 +453,8 @@ class _ConnectionBanner extends StatelessWidget {
     this.serviceActive = false,
     this.ipAddress,
     this.live,
+    this.liveEnabled = false,
+    this.onToggleLive,
   });
 
   /// Whether the displayed subscription is active. An active account that is
@@ -463,6 +474,12 @@ class _ConnectionBanner extends StatelessWidget {
 
   /// Current throughput, when the bandwidth poller has a recent sample.
   final LiveBandwidth? live;
+
+  /// Whether continuous live polling is on (drives the toggle's state).
+  final bool liveEnabled;
+
+  /// Toggles on-demand live polling. Null hides the control (e.g. offline).
+  final VoidCallback? onToggleLive;
 
   @override
   Widget build(BuildContext context) {
@@ -518,6 +535,29 @@ class _ConnectionBanner extends StatelessWidget {
             child: Text(text,
                 style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
           ),
+          // On-demand live toggle — only when connected. Off by default so the
+          // banner takes a single reading instead of polling continuously.
+          if (session != null && onToggleLive != null)
+            InkWell(
+              onTap: onToggleLive,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(liveEnabled ? Icons.bolt : Icons.bolt_outlined,
+                        size: 16, color: fg),
+                    const SizedBox(width: 2),
+                    Text(liveEnabled ? 'Live' : 'Go live',
+                        style: TextStyle(
+                            color: fg,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
