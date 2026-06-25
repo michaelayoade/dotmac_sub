@@ -31,49 +31,88 @@ class TicketsScreen extends ConsumerWidget {
         icon: const Icon(Icons.add),
         label: const Text('New ticket'),
       ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          ref.invalidate(ticketsProvider);
-          await ref.read(ticketsProvider.future);
-        },
-        child: AsyncValueView(
-          value: tickets,
-          onRetry: () => ref.invalidate(ticketsProvider),
-          skeleton: const ListSkeleton(),
-          data: (page) {
-            if (page.items.isEmpty) {
-              return ListView(
-                children: const [
-                  SizedBox(height: 120),
-                  EmptyState(
-                    icon: Icons.support_agent_outlined,
-                    message: 'No support tickets yet.',
+      body: Column(
+        children: [
+          // Prominent live-chat entry (the AppBar icon alone was too easy to
+          // miss). Opens the CRM-backed live chat.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+            child: Card(
+              margin: EdgeInsets.zero,
+              color: Theme.of(context).colorScheme.primaryContainer,
+              child: ListTile(
+                leading: Icon(
+                  Icons.forum_outlined,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+                title: Text(
+                  'Live chat',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
                   ),
-                ],
-              );
-            }
-            return ListView.separated(
-              padding: const EdgeInsets.all(12),
-              itemCount: page.items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (_, i) {
-                final t = page.items[i];
-                return Card(
-                  margin: EdgeInsets.zero,
-                  child: ListTile(
-                    title: Text(t.title,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle: Text(
-                      '${t.number ?? t.id.substring(0, 8)} · ${Fmt.date(t.createdAt)}',
-                    ),
-                    trailing: StatusChip.forTicket(t.status),
-                    onTap: () => context.go('/support/${t.id}'),
+                ),
+                subtitle: Text(
+                  'Chat with our support team now',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
                   ),
-                );
+                ),
+                trailing: Icon(
+                  Icons.chevron_right,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+                onTap: () => context.go('/chat'),
+              ),
+            ),
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () async {
+                ref.invalidate(ticketsProvider);
+                await ref.read(ticketsProvider.future);
               },
-            );
-          },
-        ),
+              child: AsyncValueView(
+                value: tickets,
+                onRetry: () => ref.invalidate(ticketsProvider),
+                skeleton: const ListSkeleton(),
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return ListView(
+                      children: const [
+                        SizedBox(height: 120),
+                        EmptyState(
+                          icon: Icons.support_agent_outlined,
+                          message: 'No support tickets yet.',
+                        ),
+                      ],
+                    );
+                  }
+                  return ListView.separated(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: page.items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final t = page.items[i];
+                      return Card(
+                        margin: EdgeInsets.zero,
+                        child: ListTile(
+                          title: Text(t.title,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(
+                            '${t.number ?? t.id.substring(0, 8)} · ${Fmt.date(t.createdAt)}',
+                          ),
+                          trailing: StatusChip.forTicket(t.status),
+                          onTap: () => context.go('/support/${t.id}'),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
