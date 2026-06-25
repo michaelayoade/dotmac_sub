@@ -52,6 +52,10 @@ function bandwidthChart(config = {}) {
         // (cookie-auth) instead of the admin directLiveEndpoint poll.
         liveStream: config.liveStream || false,
 
+        // Whether live updates are currently running. Off by default — live is
+        // on-demand (the user starts it via toggleLive), not on page load.
+        liveActive: false,
+
         // State
         chart: null,
         eventSource: null,
@@ -127,8 +131,32 @@ function bandwidthChart(config = {}) {
             this.isDestroyed = false;
             await this.loadData();
             this.initChart();
-            this.connectSSE();
-            this.startDirectLivePolling();
+            // Live updates are on-demand: the user starts them with the Live
+            // button (toggleLive). Nothing streams or polls on page load.
+        },
+
+        // Start/stop live updates on demand (SSE for the customer stream, or the
+        // direct poll for the admin endpoint). Off by default so neither runs
+        // until the user asks.
+        toggleLive() {
+            if (this.liveActive) {
+                this.liveActive = false;
+                this.stopDirectLivePolling();
+                if (this.eventSource) {
+                    this.eventSource.close();
+                    this.eventSource = null;
+                }
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
+                }
+                this.liveStatus = 'paused';
+            } else {
+                this.liveActive = true;
+                this.liveStatus = 'waiting';
+                this.connectSSE();
+                this.startDirectLivePolling();
+            }
         },
 
         // Cleanup
@@ -248,7 +276,7 @@ function bandwidthChart(config = {}) {
 
         startDirectLivePolling() {
             this.stopDirectLivePolling();
-            if (this.isDestroyed || !this.directLiveEndpoint) {
+            if (this.isDestroyed || !this.directLiveEndpoint || !this.liveActive) {
                 return;
             }
             this.loadDirectLive();
@@ -408,6 +436,8 @@ function bandwidthChart(config = {}) {
         connectSSE() {
             if (this.isDestroyed) return;
             if (!this.enableLive) return;
+            // On-demand: never (re)connect while live is paused.
+            if (!this.liveActive) return;
             if (this.eventSource) {
                 this.eventSource.close();
                 this.eventSource = null;
