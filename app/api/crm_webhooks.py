@@ -38,7 +38,7 @@ EVENT_HEADER = "X-Webhook-Event"
 # CRM ticket events that should refresh the local copy.
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
-CHAT_EVENTS = {"conversation.message_new"}
+CHAT_EVENTS = {"message.outbound"}
 
 
 def _verify_signature(
@@ -164,7 +164,12 @@ async def receive_crm_chat_event(
     if not isinstance(payload, dict):
         payload = {}
 
-    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    # The CRM wraps event data under "payload" (event envelope); tolerate a flat
+    # body too so the contract isn't brittle.
+    inner = payload.get("payload")
+    body = inner if isinstance(inner, dict) else payload
+
+    subscriber_id = str(body.get("subscriber_id") or "").strip()
     if not subscriber_id:
         # Reseller-originated or unmapped chats have no device to wake; ack so
         # the CRM doesn't retry.
@@ -172,7 +177,7 @@ async def receive_crm_chat_event(
 
     from app.services import push as push_service
 
-    preview = str(payload.get("preview") or "").strip() or "You have a new message."
+    preview = str(body.get("preview") or "").strip() or "You have a new message."
     push_service.send_push(
         db,
         subscriber_id,
@@ -180,7 +185,7 @@ async def receive_crm_chat_event(
         body=preview,
         data={
             "type": "chat_message",
-            "conversation_id": str(payload.get("conversation_id") or ""),
+            "conversation_id": str(body.get("conversation_id") or ""),
         },
     )
     return {"status": "ok", "event": event_type}

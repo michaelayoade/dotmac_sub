@@ -223,7 +223,7 @@ def _sign(body: bytes, secret: str = CHAT_SECRET) -> str:
     return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-def _post_chat(db_session, body: dict, *, event="conversation.message_new", sig=None):
+def _post_chat(db_session, body: dict, *, event="message.outbound", sig=None):
     raw = json.dumps(body).encode()
     headers = {"X-Webhook-Event": event, "Content-Type": "application/json"}
     if sig is not None:
@@ -245,6 +245,26 @@ def test_chat_webhook_valid_signature_sends_push(db_session):
     assert send.call_args.args[1] == "sub-7"
     assert send.call_args.kwargs["data"]["conversation_id"] == "conv-7"
     assert send.call_args.kwargs["data"]["type"] == "chat_message"
+
+
+def test_chat_webhook_reads_event_envelope(db_session):
+    # The CRM delivers the data nested under "payload" (event envelope).
+    body = {
+        "event_type": "message.outbound",
+        "payload": {
+            "subscriber_id": "sub-9",
+            "conversation_id": "conv-9",
+            "preview": "Enveloped",
+        },
+        "context": {"subscriber_id": None},
+    }
+    raw = json.dumps(body).encode()
+    with _chat_settings(), patch("app.services.push.send_push") as send:
+        resp = _post_chat(db_session, body, sig=_sign(raw))
+    assert resp["status"] == "ok"
+    send.assert_called_once()
+    assert send.call_args.args[1] == "sub-9"
+    assert send.call_args.kwargs["data"]["conversation_id"] == "conv-9"
 
 
 def test_chat_webhook_bad_signature_rejected(db_session):
