@@ -114,6 +114,18 @@ def monitoring_index_context(
     return data
 
 
+def monitoring_bandwidth_context(db: Session) -> dict[str, object]:
+    """Build context for the auto-refreshing live bandwidth partial.
+
+    Mirrors the bandwidth/nas_throughput slice of ``monitoring_page_data`` so
+    the network-wide throughput panel can poll independently of the full page.
+    """
+    return {
+        "bandwidth": _get_bandwidth_summary(),
+        "nas_throughput": _get_nas_throughput_summary(db),
+    }
+
+
 def monitoring_kpi_context(
     db: Session,
     *,

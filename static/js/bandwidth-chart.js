@@ -48,6 +48,9 @@ function bandwidthChart(config = {}) {
         enableLive: config.enableLive !== false,
         directLiveEndpoint: config.directLiveEndpoint || null,
         directLivePollMs: config.directLivePollMs || 5000,
+        // Customer-portal live: drive the live UI from the /my/live SSE stream
+        // (cookie-auth) instead of the admin directLiveEndpoint poll.
+        liveStream: config.liveStream || false,
 
         // State
         chart: null,
@@ -67,13 +70,14 @@ function bandwidthChart(config = {}) {
         peakUpload: 0,
         totalDownload: 0,
         totalUpload: 0,
-        liveStatus: config.directLiveEndpoint ? 'waiting' : 'history',
+        liveStatus: (config.directLiveEndpoint || config.liveStream) ? 'waiting' : 'history',
         liveSource: '',
         liveInterface: '',
         liveUpdatedAt: null,
 
-        // Time range
-        timeRange: '24h',
+        // Time range. Live stream only flows on the 1h view, so default there
+        // when live so customers see real-time speed without first switching.
+        timeRange: config.liveStream ? '1h' : '24h',
         timeRanges: [
             { value: '1h', label: '1h' },
             { value: '24h', label: '24h' },
@@ -89,11 +93,19 @@ function bandwidthChart(config = {}) {
         get totalDownloadFormatted() { return formatBytes(this.totalDownload); },
         get totalUploadFormatted() { return formatBytes(this.totalUpload); },
         get liveStatusLabel() {
-            if (!this.directLiveEndpoint) return 'Speed history';
-            if (this.liveStatus === 'live') return 'Live from MikroTik';
-            if (this.liveStatus === 'offline') return 'PPP session offline';
-            if (this.liveStatus === 'error') return 'Live read unavailable';
-            return 'Waiting for MikroTik';
+            if (this.directLiveEndpoint) {
+                if (this.liveStatus === 'live') return 'Live from MikroTik';
+                if (this.liveStatus === 'offline') return 'PPP session offline';
+                if (this.liveStatus === 'error') return 'Live read unavailable';
+                return 'Waiting for MikroTik';
+            }
+            if (this.liveStream) {
+                if (this.timeRange !== '1h') return 'Live paused (history view)';
+                if (this.liveStatus === 'live') return 'Live';
+                if (this.liveStatus === 'error') return 'Live read unavailable';
+                return 'Connecting…';
+            }
+            return 'Speed history';
         },
         get liveUpdatedAtFormatted() {
             if (!this.liveUpdatedAt) return '';
@@ -420,6 +432,10 @@ function bandwidthChart(config = {}) {
                         this.currentDownload = data.download_bps || 0;
                         this.currentUpload = data.upload_bps || 0;
                     }
+                    if (this.liveStream) {
+                        this.liveStatus = 'live';
+                        this.liveUpdatedAt = data.timestamp || new Date().toISOString();
+                    }
 
                     // Update peak if necessary
                     if (this.currentDownload > this.peakDownload) this.peakDownload = this.currentDownload;
@@ -456,6 +472,7 @@ function bandwidthChart(config = {}) {
 
                 source.addEventListener('error', (event) => {
                     console.error('SSE error:', event);
+                    if (this.liveStream) this.liveStatus = 'error';
                     if (this.eventSource === source) {
                         source.close();
                         this.eventSource = null;

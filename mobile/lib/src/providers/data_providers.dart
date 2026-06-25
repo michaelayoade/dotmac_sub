@@ -371,13 +371,14 @@ final bandwidthSeriesProvider =
   },
 );
 
-/// Current throughput for the active subscription (connection banner).
-/// Errors (e.g. no active subscription) just mean "no signal" — callers
-/// read it via asData and omit the figure.
+/// Live throughput for the active subscription (connection banner). Streams
+/// fresh samples while the dashboard is open; autoDispose stops the poll when
+/// it closes. Errors (e.g. no active subscription) surface as a no-signal
+/// value, so callers read it via asData and omit the figure.
 final liveBandwidthProvider =
-    FutureProvider.autoDispose<LiveBandwidth>((ref) async {
+    StreamProvider.autoDispose<LiveBandwidth>((ref) {
   cacheFor(ref);
-  return ref.watch(usageRepositoryProvider).liveBandwidth();
+  return ref.watch(usageRepositoryProvider).liveBandwidthStream();
 });
 
 final sessionsProvider =
