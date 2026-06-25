@@ -55,13 +55,13 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
     ).all()
 
     active_ids: set = set()
-    live_ids: set = set()
+    live_count = 0
     active_with_nas: set = set()
     active_with_login: set = set()
     nas_of: dict = {}
     for sub_id, status, nas_id, login in rows:
         if status in live_statuses:
-            live_ids.add(sub_id)
+            live_count += 1
         if status == SubscriptionStatus.active:
             active_ids.add(sub_id)
             nas_of[sub_id] = nas_id
@@ -91,6 +91,10 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
 
     active_live = active_ids & recent_sample_ids
     active_mapped = active_ids & mapping_sub_ids
+    # Live AND has a provisioning NAS — the proper subset for the
+    # live-vs-NAS-assigned ratio (a sub can have a fresh sample yet a NULL
+    # provisioning NAS, since samples are keyed by the sample's device).
+    active_live_with_nas = active_live & active_with_nas
     # Orphan samples: fresh data for a sub that is not currently active.
     orphan_sample_ids = recent_sample_ids - active_ids
 
@@ -136,7 +140,7 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
         "generated_at": datetime.now(UTC).isoformat(),
         "window_minutes": window_minutes,
         "totals": {
-            "live_service_subs": len(live_ids),
+            "live_service_subs": live_count,
             "active_subs": len(active_ids),
             "active_with_nas": len(active_with_nas),
             "active_with_queue_mapping": len(active_mapped),
@@ -147,7 +151,9 @@ def audit_live_bandwidth_coverage(session, *, window_minutes: int = 15) -> dict:
         },
         "coverage_pct": {
             "live_now_vs_active": _pct(len(active_live), len(active_ids)),
-            "live_now_vs_active_with_nas": _pct(len(active_live), len(active_with_nas)),
+            "live_now_vs_active_with_nas": _pct(
+                len(active_live_with_nas), len(active_with_nas)
+            ),
             "mapped_vs_active": _pct(len(active_mapped), len(active_ids)),
             "nas_assigned_vs_active": _pct(len(active_with_nas), len(active_ids)),
         },
