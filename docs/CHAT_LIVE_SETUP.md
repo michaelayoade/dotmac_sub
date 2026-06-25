@@ -46,7 +46,7 @@ and `FCM_CREDENTIALS_JSON` (push).
 2. **Seed the CRM** (after deploy, so the enum exists):
    ```
    docker exec -e CHAT_ALLOWED_DOMAINS="selfcare.dotmac.io,app.dotmac.io" \
-     -e SUB_CHAT_WEBHOOK_URL="https://selfcare.dotmac.io/webhooks/crm/chat" \
+     -e SUB_CHAT_WEBHOOK_URL="https://selfcare.dotmac.io/api/v1/webhooks/crm/chat" \
      -e SUB_CHAT_WEBHOOK_SECRET="<pick a secret>" \
      dotmac_omni_app python scripts/seed_chat_widget.py
    ```
