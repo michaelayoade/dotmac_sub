@@ -225,14 +225,46 @@ def test_all_combines_daily_rollup_with_post_cutoff_sessions(
     assert out["start"].date() == date(2020, 1, 1)  # earliest = daily rollup start
 
 
-def test_cycle_uses_rated_quota_bucket(db_session, subscriber, subscription):
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+def test_cycle_sums_session_octets_over_window(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """Cycle total = RADIUS session octets over the billing-cycle window — the
+    rated bucket only defines the window, not the total."""
+
+    async def _no_vm(db, sub_ids, start, end):
+        return []
+
+    monkeypatch.setattr(svc, "_vm_points", _no_vm)
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+    # Bucket defines the window; its used_gb is irrelevant to the total now.
     db_session.add(
         QuotaBucket(
             subscription_id=subscription.id,
-            period_start=now - timedelta(days=5),
-            period_end=now + timedelta(days=25),
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=500,
             used_gb=2,
+        )
+    )
+    # In-window session (counted) + a pre-window session (excluded).
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="in-window",
+            status_type=AccountingStatus.stop,
+            session_start=now - timedelta(days=3),
+            input_octets=3000,
+            output_octets=2000,
+        )
+    )
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscription.id,
+            session_id="pre-window",
+            status_type=AccountingStatus.stop,
+            session_start=now - timedelta(days=40),
+            input_octets=9999,
+            output_octets=9999,
         )
     )
     db_session.commit()
@@ -241,20 +273,18 @@ def test_cycle_uses_rated_quota_bucket(db_session, subscriber, subscription):
         svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
     )
 
-    assert out["total_source"] == "quota"
+    assert out["total_source"] == "sessions"
     assert out["is_authoritative"] is True
-    assert out["total_bytes"] == 2 * (1024**3)
+    assert out["total_bytes"] == 5000  # only the in-window session
     assert out["bucket"] == "day"
 
 
-def test_cycle_unlimited_bucket_falls_back_to_measured(
+def test_cycle_unlimited_uses_session_octets(
     db_session, subscriber, subscription, monkeypatch
 ):
     """An unlimited/unmetered plan has a rated bucket with used_gb=0; the cycle
-    total must reflect real session traffic instead of a false 0."""
+    total comes from session octets over the window, not the (0) quota."""
 
-    # No metrics store in tests — return an empty series cleanly so the fallback
-    # to session octets runs (the real call would error and poison the session).
     async def _no_vm(db, sub_ids, start, end):
         return []
 
@@ -286,10 +316,41 @@ def test_cycle_unlimited_bucket_falls_back_to_measured(
         svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
     )
 
-    # VM series is empty here, so it falls back to session octets.
     assert out["total_bytes"] == 5_000
-    assert out["total_source"] == "samples"
-    assert out["is_authoritative"] is False
+    assert out["total_source"] == "sessions"
+    assert out["is_authoritative"] is True
+
+
+def test_cycle_includes_peak_over_window(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """The cycle summary carries exact peak (download/upload) over the window."""
+
+    async def _no_vm(db, sub_ids, start, end):
+        return []
+
+    async def _peak(db, sub_ids, start, end):
+        return (123_000_000.0, 45_000_000.0)  # 123 / 45 Mbps
+
+    monkeypatch.setattr(svc, "_vm_points", _no_vm)
+    monkeypatch.setattr(svc, "_peak_directions", _peak)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=500,
+            used_gb=40,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+    assert out["peak_download_bps"] == 123_000_000.0
+    assert out["peak_upload_bps"] == 45_000_000.0
 
 
 def test_window_with_no_data_falls_back_without_false_zero(

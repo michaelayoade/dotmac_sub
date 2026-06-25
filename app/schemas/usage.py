@@ -156,6 +156,11 @@ class UsageSummaryResponse(BaseModel):
     # Mean throughput over the window (rx+tx bits/s) — the "average speed".
     # None for windows with no sample points (e.g. "all").
     average_bps: float | None = None
+    # Exact peak throughput over the window (subscriber-perspective bits/s),
+    # from the metrics store. Currently populated for the billing cycle; None
+    # when the metrics store is unavailable or the window has no data.
+    peak_download_bps: float | None = None
+    peak_upload_bps: float | None = None
     series: list[UsageSeriesPoint] = Field(default_factory=list)
     # Fair-Usage status for the caller (None when no FUP applies / unknown).
     fup: FupSummary | None = None

@@ -71,21 +71,40 @@ class DashboardScreen extends ConsumerWidget {
     // unlimited plans, unlike "data left" which reads as 0 on unlimited.
     final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    // Total data used this subscription period. Prefer the cycle total; if that
-    // reads 0 (unmetered/unlimited plans accrue no quota used_gb, and the
-    // server-side measured fallback may not be live yet) use the cycle chart
-    // series, then today's total, so a period with real traffic never shows 0.
+    // Total data used this subscription period = RADIUS session octets over the
+    // cycle window (server-authoritative). Until that's deployed, fall back to
+    // summing the loaded sessions started in the window, then the (retention-
+    // limited) throughput series, then today — so it's never a false 0 and never
+    // the under-counted series when session data is available.
     int? dataPeriod;
     if (cycleSummary != null) {
+      final cycleStart = cycleSummary.start;
+      final sessionSum = (sessItems ?? const <AccountingSession>[])
+          .where((s) =>
+              s.sessionStart != null && !s.sessionStart!.isBefore(cycleStart))
+          .fold<int>(0, (a, s) => a + s.totalOctets);
       final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
       dataPeriod = cycleSummary.totalBytes > 0
           ? cycleSummary.totalBytes
-          : (seriesSum > 0 ? seriesSum : (dataToday ?? 0));
+          : (sessionSum > 0
+              ? sessionSum
+              : (seriesSum > 0 ? seriesSum : (dataToday ?? 0)));
     }
     // Wallet (account credit) balance for its own at-a-glance card. Uses the
     // always-available credit balance (/me/balance), not the feature-gated VAS
     // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
     final balance = ref.watch(balanceProvider).asData?.value;
+    // Peak download throughput for the "Peak" tile. Prefer the exact
+    // billing-cycle peak from the cycle summary; fall back to the ~30d stats
+    // window until that ships. Both are subscriber-perspective download bps.
+    final peak30 = ref.watch(peakBandwidthProvider).asData?.value;
+    final peakBps = cycleSummary?.peakDownloadBps ?? peak30?.peakDownloadBps;
+    final peakLoaded = cycleSummary != null || peak30 != null;
+    final peakValue = !peakLoaded
+        ? null // still loading
+        : (peakBps == null || peakBps <= 0
+            ? '—'
+            : '${(peakBps / 1e6).toStringAsFixed(peakBps >= 1e7 ? 0 : 1)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -197,6 +216,7 @@ class DashboardScreen extends ConsumerWidget {
           ref.invalidate(usageSummaryProvider('today'));
           ref.invalidate(quotaBucketsProvider);
           ref.invalidate(liveBandwidthProvider);
+          ref.invalidate(peakBandwidthProvider);
           await Future.wait([
             ref.read(subscriptionsProvider.future),
             ref.read(invoicesProvider.future),
@@ -267,97 +287,71 @@ class DashboardScreen extends ConsumerWidget {
             }),
             const SizedBox(height: 16),
 
-            // --- At-a-glance summary ---
-            // Row 1: wallet balance · amount due · usage today
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.account_balance_wallet_outlined,
-                    label: 'Wallet',
-                    value: balance == null
-                        ? null
-                        : Fmt.moneyCompact(
-                            balance.creditBalance, balance.currency),
-                    onTap: () => context.push('/wallet'),
-                  ),
+            // --- At-a-glance summary (rows of 3; grid pads the last row) ---
+            _StatGrid(
+              tiles: [
+                _StatCard(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: 'Wallet',
+                  value: balance == null
+                      ? null
+                      : Fmt.moneyCompact(
+                          balance.creditBalance, balance.currency),
+                  onTap: () => context.push('/wallet'),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.receipt_long_outlined,
-                    label: 'Amount due',
-                    value: outstanding == null
-                        ? null
-                        : Fmt.moneyCompact(outstanding, currency),
-                    // Colour alone shouldn't convey the owing state, but the
-                    // label already says "Amount due"; highlight when > 0.
-                    highlight: (outstanding ?? 0) > 0,
-                    onTap: () => context.go('/billing'),
-                  ),
+                _StatCard(
+                  icon: Icons.receipt_long_outlined,
+                  label: 'Amount due',
+                  value: outstanding == null
+                      ? null
+                      : Fmt.moneyCompact(outstanding, currency),
+                  // Label already says "Amount due"; highlight when > 0.
+                  highlight: (outstanding ?? 0) > 0,
+                  onTap: () => context.go('/billing'),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.today_outlined,
-                    label: 'Today',
-                    value: dataToday == null ? null : Fmt.bytes(dataToday),
-                    onTap: () => context.go('/usage'),
-                  ),
+                _StatCard(
+                  icon: Icons.today_outlined,
+                  label: 'Today',
+                  value: dataToday == null ? null : Fmt.bytes(dataToday),
+                  onTap: () => context.go('/usage'),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            // Row 2: usage this subscription period · (quota/FUP left) · next bill
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.data_usage_outlined,
-                    // Total data used over the whole billing/subscription period
-                    // (not quota remaining) — for capped and unlimited alike.
-                    label: 'This period',
-                    value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
-                    highlight: (fup?.isApproaching ?? false) ||
+                _StatCard(
+                  icon: Icons.data_usage_outlined,
+                  // Total data used this billing/subscription period.
+                  label: 'This period',
+                  value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
+                  highlight: (fup?.isApproaching ?? false) ||
+                      (fup?.needsAttention ?? false),
+                  onTap: () => context.go('/usage'),
+                ),
+                // Quota / fair-use remaining — only for plans where it applies.
+                if (quotaLeftValue != null)
+                  _StatCard(
+                    icon: Icons.data_saver_off_outlined,
+                    label: quotaLeftLabel,
+                    value: quotaLeftValue,
+                    highlight: (currentQuota != null &&
+                            (currentQuota.usedFraction ?? 0) >= 0.9) ||
+                        (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
                     onTap: () => context.go('/usage'),
                   ),
+                _StatCard(
+                  icon: Icons.speed_outlined,
+                  // Peak download throughput this period (~30d).
+                  label: 'Peak',
+                  value: peakValue,
+                  onTap: () => context.go('/usage'),
                 ),
-                const SizedBox(width: 10),
-                // Quota / fair-use remaining — only for plans where it applies.
-                if (quotaLeftValue != null) ...[
-                  Expanded(
-                    child: _StatCard(
-                      icon: Icons.data_saver_off_outlined,
-                      label: quotaLeftLabel,
-                      value: quotaLeftValue,
-                      highlight: (currentQuota != null &&
-                              (currentQuota.usedFraction ?? 0) >= 0.9) ||
-                          (fup?.isApproaching ?? false) ||
-                          (fup?.needsAttention ?? false),
-                      onTap: () => context.go('/usage'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                ],
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.event_outlined,
-                    label: expiryStatLabel,
-                    value: expiryStatValue,
-                    // Urgent when expiring within 3 days or genuinely expired
-                    // (never for an active service with a stale billing date).
-                    highlight: (currentService?.expiresSoon ?? false) ||
-                        (currentService?.isExpired ?? false),
-                    onTap: () => context.go('/billing'),
-                  ),
+                _StatCard(
+                  icon: Icons.event_outlined,
+                  label: expiryStatLabel,
+                  value: expiryStatValue,
+                  // Urgent when expiring within 3 days or genuinely expired.
+                  highlight: (currentService?.expiresSoon ?? false) ||
+                      (currentService?.isExpired ?? false),
+                  onTap: () => context.go('/billing'),
                 ),
-                // Keep widths aligned with row 1's three cards when there's no
-                // quota/FUP card to show.
-                if (quotaLeftValue == null) ...[
-                  const SizedBox(width: 10),
-                  const Expanded(child: SizedBox()),
-                ],
               ],
             ),
             const SizedBox(height: 20),
@@ -803,6 +797,37 @@ class _ServiceSwitcher extends StatelessWidget {
         },
       ),
     );
+  }
+}
+
+/// Lays out at-a-glance stat tiles in rows of three, padding the final row so
+/// every tile keeps an equal width regardless of count (5, 6 or 7 tiles).
+class _StatGrid extends StatelessWidget {
+  const _StatGrid({required this.tiles});
+  final List<Widget> tiles;
+
+  @override
+  Widget build(BuildContext context) {
+    const perRow = 3;
+    const gap = 10.0;
+    final rows = <Widget>[];
+    for (var i = 0; i < tiles.length; i += perRow) {
+      final cells = <Widget>[];
+      for (var j = 0; j < perRow; j++) {
+        if (j > 0) cells.add(const SizedBox(width: gap));
+        final idx = i + j;
+        cells.add(Expanded(
+          child: idx < tiles.length ? tiles[idx] : const SizedBox(),
+        ));
+      }
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
+      rows.add(IntrinsicHeight(
+          child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: cells,
+      )));
+    }
+    return Column(children: rows);
   }
 }
 

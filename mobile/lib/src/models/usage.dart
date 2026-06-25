@@ -129,16 +129,28 @@ class AccountingSession {
 /// perspective. Mirrors BandwidthStats from api/bandwidth.py (we bind only
 /// the download/upload fields — rx/tx are NAS-perspective).
 class LiveBandwidth {
-  LiveBandwidth({this.downloadBps, this.uploadBps});
+  LiveBandwidth({
+    this.downloadBps,
+    this.uploadBps,
+    this.peakDownloadBps,
+    this.peakUploadBps,
+  });
 
   final double? downloadBps;
   final double? uploadBps;
+
+  /// Peak throughput over the requested window (subscriber perspective).
+  /// Populated by /bandwidth/my/stats; null on the live one-shot.
+  final double? peakDownloadBps;
+  final double? peakUploadBps;
 
   bool get hasSignal => (downloadBps ?? 0) > 0 || (uploadBps ?? 0) > 0;
 
   factory LiveBandwidth.fromJson(Map<String, dynamic> json) => LiveBandwidth(
         downloadBps: (json['download_bps'] as num?)?.toDouble(),
         uploadBps: (json['upload_bps'] as num?)?.toDouble(),
+        peakDownloadBps: (json['peak_download_bps'] as num?)?.toDouble(),
+        peakUploadBps: (json['peak_upload_bps'] as num?)?.toDouble(),
       );
 }
 
@@ -248,6 +260,8 @@ class UsageSummary {
     required this.isAuthoritative,
     this.bucket,
     this.averageBps,
+    this.peakDownloadBps,
+    this.peakUploadBps,
     this.series = const [],
     this.fup,
   });
@@ -263,6 +277,11 @@ class UsageSummary {
   /// Mean throughput over the window (rx+tx bits/s) — the "average speed".
   /// Null for windows with no samples (e.g. "all").
   final double? averageBps;
+
+  /// Exact peak throughput over the window (subscriber bits/s). Populated for
+  /// the billing cycle; null when unavailable.
+  final double? peakDownloadBps;
+  final double? peakUploadBps;
   final List<UsageSeriesPoint> series;
   final FupStatus? fup;
 
@@ -275,6 +294,8 @@ class UsageSummary {
         isAuthoritative: json['is_authoritative'] as bool? ?? false,
         bucket: json['bucket'] as String?,
         averageBps: (json['average_bps'] as num?)?.toDouble(),
+        peakDownloadBps: (json['peak_download_bps'] as num?)?.toDouble(),
+        peakUploadBps: (json['peak_upload_bps'] as num?)?.toDouble(),
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),

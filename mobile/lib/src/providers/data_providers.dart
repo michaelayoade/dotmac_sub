@@ -375,6 +375,21 @@ final bandwidthSeriesProvider =
   },
 );
 
+/// Peak throughput this period (~30d window) for the at-a-glance tile, from
+/// /bandwidth/my/stats. Degrades to an empty value (tile shows "—") when the
+/// connection has no bandwidth mapping (403) rather than erroring.
+final peakBandwidthProvider =
+    FutureProvider.autoDispose<LiveBandwidth>((ref) async {
+  cacheFor(ref);
+  try {
+    return await ref
+        .watch(usageRepositoryProvider)
+        .liveBandwidth(period: '30d');
+  } catch (_) {
+    return LiveBandwidth();
+  }
+});
+
 /// On-demand switch for live bandwidth polling. Off by default, so the
 /// connection banner takes a single reading instead of polling every few
 /// seconds; the user opts into continuous live updates from the banner.

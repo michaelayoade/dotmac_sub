@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/chat.dart';
 import '../../providers/data_providers.dart';
+import '../../repositories/chat_repository.dart';
 
 /// Live chat with support. Brokers a session, loads history, and polls for new
 /// messages while foregrounded; background delivery arrives via FCM push.
@@ -60,8 +61,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   Future<void> _start() async {
     try {
-      final session =
-          await _repo.openSession(endpoint: widget.sessionEndpoint);
+      final session = await _repo.openSession(endpoint: widget.sessionEndpoint);
       final history = await _repo.history(session);
       if (!mounted) return;
       setState(() {
@@ -140,9 +140,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(_error!, textAlign: TextAlign.center)))
+              ? Center(
+                  child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(_error!, textAlign: TextAlign.center)))
               : Column(
                   children: [
                     Expanded(child: _buildLog()),
@@ -173,8 +174,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         decoration: BoxDecoration(
           color: mine
               ? theme.colorScheme.primary
