@@ -89,18 +89,20 @@ class QuotaCard extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               b.isUnlimited
-                  ? Fmt.gb(b.usedGb)
+                  ? '${Fmt.gb(b.usedGb)} used'
                   : '${Fmt.gb(b.usedGb)} / ${Fmt.gb(b.allowanceGb ?? 0)}',
               style: theme.textTheme.headlineSmall,
             ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              value: fraction,
-              minHeight: 10,
-              borderRadius: BorderRadius.circular(5),
-              color: overLimit ? theme.colorScheme.error : null,
-            ),
+            // Capped plans get an allowance bar + "X left"; unlimited plans don't
+            // (no cap to draw against — the "Unlimited" chip says it all).
             if (!b.isUnlimited) ...[
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                value: fraction,
+                minHeight: 10,
+                borderRadius: BorderRadius.circular(5),
+                color: overLimit ? theme.colorScheme.error : null,
+              ),
               const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,

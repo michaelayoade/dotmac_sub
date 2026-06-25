@@ -31,7 +31,7 @@ class QuotaBucket {
 
   /// Total data available this period (included + rolled-over + top-ups).
   double? get allowanceGb =>
-      includedGb == null ? null : includedGb! + rolloverGb + topupGb;
+      isUnlimited ? null : includedGb! + rolloverGb + topupGb;
 
   double? get remainingGb {
     final a = allowanceGb;
@@ -48,7 +48,9 @@ class QuotaBucket {
     return f.clamp(0.0, 1.0);
   }
 
-  bool get isUnlimited => includedGb == null;
+  /// Unmetered plan: no included allowance on file (null) or an explicit 0,
+  /// which is how "unlimited" offers are rated (no GB cap to count against).
+  bool get isUnlimited => includedGb == null || includedGb! <= 0;
 
   factory QuotaBucket.fromJson(Map<String, dynamic> json) => QuotaBucket(
         id: json['id'].toString(),
