@@ -394,21 +394,42 @@ class MetricsStore:
     ) -> dict[str, float]:
         """
         Get peak bandwidth for a subscription within a time range.
+
+        Prefers an exact raw-resolution ``max_over_time`` instant query. That
+        query can return nothing on a long lookbehind window (VictoriaMetrics
+        rejects an over-long ``[duration]`` rollup, or the data predates the
+        instant evaluation's staleness window), so when it yields no peak we
+        fall back to the max of the *range* series — the same path the chart
+        uses, which is known to return data over multi-day windows.
         """
         duration = int((end - start).total_seconds())
         rx_query = f'max_over_time(bandwidth_rx_bps{{subscription_id="{subscription_id}"}}[{duration}s])'
         tx_query = f'max_over_time(bandwidth_tx_bps{{subscription_id="{subscription_id}"}}[{duration}s])'
 
-        rx_results = await self.get_instant(rx_query)
-        tx_results = await self.get_instant(tx_query)
-
         rx_peak = 0.0
         tx_peak = 0.0
+        try:
+            rx_results = await self.get_instant(rx_query)
+            tx_results = await self.get_instant(tx_query)
+            rx_peak = max(
+                (float(r["value"][1]) for r in rx_results if r.get("value")),
+                default=0.0,
+            )
+            tx_peak = max(
+                (float(r["value"][1]) for r in tx_results if r.get("value")),
+                default=0.0,
+            )
+        except Exception as exc:  # pragma: no cover - metrics store dependent
+            logger.warning(
+                "peak instant query failed, falling back to range series: %s", exc
+            )
 
-        if rx_results and rx_results[0].get("value"):
-            rx_peak = float(rx_results[0]["value"][1])
-        if tx_results and tx_results[0].get("value"):
-            tx_peak = float(tx_results[0]["value"][1])
+        if rx_peak <= 0 and tx_peak <= 0:
+            series = await self.get_subscription_bandwidth(
+                subscription_id, start, end, step="1m"
+            )
+            rx_peak = max((p.value for p in series.get("rx", [])), default=0.0)
+            tx_peak = max((p.value for p in series.get("tx", [])), default=0.0)
 
         return {"rx_peak_bps": rx_peak, "tx_peak_bps": tx_peak}
 
