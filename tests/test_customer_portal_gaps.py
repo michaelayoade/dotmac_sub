@@ -854,6 +854,9 @@ class TestCustomerUsageRoute:
         assert context["usage_records_default_view"] == "chart"
         assert context["usage_records_chart_id"] == "portal-usage-records-chart"
         assert context["usage_records_chart_label"] == "Daily Usage (GB)"
+        # Live streaming is enabled for customers with an active subscription so
+        # the usage page subscribes to the /portal/bandwidth/my/live SSE stream.
+        assert context["bandwidth_chart_live_stream"] is True
 
 
 class TestAdminUsageTemplateDefaults:
@@ -878,6 +881,34 @@ class TestAdminUsageTemplateDefaults:
         assert "Live from MikroTik" in Path("static/js/bandwidth-chart.js").read_text(
             encoding="utf-8"
         )
+
+    def test_customer_usage_template_supports_live_stream(self) -> None:
+        usage_content = Path("templates/customer/usage/_content.html").read_text(
+            encoding="utf-8"
+        )
+        js = Path("static/js/bandwidth-chart.js").read_text(encoding="utf-8")
+
+        # The live UI gate is decoupled from the admin-only directLiveEndpoint so
+        # the customer SSE (/portal/bandwidth/my/live) can drive it.
+        assert "bandwidth_chart_live_stream" in usage_content
+        assert "bandwidth_chart_live" in usage_content
+        assert "liveStream: true" in usage_content
+        assert "liveStream: config.liveStream" in js
+
+    def test_admin_monitoring_bandwidth_panel_auto_refreshes(self) -> None:
+        index = Path("templates/admin/network/monitoring/index.html").read_text(
+            encoding="utf-8"
+        )
+        partial = Path(
+            "templates/admin/network/monitoring/_bandwidth_partial.html"
+        ).read_text(encoding="utf-8")
+
+        # Network-wide bandwidth now polls a partial every 15s instead of being
+        # frozen at page load.
+        assert "/admin/network/monitoring/bandwidth" in index
+        assert 'hx-trigger="every 15s"' in index
+        assert "Bandwidth Overview" in partial
+        assert "NAS Throughput" in partial
 
 
 class TestPortalNotificationsPage:

@@ -522,6 +522,9 @@ def customer_usage(
                 db,
                 subscription.id if subscription else None,
             ),
+            # Stream live throughput from /portal/bandwidth/my/live (SSE) when the
+            # customer has a subscription to read against.
+            "bandwidth_chart_live_stream": bool(usage_data.get("has_subscription")),
             "usage_enable_records_chart": True,
             "usage_records_default_view": "chart",
             "usage_records_chart_id": "portal-usage-records-chart",
