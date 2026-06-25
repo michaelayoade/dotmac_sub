@@ -910,28 +910,26 @@ def _calculate_proration(
             "remaining_ratio": Decimal("0"),
         }
 
-    # Get old and new recurring prices
-    old_price_row = (
-        db.query(OfferPrice.amount)
-        .filter(
-            OfferPrice.offer_id == subscription.offer_id,
-            OfferPrice.price_type == PriceType.recurring,
-            OfferPrice.is_active.is_(True),
-        )
-        .first()
-    )
-    new_price_row = (
-        db.query(OfferPrice.amount)
-        .filter(
-            OfferPrice.offer_id == new_offer_id,
-            OfferPrice.price_type == PriceType.recurring,
-            OfferPrice.is_active.is_(True),
-        )
-        .first()
-    )
+    # Old and new recurring prices, at the rate the customer actually pays.
+    # The old side is the subscription's *effective* price (version-aware
+    # catalog, then unit_price override, then any active discount) so the credit
+    # matches what was billed — a negotiated/discounted/version-priced customer
+    # was over-credited when this read the raw catalog OfferPrice. The new side
+    # is the new offer's catalog price with the subscription's discount applied
+    # but NOT the old per-offer override (which is re-snapshotted on the change).
+    from app.services import billing_automation
 
-    old_price = Decimal(str(old_price_row[0])) if old_price_row else Decimal("0")
-    new_price = Decimal(str(new_price_row[0])) if new_price_row else Decimal("0")
+    resolved_old, _, _ = billing_automation._resolve_price(db, subscription)
+    old_catalog = (
+        Decimal(str(resolved_old))
+        if resolved_old is not None
+        else _offer_recurring_price_amount(db, subscription.offer_id)
+    )
+    new_catalog = _offer_recurring_price_amount(db, new_offer_id)
+    old_price = billing_automation._effective_unit_price(subscription, old_catalog, now)
+    new_price = billing_automation._effective_unit_price(
+        subscription, new_catalog, now, include_override=False
+    )
     remaining_ratio = Decimal(str(remaining_cycle_seconds)) / Decimal(
         str(total_cycle_seconds)
     )
@@ -1472,6 +1470,19 @@ class Subscriptions(ListResponseMixin):
         subscriber_id = str(data.get("subscriber_id", subscription.subscriber_id))
         offer_id = str(data.get("offer_id", subscription.offer_id))
         offer_version_id = data.get("offer_version_id", subscription.offer_version_id)
+        # A plan change to a different offer must not carry the previous offer's
+        # pinned version: a stale offer_version_id makes price resolution read the
+        # OLD offer's OfferVersionPrice (wrong-plan price, silently). When the
+        # caller changes offer_id without explicitly choosing a version, drop the
+        # pin so pricing falls back to the new offer's price.
+        if (
+            "offer_id" in data
+            and str(data["offer_id"]) != str(subscription.offer_id)
+            and "offer_version_id" not in data
+            and offer_version_id is not None
+        ):
+            offer_version_id = None
+            data["offer_version_id"] = None
         service_address_id = data.get(
             "service_address_id", subscription.service_address_id
         )
@@ -1496,11 +1507,16 @@ class Subscriptions(ListResponseMixin):
             proration_result = _calculate_proration(
                 db, subscription, str(data["offer_id"])
             )
+            # Use the EFFECTIVE prices (negotiated/discounted/version-aware) the
+            # subscription actually pays — already computed by _calculate_proration —
+            # to pick the upgrade vs downgrade fee. Raw catalog prices can give the
+            # wrong direction: a negotiated ₦50 → new ₦80 is an upgrade, but raw
+            # catalog ₦100 → ₦80 reads as a downgrade.
             proration_result = _apply_plan_change_policy(
                 db,
                 proration_result,
-                old_price=_offer_recurring_price_amount(db, subscription.offer_id),
-                new_price=_offer_recurring_price_amount(db, str(data["offer_id"])),
+                old_price=proration_result.get("old_price", Decimal("0")),
+                new_price=proration_result.get("new_price", Decimal("0")),
             )
 
         # When the offer changes, refresh the snapshotted recurring price to the
@@ -1516,6 +1532,21 @@ class Subscriptions(ListResponseMixin):
             data["unit_price"] = _offer_recurring_price_amount(
                 db, str(data["offer_id"])
             )
+
+        # Re-derive billing_mode from the new offer on an offer change (unless one
+        # was supplied), so it can't drift out of sync — only Subscription.billing_mode
+        # gates invoicing, and a stale mode silently leaves a sub on the wrong
+        # billing path. For active subs _validate_plan_change already rejects a
+        # cross-mode change, so this is a no-op there; it closes the gap for
+        # non-active subs whose offer is switched without that guard.
+        if (
+            "offer_id" in data
+            and str(data["offer_id"]) != str(previous_offer_id)
+            and "billing_mode" not in data
+        ):
+            new_offer = db.get(CatalogOffer, str(data["offer_id"]))
+            if new_offer and new_offer.billing_mode:
+                data["billing_mode"] = new_offer.billing_mode
 
         status = data.get("status", subscription.status)
         # State-machine guard: the raw form/CRUD write path must not resurrect a
@@ -1589,9 +1620,19 @@ class Subscriptions(ListResponseMixin):
                 )
         if start_at and "end_at" not in data:
             term = data.get("contract_term", subscription.contract_term)
-            end_at = _compute_contract_end_at(start_at, term)
-            if end_at:
-                data["end_at"] = end_at
+            term_changing = (
+                "contract_term" in data
+                and data["contract_term"] != subscription.contract_term
+            )
+            # Only (re)derive end_at from the contract term when it isn't set yet
+            # or the term itself is explicitly changing. Re-deriving on every
+            # update (e.g. a plan change that carries no end_at) silently
+            # overwrote a manually set/extended end_at and could resurrect a past
+            # contract-end as a customer-visible expiry.
+            if subscription.end_at is None or term_changing:
+                new_end_at = _compute_contract_end_at(start_at, term)
+                if new_end_at:
+                    data["end_at"] = new_end_at
 
         # Auto-select NAS device when activating if not already set
         if (
