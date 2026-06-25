@@ -71,7 +71,17 @@ class DashboardScreen extends ConsumerWidget {
     // unlimited plans, unlike "data left" which reads as 0 on unlimited.
     final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    final dataPeriod = cycleSummary?.totalBytes;
+    // Total data used this subscription period. Prefer the cycle total; if that
+    // reads 0 (unmetered/unlimited plans accrue no quota used_gb, and the
+    // server-side measured fallback may not be live yet) use the cycle chart
+    // series, then today's total, so a period with real traffic never shows 0.
+    int? dataPeriod;
+    if (cycleSummary != null) {
+      final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
+      dataPeriod = cycleSummary.totalBytes > 0
+          ? cycleSummary.totalBytes
+          : (seriesSum > 0 ? seriesSum : (dataToday ?? 0));
+    }
     // Wallet (account credit) balance for its own at-a-glance card. Uses the
     // always-available credit balance (/me/balance), not the feature-gated VAS
     // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
@@ -91,6 +101,18 @@ class DashboardScreen extends ConsumerWidget {
           currentQuota = b;
         }
       }
+    }
+
+    // Quota / fair-use headroom, for plans where it applies. Capped plans show
+    // remaining allowance; unlimited-with-FUP plans show GB left at full speed.
+    // Null (card hidden) for truly unlimited plans with no fair-use policy.
+    String? quotaLeftValue;
+    var quotaLeftLabel = 'Data left';
+    if (currentQuota != null && currentQuota.remainingGb != null) {
+      quotaLeftValue = Fmt.gb(currentQuota.remainingGb!);
+    } else if (fup?.gbUntilThrottle != null && (fup?.thresholdGb ?? 0) > 0) {
+      quotaLeftValue = Fmt.gb(fup!.gbUntilThrottle!);
+      quotaLeftLabel = 'Full-speed';
     }
 
     // Expiry urgency: lift a renew prompt to the banner area when the current
@@ -286,24 +308,38 @@ class DashboardScreen extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 10),
-            // Row 2: usage this subscription period · next bill date
+            // Row 2: usage this subscription period · (quota/FUP left) · next bill
             Row(
               children: [
                 Expanded(
                   child: _StatCard(
                     icon: Icons.data_usage_outlined,
-                    // Data used over the whole billing/subscription period —
-                    // meaningful for capped and unlimited plans alike.
+                    // Total data used over the whole billing/subscription period
+                    // (not quota remaining) — for capped and unlimited alike.
                     label: 'This period',
                     value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
-                    highlight: (currentQuota != null &&
-                            (currentQuota.usedFraction ?? 0) >= 0.9) ||
-                        (fup?.isApproaching ?? false) ||
+                    highlight: (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
                     onTap: () => context.go('/usage'),
                   ),
                 ),
                 const SizedBox(width: 10),
+                // Quota / fair-use remaining — only for plans where it applies.
+                if (quotaLeftValue != null) ...[
+                  Expanded(
+                    child: _StatCard(
+                      icon: Icons.data_saver_off_outlined,
+                      label: quotaLeftLabel,
+                      value: quotaLeftValue,
+                      highlight: (currentQuota != null &&
+                              (currentQuota.usedFraction ?? 0) >= 0.9) ||
+                          (fup?.isApproaching ?? false) ||
+                          (fup?.needsAttention ?? false),
+                      onTap: () => context.go('/usage'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: _StatCard(
                     icon: Icons.event_outlined,
@@ -316,9 +352,12 @@ class DashboardScreen extends ConsumerWidget {
                     onTap: () => context.go('/billing'),
                   ),
                 ),
-                // Keep the two row-2 cards the same width as row 1's three.
-                const SizedBox(width: 10),
-                const Expanded(child: SizedBox()),
+                // Keep widths aligned with row 1's three cards when there's no
+                // quota/FUP card to show.
+                if (quotaLeftValue == null) ...[
+                  const SizedBox(width: 10),
+                  const Expanded(child: SizedBox()),
+                ],
               ],
             ),
             const SizedBox(height: 20),
