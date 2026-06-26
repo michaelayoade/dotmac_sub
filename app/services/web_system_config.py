@@ -187,35 +187,11 @@ def save_retention(db: Session, data: Mapping[str, Any]) -> None:
     _save_settings(db, SettingDomain.audit, data, RETENTION_KEYS)
 
 
-# ---------------------------------------------------------------------------
-# 8.11 Finance Automation
-# ---------------------------------------------------------------------------
-FINANCE_AUTO_KEYS = [
-    "auto_invoice_enabled",
-    "confirmation_period_days",
-    "confirmation_time",
-    "preview_days",
-    "date_mode",
-    "dashboard_billing_notification",
-    "auto_blocking_enabled",
-    "blocking_time",
-    "block_on_weekends",
-    "block_on_holidays",
-    "deactivation_enabled",
-    "prepaid_deactivation",
-    "ip_reclamation_enabled",
-    "ip_reclamation_months",
-]
-
-
-def get_finance_automation_context(db: Session) -> dict:
-    return {
-        "finance_auto": _read_settings(db, SettingDomain.billing, FINANCE_AUTO_KEYS)
-    }
-
-
-def save_finance_automation(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.billing, data, FINANCE_AUTO_KEYS)
+# 8.11 Finance Automation — REMOVED. The page's toggles (auto_invoice_enabled,
+# auto_blocking_enabled, deactivation_enabled, ip_reclamation_enabled, …) were
+# inert: nothing read them. Billing automation is governed by the single control
+# plane (control_registry / module_manager), so this dead, misleading config was
+# deleted rather than left as a footgun that looks like it controls billing.
 
 
 # ---------------------------------------------------------------------------
