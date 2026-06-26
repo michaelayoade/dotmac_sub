@@ -118,6 +118,15 @@ function paymentPage() {
             }
             return this.idempotencyKey;
         },
+        // Re-fetch a portal page so the CSRF middleware re-issues the cookie,
+        // then return the fresh token. Used to recover from a stale/missing
+        // CSRF cookie that would otherwise dead-end the Pay button on a 403.
+        async refreshCsrf() {
+            try {
+                await fetch('/portal/auth/session', { method: 'GET', credentials: 'same-origin', cache: 'no-store' });
+            } catch (e) { /* best effort */ }
+            return this.csrfToken();
+        },
         buttonLabel() {
             if (this.processing) {
                 return 'Processing...';
@@ -143,6 +152,7 @@ function paymentPage() {
                     endpoint: '/portal/billing/pay/intent',
                     verifyPath: '/portal/billing/pay/verify',
                     csrfToken: this.csrfToken(),
+                    refreshCsrf: () => self.refreshCsrf(),
                     idempotencyKey: this.ensureIdempotencyKey(),
                     body: {
                         invoice: '{{ invoice.id }}',
@@ -160,26 +170,40 @@ function paymentPage() {
             }
             const intent = result.intent;
 
-            const handler = PaystackPop.setup({
-                key: intent.provider_public_key,
-                email: '{{ customer_email }}',
-                // Charge the server-authoritative intent amount, not the (possibly
-                // stale) amount rendered at page load.
-                amount: Math.round((intent.amount || {{ (amount or invoice.balance_due or invoice.total or 0) | float }}) * 100),
-                currency: intent.currency || 'NGN',
-                ref: intent.reference,
-                metadata: intent.checkout_metadata || {
-                    invoice_id: '{{ invoice.id }}',
-                    invoice_number: '{{ invoice.invoice_number or "" }}'
-                },
-                callback: function(response) {
-                    window.location.href = '/portal/billing/pay/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack' + (self.saveCard ? '&save_card=true' : '');
-                },
-                onClose: function() {
-                    self.processing = false;
-                }
-            });
-            handler.openIframe();
+            // Paystack's inline.js may have been blocked/failed to load. Don't
+            // throw an uncaught error that strands the spinner — the intent is
+            // already recorded server-side, so the customer can safely retry.
+            if (typeof PaystackPop === 'undefined') {
+                self.processing = false;
+                self.errorMessage = 'The payment window failed to load. Please refresh the page and try again.';
+                return;
+            }
+
+            try {
+                const handler = PaystackPop.setup({
+                    key: intent.provider_public_key,
+                    email: '{{ customer_email }}',
+                    // Charge the server-authoritative intent amount, not the (possibly
+                    // stale) amount rendered at page load.
+                    amount: Math.round((intent.amount || {{ (amount or invoice.balance_due or invoice.total or 0) | float }}) * 100),
+                    currency: intent.currency || 'NGN',
+                    ref: intent.reference,
+                    metadata: intent.checkout_metadata || {
+                        invoice_id: '{{ invoice.id }}',
+                        invoice_number: '{{ invoice.invoice_number or "" }}'
+                    },
+                    callback: function(response) {
+                        window.location.href = '/portal/billing/pay/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack' + (self.saveCard ? '&save_card=true' : '');
+                    },
+                    onClose: function() {
+                        self.processing = false;
+                    }
+                });
+                handler.openIframe();
+            } catch (e) {
+                self.processing = false;
+                self.errorMessage = 'Could not open the payment window. Please try again.';
+            }
         }
     };
 }
