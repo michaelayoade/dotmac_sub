@@ -498,8 +498,24 @@ class PortVlan(Base):
 class IPAssignment(Base):
     __tablename__ = "ip_assignments"
     __table_args__ = (
-        UniqueConstraint("ipv4_address_id", name="uq_ip_assignments_ipv4_address_id"),
-        UniqueConstraint("ipv6_address_id", name="uq_ip_assignments_ipv6_address_id"),
+        # Partial-unique: only ONE *active* assignment per address. Released
+        # assignments stay (is_active=False) for history, and the address becomes
+        # re-allocatable — without this a terminally-released IP was stranded
+        # (counted free in the UI but un-assignable). See migration 177.
+        Index(
+            "uq_ip_assignments_ipv4_active",
+            "ipv4_address_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active"),
+        ),
+        Index(
+            "uq_ip_assignments_ipv6_active",
+            "ipv6_address_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active"),
+        ),
         CheckConstraint(
             "(ip_version = 'ipv4' AND ipv4_address_id IS NOT NULL AND ipv6_address_id IS NULL) OR "
             "(ip_version = 'ipv6' AND ipv6_address_id IS NOT NULL AND ipv4_address_id IS NULL)",
@@ -732,8 +748,14 @@ class IPv4Address(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
+    # Active-preferring: with the partial-unique index an address can carry past
+    # (inactive) assignments plus at most one active one; order so the active row
+    # wins this uselist=False accessor.
     assignment = relationship(
-        "IPAssignment", back_populates="ipv4_address", uselist=False
+        "IPAssignment",
+        back_populates="ipv4_address",
+        uselist=False,
+        order_by="IPAssignment.is_active.desc()",
     )
     pool = relationship("IpPool", back_populates="ipv4_addresses")
     ont_unit = relationship("OntUnit", foreign_keys=[ont_unit_id])
@@ -763,7 +785,10 @@ class IPv6Address(Base):
     )
 
     assignment = relationship(
-        "IPAssignment", back_populates="ipv6_address", uselist=False
+        "IPAssignment",
+        back_populates="ipv6_address",
+        uselist=False,
+        order_by="IPAssignment.is_active.desc()",
     )
     pool = relationship("IpPool", back_populates="ipv6_addresses")
 
