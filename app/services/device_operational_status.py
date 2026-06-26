@@ -148,6 +148,73 @@ def _maybe_mismatch(status: str, reason: str, admin: str | None) -> OperationalS
     return OperationalStatus(status, reason, admin, mismatch, mreason)
 
 
+# Mismatch reason -> (operator-facing label, owning team). The worklist groups
+# by this so inventory-hygiene conflicts route to whoever can fix them.
+_MISMATCH_OWNERS = {
+    "admin_online_observed_down": (
+        "Admin says online, monitoring sees down/degraded",
+        "Field ops",
+    ),
+    "admin_offline_observed_up": (
+        "Admin says offline, monitoring sees it up",
+        "Inventory hygiene",
+    ),
+    "active_but_unmonitored": (
+        "Active in inventory, but no monitoring coverage",
+        "Net-eng / VPN",
+    ),
+}
+
+
+def mismatch_worklist(db, *, reason: str | None = None) -> dict:
+    """Devices whose admin intent conflicts with observed reality, grouped by
+    reason and routed to an owning team. The operational hygiene queue.
+
+    Read-only; derives operational status on the fly (no persisted state)."""
+    from app.models.network_monitoring import NetworkDevice
+
+    devices = list(
+        db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
+    )
+    annotate_operational_status(devices)
+
+    groups: dict[str, dict] = {}
+    for d in devices:
+        op = getattr(d, "operational", None)
+        if not op or not op.mismatch or not op.mismatch_reason:
+            continue
+        if reason and op.mismatch_reason != reason:
+            continue
+        label, owner = _MISMATCH_OWNERS.get(
+            op.mismatch_reason, (op.mismatch_reason, "Unassigned")
+        )
+        g = groups.setdefault(
+            op.mismatch_reason,
+            {"reason": op.mismatch_reason, "label": label, "owner": owner, "rows": []},
+        )
+        g["rows"].append(
+            {
+                "id": d.id,
+                "name": d.name,
+                "mgmt_ip": getattr(d, "mgmt_ip", None),
+                "admin": op.admin_status,
+                "operational": op.status,
+                "operational_label": op.label,
+            }
+        )
+
+    ordered = sorted(groups.values(), key=lambda g: len(g["rows"]), reverse=True)
+    for g in ordered:
+        g["count"] = len(g["rows"])
+        g["rows"].sort(key=lambda r: (r["name"] or "").lower())
+    return {
+        "groups": ordered,
+        "total": sum(g["count"] for g in ordered),
+        "reason_filter": reason,
+        "reasons": list(_MISMATCH_OWNERS),
+    }
+
+
 def annotate_operational_status(devices, *, now: datetime | None = None) -> None:
     """Attach a transient ``.operational`` to each device for templates.
 
