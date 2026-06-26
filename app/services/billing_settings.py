@@ -46,7 +46,15 @@ def billing_enabled(db: Session, *, default: bool = True) -> bool:
     expiry — so they all activate together at cutover and none can charge,
     suspend, or expire an account before then. Resolved via ``settings_spec``
     (env fallback included) to match the invoice-cycle kill-switch.
+
+    Single control plane: the billing MODULE composes in — if the billing module
+    is turned off, billing is off everywhere, not just in the scheduler.
     """
+    # Local import avoids an import-time cycle (module_manager pulls settings).
+    from app.services import module_manager
+
+    if not module_manager.is_module_enabled(db, "billing"):
+        return False
     value = settings_spec.resolve_value(db, SettingDomain.billing, "billing_enabled")
     if value is None:
         return default
@@ -99,10 +107,12 @@ def _coerce_int(value: object, default: int) -> int:
     return default
 
 
-def _setting_value(db: Session, key: str) -> object | None:
+def _domain_setting_value(
+    db: Session, domain: SettingDomain, key: str
+) -> object | None:
     stmt = (
         select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.billing)
+        .where(DomainSetting.domain == domain)
         .where(DomainSetting.key == key)
         .where(DomainSetting.is_active.is_(True))
     )
@@ -110,6 +120,43 @@ def _setting_value(db: Session, key: str) -> object | None:
     if not setting:
         return None
     return setting.value_json if setting.value_json is not None else setting.value_text
+
+
+def _setting_value(db: Session, key: str) -> object | None:
+    return _domain_setting_value(db, SettingDomain.billing, key)
+
+
+# Capture-automation components that must stay on once billing is live. Each is
+# fail-open (absent row = on); we flag only an EXPLICIT off, so "someone turned a
+# billing aspect off" is surfaced loudly by the hourly integrity task — without
+# removing the per-component switch (kept as a deliberate, audited brake).
+_BILLING_COMPONENT_SWITCHES = (
+    (SettingDomain.billing, "autopay_enabled", "autopay"),
+    (SettingDomain.collections, "dunning_enabled", "dunning"),
+    (SettingDomain.billing, "overdue_check_enabled", "overdue-marking"),
+)
+
+
+def disabled_billing_components(db: Session) -> list[str]:
+    """Labels of capture-automation components explicitly switched OFF.
+
+    Fail-open: an absent setting row is treated as ON, so this returns only the
+    components a human deliberately disabled. The hourly billing-switch task
+    escalates a non-empty result to CRITICAL so no aspect of billing automation
+    can be silently turned off while the master switch is on.
+    """
+    disabled: list[str] = []
+    for domain, key, label in _BILLING_COMPONENT_SWITCHES:
+        value = _domain_setting_value(db, domain, key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            truthy = value
+        else:
+            truthy = str(value).strip().lower() in {"1", "true", "yes", "on"}
+        if not truthy:
+            disabled.append(label)
+    return disabled
 
 
 def resolve_payment_due_days(

@@ -4127,23 +4127,8 @@ def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/config/data-retention", status_code=303)
 
 
-# --- 8.11 Finance Automation ---
-@router.get("/config/finance-automation", response_class=HTMLResponse)
-def config_finance_auto_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_finance_automation_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/finance_automation.html",
-        _config_context(request, db, {"active_page": "config-finance-auto", **data}),
-    )
-
-
-@router.post("/config/finance-automation", response_class=HTMLResponse)
-def config_finance_auto_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_finance_automation(db, form)
-    return RedirectResponse(
-        url="/admin/system/config/finance-automation", status_code=303
-    )
+# --- 8.11 Finance Automation: REMOVED (inert/dead config; billing automation is
+# governed by the single control plane — control_registry / module_manager) ---
 
 
 # --- 8.12 Billing Settings ---

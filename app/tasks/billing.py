@@ -8,7 +8,11 @@ from app.services.billing_enforcement_guards import (
     billing_enforcement_health,
     notification_delivery_health,
 )
-from app.services.billing_settings import billing_enabled, check_billing_switch
+from app.services.billing_settings import (
+    billing_enabled,
+    check_billing_switch,
+    disabled_billing_components,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
@@ -89,9 +93,16 @@ def check_billing_switch_task() -> dict:
         switch = check_billing_switch(session)
         enforcement = billing_enforcement_health(session)
         notification = notification_delivery_health(session)
+        # "Single master" guarantee: once billing is live, no capture component
+        # (autopay/dunning/overdue) may be silently switched off. Fail-open, so
+        # this only catches a deliberate disable.
+        disabled_components = (
+            disabled_billing_components(session) if switch["actual"] else []
+        )
         result = {
-            "ok": bool(switch["ok"]) and enforcement.ok,
+            "ok": bool(switch["ok"]) and enforcement.ok and not disabled_components,
             "billing_switch": switch,
+            "disabled_billing_components": disabled_components,
             "billing_enforcement_health": {
                 "ok": enforcement.ok,
                 "reasons": enforcement.reasons,
@@ -121,6 +132,13 @@ def check_billing_switch_task() -> dict:
                 "billing_notification_delivery_unhealthy: reasons=%s details=%s",
                 ",".join(notification.reasons),
                 notification.details,
+            )
+        if disabled_components:
+            logger.critical(
+                "billing_component_disabled: billing is live but these capture "
+                "components are switched OFF: %s; re-enable them or collections "
+                "will silently under-run",
+                ",".join(disabled_components),
             )
 
         # Billing liveness/anomaly monitoring (alert-only; never blocks

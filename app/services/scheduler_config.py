@@ -84,13 +84,28 @@ def _get_setting_value(db, domain: SettingDomain, key: str) -> str | None:
 def _effective_bool(
     db, domain: SettingDomain, key: str, env_key: str, default: bool
 ) -> bool:
+    # Legacy value resolution (unchanged: env override -> DB row -> default).
     env_value = _env_bool(env_key)
     if env_value is not None:
-        return env_value
-    value = _get_setting_value(db, domain, key)
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+        result = env_value
+    else:
+        value = _get_setting_value(db, domain, key)
+        if value is None:
+            result = default
+        else:
+            result = str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    # Single control plane: compose the owning MODULE on top, so turning a
+    # module off disables its scheduled tasks. Behavior-neutral while the module
+    # is on (the default), which is why existing task behavior is preserved.
+    if result:
+        from app.services import control_registry, module_manager
+
+        canonical = control_registry.control_for_legacy(domain, key)
+        owner = control_registry.owner_module_for(canonical) if canonical else None
+        if owner and not module_manager.is_module_enabled(db, owner):
+            return False
+    return result
 
 
 def _effective_int(
