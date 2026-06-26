@@ -50,7 +50,7 @@ class MonitoringCoverage:
                 continue
 
     def covers(self, ip: str | None) -> bool:
-        """True if ``ip`` is within a reachable CIDR. Unloaded coverage or an
+        """True if ``ip`` is reachable for monitoring. Unloaded coverage or an
         unparseable/absent ip -> True (never penalise on missing data)."""
         if not self.loaded:
             return True
@@ -59,6 +59,11 @@ class MonitoringCoverage:
         try:
             addr = ipaddress.ip_address(str(ip).split("/")[0])
         except ValueError:
+            return True
+        # A globally-routable (public) management IP is reachable directly — it
+        # doesn't ride a tunnel, so tunnel CIDRs don't apply. Only private/
+        # tunnel-only addresses need a covering route.
+        if addr.is_global:
             return True
         return any(addr in net for net in self._networks)
 
