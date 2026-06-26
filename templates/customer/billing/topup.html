@@ -281,6 +281,15 @@ function topupPage() {
             const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
             return match ? decodeURIComponent(match[1]) : '';
         },
+        // Re-fetch a portal page so the CSRF middleware re-issues the cookie,
+        // then return the fresh token — recovers from a stale/missing CSRF
+        // cookie that would otherwise dead-end the Add-funds button on a 403.
+        async refreshCsrf() {
+            try {
+                await fetch('/portal/auth/session', { method: 'GET', credentials: 'same-origin', cache: 'no-store' });
+            } catch (e) { /* best effort */ }
+            return this.csrfToken();
+        },
         buttonLabel() {
             if (this.processing) {
                 return 'Processing...';
@@ -325,6 +334,7 @@ function topupPage() {
                     endpoint: '/portal/billing/topup/intent',
                     verifyPath: '/portal/billing/topup/verify',
                     csrfToken: this.csrfToken(),
+                    refreshCsrf: () => self.refreshCsrf(),
                     idempotencyKey: this.idempotencyKey,
                     body: {
                         amount: amount,
@@ -350,21 +360,34 @@ function topupPage() {
             const intent = result.intent;
             this.liveReference = intent.reference || '';
 
-            const handler = PaystackPop.setup({
-                key: intent.provider_public_key,
-                email: '{{ customer_email }}',
-                amount: amount * 100,
-                currency: intent.currency || 'NGN',
-                ref: intent.reference,
-                metadata: intent.checkout_metadata || {},
-                callback: function(response) {
-                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack' + (self.saveCard ? '&save_card=true' : '');
-                },
-                onClose: function() {
-                    self.processing = false;
-                }
-            });
-            handler.openIframe();
+            // inline.js may have been blocked/failed to load — surface a retry
+            // instead of stranding the spinner on an uncaught error.
+            if (typeof PaystackPop === 'undefined') {
+                self.processing = false;
+                self.validationError = 'The payment window failed to load. Please refresh the page and try again.';
+                return;
+            }
+
+            try {
+                const handler = PaystackPop.setup({
+                    key: intent.provider_public_key,
+                    email: '{{ customer_email }}',
+                    amount: amount * 100,
+                    currency: intent.currency || 'NGN',
+                    ref: intent.reference,
+                    metadata: intent.checkout_metadata || {},
+                    callback: function(response) {
+                        window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack' + (self.saveCard ? '&save_card=true' : '');
+                    },
+                    onClose: function() {
+                        self.processing = false;
+                    }
+                });
+                handler.openIframe();
+            } catch (e) {
+                self.processing = false;
+                self.validationError = 'Could not open the payment window. Please try again.';
+            }
         }
     };
 }
