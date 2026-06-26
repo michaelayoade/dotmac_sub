@@ -1,0 +1,73 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Device Status Worklist - Admin{% endblock %}
+
+{% set op_color = {
+  'up': 'text-emerald-600 dark:text-emerald-400',
+  'degraded': 'text-amber-600 dark:text-amber-400',
+  'down': 'text-rose-600 dark:text-rose-400',
+  'unmonitored': 'text-slate-500 dark:text-slate-400',
+  'maintenance': 'text-indigo-600 dark:text-indigo-400',
+  'unknown': 'text-slate-400'
+} %}
+
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <a href="/admin/network/monitoring" class="text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">&larr; Network monitoring</a>
+    <h1 class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Device status worklist</h1>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+      Devices where the admin/inventory status conflicts with what monitoring actually observes — grouped by reason, routed to an owner. Inventory hygiene, not outages.
+    </p>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2 text-sm">
+    <span class="text-slate-500 dark:text-slate-400">{{ worklist.total }} mismatch{{ 'es' if worklist.total != 1 }}</span>
+    <span class="text-slate-300">·</span>
+    <a href="?" class="rounded-full px-3 py-1 {{ 'bg-indigo-600 text-white' if not worklist.reason_filter else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">All</a>
+    {% for r in worklist.reasons %}
+    <a href="?reason={{ r }}" class="rounded-full px-3 py-1 {{ 'bg-indigo-600 text-white' if worklist.reason_filter == r else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">{{ r|replace('_',' ') }}</a>
+    {% endfor %}
+  </div>
+
+  {% for group in worklist.groups %}
+  <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3 dark:border-slate-700">
+      <div>
+        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ group.label }}</h3>
+        <p class="text-xs text-slate-400">{{ group.reason|replace('_',' ') }}</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Owner: {{ group.owner }}</span>
+        <span class="text-lg font-bold text-slate-900 dark:text-white">{{ group.count }}</span>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase text-slate-400">
+            <th class="px-5 py-2">Device</th><th class="px-5 py-2">Mgmt IP</th>
+            <th class="px-5 py-2">Admin</th><th class="px-5 py-2">Observed</th><th class="px-5 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in group.rows %}
+          <tr class="border-t border-slate-100 dark:border-slate-700">
+            <td class="px-5 py-2 text-slate-700 dark:text-slate-200">{{ row.name }}</td>
+            <td class="px-5 py-2 font-mono text-xs text-slate-500 dark:text-slate-400">{{ row.mgmt_ip or '—' }}</td>
+            <td class="px-5 py-2 text-slate-500 dark:text-slate-400">{{ row.admin or '—' }}</td>
+            <td class="px-5 py-2 font-medium {{ op_color.get(row.operational, 'text-slate-400') }}">{{ row.operational_label }}</td>
+            <td class="px-5 py-2 text-right"><a href="/admin/network/core-devices/{{ row.id }}" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">View</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    No status mismatches{% if worklist.reason_filter %} for this reason{% endif %}. Inventory and monitoring agree.
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
