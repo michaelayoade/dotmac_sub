@@ -78,4 +78,14 @@ class ChatMessage {
         fromAgent: false,
         createdAt: _parseDate(j['created_at']),
       );
+
+  /// From a `message_new` WebSocket event (broadcast_to_widget_visitor).
+  factory ChatMessage.fromSocket(Map<String, dynamic> j) => ChatMessage(
+        id: (j['message_id'] ?? j['id'] ?? '').toString(),
+        body: (j['body'] ?? '').toString(),
+        fromAgent: j['direction'] == 'outbound',
+        authorName: _str(j['author_name']),
+        authorAvatar: _str(j['author_avatar']),
+        createdAt: _parseDate(j['created_at']),
+      );
 }

@@ -227,6 +227,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 minLines: 1,
                 maxLines: 4,
                 textInputAction: TextInputAction.send,
+                onChanged: (v) {
+                  if (v.trim().isNotEmpty) {
+                    ref
+                        .read(chatControllerProvider(_endpoint).notifier)
+                        .notifyTyping();
+                  }
+                },
                 onSubmitted: (_) => _send(),
                 decoration: const InputDecoration(
                   hintText: 'Type a message…',
