@@ -5,15 +5,15 @@ import 'package:flutter/material.dart';
 /// Override the API base URL at build/run time, e.g.:
 ///   flutter run --dart-define=API_BASE_URL=https://selfcare.dotmac.io
 ///
-/// Defaults to the Android emulator loopback alias (10.0.2.2 -> host machine
-/// localhost). For the iOS simulator use http://localhost:8000, and for a
-/// physical device use your machine's LAN IP.
+/// Defaults to the production self-care API. For local development, override
+/// this with the Android emulator loopback alias, localhost, or your machine's
+/// LAN IP depending on the target device.
 class Env {
   const Env._();
 
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
+    defaultValue: 'https://selfcare.dotmac.io',
   );
 
   /// All backend routers are mounted under this prefix in app/main.py.

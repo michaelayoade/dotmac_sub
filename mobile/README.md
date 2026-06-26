@@ -53,9 +53,11 @@ flutter pub get
 # In restricted/root environments, use the repo-local wrapper after setup:
 ./flutterw pub get
 
-# Android — debug build / install / run on a connected device or emulator
-flutter build apk --debug --dart-define=API_BASE_URL=http://10.0.2.2:8001
-flutter install                       # or: flutter run --dart-define=...
+# Android — debug build / install / run on a connected physical device
+flutter run
+
+# Local backend on an Android emulator
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8001
 
 # iOS (generate the platform folder first)
 flutter create --platforms=ios .
