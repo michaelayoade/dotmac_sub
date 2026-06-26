@@ -216,11 +216,19 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
         "billing_enforcement_payment_max_pending_minutes",
         45,
     )
+    # Systemic circuit-breaker threshold, NOT a per-payment guard. A non-zero
+    # default on purpose: the previous ``0`` halted ALL collections the moment a
+    # single signature-verified webhook failed to ingest — even though that
+    # affects one account, not the whole base. Per-account protection (don't
+    # suspend someone who just paid / has a pending proof or arrangement) is
+    # already handled under a row lock by ``_dunning_shield_reason``. This gate
+    # should only fire on a *systemic* webhook-processing outage, where a large
+    # backlog of unprocessed payments means we'd wrongly enforce at scale.
     max_dead_letters = _setting_int(
         db,
         SettingDomain.collections,
         "billing_enforcement_payment_max_dead_letters",
-        0,
+        25,
     )
     max_stale_pending = _setting_int(
         db,

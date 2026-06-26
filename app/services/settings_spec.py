@@ -686,11 +686,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
     ),
     SettingSpec(
+        # Systemic circuit-breaker, not a per-payment guard: a default of 0 made
+        # a single un-ingested webhook halt ALL collections. Per-account "did
+        # they just pay" protection lives in collections._dunning_shield_reason.
         domain=SettingDomain.collections,
         key="billing_enforcement_payment_max_dead_letters",
         env_var="BILLING_ENFORCEMENT_PAYMENT_MAX_DEAD_LETTERS",
         value_type=SettingValueType.integer,
-        default=0,
+        default=25,
         min_value=0,
     ),
     SettingSpec(

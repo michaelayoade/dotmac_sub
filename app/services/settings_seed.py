@@ -1893,9 +1893,13 @@ def seed_collections_policy_settings(db: Session) -> None:
             "45",
         ),
         (
+            # Systemic circuit-breaker default (was 0 — a single dead-letter
+            # halted all collections). NOTE: ensure_by_key is insert-if-missing,
+            # so an environment that already seeded "0" keeps it until the row
+            # is updated operationally.
             "billing_enforcement_payment_max_dead_letters",
             "BILLING_ENFORCEMENT_PAYMENT_MAX_DEAD_LETTERS",
-            "0",
+            "25",
         ),
         (
             "billing_enforcement_payment_max_stale_pending_topups",
