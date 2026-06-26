@@ -74,6 +74,25 @@ def test_unsupported_module_rejected(db_session):
         )
 
 
+def test_apply_from_dry_run(db_session):
+    csv = "name,ip_version,cidr\nPool DR,ipv4,10.30.0.0/24\n"
+    dry = import_runs.create_import_run(
+        db_session, module="ip_pools", raw_text=csv, dry_run=True
+    )
+    dry = import_runs.process_import_run(db_session, dry.id)
+    assert dry.status == ImportRunStatus.dry_run_ready
+    assert _pool_count(db_session, "Pool DR") == 0
+
+    applied = import_runs.apply_from_dry_run(db_session, dry.id)
+    assert applied.status == ImportRunStatus.completed
+    assert applied.dry_run is False
+    assert _pool_count(db_session, "Pool DR") == 1
+
+    # Re-applying a now-completed run is rejected (only dry_run_ready can apply).
+    with pytest.raises(ValueError):
+        import_runs.apply_from_dry_run(db_session, applied.id)
+
+
 def test_ipv4_assignments_import_dry_run_then_apply(db_session):
     import uuid
 

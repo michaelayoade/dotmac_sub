@@ -68,6 +68,38 @@ def create_import_run(
     return run
 
 
+def list_import_runs(db: Session, *, limit: int = 50) -> list[ImportRun]:
+    return db.query(ImportRun).order_by(ImportRun.created_at.desc()).limit(limit).all()
+
+
+def get_import_run(db: Session, run_id) -> ImportRun | None:
+    return db.get(ImportRun, coerce_uuid(run_id))
+
+
+def apply_from_dry_run(
+    db: Session, run_id, *, created_by: str | None = None
+) -> ImportRun:
+    """Create and process an apply run from a dry-run-ready run's stored input.
+    The dry-run record is preserved as the validation audit."""
+    src = db.get(ImportRun, coerce_uuid(run_id))
+    if src is None:
+        raise ValueError("Import run not found")
+    if src.status != ImportRunStatus.dry_run_ready:
+        raise ValueError("Only a validated (dry-run) run can be applied.")
+    run = create_import_run(
+        db,
+        module=src.module,
+        raw_text=src.input_text or "",
+        data_format=src.data_format,
+        source_name=src.source_name,
+        column_mapping=src.column_mapping,
+        csv_delimiter=src.csv_delimiter,
+        dry_run=False,
+        created_by=created_by,
+    )
+    return process_import_run(db, run.id)
+
+
 def _record_row(
     db: Session,
     run_id,
