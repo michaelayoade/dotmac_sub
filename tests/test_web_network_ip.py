@@ -579,3 +579,37 @@ def test_validate_ip_pool_values_rejects_malformed_cidr_and_mismatches():
         )
         is None
     )
+
+
+def test_range_detail_stats_count_assignments_beyond_display_window():
+    """Detail stats must reflect the whole CIDR, not just the first `limit` rows.
+
+    An assignment on .14 of a /28 must count even when only 2 rows are displayed.
+    """
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Big Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.30.0.0/28",
+        is_active=True,
+    )
+    high = IPv4Address(
+        id=uuid.uuid4(), address="10.30.0.14", pool_id=pool.id, is_reserved=False
+    )
+    high.assignment = IPAssignment(
+        id=uuid.uuid4(),
+        subscriber_id=uuid.uuid4(),
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=high.id,
+        is_active=True,
+    )
+
+    db = FakeSession({IPv4Address: [high]})
+    result = web_network_ip._build_ipv4_range_rows(
+        db, pool=pool, cidr="10.30.0.0/28", limit=2
+    )
+
+    assert result is not None
+    assert result["row_count"] == 2  # display window unchanged
+    assert result["stats"]["assigned"] == 1  # but the off-window assignment counts
+    assert result["stats"]["total_usable"] == 14
