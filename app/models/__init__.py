@@ -161,6 +161,12 @@ from app.models.gis import (  # noqa: F401
     GeoLocationType,
     ServiceBuilding,
 )
+from app.models.imports import (  # noqa: F401
+    ImportRowStatus,
+    ImportRun,
+    ImportRunRow,
+    ImportRunStatus,
+)
 from app.models.integration import (  # noqa: F401
     IntegrationJob,
     IntegrationJobType,

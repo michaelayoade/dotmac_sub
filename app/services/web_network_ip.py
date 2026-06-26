@@ -1373,6 +1373,73 @@ def build_ipv4_assignment_form_data(
     }
 
 
+def assign_ipv4_for_import(
+    db,
+    *,
+    pool_id: str,
+    ip_address: str,
+    subscriber_id: str,
+    subscription_id: str | None = None,
+):
+    """Non-committing IPv4 assignment for the bulk-import framework.
+
+    Mirrors ``assign_ipv4_address``'s validation + guards (reserved / device-IP /
+    routed-block) but only flushes — the import orchestrator owns the per-row
+    SAVEPOINT/commit, so this must NOT commit. Returns the IPAssignment.
+    """
+    normalized_subscriber_id = str(subscriber_id or "").strip()
+    if not normalized_subscriber_id:
+        raise ValueError("subscriber_id is required.")
+    state = build_ipv4_assignment_form_data(
+        db, pool_id=str(pool_id), ip_address=str(ip_address)
+    )
+    if state is None:
+        raise ValueError(f"IP {ip_address} is not valid for pool {pool_id}.")
+    pool = state["pool"]
+    address_record = state["address_record"]
+    active_assignment = state["assignment"]
+    target_ip = str(state["ip_address"])
+
+    if address_record and getattr(address_record, "is_reserved", False):
+        raise ValueError(f"{target_ip} is reserved and cannot be assigned.")
+    if target_ip in _device_ipv4_hosts(db):
+        raise ValueError(f"{target_ip} is a network-device IP; cannot assign.")
+    if _additional_route_owners_by_ipv4(db, ip_addresses={target_ip}):
+        raise ValueError(f"{target_ip} belongs to an active routed block.")
+
+    if active_assignment and getattr(active_assignment, "is_active", False):
+        owner = str(getattr(active_assignment, "subscriber_id", "") or "")
+        if owner == normalized_subscriber_id:
+            return active_assignment  # idempotent
+        raise ValueError(f"{target_ip} is already assigned to another subscriber.")
+
+    if address_record is None:
+        address_record = IPv4Address(
+            address=target_ip, pool_id=pool.id, is_reserved=False
+        )
+        db.add(address_record)
+        db.flush()
+    elif address_record.pool_id is None:
+        address_record.pool_id = pool.id
+        db.flush()
+
+    assignment = IPAssignment(
+        subscriber_id=coerce_uuid(normalized_subscriber_id),
+        subscription_id=coerce_uuid(str(subscription_id)) if subscription_id else None,
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=address_record.id,
+        is_active=True,
+    )
+    db.add(assignment)
+    db.flush()
+
+    if subscription_id:
+        subscription = db.get(Subscription, coerce_uuid(str(subscription_id)))
+        if subscription is not None:
+            subscription.ipv4_address = target_ip
+    return assignment
+
+
 def assign_ipv4_address(
     db,
     *,

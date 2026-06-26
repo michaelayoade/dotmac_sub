@@ -43,6 +43,7 @@ from app.services import (
 from app.services import branding_storage as branding_storage_service
 from app.services import email as email_service
 from app.services import file_upload as file_upload_service
+from app.services import import_runs as import_runs_service
 from app.services import module_manager as module_manager_service
 from app.services import radius_reject as radius_reject_service
 from app.services import (
@@ -634,6 +635,74 @@ def system_import_job_status(
             "job": job,
         },
     )
+
+
+@router.get(
+    "/import-runs",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_import_runs(request: Request, db: Session = Depends(get_db)):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    runs = import_runs_service.list_import_runs(db, limit=100)
+    return templates.TemplateResponse(
+        "admin/system/import_runs.html",
+        {
+            "request": request,
+            "active_page": "system-import",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "runs": runs,
+        },
+    )
+
+
+@router.get(
+    "/import-runs/{run_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_import_run_detail(
+    request: Request, run_id: str, db: Session = Depends(get_db)
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    run = import_runs_service.get_import_run(db, run_id)
+    if run is None:
+        return RedirectResponse("/admin/system/import-runs", status_code=303)
+    return templates.TemplateResponse(
+        "admin/system/import_run_detail.html",
+        {
+            "request": request,
+            "active_page": "system-import",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "run": run,
+            "rows": run.rows,
+        },
+    )
+
+
+@router.post(
+    "/import-runs/{run_id}/apply",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_run_apply(
+    request: Request, run_id: str, db: Session = Depends(get_db)
+):
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    try:
+        applied = import_runs_service.apply_from_dry_run(
+            db, run_id, created_by=getattr(user, "email", None)
+        )
+    except ValueError:
+        return RedirectResponse(f"/admin/system/import-runs/{run_id}", status_code=303)
+    return RedirectResponse(f"/admin/system/import-runs/{applied.id}", status_code=303)
 
 
 @router.get(
