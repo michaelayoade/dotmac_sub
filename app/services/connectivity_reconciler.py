@@ -431,6 +431,12 @@ def converge_subscription_connectivity(
             )
         return plan
 
+    from app.services.enforcement import (
+        network_identity_signature,
+        reauth_subscription_on_identity_change,
+    )
+
+    before_sig = network_identity_signature(db, subscription)
     applied: list[str] = []
     needs_refresh = False
     with reconciler_write_scope():
@@ -462,6 +468,19 @@ def converge_subscription_connectivity(
                 subscription_id,
                 exc,
             )
+
+    # If we changed the served IP, a live session is still pinned to the old
+    # Framed-IP until it reconnects — reconcile this subscriber's RADIUS state and
+    # kick it so it re-auths onto the new IP. No-op if nothing effective changed.
+    if "set_column" in applied:
+        result = reauth_subscription_on_identity_change(
+            db,
+            str(subscription_id),
+            before=before_sig,
+            reason="connectivity_reconciler_ip_change",
+        )
+        if result.get("changed"):
+            applied.append("reauth")
 
     plan["applied"] = bool(applied)
     plan["applied_actions"] = applied
