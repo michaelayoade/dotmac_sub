@@ -17,6 +17,10 @@ dependencies:
   # Networking
   dio: ^5.5.0
 
+  # Live-chat realtime transport (CRM widget /ws/widget): instant messages,
+  # "agent is typing", and "Seen" without poll lag.
+  web_socket_channel: ^3.0.1
+
   # Routing
   go_router: ^14.2.0
 

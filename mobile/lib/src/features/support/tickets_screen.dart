@@ -22,7 +22,7 @@ class TicketsScreen extends ConsumerWidget {
           IconButton(
             tooltip: 'Live chat',
             icon: const Icon(Icons.chat_bubble_outline),
-            onPressed: () => context.push('/chat'),
+            onPressed: () => context.push('/support/chat'),
           ),
         ],
       ),
@@ -62,7 +62,7 @@ class TicketsScreen extends ConsumerWidget {
                   Icons.chevron_right,
                   color: Theme.of(context).colorScheme.onPrimaryContainer,
                 ),
-                onTap: () => context.push('/chat'),
+                onTap: () => context.push('/support/chat'),
               ),
             ),
           ),

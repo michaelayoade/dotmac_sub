@@ -68,12 +68,18 @@ class ChatRepository {
         .toList();
   }
 
-  Future<ChatMessage> send(ChatSession s, String body) async {
+  /// Returns the sent message plus the (possibly newly created) conversation id,
+  /// so the caller can subscribe a brand-new conversation over the WebSocket.
+  Future<({ChatMessage message, String? conversationId})> send(
+      ChatSession s, String body) async {
     final data = await guard(() => _crmClient.post(
           '/session/${s.sessionId}/message',
           data: {'body': body},
-        ));
-    return ChatMessage.fromSendResponse(data as Map<String, dynamic>);
+        )) as Map<String, dynamic>;
+    return (
+      message: ChatMessage.fromSendResponse(data),
+      conversationId: data['conversation_id']?.toString(),
+    );
   }
 
   Future<void> markRead(ChatSession s) async {

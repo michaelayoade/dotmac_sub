@@ -30,7 +30,9 @@ class ChatMessage {
     required this.body,
     required this.fromAgent,
     this.authorName,
+    this.authorAvatar,
     this.createdAt,
+    this.readAt,
   });
 
   final String id;
@@ -40,18 +42,33 @@ class ChatMessage {
   /// for the subscriber's own messages.
   final bool fromAgent;
   final String? authorName;
+
+  /// Agent's avatar URL (CRM `author_avatar`), present on outbound messages
+  /// when the agent has a profile photo. Null for the subscriber's messages.
+  final String? authorAvatar;
   final DateTime? createdAt;
+
+  /// When an agent read this (our own) message — drives the "Seen" receipt.
+  /// Null until read; only meaningful for the subscriber's own messages.
+  final DateTime? readAt;
 
   static DateTime? _parseDate(Object? v) =>
       v is String ? DateTime.tryParse(v) : null;
+
+  static String? _str(Object? v) {
+    final s = v?.toString();
+    return (s == null || s.isEmpty) ? null : s;
+  }
 
   /// From GET /session/{id}/messages (WidgetMessageRead).
   factory ChatMessage.fromHistory(Map<String, dynamic> j) => ChatMessage(
         id: (j['id'] ?? '').toString(),
         body: (j['body'] ?? '').toString(),
         fromAgent: j['direction'] == 'outbound',
-        authorName: j['author_name'] as String?,
+        authorName: _str(j['author_name']),
+        authorAvatar: _str(j['author_avatar']),
         createdAt: _parseDate(j['created_at']),
+        readAt: _parseDate(j['read_at']),
       );
 
   /// From POST /session/{id}/message (WidgetMessageResponse) — our own message.
@@ -59,6 +76,16 @@ class ChatMessage {
         id: (j['message_id'] ?? '').toString(),
         body: (j['body'] ?? '').toString(),
         fromAgent: false,
+        createdAt: _parseDate(j['created_at']),
+      );
+
+  /// From a `message_new` WebSocket event (broadcast_to_widget_visitor).
+  factory ChatMessage.fromSocket(Map<String, dynamic> j) => ChatMessage(
+        id: (j['message_id'] ?? j['id'] ?? '').toString(),
+        body: (j['body'] ?? '').toString(),
+        fromAgent: j['direction'] == 'outbound',
+        authorName: _str(j['author_name']),
+        authorAvatar: _str(j['author_avatar']),
         createdAt: _parseDate(j['created_at']),
       );
 }
