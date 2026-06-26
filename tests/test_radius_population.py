@@ -75,3 +75,38 @@ class TestRadreplyAdditionalRoutes:
     def test_no_routes_no_framed_route(self):
         attrs = _radreply_attrs(_sub(), None, None, additional_routes=None)
         assert _routes(attrs) == []
+
+
+class TestRadreplyIPv6:
+    """The authoritative sweep must emit Framed-IPv6-Prefix or its DELETE+INSERT
+    wipes any v6 the event-time builder wrote (v6 RADIUS never becomes durable)."""
+
+    def test_emits_framed_ipv6_from_subscription_column(self):
+        sub = types.SimpleNamespace(
+            ipv4_address="10.0.0.5",
+            ipv6_address="2001:db8:1:2::/64",
+            status=SubscriptionStatus.active,
+            subscriber_id="subscriber-x",
+        )
+        attrs = _radreply_attrs(sub, None, None)
+        assert ("Framed-IPv6-Prefix", ":=", "2001:db8:1:2::/64") in attrs
+
+    def test_framed_ipv6_override_wins(self):
+        attrs = _radreply_attrs(_sub(), None, None, framed_ipv6="2001:db8:abcd::/56")
+        assert ("Framed-IPv6-Prefix", ":=", "2001:db8:abcd::/56") in attrs
+
+    def test_no_v6_no_framed_ipv6(self):
+        attrs = _radreply_attrs(_sub(), None, None)
+        assert not [a for a in attrs if a[0] == "Framed-IPv6-Prefix"]
+
+    def test_emits_for_blocked_sub_like_framed_ip(self):
+        # v6 mirrors v4 Framed-IP: emitted whenever present (block is enforced via
+        # radcheck/Address-List, not by withholding the address).
+        sub = types.SimpleNamespace(
+            ipv4_address="10.0.0.5",
+            ipv6_address="2001:db8::/64",
+            status=SubscriptionStatus.suspended,
+            subscriber_id="subscriber-x",
+        )
+        attrs = _radreply_attrs(sub, None, None, captive_redirect_enabled=True)
+        assert ("Framed-IPv6-Prefix", ":=", "2001:db8::/64") in attrs

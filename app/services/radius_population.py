@@ -61,6 +61,7 @@ def _radreply_attrs(
     captive_redirect_enabled: bool = False,
     additional_routes: list[tuple[str, int | None]] | None = None,
     framed_ipv4: str | None = None,
+    framed_ipv6: str | None = None,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -83,10 +84,20 @@ def _radreply_attrs(
     stale/cleared `subscriptions.ipv4_address` does NOT silently drop Framed-IP
     (which de-IPs the customer and the BNG tears the session down). "0.0.0.0" is
     treated as no address.
+
+    `framed_ipv6`: the prefix to emit as Framed-IPv6-Prefix; defaults to
+    `sub.ipv6_address`. This authoritative sweep must emit it too — otherwise the
+    sweep's `DELETE FROM radreply` wipes the Framed-IPv6-Prefix that
+    build_radius_reply_attributes wrote on activation, so IPv6 RADIUS could never
+    be durable (same wipe hazard the Framed-Route handling already guards against).
     """
     ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
     if ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare, not a bind
         ipv4 = None
+    ipv6 = (
+        framed_ipv6 if framed_ipv6 is not None else getattr(sub, "ipv6_address", None)
+    )
+    ipv6 = (str(ipv6).strip() or None) if ipv6 else None
 
     attrs: list[tuple[str, str, str]] = [
         ("Service-Type", ":=", "Framed-User"),
@@ -96,6 +107,8 @@ def _radreply_attrs(
 
     if ipv4:
         attrs.append(("Framed-IP-Address", ":=", ipv4))
+    if ipv6:
+        attrs.append(("Framed-IPv6-Prefix", ":=", ipv6))
 
     rate = _rate_limit(offer, profile)
     if rate:
