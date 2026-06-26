@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import cast
 
@@ -36,6 +35,7 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
 )
+from app.services.radius_dsn import radius_dsn_libpq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ def _radreply_attrs(
     additional_routes: list[tuple[str, int | None]] | None = None,
     framed_ipv4: str | None = None,
     framed_ipv6: str | None = None,
+    delegated_ipv6: str | None = None,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -109,6 +110,9 @@ def _radreply_attrs(
         attrs.append(("Framed-IP-Address", ":=", ipv4))
     if ipv6:
         attrs.append(("Framed-IPv6-Prefix", ":=", ipv6))
+    delegated = (str(delegated_ipv6).strip() or None) if delegated_ipv6 else None
+    if delegated:
+        attrs.append(("Delegated-IPv6-Prefix", ":=", delegated))
 
     rate = _rate_limit(offer, profile)
     if rate:
@@ -146,9 +150,11 @@ def _radreply_attrs(
 
 
 def populate(dry_run: bool = True) -> dict[str, int]:
-    radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+    # Single authority (shared with radius.py's event-time sync) so both writers
+    # target the same radius DB and cannot split-brain.
+    radius_dsn = radius_dsn_libpq()
     if not radius_dsn:
-        raise RuntimeError("RADIUS_DB_DSN not set")
+        raise RuntimeError("RADIUS database DSN not configured")
 
     stats = {
         "subscriptions_considered": 0,
@@ -269,6 +275,24 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             if sid and addr:
                 ipv4_by_subscriber.setdefault(sid, str(addr))
 
+        # IPv6 PD: the subscriber's assigned delegated prefix, emitted as
+        # Delegated-IPv6-Prefix. Flag-gated (inert until IPv6 PD is turned on).
+        pd_by_subscriber: dict = {}
+        from app.services.ipv6_pd import pd_enabled
+
+        if pd_enabled():
+            from app.models.network import Ipv6DelegatedPrefix, Ipv6PrefixState
+
+            for sid, prefix, plen in db.execute(
+                select(
+                    Ipv6DelegatedPrefix.subscriber_id,
+                    Ipv6DelegatedPrefix.prefix,
+                    Ipv6DelegatedPrefix.prefix_length,
+                ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+            ).all():
+                if sid and prefix:
+                    pd_by_subscriber.setdefault(sid, f"{prefix}/{plen}")
+
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
@@ -309,6 +333,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 captive_redirect_enabled=captive,
                 additional_routes=routes_by_subscriber.get(sub.subscriber_id),
                 framed_ipv4=eff_ipv4,
+                delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
             )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,
@@ -517,7 +542,8 @@ def populate_device_login(
         _conn_factory: Optional zero-arg callable that returns a DB-API 2
             connection to the RADIUS DB.  Used by tests to inject an in-memory
             SQLite connection in place of the real psycopg Postgres connection.
-            When None (production), opens psycopg.connect(RADIUS_DB_DSN).
+            When None (production), connects to the resolved radius DSN
+            (radius_dsn.radius_dsn_libpq()).
 
     Returns:
         dict with keys: considered, radcheck_upserts, radreply_upserts,
@@ -583,9 +609,9 @@ def populate_device_login(
     if _conn_factory is not None:
         conn = _conn_factory()
     else:
-        radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+        radius_dsn = radius_dsn_libpq()
         if not radius_dsn:
-            raise RuntimeError("RADIUS_DB_DSN not set")
+            raise RuntimeError("RADIUS database DSN not configured")
         conn = psycopg.connect(radius_dsn)
         conn.autocommit = False
 

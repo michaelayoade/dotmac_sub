@@ -21,6 +21,7 @@ from app.models.catalog import (
     OfferRadiusProfile,
     RadiusProfile,
     Subscription,
+    SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusClient
@@ -916,6 +917,92 @@ def disconnect_subscription_sessions(
             subscription_id,
         )
     return count
+
+
+def network_identity_signature(db: Session, subscription: Subscription) -> tuple:
+    """The RADIUS-effective network identity of a subscription: login, served
+    IPv4, served IPv6 prefix, RADIUS profile, and the sorted set of active routed
+    blocks. Used to decide whether an edit actually changed something the BNG must
+    re-learn — so a non-effective edit doesn't trigger a needless session kick.
+    """
+    from app.models.network import SubscriberAdditionalRoute
+
+    routes: tuple[str, ...] = ()
+    if subscription.subscriber_id is not None:
+        routes = tuple(
+            sorted(
+                str(cidr)
+                for (cidr,) in db.query(SubscriberAdditionalRoute.cidr)
+                .filter(
+                    SubscriberAdditionalRoute.subscriber_id
+                    == subscription.subscriber_id
+                )
+                .filter(SubscriberAdditionalRoute.is_active.is_(True))
+                .all()
+            )
+        )
+    return (
+        (subscription.login or "").strip(),
+        (subscription.ipv4_address or "").strip(),
+        (subscription.ipv6_address or "").strip(),
+        str(subscription.radius_profile_id or ""),
+        routes,
+    )
+
+
+def reauth_subscription_on_identity_change(
+    db: Session,
+    subscription_id: str,
+    *,
+    before: tuple,
+    reason: str = "network_identity_change",
+) -> dict:
+    """Reconcile RADIUS then kick live sessions when an ACTIVE subscription's
+    network identity changed.
+
+    Call AFTER the edit is committed (never mid-transaction). Compares the current
+    signature to ``before``; if unchanged — or the subscription is not active —
+    it's a no-op (avoids needless kicks). Otherwise it reconciles this
+    subscriber's RADIUS state *first* (so a re-auth lands on the new
+    Framed-IP/routes/profile) and *then* disconnects open sessions so the BNG
+    re-learns them.
+    """
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    if not subscription or subscription.status != SubscriptionStatus.active:
+        return {"changed": False, "reason": "not_active"}
+    after = network_identity_signature(db, subscription)
+    if after == before:
+        return {"changed": False, "reason": "no_effective_change"}
+
+    # RADIUS first (synchronous, per-subscriber), then kick.
+    try:
+        from app.services.radius import reconcile_subscription_connectivity
+
+        reconcile_subscription_connectivity(db, subscription_id)
+    except Exception as exc:  # pragma: no cover - reconcile is best-effort here
+        logger.warning(
+            "reauth: RADIUS reconcile failed for sub=%s: %s (periodic sweep "
+            "converges within 15 min)",
+            subscription_id,
+            exc,
+        )
+
+    disconnected = 0
+    try:
+        disconnected = disconnect_subscription_sessions(
+            db, subscription_id, reason=reason
+        )
+    except Exception as exc:  # pragma: no cover - kick is best-effort
+        logger.warning(
+            "reauth: session disconnect failed for sub=%s: %s", subscription_id, exc
+        )
+    logger.info(
+        "reauth on identity change sub=%s reason=%s disconnected=%d",
+        subscription_id,
+        reason,
+        disconnected,
+    )
+    return {"changed": True, "disconnected": disconnected}
 
 
 def disconnect_account_sessions(

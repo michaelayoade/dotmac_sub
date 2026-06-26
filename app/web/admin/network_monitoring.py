@@ -60,6 +60,28 @@ def topology_gaps_page(
 
 
 @router.get(
+    "/device-status-worklist",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def device_status_worklist_page(
+    request: Request,
+    reason: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Inventory-hygiene queue: devices whose admin status conflicts with what
+    monitoring observes, grouped by reason and routed to an owning team.
+    See docs/designs/DEVICE_OPERATIONAL_STATUS.md."""
+    from app.services.device_operational_status import mismatch_worklist
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["worklist"] = mismatch_worklist(db, reason=reason)
+    return templates.TemplateResponse(
+        "admin/network/device_status_worklist.html", context
+    )
+
+
+@router.get(
     "/performance",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],

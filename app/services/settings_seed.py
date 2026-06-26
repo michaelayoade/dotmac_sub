@@ -1412,6 +1412,15 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.boolean,
         value_text=billing_enabled_raw,
     )
+    # Pin the expected master-switch value so the hourly check_billing_switch
+    # guard alarms if billing is ever turned OFF (drift = actual != expected).
+    # Default "true": post-cutover DotMac is the biller of record.
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_enabled_expected",
+        value_type=SettingValueType.boolean,
+        value_text=os.getenv("BILLING_ENABLED_EXPECTED", "true"),
+    )
     billing_settings.ensure_by_key(
         db,
         key="billing_interval_seconds",

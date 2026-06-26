@@ -795,6 +795,10 @@ def parse_profile_form(form) -> tuple[dict[str, object], list[dict], str | None]
             return profile_data, attributes, "Upload speed must be a valid integer."
     if mikrotik_rate_limit:
         profile_data["mikrotik_rate_limit"] = mikrotik_rate_limit
+    # Framed-Pool (v4) and Delegated-IPv6-Prefix-Pool (v6) names. Set
+    # unconditionally so an admin can clear them by submitting an empty field.
+    profile_data["ip_pool_name"] = form.get("ip_pool_name", "").strip() or None
+    profile_data["ipv6_pool_name"] = form.get("ipv6_pool_name", "").strip() or None
 
     if not name:
         return profile_data, attributes, "Profile name is required."

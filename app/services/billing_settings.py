@@ -46,7 +46,24 @@ def billing_enabled(db: Session, *, default: bool = True) -> bool:
     expiry — so they all activate together at cutover and none can charge,
     suspend, or expire an account before then. Resolved via ``settings_spec``
     (env fallback included) to match the invoice-cycle kill-switch.
+
+    Single control plane: the billing MODULE (resolved by the same module
+    resolver the registry uses) composes in — if the billing module is off,
+    billing is off everywhere, not just in the scheduler.
+
+    Design note: this MASTER is intentionally NOT collapsed into the
+    ``billing.invoicing`` feature. Task bodies (autopay, dunning, expiry) read it
+    as a cross-feature master, so equating it with invoicing would wrongly stop
+    collection whenever invoice *generation* is paused. The master therefore
+    stays = billing module AND the legacy ``billing.billing_enabled`` flag; the
+    individual capture features (invoicing/autopay/collections/…) are gated
+    independently through ``control_registry.is_enabled``.
     """
+    # Local import avoids an import-time cycle (module_manager pulls settings).
+    from app.services import module_manager
+
+    if not module_manager.is_module_enabled(db, "billing"):
+        return False
     value = settings_spec.resolve_value(db, SettingDomain.billing, "billing_enabled")
     if value is None:
         return default
@@ -99,10 +116,12 @@ def _coerce_int(value: object, default: int) -> int:
     return default
 
 
-def _setting_value(db: Session, key: str) -> object | None:
+def _domain_setting_value(
+    db: Session, domain: SettingDomain, key: str
+) -> object | None:
     stmt = (
         select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.billing)
+        .where(DomainSetting.domain == domain)
         .where(DomainSetting.key == key)
         .where(DomainSetting.is_active.is_(True))
     )
@@ -110,6 +129,35 @@ def _setting_value(db: Session, key: str) -> object | None:
     if not setting:
         return None
     return setting.value_json if setting.value_json is not None else setting.value_text
+
+
+def _setting_value(db: Session, key: str) -> object | None:
+    return _domain_setting_value(db, SettingDomain.billing, key)
+
+
+def disabled_billing_components(db: Session) -> list[str]:
+    """Canonical keys of billing capture-automation features that are OFF.
+
+    Derived from the control registry (single source) — every default-ON billing
+    feature (invoicing, autopay, collections, overdue-marking, arrangements,
+    topup-reconciliation, …) is checked via the one resolver. Default-OFF
+    opt-ins (e.g. the hourly notification runner) are excluded. Resolution is
+    fail-open, so this returns only deliberately-disabled features. The hourly
+    billing-switch task escalates a non-empty result to CRITICAL so no aspect of
+    billing capture automation can be silently turned off while billing is live.
+    """
+    from app.services import control_registry
+
+    disabled: list[str] = []
+    for control in control_registry.all_controls():
+        if (
+            control.layer is control_registry.Layer.feature
+            and control.owner_module == "billing"
+            and control.on_missing  # only features that are meant to be ON
+            and not control_registry.is_enabled(db, control.key)
+        ):
+            disabled.append(control.key)
+    return disabled
 
 
 def resolve_payment_due_days(
