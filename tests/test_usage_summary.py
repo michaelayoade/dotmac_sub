@@ -353,6 +353,46 @@ def test_cycle_includes_peak_over_window(
     assert out["peak_upload_bps"] == 45_000_000.0
 
 
+def test_cycle_peak_falls_back_to_series_when_metrics_peak_empty(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """When the exact metrics-store peak is empty (VictoriaMetrics holds no data
+    — e.g. on-demand polling), the cycle summary still reports a peak derived
+    from the throughput series, which resolves VM->Postgres raw samples."""
+
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
+
+    async def _points(db, sub_ids, start, end):
+        # (ts, rx_bps, tx_bps). to_subscriber_directions maps tx->download.
+        return [
+            (now - timedelta(hours=2), 1_000_000.0, 8_000_000.0),
+            (now - timedelta(hours=1), 2_500_000.0, 20_000_000.0),  # peaks
+        ]
+
+    async def _peak_none(db, sub_ids, start, end):
+        return (None, None)
+
+    monkeypatch.setattr(svc, "_vm_points", _points)
+    monkeypatch.setattr(svc, "_peak_directions", _peak_none)
+    db_session.add(
+        QuotaBucket(
+            subscription_id=subscription.id,
+            period_start=now - timedelta(days=10),
+            period_end=now + timedelta(days=20),
+            included_gb=500,
+            used_gb=40,
+        )
+    )
+    db_session.commit()
+
+    out = _run_async(
+        svc.get_usage_summary(db_session, str(subscriber.id), "cycle", now=now)
+    )
+    # download = max tx (20 Mbps), upload = max rx (2.5 Mbps)
+    assert out["peak_download_bps"] == 20_000_000.0
+    assert out["peak_upload_bps"] == 2_500_000.0
+
+
 def test_window_with_no_data_falls_back_without_false_zero(
     db_session, subscriber, subscription
 ):

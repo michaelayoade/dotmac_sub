@@ -691,6 +691,19 @@ async def get_usage_summary(
         points = await _vm_points(db, sub_ids, start, end)
         series = _integrate(points, "day", tz, end=end)
         peak_down, peak_up = await _peak_directions(db, sub_ids, start, end)
+        if peak_down is None and peak_up is None and points:
+            # The metrics store (VictoriaMetrics) holds only days of throughput
+            # and on-demand polling can leave it empty, so the exact peak query
+            # returns nothing. Derive the peak from the throughput series we
+            # already fetched — _vm_points resolves VM→Postgres, and Postgres
+            # retains recent raw samples — so the figure isn't dropped when data
+            # exists. Coarser than the raw-resolution peak, but real.
+            from app.services.bandwidth import to_subscriber_directions
+
+            rx_peak = max((p[1] for p in points), default=0.0)
+            tx_peak = max((p[2] for p in points), default=0.0)
+            if rx_peak or tx_peak:
+                peak_down, peak_up = to_subscriber_directions(rx_peak, tx_peak)
         return {
             "period": period,
             "start": start,
