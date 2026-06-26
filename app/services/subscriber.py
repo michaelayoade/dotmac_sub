@@ -53,6 +53,40 @@ logger = logging.getLogger(__name__)
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
 
 
+def _release_subscriber_network_records(db: Session, subscriber_id) -> None:
+    """Deactivate a subscriber's active IP assignments and retire its active CPE
+    before a hard-delete.
+
+    ``ip_assignments.subscriber_id`` and ``cpe_devices.subscriber_id`` are
+    ``ON DELETE SET NULL``; without this, deleting a subscriber would null the
+    owner while leaving ``is_active``/``status=active`` set — an orphaned active
+    assignment that the partial-unique index keeps the IP locked behind (a leak),
+    and an ownerless active CPE. Deactivating first means SET NULL only ever
+    touches already-released rows.
+    """
+    from app.models.network import CPEDevice, DeviceStatus, IPAssignment
+
+    for assignment in (
+        db.query(IPAssignment)
+        .filter(
+            IPAssignment.subscriber_id == subscriber_id,
+            IPAssignment.is_active.is_(True),
+        )
+        .all()
+    ):
+        assignment.is_active = False
+    for cpe in (
+        db.query(CPEDevice)
+        .filter(
+            CPEDevice.subscriber_id == subscriber_id,
+            CPEDevice.status == DeviceStatus.active,
+        )
+        .all()
+    ):
+        cpe.status = DeviceStatus.retired
+    db.flush()
+
+
 def _parse_ipv4_search(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     if not normalized:
@@ -769,6 +803,7 @@ class Subscribers(ListResponseMixin):
         subscriber = db.get(Subscriber, subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+        _release_subscriber_network_records(db, subscriber_id)
         db.delete(subscriber)
         db.commit()
 
@@ -1194,6 +1229,7 @@ class Accounts(ListResponseMixin):
         subscriber = db.get(Subscriber, account_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+        _release_subscriber_network_records(db, account_id)
         db.delete(subscriber)
         db.commit()
 
