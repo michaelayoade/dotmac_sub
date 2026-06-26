@@ -835,6 +835,41 @@ class TestBuildBeatSchedule:
             for call in scheduled_calls
         )
 
+    def test_builds_infra_availability_snapshot_and_prune(self, monkeypatch):
+        """Infra availability snapshot + prune register as daily tasks."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("INFRA_AVAILABILITY_SNAPSHOT_ENABLED", raising=False)
+        monkeypatch.delenv("INFRA_AVAILABILITY_PRUNE_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        scheduled_calls = mock_session.add.call_args_list
+        assert any(
+            getattr(call.args[0], "name", None) == "infra_availability_snapshot"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.infrastructure_availability."
+            "snapshot_infrastructure_availability"
+            and getattr(call.args[0], "interval_seconds", None) == 86400
+            for call in scheduled_calls
+        )
+        assert any(
+            getattr(call.args[0], "name", None) == "infra_availability_prune"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.infrastructure_availability.prune_infrastructure_availability"
+            for call in scheduled_calls
+        )
+
 
 class TestIntervalToBeatSchedule:
     """Day-long intervals become wall-clock crontabs (restart-proof)."""
