@@ -7,10 +7,10 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.network import FdhCabinet
+from app.models.network import FdhCabinet, OLTDevice, OntUnit, OnuOnlineStatus, PonPort
 from app.models.network_monitoring import (
     Alert,
     AlertEvent,
@@ -20,6 +20,7 @@ from app.models.network_monitoring import (
     AlertStatus,
     DeviceInterface,
     DeviceMetric,
+    DeviceType,
     MetricType,
     NetworkDevice,
     PopSite,
@@ -108,6 +109,60 @@ def _alert_intervals_by_device(
         key = str(alert.device_id)
         intervals.setdefault(key, []).append((start, end))
     return intervals
+
+
+def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeReportItem]:
+    """Per-PON-port availability, *derived* from the current ONT-online ratio.
+
+    PON ports have no Zabbix host and no uptime ``Alert`` source, so unlike the
+    other dimensions this is not measured from downtime intervals. We approximate
+    a port's health as the fraction of its ONTs currently reporting ``online``
+    (``offline``/``unknown`` ONTs count against it). Rows are flagged
+    ``derived=True`` so the UI labels them estimates, not contractual SLA.
+    Ports with no ONTs are reported with ``uptime_percent=None`` (no signal).
+    """
+    online_count = func.count(
+        case((OntUnit.olt_status == OnuOnlineStatus.online, OntUnit.id))
+    )
+    rows = (
+        db.query(
+            PonPort.id,
+            PonPort.name,
+            OLTDevice.name.label("olt_name"),
+            func.count(OntUnit.id).label("total"),
+            online_count.label("online"),
+        )
+        .select_from(PonPort)
+        .join(OLTDevice, OLTDevice.id == PonPort.olt_id)
+        .outerjoin(OntUnit, OntUnit.pon_port_id == PonPort.id)
+        .filter(PonPort.is_active.is_(True))
+        .group_by(PonPort.id, PonPort.name, OLTDevice.name)
+        .all()
+    )
+    items: list[UptimeReportItem] = []
+    for pon_id, pon_name, olt_name, total, online in rows:
+        total = int(total or 0)
+        online = int(online or 0)
+        if total == 0:
+            uptime_percent = None
+            downtime = 0
+        else:
+            ratio = Decimal(online) / Decimal(total)
+            uptime_percent = _round_percent(ratio * Decimal("100.00"))
+            downtime = int((Decimal(1) - ratio) * Decimal(window_seconds))
+        items.append(
+            UptimeReportItem(
+                group_by="pon",
+                group_id=pon_id,
+                name=f"{olt_name} / {pon_name}",
+                device_count=total,
+                total_seconds=window_seconds,
+                downtime_seconds=downtime,
+                uptime_percent=uptime_percent,
+                derived=True,
+            )
+        )
+    return items
 
 
 def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResponse:
@@ -249,6 +304,28 @@ def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResp
                     uptime_percent=uptime_percent,
                 )
             )
+    elif group_by == "access_point":
+        for device in devices:
+            if device.device_type != DeviceType.access_point:
+                continue
+            downtime = downtime_by_device.get(str(device.id), 0)
+            uptime_percent = _round_percent(
+                (Decimal(window_seconds - downtime) * Decimal("100.00"))
+                / Decimal(window_seconds)
+            )
+            items.append(
+                UptimeReportItem(
+                    group_by=group_by,
+                    group_id=device.id,
+                    name=device.name,
+                    device_count=1,
+                    total_seconds=window_seconds,
+                    downtime_seconds=downtime,
+                    uptime_percent=uptime_percent,
+                )
+            )
+    elif group_by == "pon":
+        items = _pon_availability_items(db, window_seconds)
     else:
         raise HTTPException(status_code=400, detail="Invalid group_by")
     return UptimeReportResponse(

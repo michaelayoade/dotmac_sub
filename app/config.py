@@ -148,5 +148,25 @@ class Settings:
         "RESELLER_USER_PRINCIPAL_ENABLED", "false"
     ).lower() in ("true", "1", "yes")
 
+    # Infrastructure SLA: when ON, the live-status warmer records device
+    # availability transitions as uptime Alert intervals (down->open,
+    # recovered->resolve). This is what populates the SLA/uptime report —
+    # without it, no uptime alerts exist in prod and every uptime % reads 100%
+    # (see INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 0 / R1). Default OFF: the
+    # warmer is a hot deployed task, so the bridge is inert until a deploy flips
+    # this on deliberately. Additive-only — never changes live_status behaviour.
+    sla_availability_log_enabled: bool = os.getenv(
+        "SLA_AVAILABILITY_LOG_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+
+    # Global infrastructure-SLA uptime target (%). Network elements have no
+    # per-element SLA profile (SlaProfile binds to catalog offers, not devices),
+    # so the performance dashboard's PASS/BREACH badge compares every element's
+    # measured uptime % against this single target. Per-tier overrides are a
+    # later refinement.
+    infra_sla_target_percent: float = float(
+        os.getenv("INFRA_SLA_TARGET_PERCENT", "99.5")
+    )
+
 
 settings = Settings()

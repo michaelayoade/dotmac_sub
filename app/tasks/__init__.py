@@ -40,6 +40,10 @@ from app.tasks.events import (
 from app.tasks.exports import run_export_job, run_scheduled_export
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
+from app.tasks.infrastructure_availability import (
+    prune_infrastructure_availability,
+    snapshot_infrastructure_availability,
+)
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.ip_utilization import (
@@ -221,6 +225,8 @@ __all__ = [
     "deliver_notification_queue",
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",
+    "snapshot_infrastructure_availability",
+    "prune_infrastructure_availability",
     "prune_ip_pool_utilization_snapshots",
     "run_topology_reconcile",
     "warm_topology_status",

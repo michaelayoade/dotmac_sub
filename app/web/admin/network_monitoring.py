@@ -60,6 +60,99 @@ def topology_gaps_page(
 
 
 @router.get(
+    "/performance",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def performance_page(
+    request: Request,
+    tab: str = "wallboard",
+    tier: str = "bts",
+    window: str = "7d",
+    db: Session = Depends(get_db),
+):
+    """Infrastructure performance & SLA dashboard (BTS / OLT / PON / AP).
+
+    Three tabs: live wallboard, worst-performer ranking, SLA compliance. See
+    docs/designs/INFRASTRUCTURE_SLA_PERFORMANCE.md.
+    """
+    from app.config import settings
+    from app.services import web_network_performance as perf
+
+    context = _base_context(request, db, active_page="monitoring")
+    active_tab = tab if tab in {"wallboard", "ranking", "sla"} else "wallboard"
+    context["active_tab"] = active_tab
+    context["tiers"] = perf.TIERS
+    context["windows"] = perf.WINDOWS
+    context["sel_tier"] = tier if tier in perf.TIERS else "bts"
+    context["sel_window"] = window if window in perf.WINDOWS else "7d"
+    context["wallboard"] = perf.wallboard(db)
+    context["sla_logging_enabled"] = bool(settings.sla_availability_log_enabled)
+    if active_tab in {"ranking", "sla"}:
+        context["ranking"] = perf.ranking(
+            db, context["sel_tier"], context["sel_window"]
+        )
+    return templates.TemplateResponse("admin/network/performance/index.html", context)
+
+
+@router.get(
+    "/performance/trend",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def performance_trend_page(
+    request: Request,
+    element_type: str,
+    element_id: str,
+    name: str = "",
+    db: Session = Depends(get_db),
+):
+    """Availability trend (Chart.js) for one element, from daily snapshots."""
+    import uuid as _uuid
+
+    from app.services import infrastructure_availability_snapshot as snap
+
+    context = _base_context(request, db, active_page="monitoring")
+    points: list = []
+    if element_type in {"device", "pop_site", "pon_port"}:
+        try:
+            points = snap.trend(db, element_type, _uuid.UUID(element_id), days=365)
+        except (ValueError, TypeError):
+            points = []
+    context["element_name"] = name or element_id
+    context["element_type"] = element_type
+    context["points"] = points
+    return templates.TemplateResponse("admin/network/performance/trend.html", context)
+
+
+@router.get(
+    "/performance/export",
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def performance_export(
+    tier: str = "bts",
+    window: str = "7d",
+    db: Session = Depends(get_db),
+):
+    from fastapi.responses import Response
+
+    from app.services import web_network_performance as perf
+
+    content = perf.build_ranking_csv(db, tier, window)
+    safe_tier = tier if tier in perf.TIERS else "bts"
+    safe_window = window if window in perf.WINDOWS else "7d"
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=infra_sla_{safe_tier}_{safe_window}.csv"
+            )
+        },
+    )
+
+
+@router.get(
     "/outage-impact",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
