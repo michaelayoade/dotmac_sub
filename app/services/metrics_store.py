@@ -354,8 +354,12 @@ class MetricsStore:
         Returns:
             Dict with 'rx' and 'tx' keys containing time series points
         """
-        rx_query = f'bandwidth_rx_bps_{aggregate}{{subscription_id="{subscription_id}"}}'
-        tx_query = f'bandwidth_tx_bps_{aggregate}{{subscription_id="{subscription_id}"}}'
+        rx_query = (
+            f'bandwidth_rx_bps_{aggregate}{{subscription_id="{subscription_id}"}}'
+        )
+        tx_query = (
+            f'bandwidth_tx_bps_{aggregate}{{subscription_id="{subscription_id}"}}'
+        )
 
         rx_results = await self.query_range(rx_query, start, end, step)
         tx_results = await self.query_range(tx_query, start, end, step)

@@ -23,7 +23,10 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch base branch
-        run: git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }} --depth=1
+        # Full history (no --depth): the three-dot diff in check_version_impact.py
+        # needs the merge-base of base and HEAD, which a shallow base tip lacks
+        # (git diff base...HEAD then exits 128).
+        run: git fetch --no-tags origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
 
       - name: Validate version impact
         run: python3 scripts/ci/check_version_impact.py --base origin/${{ github.base_ref }} --head HEAD

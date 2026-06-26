@@ -56,13 +56,48 @@ def _matches(path: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
-def _changed_files(base: str, head: str) -> list[str]:
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...{head}"],
-        check=True,
+def _git_diff_names(spec: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "diff", "--name-only", spec],
         capture_output=True,
         text=True,
     )
+
+
+def _deepen_base(base: str) -> None:
+    """Best-effort: fetch the base branch's history so a merge-base exists.
+
+    On a shallow CI checkout ``base`` (e.g. ``origin/main``) may be a single
+    commit with no ancestors, which makes the three-dot diff fail. Derive the
+    remote/branch from ``base`` and deepen it.
+    """
+    remote, _, branch = base.partition("/")
+    if not remote or not branch:
+        return
+    subprocess.run(
+        ["git", "fetch", "--no-tags", remote, branch],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _changed_files(base: str, head: str) -> list[str]:
+    # Three-dot (merge-base) is the correct "files this PR introduces" semantic.
+    result = _git_diff_names(f"{base}...{head}")
+    if result.returncode != 0:
+        # Likely a shallow base tip with no reachable merge-base — deepen & retry.
+        _deepen_base(base)
+        result = _git_diff_names(f"{base}...{head}")
+    if result.returncode != 0:
+        # Last resort: two-dot diff (tip-vs-tip) so the gate still runs instead
+        # of crashing. It may over-report files changed on base, which only ever
+        # makes the check stricter (require a label), never laxer.
+        print(
+            "::warning::version-impact: merge-base unavailable for "
+            f"'{base}...{head}'; falling back to two-dot diff"
+        )
+        result = _git_diff_names(f"{base} {head}")
+        result.check_returncode()
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
