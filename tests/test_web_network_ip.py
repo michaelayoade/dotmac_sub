@@ -551,3 +551,31 @@ def test_ipv4_block_detail_marks_network_device_management_ip(monkeypatch):
     assert rows["10.20.32.1"]["device"] == "Aggregation Switch"
     assert rows["10.20.32.1"]["notes"] == "Network device"
     assert state["stats"]["assigned"] == 1
+
+
+def test_validate_ip_pool_values_rejects_malformed_cidr_and_mismatches():
+    base = {"name": "P", "ip_version": "ipv4"}
+    # valid passes
+    assert (
+        web_network_ip.validate_ip_pool_values({**base, "cidr": "10.0.0.0/24"}) is None
+    )
+    # garbage / out-of-range prefix rejected
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "garbage"})
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "10.0.0.0/99"})
+    # version mismatch rejected
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "2001:db8::/64"})
+    # bad gateway / DNS rejected; valid ones pass
+    assert web_network_ip.validate_ip_pool_values(
+        {**base, "cidr": "10.0.0.0/24", "gateway": "not-an-ip"}
+    )
+    assert (
+        web_network_ip.validate_ip_pool_values(
+            {
+                **base,
+                "cidr": "10.0.0.0/24",
+                "gateway": "10.0.0.1",
+                "dns_primary": "8.8.8.8",
+            }
+        )
+        is None
+    )

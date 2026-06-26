@@ -1761,8 +1761,34 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
         return "Pool name is required."
     if not values.get("ip_version"):
         return "IP version is required."
-    if not values.get("cidr"):
+    cidr = str(values.get("cidr") or "").strip()
+    if not cidr:
         return "CIDR block is required."
+    # Content validation (not just presence): a malformed CIDR must be rejected,
+    # not silently stored — an unparseable pool shows util "N/A", can never receive
+    # assignments, and is treated as "no overlap" by the overlap check.
+    network = _parse_network(cidr)
+    if network is None:
+        return f"CIDR block '{cidr}' is not a valid network (e.g. 10.0.0.0/24)."
+    declared = str(values.get("ip_version") or "").strip().lower()
+    if declared == "ipv4" and network.version != 4:
+        return "CIDR block is an IPv6 network but IP version is set to IPv4."
+    if declared == "ipv6" and network.version != 6:
+        return "CIDR block is an IPv4 network but IP version is set to IPv6."
+    for label, key in (
+        ("Gateway", "gateway"),
+        ("Primary DNS", "dns_primary"),
+        ("Secondary DNS", "dns_secondary"),
+    ):
+        raw = str(values.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            addr = ipaddress.ip_address(raw)
+        except ValueError:
+            return f"{label} '{raw}' is not a valid IP address."
+        if key == "gateway" and addr.version != network.version:
+            return f"Gateway '{raw}' must match the CIDR's IP version."
     return None
 
 
