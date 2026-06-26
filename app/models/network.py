@@ -1409,7 +1409,7 @@ class OltOntRegistration(Base):
     )
     olt_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        ForeignKey("olt_devices.id", ondelete="RESTRICT"),
         nullable=False,
     )
     fsp: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -3251,7 +3251,7 @@ class OntWanServiceInstance(Base):
     )
     ont_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        ForeignKey("ont_units.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -3707,12 +3707,12 @@ class ServicePortAllocation(Base):
     )
     pool_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("olt_service_port_pools.id", ondelete="CASCADE"),
+        ForeignKey("olt_service_port_pools.id", ondelete="RESTRICT"),
         nullable=False,
     )
     ont_unit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        ForeignKey("ont_units.id", ondelete="RESTRICT"),
         nullable=False,
     )
     port_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -3761,7 +3761,7 @@ class OltServicePort(Base):
     )
     olt_device_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        ForeignKey("olt_devices.id", ondelete="RESTRICT"),
         nullable=False,
     )
     ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
