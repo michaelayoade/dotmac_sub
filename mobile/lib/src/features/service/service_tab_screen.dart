@@ -10,6 +10,7 @@ import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../usage/fup_card.dart';
+import '../usage/live_bandwidth_card.dart';
 import '../usage/speed_history_card.dart';
 import '../usage/usage_section.dart';
 
@@ -179,6 +180,8 @@ class ServiceTabScreen extends ConsumerWidget {
               const SizedBox(height: 20),
             ],
             const MonthlyUsageCard(),
+            const LiveBandwidthCard(),
+            const SizedBox(height: 12),
             const SpeedHistoryCard(),
             const SizedBox(height: 12),
             UsageSection(
