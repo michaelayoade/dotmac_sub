@@ -21,6 +21,7 @@ Revises: 178_ipv6_delegated_prefixes
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "179_billing_always_on"
@@ -38,8 +39,8 @@ _UPSERT = sa.text(
         is_secret, is_active, created_at, updated_at
     )
     VALUES (
-        gen_random_uuid(), :domain, :key, 'boolean', 'true', NULL,
-        false, true, now(), now()
+        gen_random_uuid(), CAST(:domain AS settingdomain), :key, 'boolean',
+        'true', NULL, false, true, now(), now()
     )
     ON CONFLICT (domain, key)
     DO UPDATE SET
