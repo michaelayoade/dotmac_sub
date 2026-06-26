@@ -9,17 +9,30 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services import settings_spec
 
-# A subscription in one of these states still represents a *live* service the
-# account can be billed for. Everything else — disabled (admin-terminated),
-# canceled, stopped, expired, blocked, archived, hidden — is terminal: a
-# terminated service must not keep generating reminders, dunning escalations,
-# or autopay charges. ``suspended``/``blocked`` differ here on purpose:
-# ``suspended`` is a recoverable non-payment hold we keep chasing, while
-# ``blocked`` is an enforcement endpoint that is not a live billable service.
+# A subscription in one of these states represents a *live* (connectable)
+# service. Used for "is the service actually up" semantics.
 LIVE_SERVICE_STATUSES = (
     SubscriptionStatus.active,
     SubscriptionStatus.suspended,
     SubscriptionStatus.pending,
+)
+
+# Statuses we still actively COLLECT against (invoice reminders, dunning
+# escalations, autopay charges). Deliberately wider than
+# ``LIVE_SERVICE_STATUSES``: it adds ``blocked``, which is a *recoverable
+# non-payment hold*, not a dead account — exactly the customer we most want to
+# keep chasing and auto-charging so they can pay and be restored. Excluding it
+# (the pre-2026-06-26 behavior) meant that the moment enforcement walled a
+# non-payer, autopay/reminders/dunning could never recover them — a major
+# collections leak. Only truly-terminal states stay excluded: ``stopped``
+# (admin-paused), ``disabled`` (admin-terminated), ``hidden``, ``archived``,
+# ``canceled`` (soft-deleted) and ``expired`` (period ended) — these must not
+# keep pinging or charging the customer.
+COLLECTIBLE_SERVICE_STATUSES = (
+    SubscriptionStatus.active,
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.pending,
+    SubscriptionStatus.blocked,
 )
 
 
@@ -164,6 +177,42 @@ def account_has_live_service(db: Session, account_id) -> bool:
             select(Subscription.id)
             .where(Subscription.subscriber_id == account_id)
             .where(Subscription.status.in_(LIVE_SERVICE_STATUSES))
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def accounts_with_collectible_service(db: Session) -> set:
+    """Subscriber IDs with at least one subscription we still collect against
+    (see :data:`COLLECTIBLE_SERVICE_STATUSES`).
+
+    This is the gate collections automation should use — invoice reminders,
+    dunning escalations, autopay charges. Unlike
+    :func:`accounts_with_live_service`, it keeps ``blocked`` (recoverable
+    non-payment) in scope so a walled non-payer can still be reminded and
+    auto-charged back to good standing.
+    """
+    return set(
+        db.scalars(
+            select(Subscription.subscriber_id)
+            .where(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+            .distinct()
+        ).all()
+    )
+
+
+def account_has_collectible_service(db: Session, account_id) -> bool:
+    """Whether a single account still has a collectible service.
+
+    Single-account counterpart to :func:`accounts_with_collectible_service`,
+    for hot paths like autopay that operate on one account.
+    """
+    return (
+        db.scalars(
+            select(Subscription.id)
+            .where(Subscription.subscriber_id == account_id)
+            .where(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
             .limit(1)
         ).first()
         is not None
