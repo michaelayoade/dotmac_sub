@@ -34,7 +34,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -206,19 +205,10 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         ),
         description="Auto-resume expired vacation holds.",
     ),
-    Control(
-        key="catalog.nas_backup_retention",
-        layer=Layer.feature,
-        owner_module="catalog",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(
-                _CAT, "nas_backup_retention_enabled", "NAS_BACKUP_RETENTION_ENABLED"
-            ),
-        ),
-        description="Prune old NAS backups.",
-    ),
+    # NOTE: nas_backup_retention intentionally NOT registered — it is network
+    # infrastructure housekeeping, not a catalog (product) capability. Leaving it
+    # unregistered keeps it on the pure legacy path with no accidental module
+    # coupling (disabling a module must not silently stop NAS backup cleanup).
     Control(
         key="notifications.queue",
         layer=Layer.feature,
@@ -444,12 +434,15 @@ def all_controls() -> Iterable[Control]:
 
 
 def _db_value(db: Session, domain: SettingDomain, key: str) -> object | None:
-    setting = db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == domain)
-        .where(DomainSetting.key == key)
-        .where(DomainSetting.is_active.is_(True))
-    ).first()
+    # query(...).filter(...).filter(...).filter(...).first() — the shape the
+    # scheduler tests mock; returns None for "no row".
+    setting = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == domain)
+        .filter(DomainSetting.key == key)
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
     if setting is None:
         return None
     return setting.value_json if setting.value_json is not None else setting.value_text
@@ -458,20 +451,23 @@ def _db_value(db: Session, domain: SettingDomain, key: str) -> object | None:
 def _resolve_own_flag(db: Session, control: Control) -> bool:
     """Resolve a control's OWN value (ignoring module composition).
 
-    Order: env override → DB row (canonical key in its domain, then legacy
-    aliases) → on_missing default. Logs which legacy alias supplied the value.
+    Precedence (highest first): env override → canonical DB row
+    (``modules.<feature>``) → legacy alias DB row → ``on_missing`` default. Env
+    is the emergency override, so it wins over any stored row. Logs which legacy
+    alias supplied the value.
     """
-    # Canonical row lives under the modules domain for module/feature controls.
-    canonical_domain = SettingDomain.modules
-    value = _db_value(db, canonical_domain, control.key.replace(".", "_"))
-    if value is not None:
-        return _truthy(value)
-
+    # 1) Env override (any alias env) — emergency lever, beats stored rows.
     for alias in control.legacy:
         if alias.env:
             env_val = os.getenv(alias.env)
             if env_val is not None:
                 return _truthy(env_val)
+    # 2) Canonical row (modules.<feature>) — what the admin page will write.
+    value = _db_value(db, SettingDomain.modules, control.key.replace(".", "_"))
+    if value is not None:
+        return _truthy(value)
+    # 3) Legacy alias rows — back-compat with pre-registry keys.
+    for alias in control.legacy:
         row = _db_value(db, alias.domain, alias.key)
         if row is not None:
             logger.debug(

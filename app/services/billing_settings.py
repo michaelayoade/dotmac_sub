@@ -47,8 +47,17 @@ def billing_enabled(db: Session, *, default: bool = True) -> bool:
     suspend, or expire an account before then. Resolved via ``settings_spec``
     (env fallback included) to match the invoice-cycle kill-switch.
 
-    Single control plane: the billing MODULE composes in — if the billing module
-    is turned off, billing is off everywhere, not just in the scheduler.
+    Single control plane: the billing MODULE (resolved by the same module
+    resolver the registry uses) composes in — if the billing module is off,
+    billing is off everywhere, not just in the scheduler.
+
+    Design note: this MASTER is intentionally NOT collapsed into the
+    ``billing.invoicing`` feature. Task bodies (autopay, dunning, expiry) read it
+    as a cross-feature master, so equating it with invoicing would wrongly stop
+    collection whenever invoice *generation* is paused. The master therefore
+    stays = billing module AND the legacy ``billing.billing_enabled`` flag; the
+    individual capture features (invoicing/autopay/collections/…) are gated
+    independently through ``control_registry.is_enabled``.
     """
     # Local import avoids an import-time cycle (module_manager pulls settings).
     from app.services import module_manager
@@ -126,36 +135,28 @@ def _setting_value(db: Session, key: str) -> object | None:
     return _domain_setting_value(db, SettingDomain.billing, key)
 
 
-# Capture-automation components that must stay on once billing is live. Each is
-# fail-open (absent row = on); we flag only an EXPLICIT off, so "someone turned a
-# billing aspect off" is surfaced loudly by the hourly integrity task — without
-# removing the per-component switch (kept as a deliberate, audited brake).
-_BILLING_COMPONENT_SWITCHES = (
-    (SettingDomain.billing, "autopay_enabled", "autopay"),
-    (SettingDomain.collections, "dunning_enabled", "dunning"),
-    (SettingDomain.billing, "overdue_check_enabled", "overdue-marking"),
-)
-
-
 def disabled_billing_components(db: Session) -> list[str]:
-    """Labels of capture-automation components explicitly switched OFF.
+    """Canonical keys of billing capture-automation features that are OFF.
 
-    Fail-open: an absent setting row is treated as ON, so this returns only the
-    components a human deliberately disabled. The hourly billing-switch task
-    escalates a non-empty result to CRITICAL so no aspect of billing automation
-    can be silently turned off while the master switch is on.
+    Derived from the control registry (single source) — every default-ON billing
+    feature (invoicing, autopay, collections, overdue-marking, arrangements,
+    topup-reconciliation, …) is checked via the one resolver. Default-OFF
+    opt-ins (e.g. the hourly notification runner) are excluded. Resolution is
+    fail-open, so this returns only deliberately-disabled features. The hourly
+    billing-switch task escalates a non-empty result to CRITICAL so no aspect of
+    billing capture automation can be silently turned off while billing is live.
     """
+    from app.services import control_registry
+
     disabled: list[str] = []
-    for domain, key, label in _BILLING_COMPONENT_SWITCHES:
-        value = _domain_setting_value(db, domain, key)
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            truthy = value
-        else:
-            truthy = str(value).strip().lower() in {"1", "true", "yes", "on"}
-        if not truthy:
-            disabled.append(label)
+    for control in control_registry.all_controls():
+        if (
+            control.layer is control_registry.Layer.feature
+            and control.owner_module == "billing"
+            and control.on_missing  # only features that are meant to be ON
+            and not control_registry.is_enabled(db, control.key)
+        ):
+            disabled.append(control.key)
     return disabled
 
 
