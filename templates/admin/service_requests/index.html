@@ -1,0 +1,163 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_row, row_action, status_badge,
+    empty_state, animation_styles, icon_view
+%}
+
+{% block title %}Service Requests - Admin{% endblock %}
+
+{% set sr_icon = '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>' %}
+
+{% macro sr_status_badge(value) %}
+    {% if value == 'completed' %}{{ status_badge("Completed", variant="success") }}
+    {% elif value == 'rejected' %}{{ status_badge("Rejected", variant="error") }}
+    {% elif value == 'scheduled' %}{{ status_badge("Scheduled", variant="info") }}
+    {% elif value == 'reviewing' %}{{ status_badge("Reviewing", variant="pending") }}
+    {% else %}{{ status_badge("New", variant="pending") }}{% endif %}
+{% endmacro %}
+
+{% block content %}
+{{ ambient_background("indigo", "violet") }}
+
+<div class="relative space-y-8">
+
+    {# Page Header #}
+    {% call(content) page_header(
+        "Service Requests",
+        subtitle="New-connection / install requests submitted by resellers",
+        icon=sr_icon,
+        color="indigo",
+        breadcrumbs=[
+            {"label": "Resellers", "href": "/admin/resellers"},
+            {"label": "Service Requests"}
+        ]
+    ) %}
+    {% endcall %}
+
+    {# Stats #}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" style="animation-delay: 50ms;">
+        {{ stats_card(
+            "Total",
+            total,
+            icon=sr_icon,
+            color="indigo", color2="violet"
+        ) }}
+        {{ stats_card(
+            "New (awaiting review)",
+            new_count,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
+        {{ stats_card(
+            "Completed",
+            requests | selectattr('status.value', 'equalto', 'completed') | list | length if requests else 0,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+    </div>
+
+    {# Filters #}
+    <div class="animate-fade-in-up rounded-xl border border-slate-200/60 bg-white/80 px-5 py-3 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <form method="get" action="/admin/service-requests" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div class="sm:w-48">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Status</label>
+                <select name="status" onchange="this.form.submit()"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Statuses</option>
+                    {% for s in statuses %}
+                    <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% if status_filter %}
+            <a href="/admin/service-requests"
+               class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                Clear filter
+            </a>
+            {% endif %}
+        </form>
+    </div>
+
+    {# Data table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
+                        <th scope="col" class="sticky left-0 z-30 min-w-56 bg-slate-50 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 shadow-[1px_0_0_rgba(148,163,184,0.25)] dark:bg-slate-900 dark:text-slate-500 dark:shadow-[1px_0_0_rgba(51,65,85,0.85)]">Reseller / Contact</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Address</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Serviceability</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Status</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Submitted</th>
+                        <th scope="col" class="px-6 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if requests %}
+                    {% for req in requests %}
+                    {% set detail_href = "/admin/service-requests/" ~ req.id %}
+                    {% call table_row(color="indigo") %}
+                        <td class="sticky left-0 z-20 min-w-56 whitespace-nowrap bg-white px-6 py-4 shadow-[1px_0_0_rgba(148,163,184,0.18)] transition-colors group-hover:bg-indigo-50 dark:bg-slate-800 dark:shadow-[1px_0_0_rgba(51,65,85,0.75)] dark:group-hover:bg-slate-800">
+                            <a href="{{ detail_href }}" class="font-semibold text-slate-900 transition-colors hover:text-indigo-700 hover:underline dark:text-white dark:hover:text-indigo-300">
+                                {{ req.reseller.name if req.reseller else 'Reseller' }}
+                            </a>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ req.contact_name or '—' }}{% if req.contact_phone %} · {{ req.contact_phone }}{% endif %}</p>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300 max-w-xs truncate">{{ req.address or '—' }}</td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% set sa = req.serviceability.value if req.serviceability else 'unknown' %}
+                            {% if sa == 'serviceable' %}{{ status_badge("Serviceable", variant="success") }}
+                            {% elif sa == 'not_serviceable' %}{{ status_badge("Not serviceable", variant="error") }}
+                            {% else %}{{ status_badge("Unknown", variant="default") }}{% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">{{ sr_status_badge(req.status.value if req.status else 'new') }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ req.created_at.strftime('%Y-%m-%d %H:%M') if req.created_at else '—' }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action(href=detail_href, icon=icon_view(), title="Review", color="indigo") }}
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No service requests found",
+                        message="Reseller-submitted new-connection requests will appear here",
+                        icon=sr_icon,
+                        color="indigo",
+                        colspan=6
+                    ) }}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {# Pagination #}
+        {% if total_pages > 1 %}
+        {% set _extra %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% endset %}
+        <div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+            <div class="flex items-center justify-between">
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} results
+                </p>
+                <nav class="flex items-center gap-1">
+                    {% if page > 1 %}
+                    <a href="/admin/service-requests?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
+                    {% endif %}
+                    {% if page < total_pages %}
+                    <a href="/admin/service-requests?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
