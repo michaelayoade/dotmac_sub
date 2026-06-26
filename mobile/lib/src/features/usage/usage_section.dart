@@ -57,10 +57,16 @@ class UsageSection extends StatelessWidget {
 /// while healthy, not just once capped) and the running overage cost when the
 /// customer is past their allowance on a metered plan.
 class QuotaCard extends StatelessWidget {
-  const QuotaCard({super.key, required this.bucket, this.policyLine});
+  const QuotaCard(
+      {super.key, required this.bucket, this.policyLine, this.actualUsedBytes});
 
   final QuotaBucket bucket;
   final String? policyLine;
+
+  /// Real period usage (session-based bytes) for UNLIMITED plans, whose rated
+  /// bucket carries no usage (used_gb is 0). When provided, it replaces the
+  /// bucket's empty "0.0 GB used" with the true figure (matches Home).
+  final int? actualUsedBytes;
 
   @override
   Widget build(BuildContext context) {
@@ -68,6 +74,9 @@ class QuotaCard extends StatelessWidget {
     final theme = Theme.of(context);
     final fraction = b.usedFraction;
     final overLimit = b.overageGb > 0;
+    final unlimitedUsed = (actualUsedBytes != null && actualUsedBytes! > 0)
+        ? Fmt.bytes(actualUsedBytes!)
+        : Fmt.gb(b.usedGb);
 
     return Card(
       child: Padding(
@@ -89,7 +98,7 @@ class QuotaCard extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               b.isUnlimited
-                  ? '${Fmt.gb(b.usedGb)} used'
+                  ? '$unlimitedUsed used'
                   : '${Fmt.gb(b.usedGb)} / ${Fmt.gb(b.allowanceGb ?? 0)}',
               style: theme.textTheme.headlineSmall,
             ),

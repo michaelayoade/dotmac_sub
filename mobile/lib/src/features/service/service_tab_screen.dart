@@ -24,6 +24,10 @@ class ServiceTabScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final period = ref.watch(selectedUsagePeriodProvider);
     final summary = ref.watch(usageSummaryProvider(period));
+    // Session-based cycle total — the true usage for unlimited plans, whose
+    // rated bucket reads 0 (independent of the selected period above).
+    final cycleUsedBytes =
+        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
     final buckets = ref.watch(quotaBucketsProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final services = ref.watch(subscriptionsProvider);
@@ -103,6 +107,9 @@ class ServiceTabScreen extends ConsumerWidget {
               QuotaCard(
                 bucket: b,
                 policyLine: summary.asData?.value.fup?.policySummary,
+                // Unlimited buckets carry no usage; show the real session-based
+                // cycle total instead of "0.0 GB used".
+                actualUsedBytes: b.isUnlimited ? cycleUsedBytes : null,
               ),
               const SizedBox(height: 12),
             ],
