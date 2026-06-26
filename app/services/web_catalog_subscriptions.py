@@ -1804,11 +1804,27 @@ def normalize_additional_routes(
         if "/" not in text:
             text = f"{text}/32"
         try:
+            # strict=False intentionally snaps a host address to its network
+            # (e.g. 203.0.113.9/29 -> 203.0.113.8/29); the snapped value is what
+            # gets stored, billed and validated, so there is no stored-vs-billed
+            # mismatch — callers should display the normalized CIDR back.
             network = ipaddress.ip_network(text, strict=False)
         except ValueError as exc:
             raise ValueError(f"Invalid additional routed IP block: {raw_cidr}") from exc
         if network.version != 4:
             raise ValueError("Additional routed IP blocks must be IPv4 CIDRs.")
+        if (
+            network.prefixlen == 0
+            or network.is_multicast
+            or network.is_loopback
+            or network.is_link_local
+            or network.is_reserved
+            or network.is_unspecified
+        ):
+            raise ValueError(
+                f"Additional routed IP block {network} is not a routable range "
+                "(default-route, multicast, loopback, link-local, or reserved space)."
+            )
         cidr = str(network)
         if cidr in seen:
             raise ValueError(f"Duplicate additional routed IP block: {cidr}")
@@ -1826,6 +1842,16 @@ def normalize_additional_routes(
             if metric < 1:
                 raise ValueError(f"Route metric for {cidr} must be 1 or higher.")
         routes.append((cidr, int(network.prefixlen), metric))
+    # Reject overlapping routes within a single submission (exact-string dedupe
+    # above does not catch a nested block, e.g. /30 inside a /28).
+    for outer in range(len(routes)):
+        net_a = ipaddress.ip_network(routes[outer][0], strict=False)
+        for inner in range(outer + 1, len(routes)):
+            net_b = ipaddress.ip_network(routes[inner][0], strict=False)
+            if net_a.overlaps(net_b):
+                raise ValueError(
+                    f"Additional routed IP blocks {net_a} and {net_b} overlap."
+                )
     return routes
 
 
@@ -2334,11 +2360,9 @@ def _route_parent_networks_for_ipam(
             [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
         )
         for parent in parent_networks:
-            if parent.prefixlen > 24:
-                parent = cast(
-                    ipaddress.IPv4Network,
-                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
-                )
+            # Keep the real owned network as the parent. A sub-/24 block must NOT
+            # be widened to its enclosing /24 — that would offer routed children
+            # outside the org's actual allocation (i.e. third-party address space).
             key = str(parent)
             ranges.setdefault(
                 key,
@@ -2371,11 +2395,9 @@ def _route_parent_networks_for_ipam(
             [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
         )
         for parent in parent_networks:
-            if parent.prefixlen > 24:
-                parent = cast(
-                    ipaddress.IPv4Network,
-                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
-                )
+            # Keep the real owned network as the parent. A sub-/24 block must NOT
+            # be widened to its enclosing /24 — that would offer routed children
+            # outside the org's actual allocation (i.e. third-party address space).
             key = str(parent)
             ranges[key] = (
                 parent,

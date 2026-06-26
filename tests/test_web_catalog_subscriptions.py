@@ -1300,6 +1300,64 @@ def test_subscription_form_context_bootstraps_ip_addons_from_ipv4_blocks(
     assert "203.0.113.8/30" in {child["cidr"] for child in children_30}
 
 
+def test_route_parent_for_sub24_block_is_not_widened_to_24(db_session, subscriber):
+    """A sub-/24 block must be offered as itself, and its children must stay
+    inside it — never the enclosing /24 (which would route third-party space)."""
+    import ipaddress
+
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Small Routed Block",
+            "ip_version": "ipv4",
+            "cidr": "203.0.113.16/28",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+
+    parents = web_catalog_subscriptions_service._route_range_parent_options_for_ipam(
+        db_session
+    )
+    parent_cidrs = {p["cidr"] for p in parents}
+    assert "203.0.113.16/28" in parent_cidrs
+    assert "203.0.113.0/24" not in parent_cidrs
+
+    block_net = ipaddress.ip_network("203.0.113.16/28")
+    for prefix in (29, 30, 32):
+        children = web_catalog_subscriptions_service.route_child_options_for_parent(
+            db_session,
+            parent_cidr="203.0.113.16/28",
+            prefix=prefix,
+            current_subscriber_id=subscriber.id,
+        )
+        for child in children:
+            child_net = ipaddress.ip_network(child["cidr"])
+            assert child_net.subnet_of(block_net), (
+                f"/{prefix} child {child['cidr']} escapes owned block {block_net}"
+            )
+
+
+def test_normalize_additional_routes_rejects_non_routable_ranges():
+    for bad in ["0.0.0.0/0", "224.0.0.0/24", "240.0.0.0/24", "127.0.0.0/24"]:
+        with pytest.raises(ValueError):
+            web_catalog_subscriptions_service.normalize_additional_routes([bad])
+
+
+def test_normalize_additional_routes_rejects_overlapping_blocks():
+    with pytest.raises(ValueError, match="overlap"):
+        web_catalog_subscriptions_service.normalize_additional_routes(
+            ["203.0.113.0/28", "203.0.113.4/30"]
+        )
+
+
+def test_normalize_additional_routes_snaps_host_bits_to_network():
+    routes = web_catalog_subscriptions_service.normalize_additional_routes(
+        ["203.0.113.9/29"]
+    )
+    assert routes[0][0] == "203.0.113.8/29"
+
+
 def test_subscription_form_context_prioritizes_160_and_102_ipam_parents(
     db_session,
     subscriber,

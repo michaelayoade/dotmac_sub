@@ -203,7 +203,7 @@ function ipCalculator() {
         },
 
         calculateIPv4(ip, prefix) {
-            if (prefix < 0 || prefix > 32) {
+            if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
                 this.result = null;
                 return;
             }
@@ -252,7 +252,7 @@ function ipCalculator() {
         },
 
         calculateIPv6(ip, prefix) {
-            if (prefix < 0 || prefix > 128) {
+            if (!Number.isInteger(prefix) || prefix < 0 || prefix > 128) {
                 this.result = null;
                 return;
             }

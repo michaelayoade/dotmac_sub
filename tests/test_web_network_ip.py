@@ -551,3 +551,65 @@ def test_ipv4_block_detail_marks_network_device_management_ip(monkeypatch):
     assert rows["10.20.32.1"]["device"] == "Aggregation Switch"
     assert rows["10.20.32.1"]["notes"] == "Network device"
     assert state["stats"]["assigned"] == 1
+
+
+def test_validate_ip_pool_values_rejects_malformed_cidr_and_mismatches():
+    base = {"name": "P", "ip_version": "ipv4"}
+    # valid passes
+    assert (
+        web_network_ip.validate_ip_pool_values({**base, "cidr": "10.0.0.0/24"}) is None
+    )
+    # garbage / out-of-range prefix rejected
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "garbage"})
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "10.0.0.0/99"})
+    # version mismatch rejected
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "2001:db8::/64"})
+    # bad gateway / DNS rejected; valid ones pass
+    assert web_network_ip.validate_ip_pool_values(
+        {**base, "cidr": "10.0.0.0/24", "gateway": "not-an-ip"}
+    )
+    assert (
+        web_network_ip.validate_ip_pool_values(
+            {
+                **base,
+                "cidr": "10.0.0.0/24",
+                "gateway": "10.0.0.1",
+                "dns_primary": "8.8.8.8",
+            }
+        )
+        is None
+    )
+
+
+def test_range_detail_stats_count_assignments_beyond_display_window():
+    """Detail stats must reflect the whole CIDR, not just the first `limit` rows.
+
+    An assignment on .14 of a /28 must count even when only 2 rows are displayed.
+    """
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Big Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.30.0.0/28",
+        is_active=True,
+    )
+    high = IPv4Address(
+        id=uuid.uuid4(), address="10.30.0.14", pool_id=pool.id, is_reserved=False
+    )
+    high.assignment = IPAssignment(
+        id=uuid.uuid4(),
+        subscriber_id=uuid.uuid4(),
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=high.id,
+        is_active=True,
+    )
+
+    db = FakeSession({IPv4Address: [high]})
+    result = web_network_ip._build_ipv4_range_rows(
+        db, pool=pool, cidr="10.30.0.0/28", limit=2
+    )
+
+    assert result is not None
+    assert result["row_count"] == 2  # display window unchanged
+    assert result["stats"]["assigned"] == 1  # but the off-window assignment counts
+    assert result["stats"]["total_usable"] == 14
