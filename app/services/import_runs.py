@@ -210,12 +210,14 @@ def process_import_run(db: Session, run_id) -> ImportRun:
             "dry_run": run.dry_run,
         }
         db.commit()
+        return run
     except Exception as exc:  # noqa: BLE001 - whole-run failure
         db.rollback()
-        run = db.get(ImportRun, coerce_uuid(run_id))
-        if run is not None:
-            run.status = ImportRunStatus.failed
-            run.error_message = str(exc)
-            run.completed_at = datetime.now(UTC)
-            db.commit()
-    return run
+        failed_run = db.get(ImportRun, coerce_uuid(run_id))
+        if failed_run is None:
+            raise
+        failed_run.status = ImportRunStatus.failed
+        failed_run.error_message = str(exc)
+        failed_run.completed_at = datetime.now(UTC)
+        db.commit()
+        return failed_run

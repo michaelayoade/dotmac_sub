@@ -4,8 +4,8 @@ Idempotent: the squashed-initial migration builds the schema from the current
 model via create_all(), so on a fresh DB these tables already exist and this
 no-ops; on an existing prod DB it creates them.
 
-Revision ID: 179_import_runs
-Revises: 178_ipv6_delegated_prefixes
+Revision ID: 180_import_runs
+Revises: 179_billing_always_on
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "179_import_runs"
-down_revision = "178_ipv6_delegated_prefixes"
+revision = "180_import_runs"
+down_revision = "179_billing_always_on"
 branch_labels = None
 depends_on = None
 
