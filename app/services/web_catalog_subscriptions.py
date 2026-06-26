@@ -2085,6 +2085,12 @@ def sync_additional_routes_for_subscription(
     """Upsert active subscriber additional routes and deactivate removed ones."""
     if not subscription_obj.subscriber_id:
         return []
+    from app.services.enforcement import (
+        network_identity_signature,
+        reauth_subscription_on_identity_change,
+    )
+
+    before_sig = network_identity_signature(db, subscription_obj)
     desired = normalize_additional_routes(cidrs, metrics)
     _validate_additional_routes_match_addon(
         db,
@@ -2144,6 +2150,16 @@ def sync_additional_routes_for_subscription(
             route.is_active = False
 
     db.commit()
+
+    # Routes changed -> reconcile RADIUS and kick live sessions so the BNG
+    # re-learns the Framed-Routes. No-op if the route set is unchanged or the
+    # subscription isn't active.
+    reauth_subscription_on_identity_change(
+        db,
+        str(subscription_obj.id),
+        before=before_sig,
+        reason="additional_routes_change",
+    )
     return list(desired_map)
 
 
