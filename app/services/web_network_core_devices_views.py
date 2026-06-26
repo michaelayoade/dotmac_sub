@@ -1506,7 +1506,15 @@ def onts_list_page_data(
         )
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
+        from app.services.device_operational_status import (
+            derive_ont_operational_status,
+        )
+
+        ont_op = derive_ont_operational_status(ont)
         signal_data[str(ont.id)] = {
+            "operational": ont_op.status,
+            "operational_label": ont_op.label,
+            "operational_reason": ont_op.reason,
             "olt_rx_dbm": olt_rx_dbm,
             "onu_rx_dbm": onu_rx_dbm,
             "signal_updated_at": getattr(ont, "signal_updated_at", None),
@@ -3082,6 +3090,12 @@ def consolidated_page_data(
             )
         )
 
+    from app.services.device_operational_status import (
+        derive_olt_operational_status,
+        warmer_is_stale,
+    )
+
+    olt_warm_stale = warmer_is_stale()
     olt_stats = {}
     for olt in olts:
         linked_monitor = _linked_monitoring(olt)
@@ -3090,6 +3104,14 @@ def consolidated_page_data(
         else:
             # Keep unknown when we have no linked monitoring telemetry.
             olt.runtime_status = "unknown"
+        # Derived operational status: the OLT's own ping/poll telemetry first,
+        # falling back to the linked Zabbix device's live_status (reachable if
+        # any source confirms). runtime_status above is admin status — stale.
+        olt.operational = derive_olt_operational_status(
+            olt,
+            linked_live_status=getattr(linked_monitor, "live_status", None),
+            warm_stale=olt_warm_stale,
+        )
 
         pon_ports = network_service.pon_ports.list(
             db=db,
