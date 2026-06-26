@@ -211,12 +211,17 @@ def derive_ont_operational_status(ont, *, now: datetime | None = None):
 _LIFECYCLE_OVERRIDE = {"maintenance", "decommissioned", "retired"}
 
 
-def derive_operational_status(device, *, warm_stale: bool) -> OperationalStatus:
+def derive_operational_status(
+    device, *, warm_stale: bool, coverage=None
+) -> OperationalStatus:
     """Derive the operational status for one device-like object.
 
-    ``device`` only needs ``status``, ``live_status`` attributes (read
-    defensively). ``warm_stale`` is computed once per request via
-    ``warmer_is_stale`` and passed in, so this stays a pure function.
+    ``device`` needs ``status`` / ``live_status`` (and ``mgmt_ip`` when coverage
+    is supplied), read defensively. ``warm_stale`` is computed once per request.
+    ``coverage`` is an optional MonitoringCoverage (Phase 3): when loaded, a
+    device whose mgmt IP no live tunnel reaches reads ``unmonitored(no_path)``
+    rather than a false ``down`` — *unless* it is observed ``up`` (a positive
+    reading proves a path exists). Omitted/unloaded coverage = Phase-1 behaviour.
     """
     admin = _enum_value(getattr(device, "status", None))
     live = _enum_value(getattr(device, "live_status", None))
@@ -225,14 +230,23 @@ def derive_operational_status(device, *, warm_stale: bool) -> OperationalStatus:
     if admin in _LIFECYCLE_OVERRIDE:
         return OperationalStatus(MAINTENANCE, f"admin_{admin}", admin, False, None)
 
-    # 2/3/4. No trustworthy live observation -> unmonitored (distinct from down).
+    # 2. No monitoring path (and not positively observed up) -> blind spot, not
+    # an outage. Positive 'up' wins (it proves a path), so only gate non-up.
+    if (
+        coverage is not None
+        and getattr(coverage, "loaded", False)
+        and live != "up"
+        and not coverage.covers(getattr(device, "mgmt_ip", None))
+    ):
+        return _maybe_mismatch(UNMONITORED, "no_path", admin)
+
+    # 3/4/5. No trustworthy live observation -> unmonitored (distinct from down).
     if live is None:
         return _maybe_mismatch(UNMONITORED, "not_warmed", admin)
     if warm_stale:
         return _maybe_mismatch(UNMONITORED, "stale", admin)
     if live == "unknown":
-        # Disabled / in-maintenance in Zabbix, or no availability data (incl. the
-        # no-path blind spot until the Phase 3 coverage job lands).
+        # Disabled / in-maintenance in Zabbix, or no availability data.
         return _maybe_mismatch(UNMONITORED, "monitoring_unknown", admin)
 
     # 5. Live observation maps to the UI bucket. problem == up-with-trigger.
@@ -328,14 +342,20 @@ def mismatch_worklist(db, *, reason: str | None = None) -> dict:
 def annotate_operational_status(devices, *, now: datetime | None = None) -> None:
     """Attach a transient ``.operational`` to each device for templates.
 
-    Computes warmer staleness once for the whole batch. Safe on ORM instances
-    and on stub objects (attributes read defensively).
+    Computes warmer staleness + monitoring coverage once for the whole batch.
+    Safe on ORM instances and on stub objects (attributes read defensively).
     """
     warm_stale = warmer_is_stale(now)
+    try:
+        from app.services.monitoring_coverage import get_coverage
+
+        coverage = get_coverage()
+    except Exception:
+        coverage = None
     for device in devices:
         try:
             device.operational = derive_operational_status(
-                device, warm_stale=warm_stale
+                device, warm_stale=warm_stale, coverage=coverage
             )
         except Exception:
             # Never let status derivation break a page render.

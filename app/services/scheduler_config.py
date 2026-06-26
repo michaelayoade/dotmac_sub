@@ -1252,6 +1252,31 @@ def build_beat_schedule() -> dict:
                 interval_seconds=max(trim_interval, 60),
             )
 
+        # Monitoring-path coverage refresh — caches the reachable-CIDR set (from
+        # up WireGuard peers) so operational status + the SLA bridge can tell a
+        # blind spot from a real outage without running wg on the request path.
+        coverage_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_coverage_enabled",
+            "MONITORING_COVERAGE_ENABLED",
+            True,
+        )
+        coverage_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_coverage_interval_seconds",
+            "MONITORING_COVERAGE_INTERVAL_SECONDS",
+            600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="monitoring_coverage_refresh",
+            task_name="app.tasks.monitoring_coverage.refresh_monitoring_coverage",
+            enabled=coverage_enabled,
+            interval_seconds=max(coverage_interval_seconds, 120),
+        )
+
         # OLT health retry - auto-retry failed ping connections
         olt_health_retry_minutes = _resolve_int(
             session,
