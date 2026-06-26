@@ -72,3 +72,47 @@ def test_unsupported_module_rejected(db_session):
         import_runs.create_import_run(
             db_session, module="not_a_module", raw_text="x", dry_run=True
         )
+
+
+def test_ipv4_assignments_import_dry_run_then_apply(db_session):
+    import uuid
+
+    from app.models.network import IPAssignment, IpPool, IPVersion
+    from app.models.subscriber import Subscriber
+
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Import Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="10.50.0.0/24",
+        is_active=True,
+    )
+    sub = Subscriber(
+        first_name="A", last_name="L", email=f"{uuid.uuid4().hex[:8]}@e.com"
+    )
+    db_session.add_all([pool, sub])
+    db_session.commit()
+    csv = f"pool_id,ip_address,subscriber_id\n{pool.id},10.50.0.5,{sub.id}\n"
+
+    # Dry-run validates, assigns nothing.
+    run = import_runs.create_import_run(
+        db_session, module="ipv4_assignments", raw_text=csv, dry_run=True
+    )
+    run = import_runs.process_import_run(db_session, run.id)
+    assert run.status == ImportRunStatus.dry_run_ready
+    assert run.ok_rows == 1
+    assert db_session.query(IPAssignment).count() == 0
+
+    # Apply creates the assignment.
+    run2 = import_runs.create_import_run(
+        db_session, module="ipv4_assignments", raw_text=csv, dry_run=False
+    )
+    run2 = import_runs.process_import_run(db_session, run2.id)
+    assert run2.status == ImportRunStatus.completed
+    assert run2.ok_rows == 1
+    assignment = (
+        db_session.query(IPAssignment)
+        .filter(IPAssignment.subscriber_id == sub.id)
+        .first()
+    )
+    assert assignment is not None and assignment.is_active
