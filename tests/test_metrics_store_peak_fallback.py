@@ -134,8 +134,10 @@ def test_reads_target_ingested_aggregate_series():
     # Chart series defaults to the _avg aggregate.
     range_queries.clear()
     asyncio.run(store.get_subscription_bandwidth("sub-1", start, end))
-    assert all("bandwidth_rx_bps_avg" in q or "bandwidth_tx_bps_avg" in q
-               for q in range_queries)
+    assert all(
+        "bandwidth_rx_bps_avg" in q or "bandwidth_tx_bps_avg" in q
+        for q in range_queries
+    )
 
     # Current bandwidth reads the _avg aggregate too.
     instant_queries.clear()
