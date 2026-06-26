@@ -263,6 +263,8 @@ def _create_session(
     person_id: str | None = None,
     auth_session_id: str | None = None,
     reseller_user_id: str | None = None,
+    is_impersonation: bool = False,
+    return_to: str | None = None,
 ) -> str:
     if not subscriber_id:
         subscriber_id = person_id
@@ -288,6 +290,11 @@ def _create_session(
         # the local portal session).
         "auth_session_id": auth_session_id,
         "remember": remember,
+        # Admin "view as reseller": an admin impersonation session keeps the
+        # reseller principal but is flagged so the portal shows an exit banner
+        # and the stop endpoint can return the admin to ``return_to``.
+        "is_impersonation": is_impersonation,
+        "return_to": return_to,
         "created_at": _now().isoformat(),
         "expires_at": (_now() + timedelta(seconds=ttl_seconds)).isoformat(),
     }
@@ -299,6 +306,90 @@ def _create_session(
         _RESELLER_SESSIONS,
     )
     return session_token
+
+
+def resolve_impersonation_principal(
+    db: Session, reseller_id: str
+) -> ResellerUser | None:
+    """Pick the reseller login an admin should "view as".
+
+    Mirrors customer impersonation, which targets a real subscriber: here we
+    target a real reseller principal so ``get_context`` works unchanged. Prefer
+    an active ``ResellerUser`` for the reseller (Layer 3 standalone or
+    subscriber-backed); fall back to a legacy subscriber whose ``user_type`` is
+    ``reseller``. Returns ``None`` when the reseller has no portal login.
+    """
+    reseller_uuid = coerce_uuid(reseller_id)
+    try:
+        reseller_user = (
+            db.query(ResellerUser)
+            .filter(ResellerUser.reseller_id == reseller_uuid)
+            .filter(ResellerUser.is_active.is_(True))
+            .order_by(ResellerUser.created_at.asc())
+            .first()
+        )
+        if reseller_user:
+            return reseller_user
+    except ProgrammingError:
+        # Schema without the reseller_users table — fall through to legacy.
+        db.rollback()
+
+    subscriber = (
+        db.query(Subscriber)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(Subscriber.is_active.is_(True))
+        .filter(Subscriber.user_type == UserType.reseller)
+        .order_by(Subscriber.created_at.asc())
+        .first()
+    )
+    if not subscriber:
+        return None
+    return SimpleNamespace(
+        id=subscriber.id,
+        subscriber_id=subscriber.id,
+        person_id=subscriber.id,
+        reseller_id=subscriber.reseller_id,
+        is_active=True,
+        created_at=subscriber.created_at,
+    )
+
+
+def create_impersonation_session(
+    db: Session,
+    *,
+    reseller_id: str,
+    return_to: str,
+) -> str:
+    """Mint a reseller portal session for an admin to "view as" the reseller.
+
+    Raises ``HTTPException(404)`` when the reseller has no login principal to
+    impersonate (e.g. an org that has never had a portal user provisioned).
+    """
+    reseller = db.get(Reseller, coerce_uuid(reseller_id))
+    if not reseller:
+        raise HTTPException(status_code=404, detail="Reseller not found")
+
+    principal = resolve_impersonation_principal(db, reseller_id)
+    if principal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="This reseller has no portal login to view as.",
+        )
+
+    # A subscriber-backed principal carries subscriber_id; a Layer-3 standalone
+    # ResellerUser has subscriber_id == None and is keyed by reseller_user_id.
+    subscriber_id = getattr(principal, "subscriber_id", None)
+    reseller_user_id = None if subscriber_id else principal.id
+    return _create_session(
+        username=f"impersonate:reseller:{reseller_id}",
+        reseller_id=str(reseller.id),
+        remember=False,
+        subscriber_id=str(subscriber_id) if subscriber_id else None,
+        reseller_user_id=str(reseller_user_id) if reseller_user_id else None,
+        db=db,
+        is_impersonation=True,
+        return_to=return_to,
+    )
 
 
 def _get_session(session_token: str) -> dict | None:
@@ -545,6 +636,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
             # which is None for a first-class reseller_user principal.
             "principal_type": "reseller_user",
             "principal_id": str(reseller_user.id),
+            "is_impersonation": bool(session.get("is_impersonation")),
+            "return_to": session.get("return_to"),
         }
 
     subscriber = db.get(Subscriber, coerce_uuid(session["subscriber_id"]))
@@ -571,6 +664,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         "reseller_user": reseller_user,
         "principal_type": "subscriber",
         "principal_id": str(subscriber.id),
+        "is_impersonation": bool(session.get("is_impersonation")),
+        "return_to": session.get("return_to"),
     }
 
 

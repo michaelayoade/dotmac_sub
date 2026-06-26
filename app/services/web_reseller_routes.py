@@ -29,6 +29,13 @@ def _require_reseller_context(request: Request, db: Session):
     )
     if not context:
         return None
+    # Surface admin "view as reseller" state to the layout banner (read in
+    # reseller.html via request.state, like the customer portal banner). Set on
+    # every guarded request so any reseller page shows the exit control.
+    request.state.reseller_impersonation = {
+        "active": bool(context.get("is_impersonation")),
+        "return_to": context.get("return_to") or "/admin/resellers",
+    }
     return context
 
 

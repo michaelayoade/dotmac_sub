@@ -1,6 +1,6 @@
 """Reseller portal authentication."""
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -59,6 +59,22 @@ def reseller_mfa_submit(
 @router.get("/logout")
 def reseller_logout(request: Request):
     return web_reseller_auth_service.reseller_logout(request)
+
+
+@router.post("/stop-impersonation")
+def reseller_stop_impersonation(request: Request, next: str = Form("/admin/resellers")):
+    """Stop admin "view as reseller" and return to the admin portal."""
+    return web_reseller_auth_service.reseller_stop_impersonation(request, next)
+
+
+@router.get("/stop-impersonation")
+def reseller_stop_impersonation_get(
+    request: Request, next: str | None = Query(default=None)
+):
+    """Backwards-compatible GET stop-impersonation for link-based UI flows."""
+    return web_reseller_auth_service.reseller_stop_impersonation(
+        request, next or "/admin/resellers"
+    )
 
 
 @router.get("/refresh")
