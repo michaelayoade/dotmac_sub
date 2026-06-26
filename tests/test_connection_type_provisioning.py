@@ -298,6 +298,22 @@ class TestFramedIpParity:
         _ensure_framed_ip(db, attrs, mock_subscription)
         assert not [a for a in attrs if a["attribute"] == "Framed-IP-Address"]
 
+    def test_offer_rate_limit_fallback(self, mock_subscription):
+        from types import SimpleNamespace
+
+        from app.services.connection_type_provisioning import (
+            _offer_rate_limit_fallback,
+        )
+
+        db = MagicMock()
+        db.get.return_value = SimpleNamespace(
+            speed_download_mbps=50, speed_upload_mbps=25
+        )
+        assert _offer_rate_limit_fallback(db, mock_subscription) == "50M/25M"
+
+        db.get.return_value = None
+        assert _offer_rate_limit_fallback(db, mock_subscription) is None
+
     def test_build_emits_acct_interim_interval(self, mock_subscription, mock_profile):
         db = MagicMock()
         db.get.return_value = mock_profile

@@ -92,10 +92,32 @@ def test_skips_reserved_management_ont_and_assigned(db_session):
     assert addr.address == "10.2.0.4"  # first IP past the unsafe/taken ones
 
 
-def test_skips_address_with_inactive_assignment(db_session):
-    """An inactive assignment is a suspended customer's held IP — never reuse."""
+def test_reuses_address_with_only_inactive_assignment(db_session):
+    """An inactive assignment means the IP was *released* (suspended customers
+    keep ACTIVE assignments), so the allocator reuses it — the H1 fix for the
+    asymmetric-release pool-exhaustion bug."""
     pool = _pool(db_session, cidr="10.3.0.0/24")
-    held = IPv4Address(address="10.3.0.1", pool_id=pool.id)
+    released = IPv4Address(address="10.3.0.1", pool_id=pool.id)
+    db_session.add(released)
+    db_session.flush()
+    db_session.add(
+        IPAssignment(
+            subscriber_id=_subscriber(db_session).id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=released.id,
+            is_active=False,
+        )
+    )
+    db_session.flush()
+
+    addr = _allocate_ipv4_on_demand(db_session, pool)
+    assert addr.address == "10.3.0.1"  # released IP is re-handed-out, not skipped
+
+
+def test_skips_address_with_active_assignment(db_session):
+    """An ACTIVE assignment (live/suspended customer) still blocks reuse."""
+    pool = _pool(db_session, cidr="10.4.0.0/24")
+    held = IPv4Address(address="10.4.0.1", pool_id=pool.id)
     db_session.add(held)
     db_session.flush()
     db_session.add(
@@ -103,13 +125,13 @@ def test_skips_address_with_inactive_assignment(db_session):
             subscriber_id=_subscriber(db_session).id,
             ip_version=IPVersion.ipv4,
             ipv4_address_id=held.id,
-            is_active=False,
+            is_active=True,
         )
     )
     db_session.flush()
 
     addr = _allocate_ipv4_on_demand(db_session, pool)
-    assert addr.address == "10.3.0.2"
+    assert addr.address == "10.4.0.2"
 
 
 def test_reuses_and_attaches_loose_row(db_session):
@@ -182,3 +204,57 @@ def test_reactivation_address_validity_guard(db_session):
     assert _reactivation_address_is_valid(db_session, mgmt) is False
     assert _reactivation_address_is_valid(db_session, routed) is False
     assert _reactivation_address_is_valid(db_session, None) is False
+
+
+def test_find_available_address_reuses_released_address(db_session):
+    """The primary allocator path now returns an address whose only assignment is
+    inactive (released) — the read side of the asymmetric-release fix."""
+    from app.services.provisioning_helpers import _find_available_address
+
+    pool = _pool(db_session, cidr="10.8.0.0/24")
+    a1 = IPv4Address(address="10.8.0.1", pool_id=pool.id)
+    a2 = IPv4Address(address="10.8.0.2", pool_id=pool.id)
+    db_session.add_all([a1, a2])
+    db_session.flush()
+    db_session.add(
+        IPAssignment(
+            subscriber_id=_subscriber(db_session).id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=a1.id,
+            is_active=False,
+        )
+    )
+    db_session.flush()
+
+    addr = _find_available_address(db_session, IPVersion.ipv4, str(pool.id))
+    assert addr is not None
+    assert addr.address == "10.8.0.1"  # released address, not skipped to .2
+
+
+def test_partial_unique_allows_inactive_plus_active_on_same_address(db_session):
+    """Partial-unique index: a released (inactive) row may coexist with a fresh
+    active row on the same address; the relationship prefers the active one."""
+    pool = _pool(db_session, cidr="10.9.0.0/24")
+    addr = IPv4Address(address="10.9.0.1", pool_id=pool.id)
+    db_session.add(addr)
+    db_session.flush()
+    db_session.add_all(
+        [
+            IPAssignment(
+                subscriber_id=_subscriber(db_session).id,
+                ip_version=IPVersion.ipv4,
+                ipv4_address_id=addr.id,
+                is_active=False,
+            ),
+            IPAssignment(
+                subscriber_id=_subscriber(db_session).id,
+                ip_version=IPVersion.ipv4,
+                ipv4_address_id=addr.id,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()  # must NOT raise — only the active row is in the unique index
+
+    db_session.refresh(addr)
+    assert addr.assignment is not None and addr.assignment.is_active is True

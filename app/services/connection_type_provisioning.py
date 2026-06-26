@@ -546,6 +546,22 @@ def _append_additional_routes(
 _ACCT_INTERIM_SECONDS = "300"
 
 
+def _offer_rate_limit_fallback(db: Session, subscription: Subscription) -> str | None:
+    """Offer-derived MikroTik rate-limit ('{down}M/{up}M'), mirroring the
+    authoritative sweep's fallback when the profile defines no rate-limit."""
+    offer_id = getattr(subscription, "offer_id", None)
+    if not offer_id:
+        return None
+    from app.models.catalog import CatalogOffer
+
+    offer = db.get(CatalogOffer, offer_id)
+    down = getattr(offer, "speed_download_mbps", None) if offer else None
+    up = getattr(offer, "speed_upload_mbps", None) if offer else None
+    if down and up:
+        return f"{down}M/{up}M"
+    return None
+
+
 def _active_ipassignment_ipv4(db: Session, subscription: Subscription) -> str | None:
     """The subscriber's active IPAM IPv4 address, or None.
 
@@ -649,6 +665,20 @@ def build_radius_reply_attributes(
 
     # Append vendor-specific attributes
     _append_vendor_attributes(attrs, profile, connection_type)
+
+    # Parity: when the profile defines no rate-limit, fall back to the offer's
+    # speeds (the authoritative sweep does this) so a rate-limited connection type
+    # isn't left unthrottled until the next 15-min sweep corrects it.
+    if connection_type in (
+        ConnectionType.pppoe,
+        ConnectionType.hotspot,
+        ConnectionType.ipoe,
+    ) and not any(a["attribute"] == "Mikrotik-Rate-Limit" for a in attrs):
+        offer_rate = _offer_rate_limit_fallback(db, subscription)
+        if offer_rate:
+            attrs.append(
+                {"attribute": "Mikrotik-Rate-Limit", "op": ":=", "value": offer_rate}
+            )
 
     # Append Option 82 relay agent attributes for IPoE
     _append_option82_attributes(db, attrs, subscription, connection_type)
