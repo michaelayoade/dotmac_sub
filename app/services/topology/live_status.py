@@ -53,6 +53,15 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _sla_log_enabled() -> bool:
+    try:
+        from app.config import settings
+
+        return bool(settings.sla_availability_log_enabled)
+    except Exception:  # config is advisory here; never fail the warm over it
+        return False
+
+
 def _chunks(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
@@ -136,6 +145,13 @@ def warm_topology_status(session: Session, client) -> dict:
         # node entered its current state — the dwell clock the customer-facing
         # connection-status debounce relies on (see topology.selfcare).
         if n.live_status != status:
+            # Bridge the transition into an uptime Alert interval so the SLA
+            # report has real downtime to merge (flag-gated, additive — never
+            # alters live_status). See availability_log / INFRASTRUCTURE_SLA.
+            if _sla_log_enabled():
+                from app.services.topology.availability_log import record_transition
+
+                record_transition(session, n, status, now=now)
             n.live_status = status
             n.live_status_at = now
         counts[status] += 1
