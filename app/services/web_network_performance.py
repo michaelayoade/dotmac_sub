@@ -26,7 +26,6 @@ from app.models.network import OntAssignment
 from app.models.network_monitoring import (
     Alert,
     AlertStatus,
-    DeviceStatus,
     DeviceType,
     MetricType,
     NetworkDevice,
@@ -277,30 +276,43 @@ def ranking(db: Session, tier: str, window_key: str, *, limit: int = 100) -> dic
 _STATE_UP = "up"
 _STATE_DOWN = "down"
 _STATE_DEGRADED = "degraded"
-_STATE_UNKNOWN = "unknown"
-_STATE_ORDER = {_STATE_DOWN: 3, _STATE_DEGRADED: 2, _STATE_UP: 1, _STATE_UNKNOWN: 0}
+_STATE_UNMONITORED = "unmonitored"
+# Worst-first ordering for the BTS site roll-up: confirmed-bad outranks
+# confirmed-up, which outranks "no trustworthy signal".
+_STATE_ORDER = {
+    _STATE_DOWN: 4,
+    _STATE_DEGRADED: 3,
+    _STATE_UP: 2,
+    _STATE_UNMONITORED: 1,
+}
 
-# DeviceStatus (online/offline/degraded/maintenance) -> wallboard bucket, used
-# as a fallback when the warmed live_status cache is empty for a device.
-_DEVICE_STATUS_FALLBACK = {
-    DeviceStatus.online: _STATE_UP,
-    DeviceStatus.offline: _STATE_DOWN,
-    DeviceStatus.degraded: _STATE_DEGRADED,
-    DeviceStatus.maintenance: _STATE_UNKNOWN,
+# Operational status (the one reader) -> wallboard card bucket. A wallboard
+# only needs the coarse bucket; maintenance / unknown / unmonitored all collapse
+# to "unmonitored" (not-actively-bad, not-confirmed-up) — the device page keeps
+# the precise state. This is the one-reader rollout (issue #458).
+_OP_TO_CARD = {
+    "up": _STATE_UP,
+    "degraded": _STATE_DEGRADED,
+    "down": _STATE_DOWN,
+    "unmonitored": _STATE_UNMONITORED,
+    "maintenance": _STATE_UNMONITORED,
+    "unknown": _STATE_UNMONITORED,
 }
 
 
-def _device_state(live_status: str | None, status) -> str:
-    """Collapse a device's live_status (preferred) / status (fallback) into one
-    of up/down/degraded/unknown for the wallboard."""
-    if live_status == "down":
-        return _STATE_DOWN
-    if live_status == "problem":
-        return _STATE_DEGRADED
-    if live_status == "up":
-        return _STATE_UP
-    # live_status unknown/None -> fall back to the device's coarse status.
-    return _DEVICE_STATUS_FALLBACK.get(status, _STATE_UNKNOWN)
+def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
+    """Coarse wallboard bucket for a device, via the shared operational-status
+    reader — so the wallboard and the Network Devices page agree, and blind
+    spots count as ``unmonitored`` rather than false ``down``/``unknown``."""
+    from types import SimpleNamespace
+
+    from app.services.device_operational_status import derive_operational_status
+
+    op = derive_operational_status(
+        SimpleNamespace(status=status, live_status=live_status),
+        warm_stale=warm_stale,
+    )
+    return _OP_TO_CARD.get(op.status, _STATE_UNMONITORED)
 
 
 def _empty_card(tier: str, label: str) -> dict:
@@ -310,7 +322,7 @@ def _empty_card(tier: str, label: str) -> dict:
         _STATE_UP: 0,
         _STATE_DEGRADED: 0,
         _STATE_DOWN: 0,
-        _STATE_UNKNOWN: 0,
+        _STATE_UNMONITORED: 0,
         "total": 0,
     }
 
@@ -321,9 +333,12 @@ def _bump(card: dict, state: str) -> None:
 
 
 def wallboard(db: Session) -> dict:
-    """Live up/down/degraded/unknown counts per tier from warmed caches.
+    """Live up/down/degraded/unmonitored counts per tier from warmed caches.
 
-    Reads only the persisted ``live_status`` cache (warmed out-of-band) and
+    Buckets come from the shared operational-status reader (one reader, issue
+    #458) so the wallboard agrees with the Network Devices page and a device
+    with no/stale live signal counts as ``unmonitored``, not a false
+    ``down``/``unknown``. Reads only the warmed ``live_status`` cache and
     ONT-online ratios — never calls Zabbix on the request path.
     """
     devices = (
@@ -339,12 +354,15 @@ def wallboard(db: Session) -> dict:
         .all()
     )
 
+    from app.services.device_operational_status import warmer_is_stale
+
+    warm_stale = warmer_is_stale()
     olt_card = _empty_card("olt", TIERS["olt"][0])
     ap_card = _empty_card("ap", TIERS["ap"][0])
     # BTS: roll each pop_site up to the worst state among its devices.
     site_worst: dict[str, str] = {}
     for did, dtype, matched, pop_site_id, live_status, status in devices:
-        state = _device_state(live_status, status)
+        state = _device_state(status, live_status, warm_stale=warm_stale)
         if matched == "olt":
             _bump(olt_card, state)
         if dtype == DeviceType.access_point:
@@ -390,7 +408,7 @@ def _pon_wallboard_card(db: Session) -> dict:
         total = int(total or 0)
         online = int(online or 0)
         if total == 0:
-            state = _STATE_UNKNOWN
+            state = _STATE_UNMONITORED  # PON port with no ONTs — nothing to observe
         elif online == total:
             state = _STATE_UP
         elif online == 0:
