@@ -86,6 +86,18 @@
     els.send.disabled = !on;
   }
 
+  function cookieValue(name) {
+    var escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    var match = document.cookie.match(new RegExp("(?:^|;\\s*)" + escaped + "=([^;]+)"));
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function csrfToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) return meta.content;
+    return cookieValue("csrf_token");
+  }
+
   // ── CRM REST (direct, X-Visitor-Token) ─────────────────────────────────
   function crm(path, opts) {
     opts = opts || {};
@@ -205,7 +217,12 @@
     return fetch(sessionEndpoint, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: (function () {
+        var headers = { "Content-Type": "application/json" };
+        var token = csrfToken();
+        if (token) headers["X-CSRF-Token"] = token;
+        return headers;
+      })(),
       body: "{}",
     })
       .then(function (r) {
