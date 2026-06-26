@@ -3007,6 +3007,11 @@ def consolidated_page_data(
             continue
         core_devices.append(nas_stub)
         core_device_keys.add(key)
+    # Derived NOC-facing operational status (projection over admin intent +
+    # live observation + warmer freshness). See DEVICE_OPERATIONAL_STATUS.md.
+    from app.services.device_operational_status import annotate_operational_status
+
+    annotate_operational_status(core_devices)
     core_roles = {
         "core": len([d for d in core_devices if d.role and d.role.value == "core"]),
         "distribution": len(
