@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.db import SessionLocal  # noqa: E402
 from app.services import email as email_service  # noqa: E402
-from app.services.branding_config import get_brand  # noqa: E402
 
 
 SUBJECT = "Welcome - Access Your Reseller Portal"
