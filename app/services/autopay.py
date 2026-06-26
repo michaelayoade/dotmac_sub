@@ -46,7 +46,7 @@ from app.services import billing as billing_service
 from app.services import paystack, settings_spec
 from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
-from app.services.billing_settings import account_has_live_service
+from app.services.billing_settings import account_has_collectible_service
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -317,9 +317,12 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
         return {"charged": 0, "failed": 0, "skipped": "not_enabled"}
 
     # Never auto-charge an account whose services are all terminal
-    # (disabled/canceled/expired/…). A dead service shouldn't keep capturing
-    # the saved card even if an open balance and an active mandate linger.
-    if not account_has_live_service(db, coerce_uuid(account_id)):
+    # (stopped/disabled/canceled/expired/…). A dead service shouldn't keep
+    # capturing the saved card even if an open balance and mandate linger.
+    # ``blocked`` is intentionally still collectible — a blocked account is a
+    # recoverable non-payment hold, and auto-charging it is exactly how it gets
+    # back to good standing (see COLLECTIBLE_SERVICE_STATUSES).
+    if not account_has_collectible_service(db, coerce_uuid(account_id)):
         return {"charged": 0, "failed": 0, "skipped": "no_live_service"}
 
     attempt = int(mandate.failure_count or 0)

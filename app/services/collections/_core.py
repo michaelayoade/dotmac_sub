@@ -35,6 +35,7 @@ from app.schemas.collections import (
     DunningRunResponse,
 )
 from app.services import enforcement_window, settings_spec
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -193,15 +194,7 @@ def _resolve_policy_set_for_account(db: Session, account_id: str):
     subscriptions = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account_id)
-        .filter(
-            Subscription.status.in_(
-                [
-                    SubscriptionStatus.active,
-                    SubscriptionStatus.suspended,
-                    SubscriptionStatus.pending,
-                ]
-            )
-        )
+        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
         .options(
             selectinload(Subscription.offer_version),
             selectinload(Subscription.offer),
@@ -212,6 +205,7 @@ def _resolve_policy_set_for_account(db: Session, account_id: str):
         SubscriptionStatus.active: 0,
         SubscriptionStatus.suspended: 1,
         SubscriptionStatus.pending: 2,
+        SubscriptionStatus.blocked: 3,
     }
     subscriptions.sort(
         key=lambda sub: (
@@ -1350,13 +1344,10 @@ class DunningWorkflow(ListResponseMixin):
                 db.query(Subscription.subscriber_id)
                 .filter(enforce_mode_filter)
                 .filter(
-                    Subscription.status.in_(
-                        [
-                            SubscriptionStatus.active,
-                            SubscriptionStatus.suspended,
-                            SubscriptionStatus.pending,
-                        ]
-                    )
+                    # ``blocked`` (recoverable non-payment) stays in scope so a
+                    # walled non-payer still gets dunning cases that can recover
+                    # them. See COLLECTIBLE_SERVICE_STATUSES.
+                    Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES)
                 )
                 .distinct()
                 .all()

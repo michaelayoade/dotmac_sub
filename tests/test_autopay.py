@@ -173,6 +173,27 @@ def test_run_skips_account_with_no_live_service(
     )
 
 
+def test_run_charges_blocked_account(db_session, subscriber, subscription, monkeypatch):
+    """``blocked`` is a recoverable non-payment hold, not a dead service —
+    autopay must still try to recover it (collectible), unlike truly-terminal
+    statuses. Regression guard for the 2026-06-26 collections leak where the
+    live-service gate excluded ``blocked`` and stopped auto-charging walled
+    non-payers entirely."""
+    subscription.status = SubscriptionStatus.blocked
+    db_session.add(subscription)
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    db_session.commit()
+    _mock_charge(monkeypatch, status="success")
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    assert result.get("skipped") != "no_live_service"
+    assert result["charged"] == 1
+    assert result["failed"] == 0
+
+
 def test_run_noop_when_not_enabled(db_session, subscriber, monkeypatch):
     _card(db_session, subscriber.id)
     _open_invoice(db_session, subscriber.id, Decimal("1000.00"))
