@@ -17,8 +17,6 @@ Revises: 176_availability_snapshots
 
 from __future__ import annotations
 
-import sqlalchemy as sa
-
 from alembic import op
 
 revision = "177_ipam_partial_active_unique"
@@ -28,36 +26,39 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_constraint(
-        "uq_ip_assignments_ipv4_address_id", "ip_assignments", type_="unique"
+    # Idempotent: the squashed-initial migration builds the schema via
+    # Base.metadata.create_all() from the *current* model, which already declares
+    # the partial-unique indexes — so on a fresh DB the old named constraints never
+    # exist and the new indexes already do. Guard with IF EXISTS / IF NOT EXISTS so
+    # this both no-ops on a fresh DB and converts an existing (full-unique) prod DB.
+    op.execute(
+        "ALTER TABLE ip_assignments "
+        "DROP CONSTRAINT IF EXISTS uq_ip_assignments_ipv4_address_id"
     )
-    op.drop_constraint(
-        "uq_ip_assignments_ipv6_address_id", "ip_assignments", type_="unique"
+    op.execute(
+        "ALTER TABLE ip_assignments "
+        "DROP CONSTRAINT IF EXISTS uq_ip_assignments_ipv6_address_id"
     )
-    op.create_index(
-        "uq_ip_assignments_ipv4_active",
-        "ip_assignments",
-        ["ipv4_address_id"],
-        unique=True,
-        postgresql_where=sa.text("is_active"),
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_ip_assignments_ipv4_active "
+        "ON ip_assignments (ipv4_address_id) WHERE is_active"
     )
-    op.create_index(
-        "uq_ip_assignments_ipv6_active",
-        "ip_assignments",
-        ["ipv6_address_id"],
-        unique=True,
-        postgresql_where=sa.text("is_active"),
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_ip_assignments_ipv6_active "
+        "ON ip_assignments (ipv6_address_id) WHERE is_active"
     )
 
 
 def downgrade() -> None:
-    # Note: fails if multiple inactive rows per address were created while the
-    # partial-unique index was in effect (the full-unique can no longer hold).
-    op.drop_index("uq_ip_assignments_ipv4_active", table_name="ip_assignments")
-    op.drop_index("uq_ip_assignments_ipv6_active", table_name="ip_assignments")
-    op.create_unique_constraint(
-        "uq_ip_assignments_ipv4_address_id", "ip_assignments", ["ipv4_address_id"]
+    # Note: re-adding the full-unique fails if multiple inactive rows per address
+    # were created while the partial-unique index was in effect.
+    op.execute("DROP INDEX IF EXISTS uq_ip_assignments_ipv4_active")
+    op.execute("DROP INDEX IF EXISTS uq_ip_assignments_ipv6_active")
+    op.execute(
+        "ALTER TABLE ip_assignments ADD CONSTRAINT uq_ip_assignments_ipv4_address_id "
+        "UNIQUE (ipv4_address_id)"
     )
-    op.create_unique_constraint(
-        "uq_ip_assignments_ipv6_address_id", "ip_assignments", ["ipv6_address_id"]
+    op.execute(
+        "ALTER TABLE ip_assignments ADD CONSTRAINT uq_ip_assignments_ipv6_address_id "
+        "UNIQUE (ipv6_address_id)"
     )
