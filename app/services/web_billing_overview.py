@@ -13,10 +13,10 @@ from time import monotonic
 from uuid import UUID
 
 from sqlalchemy import func, or_
+from sqlalchemy.orm import selectinload
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, PaymentAllocation
 from app.models.subscriber import Reseller, Subscriber, UserType
-from app.services import billing as billing_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
 
@@ -41,6 +41,21 @@ _UNPAID_INVOICE_STATUSES = (
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 )
+
+# Statuses that represent real accounts-receivable for the aging report (draft
+# is excluded — not yet billed/owed). Aging must query THESE directly: loading
+# all invoices ordered oldest-first and capping (the previous approach) hid all
+# current debt behind years of historical/paid invoices, so every bucket read
+# ₦0 despite live arrears.
+_AR_OPEN_STATUSES = (
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+)
+# Safety bound on rows loaded for the report. Open AR (debtors only) is far
+# smaller than the full invoice history; if this is ever hit we log so the cap
+# isn't silent and we can move totals to a SQL aggregation.
+_AR_AGING_MAX_INVOICES = 20000
 
 
 def _add_months(value: date, months: int) -> date:
@@ -488,16 +503,29 @@ def build_ar_aging_data(
         debtor_period if debtor_period in {"all", "this_month", "last_month"} else "all"
     )
 
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=None,
-        status=None,
-        is_active=None,
-        order_by="due_at",
-        order_dir="asc",
-        limit=2000,
-        offset=0,
+    # Query open AR directly (issued/partially_paid/overdue with a balance), so
+    # current debt is never hidden behind paid history. Oldest-due first means a
+    # cap (if ever hit) keeps the most-overdue rows, which matter most here.
+    invoices = (
+        db.query(Invoice)
+        .options(
+            selectinload(Invoice.payment_allocations).selectinload(
+                PaymentAllocation.payment
+            )
+        )
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_(_AR_OPEN_STATUSES))
+        .filter(Invoice.balance_due > 0)
+        .order_by(Invoice.due_at.asc())
+        .limit(_AR_AGING_MAX_INVOICES)
+        .all()
     )
+    if len(invoices) >= _AR_AGING_MAX_INVOICES:
+        logger.warning(
+            "AR aging hit the %s-invoice cap; totals may understate open AR — "
+            "move bucket totals to a SQL aggregation.",
+            _AR_AGING_MAX_INVOICES,
+        )
 
     today = datetime.now(UTC).date()
     period_filtered_invoices = [
