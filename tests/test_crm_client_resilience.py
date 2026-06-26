@@ -177,3 +177,67 @@ class TestResponseCache:
             c.list_work_orders(subscriber_id="s1")
 
         assert calls["n"] == 2  # no cache → each call goes upstream
+
+
+# ---------------------------------------------------------------------------
+# Widget chat session
+# ---------------------------------------------------------------------------
+
+
+class TestWidgetSession:
+    def test_internal_session_falls_back_to_public_widget_flow(self, monkeypatch):
+        c = _client()
+        monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.io")
+        calls = []
+
+        def fake_request(method, path, params=None, json_data=None, headers=None):
+            calls.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "json_data": json_data,
+                    "headers": headers,
+                }
+            )
+            if path == "/api/v1/widget/internal/session":
+                raise CRMClientError("shadowed route")
+            if path == "/api/v1/widget/cfg-123/session":
+                assert headers == {"Origin": "https://selfcare.dotmac.io"}
+                return {
+                    "session_id": "sess-1",
+                    "visitor_token": "vt-1",
+                    "conversation_id": None,
+                }
+            if path == "/api/v1/widget/session/sess-1/identify":
+                assert headers == {
+                    "Origin": "https://selfcare.dotmac.io",
+                    "X-Visitor-Token": "vt-1",
+                }
+                assert json_data == {
+                    "email": "cust@example.com",
+                    "name": "Cust Omer",
+                    "custom_fields": {
+                        "surface": "customer",
+                        "crm_subscriber_id": "crm-sub-1",
+                    },
+                }
+                return {"session_id": "sess-1", "conversation_id": "conv-1"}
+            raise AssertionError(path)
+
+        with patch.object(c, "_request", side_effect=fake_request):
+            result = c.create_widget_session(
+                config_id="cfg-123",
+                email="cust@example.com",
+                name="Cust Omer",
+                crm_subscriber_id="crm-sub-1",
+                metadata={"surface": "customer"},
+            )
+
+        assert result["session_id"] == "sess-1"
+        assert result["visitor_token"] == "vt-1"
+        assert result["conversation_id"] == "conv-1"
+        assert [call["path"] for call in calls] == [
+            "/api/v1/widget/internal/session",
+            "/api/v1/widget/cfg-123/session",
+            "/api/v1/widget/session/sess-1/identify",
+        ]
