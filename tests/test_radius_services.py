@@ -1046,6 +1046,46 @@ class TestExternalSyncUsersStatusAware:
         assert _read_radcheck(radius_db) == []
         assert _read_radreply(radius_db) == []
 
+    def test_suspended_optin_subscriber_gets_walled_garden_not_reject(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        # Opted-in suspended customer should reach the captive pay-page (usable
+        # password + Address-List), not be hard-rejected — parity with the sweep.
+        subscriber.captive_redirect_enabled = True
+        db_session.flush()
+        cred, radius_db = self._seed(
+            db_session,
+            tmp_path,
+            subscriber,
+            catalog_offer,
+            SubscriptionStatus.suspended,
+        )
+        config = _fake_external_config(radius_db)
+
+        with patch(
+            "app.services.connection_type_provisioning.build_radius_reply_attributes",
+            return_value=[
+                {"attribute": "Service-Type", "op": ":=", "value": "Framed-User"},
+                {
+                    "attribute": "Framed-Route",
+                    "op": "+=",
+                    "value": "10.0.0.0/30 0.0.0.0 1",
+                },
+            ],
+        ):
+            result = radius_service._external_sync_users(db_session, config, [cred])
+
+        assert result == {"external_users_synced": 1}
+        rows = _read_radcheck(radius_db)
+        assert any(r[1] == "Cleartext-Password" for r in rows)
+        assert not any(r[1] == "Auth-Type" and r[3] == "Reject" for r in rows)
+        reply = _read_radreply(radius_db)
+        assert any(
+            r[1] == "Mikrotik-Address-List" and r[3] == "suspended" for r in reply
+        )
+        # Captive must not route extra blocks.
+        assert not any(r[1] == "Framed-Route" for r in reply)
+
 
 class TestRadiusSyncSubscriptionSelection:
     """_radius_sync_subscription_for_subscriber must prefer an active
