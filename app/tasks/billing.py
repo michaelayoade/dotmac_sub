@@ -94,13 +94,19 @@ def check_billing_switch_task() -> dict:
         enforcement = billing_enforcement_health(session)
         notification = notification_delivery_health(session)
         # "Single master" guarantee: once billing is live, no capture component
-        # (autopay/dunning/overdue) may be silently switched off. Fail-open, so
-        # this only catches a deliberate disable.
-        disabled_components = (
-            disabled_billing_components(session) if switch["actual"] else []
-        )
+        # (invoicing/autopay/collections/overdue/…) may be silently switched off.
+        # Alert-only (like notification health) — surfaced as a CRITICAL log, not
+        # folded into `ok`. Failure-isolated so a read error can't crash the
+        # hourly guard or mask the alerts below.
+        try:
+            disabled_components = (
+                disabled_billing_components(session) if switch["actual"] else []
+            )
+        except Exception:
+            logger.exception("disabled_billing_components check failed")
+            disabled_components = []
         result = {
-            "ok": bool(switch["ok"]) and enforcement.ok and not disabled_components,
+            "ok": bool(switch["ok"]) and enforcement.ok,
             "billing_switch": switch,
             "disabled_billing_components": disabled_components,
             "billing_enforcement_health": {
