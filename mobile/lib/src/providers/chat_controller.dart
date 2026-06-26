@@ -109,6 +109,7 @@ class ChatController extends FamilyNotifier<ChatState, String>
         messages: history,
         loading: false,
         error: null,
+        agentReadAt: _readWatermark(history),
       );
       unawaited(_repo.markRead(session));
       _startPolling();
@@ -139,11 +140,25 @@ class ChatController extends FamilyNotifier<ChatState, String>
     try {
       final history = await _repo.history(session);
       final grew = history.length != state.messages.length;
-      state = state.copyWith(messages: history);
+      state = state.copyWith(
+        messages: history,
+        agentReadAt: _readWatermark(history) ?? state.agentReadAt,
+      );
       if (grew) unawaited(_repo.markRead(session));
     } catch (_) {
       // Transient; the next tick retries.
     }
+  }
+
+  /// Latest time an agent read one of OUR messages — the "Seen" watermark.
+  static DateTime? _readWatermark(List<ChatMessage> messages) {
+    DateTime? latest;
+    for (final m in messages) {
+      if (m.fromAgent) continue;
+      final r = m.readAt;
+      if (r != null && (latest == null || r.isAfter(latest))) latest = r;
+    }
+    return latest;
   }
 
   Future<void> send(String text) async {
