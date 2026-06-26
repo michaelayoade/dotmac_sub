@@ -994,6 +994,66 @@ def build_beat_schedule() -> dict:
             enabled=subscription_expiration_enabled,
             interval_seconds=subscription_expiration_interval_seconds,
         )
+        # Infrastructure availability snapshot - daily rollup powering the
+        # performance/SLA trend charts (see INFRASTRUCTURE_SLA_PERFORMANCE.md).
+        # Safe to run regardless of SLA_AVAILABILITY_LOG_ENABLED: it records the
+        # day's per-element availability (PON ONT-online ratio + alert-derived
+        # device/site uptime), accumulating trend history either way.
+        infra_availability_snapshot_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "infra_availability_snapshot_enabled",
+            "INFRA_AVAILABILITY_SNAPSHOT_ENABLED",
+            True,
+        )
+        infra_availability_snapshot_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network_monitoring,
+            "infra_availability_snapshot_interval_seconds",
+            "INFRA_AVAILABILITY_SNAPSHOT_INTERVAL_SECONDS",
+            86400,  # Daily
+        )
+        infra_availability_snapshot_interval_seconds = max(
+            infra_availability_snapshot_interval_seconds, 3600
+        )
+        _sync_scheduled_task(
+            session,
+            name="infra_availability_snapshot",
+            task_name=(
+                "app.tasks.infrastructure_availability."
+                "snapshot_infrastructure_availability"
+            ),
+            enabled=infra_availability_snapshot_enabled,
+            interval_seconds=infra_availability_snapshot_interval_seconds,
+        )
+        # Infrastructure availability snapshot retention prune (daily).
+        infra_availability_prune_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "infra_availability_prune_enabled",
+            "INFRA_AVAILABILITY_PRUNE_ENABLED",
+            True,
+        )
+        infra_availability_prune_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network_monitoring,
+            "infra_availability_prune_interval_seconds",
+            "INFRA_AVAILABILITY_PRUNE_INTERVAL_SECONDS",
+            86400,  # Daily
+        )
+        infra_availability_prune_interval_seconds = max(
+            infra_availability_prune_interval_seconds, 3600
+        )
+        _sync_scheduled_task(
+            session,
+            name="infra_availability_prune",
+            task_name=(
+                "app.tasks.infrastructure_availability."
+                "prune_infrastructure_availability"
+            ),
+            enabled=infra_availability_prune_enabled,
+            interval_seconds=infra_availability_prune_interval_seconds,
+        )
         # Vacation hold auto-resume - runs hourly to resume expired holds
         vacation_hold_resume_enabled = _effective_bool(
             session,
