@@ -663,6 +663,22 @@ def build_radius_reply_attributes(
             }
         )
 
+    # IPv6 PD: emit the subscriber's delegated prefix from the app's PD inventory
+    # (the app — not FreeRADIUS dynamic pools — is the source of truth). Flag-gated
+    # and additive (only when the subscriber has an assigned prefix).
+    if not any(a["attribute"] == "Delegated-IPv6-Prefix" for a in attrs):
+        from app.services.ipv6_pd import (
+            active_delegated_prefix_for_subscriber,
+            pd_enabled,
+        )
+
+        if pd_enabled():
+            pd = active_delegated_prefix_for_subscriber(db, subscription.subscriber_id)
+            if pd:
+                attrs.append(
+                    {"attribute": "Delegated-IPv6-Prefix", "op": ":=", "value": pd}
+                )
+
     # Append vendor-specific attributes
     _append_vendor_attributes(attrs, profile, connection_type)
 

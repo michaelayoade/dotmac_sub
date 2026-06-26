@@ -62,6 +62,7 @@ def _radreply_attrs(
     additional_routes: list[tuple[str, int | None]] | None = None,
     framed_ipv4: str | None = None,
     framed_ipv6: str | None = None,
+    delegated_ipv6: str | None = None,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -109,6 +110,9 @@ def _radreply_attrs(
         attrs.append(("Framed-IP-Address", ":=", ipv4))
     if ipv6:
         attrs.append(("Framed-IPv6-Prefix", ":=", ipv6))
+    delegated = (str(delegated_ipv6).strip() or None) if delegated_ipv6 else None
+    if delegated:
+        attrs.append(("Delegated-IPv6-Prefix", ":=", delegated))
 
     rate = _rate_limit(offer, profile)
     if rate:
@@ -271,6 +275,24 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             if sid and addr:
                 ipv4_by_subscriber.setdefault(sid, str(addr))
 
+        # IPv6 PD: the subscriber's assigned delegated prefix, emitted as
+        # Delegated-IPv6-Prefix. Flag-gated (inert until IPv6 PD is turned on).
+        pd_by_subscriber: dict = {}
+        from app.services.ipv6_pd import pd_enabled
+
+        if pd_enabled():
+            from app.models.network import Ipv6DelegatedPrefix, Ipv6PrefixState
+
+            for sid, prefix, plen in db.execute(
+                select(
+                    Ipv6DelegatedPrefix.subscriber_id,
+                    Ipv6DelegatedPrefix.prefix,
+                    Ipv6DelegatedPrefix.prefix_length,
+                ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+            ).all():
+                if sid and prefix:
+                    pd_by_subscriber.setdefault(sid, f"{prefix}/{plen}")
+
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
@@ -311,6 +333,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 captive_redirect_enabled=captive,
                 additional_routes=routes_by_subscriber.get(sub.subscriber_id),
                 framed_ipv4=eff_ipv4,
+                delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
             )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,
