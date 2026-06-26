@@ -78,6 +78,7 @@ from app.web.admin.notifications import router as notifications_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
+from app.web.admin.service_requests_queue import router as service_requests_queue_router
 from app.web.admin.support_automation import router as support_automation_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.system import router as system_router
@@ -356,6 +357,7 @@ router.include_router(
     ],
 )
 router.include_router(resellers_router)
+router.include_router(service_requests_queue_router)
 router.include_router(
     notifications_router,
     dependencies=[

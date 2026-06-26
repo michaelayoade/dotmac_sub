@@ -52,6 +52,15 @@ _ALLOWED_STATUS_TRANSITIONS: dict[ServiceRequestStatus, set[ServiceRequestStatus
 }
 
 
+def allowed_next_statuses(
+    status: ServiceRequestStatus | str,
+) -> list[ServiceRequestStatus]:
+    """Public view of the legal next statuses from ``status`` (for queue UIs)."""
+    if isinstance(status, str):
+        status = ServiceRequestStatus(status)
+    return sorted(_ALLOWED_STATUS_TRANSITIONS.get(status, set()), key=lambda s: s.value)
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
     dlat = rlat2 - rlat1

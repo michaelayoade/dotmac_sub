@@ -1,0 +1,118 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, detail_header, info_row, info_grid,
+    status_badge, card, animation_styles
+%}
+
+{% block title %}Service Request - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("indigo", "violet") }}
+
+<div class="relative space-y-8">
+
+    {% set st = req.status.value if req.status else 'new' %}
+    {% if st == 'completed' %}{% set badge_variant = "success" %}
+    {% elif st == 'rejected' %}{% set badge_variant = "error" %}
+    {% elif st == 'scheduled' %}{% set badge_variant = "info" %}
+    {% else %}{% set badge_variant = "pending" %}{% endif %}
+
+    {{ detail_header(
+        "Service Request",
+        subtitle="Reseller-submitted new-connection / install request",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>',
+        color="indigo",
+        back_href="/admin/service-requests",
+        back_label="Service Requests",
+        status=status_badge(st | replace('_', ' ') | title, variant=badge_variant)
+    ) }}
+
+    {# Flash messages #}
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-200">{{ error }}</div>
+    {% endif %}
+    {% if message %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">{{ message }}</div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+
+        {# Request details #}
+        <div class="lg:col-span-2 space-y-6">
+        {% call card(title="Request Details", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2"/></svg>', color="indigo") %}
+            {% call info_grid() %}
+                {{ info_row("Reseller", req.reseller.name if req.reseller else "—") }}
+                {{ info_row("Contact name", req.contact_name or "—") }}
+                {{ info_row("Contact phone", req.contact_phone or "—") }}
+                {{ info_row("Contact email", req.contact_email or "—") }}
+                {{ info_row("Address", req.address or "—") }}
+                {% set sa = req.serviceability.value if req.serviceability else 'unknown' %}
+                {{ info_row("Serviceability", sa | replace('_', ' ') | title) }}
+                {{ info_row("Submitted", req.created_at.strftime('%Y-%m-%d %H:%M') if req.created_at else "—") }}
+                {{ info_row("Last updated", req.updated_at.strftime('%Y-%m-%d %H:%M') if req.updated_at else "—") }}
+            {% endcall %}
+            {% if req.latitude is not none and req.longitude is not none %}
+            <div class="mt-4">
+                <a href="https://www.openstreetmap.org/?mlat={{ req.latitude }}&mlon={{ req.longitude }}#map=17/{{ req.latitude }}/{{ req.longitude }}"
+                   target="_blank" rel="noopener"
+                   class="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    View on map ({{ "%.5f"|format(req.latitude) }}, {{ "%.5f"|format(req.longitude) }})
+                </a>
+            </div>
+            {% endif %}
+        {% endcall %}
+
+        {% if req.notes %}
+        {% call card(title="Customer Notes", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h10M5 4h14a1 1 0 011 1v14l-4-2-4 2-4-2-4 2V5a1 1 0 011-1z"/></svg>', color="slate") %}
+            <p class="whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300">{{ req.notes }}</p>
+        {% endcall %}
+        {% endif %}
+
+        {% if req.admin_notes %}
+        {% call card(title="Internal Notes", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', color="amber") %}
+            <p class="whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300">{{ req.admin_notes }}</p>
+        {% endcall %}
+        {% endif %}
+        </div>
+
+        {# Status management #}
+        <div class="space-y-6">
+        {% call card(title="Update Status", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="indigo") %}
+            {% if allowed_next %}
+            <form method="post" action="/admin/service-requests/{{ req.id }}/status" class="space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Move to</label>
+                    <select name="status" required
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for s in allowed_next %}
+                        <option value="{{ s }}">{{ s | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Internal note (shared with reseller)</label>
+                    <textarea name="admin_notes" rows="3" maxlength="2000"
+                              placeholder="Optional note added to the reseller notification"
+                              class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ req.admin_notes or '' }}</textarea>
+                </div>
+                <button type="submit"
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors">
+                    Update &amp; Notify Reseller
+                </button>
+            </form>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                This request is <span class="font-semibold">{{ st | title }}</span> (terminal) — no further status changes are allowed. Open a new request instead.
+            </p>
+            {% endif %}
+        {% endcall %}
+        </div>
+
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

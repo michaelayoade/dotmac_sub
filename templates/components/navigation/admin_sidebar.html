@@ -6,6 +6,7 @@
     'subscribers': 'customers', 'customers': 'customers', 'contacts': 'customers',
     'provisioning': 'system', 'provisioning-migrate': 'system', 'workflows': 'system', 'appointments': 'system',
     'support-tickets': 'support-tickets',
+    'service-requests': 'service-requests',
     'billing': 'billing', 'accounts': 'billing', 'invoices': 'billing', 'payments': 'billing',
     'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing', 'billing-cache': 'billing',
     'payment_arrangements': 'billing', 'payment_proofs': 'billing', 'payment_providers': 'billing', 'payment_channels': 'billing',
@@ -167,6 +168,7 @@
     {{ nav_link("Customers", "/admin/customers", icon_customers, "customers", tour_id="nav-customers") }}
     {% endif %}
     {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
+    {{ nav_link("Service Requests", "/admin/service-requests", icon_provisioning, "service-requests") }}
 
     {{ section_label("Operations") }}
     {% if module_states.get('billing', True) %}
