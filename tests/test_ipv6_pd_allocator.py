@@ -109,3 +109,65 @@ def test_ipv4_pool_yields_no_prefixes(db_session):
         ipv6_pd.allocate_delegated_prefix(db_session, pool=pool, subscriber_id=sub.id)
         is None
     )
+
+
+def test_pd_enabled_flag(monkeypatch):
+    monkeypatch.delenv("IPV6_PD_ENABLED", raising=False)
+    assert ipv6_pd.pd_enabled() is False
+    monkeypatch.setenv("IPV6_PD_ENABLED", "true")
+    assert ipv6_pd.pd_enabled() is True
+    monkeypatch.setenv("IPV6_PD_ENABLED", "0")
+    assert ipv6_pd.pd_enabled() is False
+
+
+def test_radreply_emits_delegated_prefix():
+    import types
+
+    from app.models.catalog import SubscriptionStatus
+    from app.services.radius_population import _radreply_attrs
+
+    sub = types.SimpleNamespace(
+        ipv4_address="10.0.0.5",
+        ipv6_address=None,
+        status=SubscriptionStatus.active,
+        subscriber_id="sub-x",
+    )
+    attrs = _radreply_attrs(sub, None, None, delegated_ipv6="2001:db8::/64")
+    assert ("Delegated-IPv6-Prefix", ":=", "2001:db8::/64") in attrs
+    # no PD -> not emitted
+    attrs2 = _radreply_attrs(sub, None, None)
+    assert not [a for a in attrs2 if a[0] == "Delegated-IPv6-Prefix"]
+
+
+def test_build_reply_emits_pd_only_when_flag_on(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    from app.services import connection_type_provisioning as ctp
+
+    pool = _pool(db_session)
+    ipv6_pd.allocate_delegated_prefix(
+        db_session, pool=pool, subscriber_id=subscriber.id
+    )
+
+    from app.models.catalog import Subscription, SubscriptionStatus
+
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        login="1000777",
+        ipv4_address="10.0.0.5",
+    )
+    db_session.add(subscription)
+    db_session.commit()
+
+    monkeypatch.setenv("IPV6_PD_ENABLED", "true")
+    attrs = ctp.build_radius_reply_attributes(db_session, subscription)
+    assert any(
+        a["attribute"] == "Delegated-IPv6-Prefix" and a["value"] == "2001:db8::/64"
+        for a in attrs
+    )
+
+    monkeypatch.setenv("IPV6_PD_ENABLED", "0")
+    attrs_off = ctp.build_radius_reply_attributes(db_session, subscription)
+    assert not [a for a in attrs_off if a["attribute"] == "Delegated-IPv6-Prefix"]

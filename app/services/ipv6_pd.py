@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import itertools
+import os
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -30,6 +31,18 @@ from sqlalchemy.orm import Session
 from app.models.network import IpPool, Ipv6DelegatedPrefix, Ipv6PrefixState
 
 DEFAULT_DELEGATION_PREFIX_LENGTH = 64
+
+
+def pd_enabled() -> bool:
+    """Feature flag (default OFF) gating IPv6 PD RADIUS emission + provisioning.
+    Inert until IPv6 is actually turned on for the fleet."""
+    return os.getenv("IPV6_PD_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 # Bound the scan for the next free prefix so a huge parent (e.g. a /32 carved
 # into /64s) can't pull an unbounded candidate set.
