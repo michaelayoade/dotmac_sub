@@ -11,10 +11,17 @@ import '../../repositories/chat_repository.dart';
 /// Live chat with support. Brokers a session, loads history, and polls for new
 /// messages while foregrounded; background delivery arrives via FCM push.
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key, this.sessionEndpoint = '/me/chat/session'});
+  const ChatScreen({
+    super.key,
+    this.sessionEndpoint = '/me/chat/session',
+    this.fallbackRoute = '/support',
+  });
 
   /// Broker path — `/me/chat/session` (customer) or `/reseller/chat/session`.
   final String sessionEndpoint;
+
+  /// Route to use when the screen was reached without a navigation stack.
+  final String fallbackRoute;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -143,8 +150,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         // via go() with no stack (fall back to the Support tab).
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () =>
-              context.canPop() ? context.pop() : context.go('/support'),
+          onPressed: () => context.canPop()
+              ? context.pop()
+              : context.go(widget.fallbackRoute),
         ),
       ),
       body: _loading

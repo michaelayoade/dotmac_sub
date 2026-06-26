@@ -174,6 +174,13 @@ final routerProvider = Provider<GoRouter>((ref) {
             builder: (_, __) => const ResellerBillingScreen(),
           ),
           GoRoute(
+            path: 'chat',
+            builder: (_, __) => const ChatScreen(
+              sessionEndpoint: '/reseller/chat/session',
+              fallbackRoute: '/reseller',
+            ),
+          ),
+          GoRoute(
             path: 'vas',
             builder: (_, __) => const ResellerVasScreen(),
           ),
