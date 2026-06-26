@@ -581,7 +581,7 @@ def _ensure_framed_ip(
     0.0.0.0.
     """
     column_ip = (subscription.ipv4_address or "").strip()
-    if column_ip == "0.0.0.0":  # noqa: S104 — IP-string compare, not a bind
+    if column_ip == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare
         column_ip = ""
     effective = column_ip or (_active_ipassignment_ipv4(db, subscription) or "")
 
@@ -600,7 +600,7 @@ def _ensure_framed_ip(
             a
             for a in attrs
             if not (
-                a["attribute"] == "Framed-IP-Address" and a["value"] == "0.0.0.0"  # noqa: S104 — IP-string compare, not a bind
+                a["attribute"] == "Framed-IP-Address" and a["value"] == "0.0.0.0"  # nosec B104  # noqa: S104 — IP-compare
             )
         ]
 
