@@ -1780,6 +1780,9 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "name": form.get("name", "").strip(),
         "ip_version": form.get("ip_version", "").strip(),
         "cidr": form.get("cidr", "").strip(),
+        "delegation_prefix_length": _parse_prefix_length(
+            form.get("delegation_prefix_length")
+        ),
         "gateway": form.get("gateway", "").strip() or None,
         "dns_primary": form.get("dns_primary", "").strip() or None,
         "dns_secondary": form.get("dns_secondary", "").strip() or None,
@@ -1797,6 +1800,17 @@ def parse_ip_pool_form(form) -> dict[str, object]:
     }
 
 
+def _parse_prefix_length(raw: object) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if 1 <= value <= 128 else None
+
+
 def parse_ipv6_network_form(form) -> dict[str, object]:
     network = str(form.get("network") or "").strip()
     prefix = str(form.get("prefix_length") or "").strip() or "64"
@@ -1805,6 +1819,9 @@ def parse_ipv6_network_form(form) -> dict[str, object]:
         "name": str(form.get("title") or "").strip(),
         "ip_version": "ipv6",
         "cidr": cidr,
+        "delegation_prefix_length": _parse_prefix_length(
+            form.get("delegation_prefix_length")
+        ),
         "gateway": str(form.get("gateway") or "").strip() or None,
         "dns_primary": str(form.get("dns_primary") or "").strip() or None,
         "dns_secondary": str(form.get("dns_secondary") or "").strip() or None,
@@ -1882,6 +1899,7 @@ def pool_form_snapshot(
         "name": values.get("name"),
         "ip_version": {"value": values.get("ip_version")},
         "cidr": values.get("cidr"),
+        "delegation_prefix_length": values.get("delegation_prefix_length"),
         "gateway": values.get("gateway"),
         "dns_primary": values.get("dns_primary"),
         "dns_secondary": values.get("dns_secondary"),
@@ -1910,6 +1928,7 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         "name": pool.name,
         "ip_version": {"value": pool.ip_version.value},
         "cidr": pool.cidr,
+        "delegation_prefix_length": getattr(pool, "delegation_prefix_length", None),
         "gateway": pool.gateway,
         "dns_primary": pool.dns_primary,
         "dns_secondary": pool.dns_secondary,
@@ -2385,6 +2404,86 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         "fallback_pool_ids": fallback_pool_ids,
         "stats": stats,
     }
+
+
+def build_ipv6_pd_data(db, *, pool_id: str | None = None) -> dict[str, object]:
+    """Admin view of IPv6 prefix-delegation: the v6 pools and the delegated
+    prefixes (state + owner)."""
+    from app.models.network import (
+        IpPool,
+        Ipv6DelegatedPrefix,
+        Ipv6PrefixState,
+        IPVersion,
+    )
+    from app.models.subscriber import Subscriber
+    from app.services.ipv6_pd import pd_enabled, pool_delegation_length
+
+    pools = (
+        db.query(IpPool)
+        .filter(IpPool.ip_version == IPVersion.ipv6)
+        .filter(IpPool.is_active.is_(True))
+        .order_by(IpPool.name.asc())
+        .all()
+    )
+
+    rows_q = db.query(Ipv6DelegatedPrefix)
+    selected_pool = None
+    if pool_id:
+        selected_pool = coerce_uuid(pool_id)
+        rows_q = rows_q.filter(Ipv6DelegatedPrefix.pool_id == selected_pool)
+    rows = rows_q.order_by(Ipv6DelegatedPrefix.prefix.asc()).limit(500).all()
+
+    sub_ids = {r.subscriber_id for r in rows if r.subscriber_id}
+    names: dict = {}
+    if sub_ids:
+        for sub in db.query(Subscriber).filter(Subscriber.id.in_(sub_ids)).all():
+            names[sub.id] = _subscriber_display_name(sub)
+
+    assigned_by_pool: dict = {}
+    for r in rows:
+        if r.state == Ipv6PrefixState.assigned:
+            assigned_by_pool[r.pool_id] = assigned_by_pool.get(r.pool_id, 0) + 1
+
+    pd_rows = [
+        {
+            "id": str(r.id),
+            "pool_id": str(r.pool_id),
+            "cidr": f"{r.prefix}/{r.prefix_length}",
+            "state": r.state.value,
+            "subscriber_id": str(r.subscriber_id) if r.subscriber_id else None,
+            "subscriber_name": names.get(r.subscriber_id),
+        }
+        for r in rows
+    ]
+    pd_pools = [
+        {
+            "id": str(p.id),
+            "name": p.name,
+            "cidr": p.cidr,
+            "delegation_prefix_length": pool_delegation_length(p),
+            "assigned": assigned_by_pool.get(p.id, 0),
+        }
+        for p in pools
+    ]
+    return {
+        "pd_pools": pd_pools,
+        "pd_rows": pd_rows,
+        "pd_pool_filter": str(selected_pool) if selected_pool else None,
+        "pd_enabled": pd_enabled(),
+    }
+
+
+def release_delegated_prefix_action(db, prefix_id: str) -> str | None:
+    """Release one delegated prefix back to its pool. Returns an error or None."""
+    from app.models.network import Ipv6DelegatedPrefix
+    from app.services import ipv6_pd
+
+    row = db.get(Ipv6DelegatedPrefix, coerce_uuid(prefix_id))
+    if row is None:
+        return "Delegated prefix not found."
+    ipv6_pd.release_delegated_prefix(db, row)
+    db.commit()
+    return None
 
 
 def build_ipv6_networks_data(

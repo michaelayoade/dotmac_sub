@@ -111,6 +111,44 @@ def test_ipv4_pool_yields_no_prefixes(db_session):
     )
 
 
+def test_build_ipv6_pd_data_and_release(db_session):
+    from app.services import web_network_ip as w
+
+    pool = _pool(db_session)
+    sub = _sub(db_session)
+    ipv6_pd.allocate_delegated_prefix(db_session, pool=pool, subscriber_id=sub.id)
+    db_session.commit()
+
+    data = w.build_ipv6_pd_data(db_session)
+    assert any(p["assigned"] == 1 for p in data["pd_pools"])
+    row = next(r for r in data["pd_rows"] if r["cidr"] == "2001:db8::/64")
+    assert row["state"] == "assigned"
+    assert row["subscriber_name"]
+
+    err = w.release_delegated_prefix_action(db_session, row["id"])
+    assert err is None
+    data2 = w.build_ipv6_pd_data(db_session)
+    row2 = next(r for r in data2["pd_rows"] if r["cidr"] == "2001:db8::/64")
+    assert row2["state"] == "available"
+    assert row2["subscriber_name"] is None
+
+
+def test_pool_form_persists_delegation_length(db_session):
+    from app.services import web_network_ip as w
+
+    values = w.parse_ip_pool_form(
+        {
+            "name": "PD Pool",
+            "ip_version": "ipv6",
+            "cidr": "2001:db8:abcd::/48",
+            "delegation_prefix_length": "60",
+        }
+    )
+    pool, err = w.create_ip_pool(db_session, values)
+    assert err is None
+    assert pool.delegation_prefix_length == 60
+
+
 def test_pd_enabled_flag(monkeypatch):
     monkeypatch.delenv("IPV6_PD_ENABLED", raising=False)
     assert ipv6_pd.pd_enabled() is False

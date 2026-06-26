@@ -64,6 +64,15 @@
                     </div>
 
                     <div>
+                        <label for="delegation_prefix_length" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IPv6 Delegation Size</label>
+                        <input type="number" name="delegation_prefix_length" id="delegation_prefix_length" min="1" max="128"
+                            value="{{ pool.delegation_prefix_length if pool and pool.delegation_prefix_length else '' }}"
+                            placeholder="64"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">IPv6 pools only — per-customer prefix-delegation size carved from the CIDR (default /64).</p>
+                    </div>
+
+                    <div>
                         <label for="bm_prefix" class="block text-sm font-medium text-slate-700 dark:text-slate-300">BM/Subnet Mask</label>
                         <select id="bm_prefix"
                             onchange="if (document.getElementById('ip_version').value === 'ipv4') { const cidr = document.getElementById('cidr'); const base = (cidr.value || '10.0.0.0').split('/')[0]; cidr.value = base + '/' + this.value; }"
