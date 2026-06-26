@@ -96,6 +96,116 @@ def _enum_value(v) -> str | None:
     return getattr(v, "value", v)
 
 
+def _is_fresh(ts, now: datetime, seconds: int) -> bool:
+    """True if timestamp ``ts`` is within ``seconds`` of ``now`` (tz-safe)."""
+    if ts is None:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (now - ts) <= timedelta(seconds=seconds)
+
+
+# ── Per-type derivers (Phase 2b) ─────────────────────────────────────────────
+# OLT and ONT carry their own native liveness fields; unlike NetworkDevice they
+# are NOT Zabbix-warmed into `live_status`. Today both tabs render an admin-ish
+# value (OLT `runtime_status` = linked device admin status; ONT badge = is_active),
+# so deriving from the real telemetry is an accuracy fix, not a re-skin.
+
+# An ONT that informed ACS / was last seen within this window counts as reachable
+# even if the OLT last reported it offline (multi-source "reachable if any").
+_ONT_FRESH_SECONDS = 1800  # 30 min (~6 missed 5-min ACS informs)
+# An OLT poll/ping older than this is no longer trustworthy.
+_OLT_FRESH_SECONDS = 3600  # 1 hour
+
+
+def _live_status_to_operational(live: str | None, reason_suffix: str):
+    """Map a Zabbix-warmed live_status string to an operational bucket."""
+    if live == "up":
+        return OperationalStatus(UP, f"zabbix_up{reason_suffix}", None, False, None)
+    if live == "down":
+        return OperationalStatus(DOWN, f"zabbix_down{reason_suffix}", None, False, None)
+    if live == "problem":
+        return OperationalStatus(
+            DEGRADED, f"zabbix_problem{reason_suffix}", None, False, None
+        )
+    return None
+
+
+def derive_olt_operational_status(
+    olt,
+    *,
+    linked_live_status: str | None = None,
+    warm_stale: bool = False,
+    now: datetime | None = None,
+):
+    """Operational status for an OLT — direct ping/poll telemetry first, then a
+    fall-back to the linked Zabbix-monitored device (reachable if any source).
+
+    up   = pinged OK and last poll succeeded
+    degraded = pinged OK but SNMP/poll failing (reachable, partial telemetry)
+    down = ping failed
+    unmonitored = no fresh telemetry from *either* source
+
+    The fall-back matters in practice: OLT direct polling can be stale/dead while
+    the OLT is still observed by Zabbix via its linked NetworkDevice.
+    """
+    now = now or datetime.now(UTC)
+    last_ping_ok = getattr(olt, "last_ping_ok", None)
+    last_ping_at = getattr(olt, "last_ping_at", None)
+    poll = _enum_value(getattr(olt, "last_poll_status", None))
+
+    direct_fresh = _is_fresh(last_ping_at, now, _OLT_FRESH_SECONDS)
+    if direct_fresh and last_ping_ok is True:
+        if poll == "success":
+            return OperationalStatus(UP, "observed_up", None, False, None)
+        return OperationalStatus(DEGRADED, f"poll_{poll or 'none'}", None, False, None)
+    if direct_fresh and last_ping_ok is False:
+        return OperationalStatus(DOWN, "ping_failed", None, False, None)
+
+    # Direct telemetry missing/stale — fall back to the linked Zabbix observation.
+    if linked_live_status and not warm_stale:
+        mapped = _live_status_to_operational(linked_live_status, "_linked")
+        if mapped is not None:
+            return mapped
+
+    if last_ping_ok is None and last_ping_at is None:
+        return OperationalStatus(UNMONITORED, "not_warmed", None, False, None)
+    return OperationalStatus(UNMONITORED, "stale", None, False, None)
+
+
+def derive_ont_operational_status(ont, *, now: datetime | None = None):
+    """Operational status for an ONT, reconciling the OLT-reported state with
+    ACS informs and last-seen — reachable if *any* source confirms recently.
+
+    This closes the real gap: an ONT the OLT last reported ``offline`` but which
+    informed ACS minutes ago is actually up. A never-seen ONT (no OLT-online, no
+    ACS, no last-seen) is ``unmonitored``, not ``down``.
+    """
+    now = now or datetime.now(UTC)
+    olt_status = _enum_value(getattr(ont, "olt_status", None))
+    acs_fresh = _is_fresh(
+        getattr(ont, "acs_last_inform_at", None), now, _ONT_FRESH_SECONDS
+    )
+    seen_fresh = _is_fresh(getattr(ont, "last_seen_at", None), now, _ONT_FRESH_SECONDS)
+
+    if olt_status == "online":
+        return OperationalStatus(UP, "olt_online", None, False, None)
+    if acs_fresh:
+        return OperationalStatus(UP, "acs_inform_recent", None, False, None)
+    if seen_fresh:
+        return OperationalStatus(UP, "seen_recent", None, False, None)
+    # Not confirmed up by any source.
+    ever_seen = (
+        getattr(ont, "last_seen_at", None) is not None
+        or getattr(ont, "acs_last_inform_at", None) is not None
+    )
+    if olt_status == "offline" and ever_seen:
+        reason = _enum_value(getattr(ont, "offline_reason", None)) or "observed_down"
+        return OperationalStatus(DOWN, reason, None, False, None)
+    # Never seen by any source -> not monitored rather than a false "down".
+    return OperationalStatus(UNMONITORED, "never_seen", None, False, None)
+
+
 # Admin lifecycle states that are intentional and must override observation
 # (we don't alarm on a device we deliberately took out of service).
 _LIFECYCLE_OVERRIDE = {"maintenance", "decommissioned", "retired"}
