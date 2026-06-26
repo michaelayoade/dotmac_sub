@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from app.db import SessionLocal  # noqa: E402
 from app.services import email as email_service  # noqa: E402
 
-
 SUBJECT = "Welcome - Access Your Reseller Portal"
 PORTAL_URL = "https://selfcare.dotmac.io/reseller/auth/login?next=/reseller/dashboard"
 MAIN_URL = "https://selfcare.dotmac.io/admin"
