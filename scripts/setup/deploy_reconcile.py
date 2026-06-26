@@ -24,10 +24,10 @@ from sqlalchemy import select
 from app.db import SessionLocal, get_engine
 from app.models.domain_settings import SettingDomain
 from app.models.tr069 import Tr069AcsServer
+from app.services.genieacs_client import GenieACSError, create_genieacs_client
 from app.services.scheduler_config import find_unregistered_scheduled_tasks
 from app.services.secrets import list_secret_paths, read_secret_fields
 from app.services.settings_spec import resolve_value
-from app.services.tr069 import get_acs_enforcement_status
 
 REQUIRED_OPENBAO_PATHS = [
     "auth",
@@ -42,6 +42,11 @@ OPTIONAL_OPENBAO_PATHS = [
     "s3",
     "migration",
 ]
+
+ACS_ENFORCEMENT_NAME_PREFIX = "dotmac-enforce-acs"
+ACS_CHECK_TIMEOUT_SECONDS = float(
+    os.getenv("DEPLOY_RECONCILE_ACS_TIMEOUT_SECONDS", "5")
+)
 
 
 @dataclass
@@ -183,6 +188,56 @@ def check_openbao() -> CheckResult:
     )
 
 
+def _acs_enforcement_status(server: Tr069AcsServer) -> dict[str, Any]:
+    if not server.base_url:
+        return {
+            "exists": False,
+            "error": "ACS server has no GenieACS base URL configured",
+        }
+
+    server_slug = str(server.id).replace("-", "")[:12]
+    provision_name = f"{ACS_ENFORCEMENT_NAME_PREFIX}-{server_slug}"
+    preset_id = f"{ACS_ENFORCEMENT_NAME_PREFIX}-{server_slug}"
+    client = create_genieacs_client(
+        server.base_url,
+        timeout=ACS_CHECK_TIMEOUT_SECONDS,
+    )
+
+    status: dict[str, Any] = {
+        "provision_id": provision_name,
+        "preset_id": preset_id,
+        "provision_exists": False,
+        "preset_exists": False,
+        "preset_details": None,
+        "errors": [],
+    }
+
+    try:
+        provisions = client.list_provisions()
+        status["provision_exists"] = any(
+            provision.get("_id") == provision_name for provision in provisions
+        )
+    except GenieACSError as exc:
+        status["errors"].append(f"provisions: {exc}")
+
+    try:
+        presets = client.list_presets()
+        for preset in presets:
+            if preset.get("_id") == preset_id:
+                status["preset_exists"] = True
+                status["preset_details"] = {
+                    "events": preset.get("events", {}),
+                    "precondition": preset.get("precondition", ""),
+                    "weight": preset.get("weight", 0),
+                }
+                break
+    except GenieACSError as exc:
+        status["errors"].append(f"presets: {exc}")
+
+    status["exists"] = status["provision_exists"] and status["preset_exists"]
+    return status
+
+
 def check_acs_runtime() -> CheckResult:
     db = SessionLocal()
     try:
@@ -196,7 +251,7 @@ def check_acs_runtime() -> CheckResult:
         server_results: list[dict[str, Any]] = []
         all_ok = True
         for server in servers:
-            enforcement = get_acs_enforcement_status(db, str(server.id))
+            enforcement = _acs_enforcement_status(server)
             server_ok = bool(enforcement.get("exists"))
             all_ok = all_ok and server_ok
             server_results.append(
