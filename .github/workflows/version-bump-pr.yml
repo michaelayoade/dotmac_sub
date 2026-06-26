@@ -70,12 +70,12 @@ jobs:
           base: ${{ github.event.pull_request.base.ref }}
           branch: automation/version-bump-${{ github.event.pull_request.base.ref }}-${{ github.event.pull_request.number }}
           delete-branch: true
-          commit-message: chore: bump version to ${{ steps.version.outputs.version }}
-          title: chore: bump version to ${{ steps.version.outputs.version }}
+          commit-message: "chore: bump version to ${{ steps.version.outputs.version }}"
+          title: "chore: bump version to ${{ steps.version.outputs.version }}"
           body: |
             Version impact: none because this PR only applies the generated version bump for #${{ github.event.pull_request.number }}.
 
             Source PR: #${{ github.event.pull_request.number }}
             Source impact: ${{ steps.impact.outputs.impact }}
             New version: ${{ steps.version.outputs.version }}
-          labels: version:none
+          labels: "version:none"
