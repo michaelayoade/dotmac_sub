@@ -35,6 +35,17 @@ def test_coverage_handles_bad_input():
     assert cov.covers("garbage") is True  # unparseable ip -> don't penalise
 
 
+def test_public_ip_is_covered_without_a_tunnel():
+    # globally-routable mgmt IPs are reachable directly, not via a tunnel CIDR
+    cov = MonitoringCoverage(["172.16.0.0/16"], loaded=True)
+    assert cov.covers("160.119.127.5") is True  # public, not in any tunnel CIDR
+    assert cov.covers("102.220.189.10") is True
+    # private/tunnel-only address still needs a covering route
+    assert cov.covers("172.21.4.1") is False
+    # loopback is NOT global -> still falls through (a misconfigured host)
+    assert cov.covers("127.0.0.1") is False
+
+
 # ── deriver no_path integration ──────────────────────────────────────────────
 
 

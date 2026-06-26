@@ -44,10 +44,12 @@ class MrrSnapshot(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+    # SET NULL (not CASCADE): preserve revenue snapshots when a subscriber is
+    # hard-deleted — keep the financial history, just unlink the owner.
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("subscribers.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("subscribers.id", ondelete="SET NULL"),
+        nullable=True,
     )
     snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
     mrr_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)

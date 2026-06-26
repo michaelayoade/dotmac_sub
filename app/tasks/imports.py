@@ -197,3 +197,22 @@ def run_import_job(
         raise
     finally:
         session.close()
+
+
+@celery_app.task(name="app.tasks.imports.process_import_run")
+def process_import_run(run_id: str) -> dict[str, Any]:
+    """Process a DB-backed bulk-import run (validate, and unless dry-run, apply),
+    recording per-row outcomes to import_run_rows."""
+    from app.services.import_runs import process_import_run as _process
+
+    session = db_session_adapter.create_session()
+    try:
+        run = _process(session, run_id)
+        return {
+            "run_id": str(run.id),
+            "status": run.status.value,
+            "ok_rows": run.ok_rows,
+            "failed_rows": run.failed_rows,
+        }
+    finally:
+        session.close()
