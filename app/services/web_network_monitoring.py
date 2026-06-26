@@ -418,8 +418,8 @@ def _get_bandwidth_summary() -> dict[str, Any]:
     and has_data boolean.  Gracefully returns zeros when VM has no data.
     """
     # Total aggregate throughput
-    rx_results = _vm_instant_query("sum(bandwidth_rx_bps)")
-    tx_results = _vm_instant_query("sum(bandwidth_tx_bps)")
+    rx_results = _vm_instant_query("sum(bandwidth_rx_bps_avg)")
+    tx_results = _vm_instant_query("sum(bandwidth_tx_bps_avg)")
 
     total_rx = 0.0
     total_tx = 0.0
@@ -434,7 +434,8 @@ def _get_bandwidth_summary() -> dict[str, Any]:
     top_users: list[dict[str, Any]] = []
     if has_data:
         top_query = (
-            "topk(5, sum by (subscription_id) (bandwidth_rx_bps + bandwidth_tx_bps))"
+            "topk(5, sum by (subscription_id) "
+            "(bandwidth_rx_bps_avg + bandwidth_tx_bps_avg))"
         )
         top_results = _vm_instant_query(top_query)
         for r in top_results:
@@ -468,8 +469,8 @@ def _get_nas_throughput_summary(db: Session) -> dict[str, Any]:
     from app.models.catalog import NasDevice
 
     # Per-NAS aggregate
-    rx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_rx_bps)")
-    tx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_tx_bps)")
+    rx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_rx_bps_avg)")
+    tx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_tx_bps_avg)")
 
     has_data = bool(rx_results) or bool(tx_results)
 

@@ -43,7 +43,7 @@ def test_range_fallback_when_instant_empty():
     async def empty_instant(query):
         return []  # the long-window instant query yields nothing
 
-    async def fake_range(subscription_id, start, end, step="1m"):
+    async def fake_range(subscription_id, start, end, step="1m", aggregate="avg"):
         return {
             "rx": [
                 TimeSeriesPoint(timestamp=start, value=2_000_000.0),
@@ -69,7 +69,7 @@ def test_range_fallback_when_instant_raises():
     async def boom_instant(query):
         raise RuntimeError("VM 422: too-long rollup window")
 
-    async def fake_range(subscription_id, start, end, step="1m"):
+    async def fake_range(subscription_id, start, end, step="1m", aggregate="avg"):
         return {
             "rx": [TimeSeriesPoint(timestamp=start, value=3_300_000.0)],
             "tx": [TimeSeriesPoint(timestamp=start, value=800_000.0)],
@@ -89,7 +89,7 @@ def test_no_data_anywhere_returns_zero():
     async def empty_instant(query):
         return []
 
-    async def empty_range(subscription_id, start, end, step="1m"):
+    async def empty_range(subscription_id, start, end, step="1m", aggregate="avg"):
         return {"rx": [], "tx": []}
 
     store.get_instant = empty_instant  # type: ignore[assignment]
@@ -98,3 +98,46 @@ def test_no_data_anywhere_returns_zero():
     start, end = _window()
     peak = asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
     assert peak == {"rx_peak_bps": 0.0, "tx_peak_bps": 0.0}
+
+
+def test_reads_target_ingested_aggregate_series():
+    """Reads must hit the suffixed aggregate series the worker actually writes
+    (``_avg``/``_max``), not the dead unsuffixed ``bandwidth_rx_bps`` series —
+    that mismatch is what left the Peak tile blank despite live throughput.
+    """
+    store = MetricsStore(base_url="http://vm.test")
+    instant_queries: list[str] = []
+    range_queries: list[str] = []
+
+    async def capture_instant(query):
+        instant_queries.append(query)
+        return []  # force the peak range fallback
+
+    async def capture_range(query, start, end, step):
+        range_queries.append(query)
+        return []
+
+    store.get_instant = capture_instant  # type: ignore[assignment]
+    store.query_range = capture_range  # type: ignore[assignment]
+
+    start, end = _window()
+
+    # Peak: instant uses _max, range fallback uses _max.
+    asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
+    assert any("bandwidth_rx_bps_max" in q for q in instant_queries)
+    assert any("bandwidth_rx_bps_max" in q for q in range_queries)
+    assert any("bandwidth_tx_bps_max" in q for q in range_queries)
+    assert not any(
+        "bandwidth_rx_bps{" in q or "bandwidth_rx_bps[" in q for q in instant_queries
+    )
+
+    # Chart series defaults to the _avg aggregate.
+    range_queries.clear()
+    asyncio.run(store.get_subscription_bandwidth("sub-1", start, end))
+    assert all("bandwidth_rx_bps_avg" in q or "bandwidth_tx_bps_avg" in q
+               for q in range_queries)
+
+    # Current bandwidth reads the _avg aggregate too.
+    instant_queries.clear()
+    asyncio.run(store.get_current_bandwidth("sub-1"))
+    assert all("_avg" in q for q in instant_queries)
