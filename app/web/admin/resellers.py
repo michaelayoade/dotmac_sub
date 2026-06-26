@@ -154,7 +154,7 @@ def reseller_detail(
     reseller_id: str,
     request: Request,
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=10, le=200),
+    per_page: int = Query(25, ge=10, le=200),
     db: Session = Depends(get_db),
 ):
     detail = reseller_svc.get_reseller_detail_context(

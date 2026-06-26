@@ -126,6 +126,7 @@ class CRMClient:
         path: str,
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """Make an authenticated request to the CRM API.
 
@@ -147,7 +148,10 @@ class CRMClient:
                     url,
                     params=params,
                     json=json_data,
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        **(headers or {}),
+                    },
                 )
                 resp.raise_for_status()
                 _REACHABILITY_CIRCUIT.reset()
@@ -382,10 +386,48 @@ class CRMClient:
             payload["crm_subscriber_id"] = crm_subscriber_id
         if metadata:
             payload["metadata"] = metadata
-        data = self._request(
-            "POST", "/api/v1/widget/internal/session", json_data=payload
+        try:
+            data = self._request(
+                "POST", "/api/v1/widget/internal/session", json_data=payload
+            )
+            return data if isinstance(data, dict) else {}
+        except CRMClientError:
+            logger.warning(
+                "CRM internal widget session mint failed; falling back to public widget flow"
+            )
+
+        origin = os.getenv("APP_URL", "").rstrip("/") or "https://selfcare.dotmac.io"
+        session_data = self._request(
+            "POST",
+            f"/api/v1/widget/{config_id}/session",
+            json_data={"page_url": f"{origin}/mobile-chat"},
+            headers={"Origin": origin},
         )
-        return data if isinstance(data, dict) else {}
+        if not isinstance(session_data, dict):
+            return {}
+
+        session_id = str(session_data.get("session_id") or "")
+        visitor_token = str(session_data.get("visitor_token") or "")
+        if not session_id or not visitor_token:
+            return session_data
+
+        custom_fields = dict(metadata or {})
+        if crm_subscriber_id:
+            custom_fields["crm_subscriber_id"] = crm_subscriber_id
+        identify_payload: dict[str, Any] = {"email": email}
+        if name:
+            identify_payload["name"] = name
+        if custom_fields:
+            identify_payload["custom_fields"] = custom_fields
+        identify_data = self._request(
+            "POST",
+            f"/api/v1/widget/session/{session_id}/identify",
+            json_data=identify_payload,
+            headers={"Origin": origin, "X-Visitor-Token": visitor_token},
+        )
+        if isinstance(identify_data, dict) and identify_data.get("conversation_id"):
+            session_data["conversation_id"] = identify_data.get("conversation_id")
+        return session_data
 
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""

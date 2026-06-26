@@ -651,6 +651,16 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=max(usage_interval_seconds, 300),
         )
+        # Queue-independent backstop: lift FUP enforcement whose reset boundary
+        # has passed even if the billing queue (where evaluate_fup_rules runs) is
+        # stalled, so customers aren't left throttled/blocked past their window.
+        _sync_scheduled_task(
+            session,
+            name="fup_reset_safety_net",
+            task_name="app.tasks.usage.lift_expired_fup_enforcement",
+            enabled=usage_enabled,
+            interval_seconds=max(usage_interval_seconds, 300),
+        )
         zabbix_usage_enabled_by_default = _zabbix_configured_default()
         zabbix_usage_enabled = _effective_bool(
             session,

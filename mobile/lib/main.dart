@@ -27,6 +27,9 @@ Future<void> _initPushBackground() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kDebugMode) {
+    debugPrint('[config] API_ROOT=${Env.apiRoot}');
+  }
   await _initPushBackground();
 
   const app = ProviderScope(child: DotMacApp());
