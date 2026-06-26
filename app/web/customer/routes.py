@@ -25,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
+from app.services import chat_session as chat_session_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
@@ -169,6 +170,24 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
             url="/portal/auth/login?next=/portal/dashboard", status_code=303
         )
     return _render_dashboard(request, db, customer, "/portal/dashboard")
+
+
+@router.post("/chat/session")
+def customer_portal_chat_session(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Open a CRM live-chat session for a browser-authenticated portal user."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
+        "subscriber_id"
+    )
+    if not subscriber_id:
+        raise HTTPException(status_code=409, detail="Customer account is incomplete")
+    return chat_session_service.broker_customer_session(db, str(subscriber_id))
 
 
 @router.get("/support", response_class=HTMLResponse)
