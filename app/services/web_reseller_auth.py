@@ -258,6 +258,30 @@ def reseller_logout(request: Request):
     return response
 
 
+def reseller_stop_impersonation(request: Request, next: str = "/admin/resellers"):
+    """End an admin "view as reseller" session and return to the admin portal.
+
+    Invalidates the reseller portal session (the impersonation cookie) and
+    redirects back to the admin reseller view. ``next`` is restricted to
+    admin-relative paths to avoid an open redirect.
+    """
+    session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    if session_token:
+        db = db_session_adapter.create_session()
+        try:
+            reseller_portal.invalidate_session(session_token, db)
+        finally:
+            db.close()
+    target = (
+        next
+        if isinstance(next, str) and next.startswith("/admin/")
+        else "/admin/resellers"
+    )
+    response = RedirectResponse(url=target, status_code=303)
+    response.delete_cookie(reseller_portal.SESSION_COOKIE_NAME)
+    return response
+
+
 def reseller_refresh(request: Request):
     session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
     if not session_token:

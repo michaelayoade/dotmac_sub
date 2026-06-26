@@ -1,6 +1,6 @@
 """Admin reseller portal web routes."""
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +46,70 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+@router.post("/{reseller_id}/impersonate", response_class=HTMLResponse)
+def reseller_impersonate(
+    request: Request,
+    reseller_id: str,
+    db: Session = Depends(get_db),
+    auth=Depends(require_permission("reseller:impersonate")),
+):
+    """Open the reseller portal as the reseller ("view as"), audited.
+
+    Mirrors customer impersonation: mints a real reseller-principal session so
+    support/staff can see and act on the portal exactly as the reseller does.
+    Admin already has full access to all reseller data, so this exposes nothing
+    new — it is a faster lens, gated behind ``reseller:impersonate`` and logged.
+    """
+    from app.models.audit import AuditActorType
+    from app.schemas.audit import AuditEventCreate
+    from app.services import audit as audit_service
+    from app.services import reseller_portal
+
+    return_to = f"/admin/resellers/{reseller_id}"
+    try:
+        session_token = reseller_portal.create_impersonation_session(
+            db, reseller_id=reseller_id, return_to=return_to
+        )
+    except HTTPException as exc:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": str(exc.detail)},
+            status_code=exc.status_code,
+        )
+
+    actor_id_value = None
+    if isinstance(auth, dict):
+        actor_id_value = (
+            str(auth.get("subscriber_id") or auth.get("person_id") or "") or None
+        )
+    audit_service.audit_events.create(
+        db=db,
+        payload=AuditEventCreate(
+            actor_type=AuditActorType.user,
+            actor_id=actor_id_value,
+            action="impersonate",
+            entity_type="reseller",
+            entity_id=str(reseller_id),
+            status_code=303,
+            is_success=True,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            metadata_={"surface": "reseller_portal"},
+        ),
+    )
+
+    response = RedirectResponse(url="/reseller/dashboard", status_code=303)
+    response.set_cookie(
+        key=reseller_portal.SESSION_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=reseller_portal.get_session_max_age(db),
+    )
+    return response
 
 
 @router.get(
