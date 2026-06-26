@@ -21,6 +21,25 @@ from app.services.audit_helpers import (
 )
 
 
+def _safe_return_to(value: str | None, default: str) -> str:
+    """Constrain a form-supplied ``return_to`` to a same-origin admin path.
+
+    The value is seeded from the Referer header and round-tripped through a hidden
+    form field, so without this an attacker-controlled value would be an open
+    redirect. Only a relative ``/admin/...`` path is accepted; anything absolute,
+    protocol-relative (``//evil``), or scheme-bearing falls back to ``default``.
+    """
+    candidate = (value or "").strip()
+    if (
+        candidate.startswith("/admin/")
+        and not candidate.startswith("//")
+        and "://" not in candidate
+        and "\\" not in candidate
+    ):
+        return candidate
+    return default
+
+
 @dataclass
 class IpWebActionResult:
     success: bool
@@ -275,9 +294,9 @@ def assign_ipv4_address_from_form(request: Request, db, form) -> IpWebActionResu
     ip_address = str(form.get("ip_address") or "").strip()
     subscriber_id = str(form.get("subscriber_id") or "").strip()
     subscription_id = str(form.get("subscription_id") or "").strip() or None
-    return_to = (
-        str(form.get("return_to") or "").strip()
-        or f"/admin/network/ip-management/ipv4-networks/{pool_id}"
+    return_to = _safe_return_to(
+        str(form.get("return_to") or ""),
+        f"/admin/network/ip-management/ipv4-networks/{pool_id}",
     )
 
     state = ip_service.build_ipv4_assignment_form_data(
@@ -350,9 +369,9 @@ def release_ipv4_address_from_form(request: Request, db, form) -> IpWebActionRes
     pool_id = str(form.get("pool_id") or "").strip()
     block_id = str(form.get("block_id") or "").strip() or None
     ip_address = str(form.get("ip_address") or "").strip()
-    return_to = (
-        str(form.get("return_to") or "").strip()
-        or f"/admin/network/ip-management/ipv4-networks/{pool_id}"
+    return_to = _safe_return_to(
+        str(form.get("return_to") or ""),
+        f"/admin/network/ip-management/ipv4-networks/{pool_id}",
     )
 
     state = ip_service.build_ipv4_assignment_form_data(

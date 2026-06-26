@@ -472,7 +472,10 @@ def catalog_subscription_create(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
-@router.get("/subscriptions/ipam/ipv4-available")
+@router.get(
+    "/subscriptions/ipam/ipv4-available",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_subscription_ipv4_available(
     selector: str = Query(...),
     current_ip: str | None = None,
@@ -491,7 +494,10 @@ def catalog_subscription_ipv4_available(
     return JSONResponse({"available_ips": available_ips})
 
 
-@router.get("/subscriptions/ipam/route-children")
+@router.get(
+    "/subscriptions/ipam/route-children",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_subscription_route_children(
     parent_cidr: str = Query(...),
     prefix: int = Query(...),
