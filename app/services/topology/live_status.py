@@ -62,6 +62,17 @@ def _sla_log_enabled() -> bool:
         return False
 
 
+def _coverage():
+    """Monitoring-path coverage for SLA-bridge gating; None on any failure
+    (then the bridge logs everything, i.e. pre-Phase-3 behaviour)."""
+    try:
+        from app.services.monitoring_coverage import get_coverage
+
+        return get_coverage()
+    except Exception:
+        return None
+
+
 def _chunks(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
@@ -135,6 +146,8 @@ def warm_topology_status(session: Session, client) -> dict:
                 problems.add(str(hh.get("hostid")))
 
     now = _now()
+    sla_logging = _sla_log_enabled()
+    coverage = _coverage() if sla_logging else None
     counts: Counter = Counter()
     for n in nodes:
         hid = n.zabbix_hostid
@@ -147,8 +160,12 @@ def warm_topology_status(session: Session, client) -> dict:
         if n.live_status != status:
             # Bridge the transition into an uptime Alert interval so the SLA
             # report has real downtime to merge (flag-gated, additive — never
-            # alters live_status). See availability_log / INFRASTRUCTURE_SLA.
-            if _sla_log_enabled():
+            # alters live_status). Skip devices with no monitoring path: their
+            # "down" is a blind spot, not real downtime (Phase 3). See
+            # availability_log / monitoring_coverage / INFRASTRUCTURE_SLA.
+            if sla_logging and (
+                coverage is None or coverage.covers(getattr(n, "mgmt_ip", None))
+            ):
                 from app.services.topology.availability_log import record_transition
 
                 record_transition(session, n, status, now=now)
