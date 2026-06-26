@@ -150,9 +150,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/wallet',
         builder: (_, __) => const WalletScreen(),
       ),
+      // Live chat now lives INSIDE the Support tab (so the bottom bar stays and
+      // it's not a detached full-screen page). Keep /chat as a redirect so push
+      // notifications and old deep links land on the nested screen.
       GoRoute(
         path: '/chat',
-        builder: (_, __) => const ChatScreen(),
+        redirect: (_, __) => '/support/chat',
       ),
       GoRoute(
         path: '/pay',
@@ -304,6 +307,12 @@ final routerProvider = Provider<GoRouter>((ref) {
               path: '/support',
               builder: (_, __) => const TicketsScreen(),
               routes: [
+                // Live chat, nested so the bottom nav stays and back returns to
+                // the ticket list.
+                GoRoute(
+                  path: 'chat',
+                  builder: (_, __) => const ChatScreen(),
+                ),
                 GoRoute(
                   path: 'new',
                   builder: (_, __) => const CreateTicketScreen(),

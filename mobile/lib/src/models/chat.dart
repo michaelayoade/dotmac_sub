@@ -30,6 +30,7 @@ class ChatMessage {
     required this.body,
     required this.fromAgent,
     this.authorName,
+    this.authorAvatar,
     this.createdAt,
   });
 
@@ -40,17 +41,27 @@ class ChatMessage {
   /// for the subscriber's own messages.
   final bool fromAgent;
   final String? authorName;
+
+  /// Agent's avatar URL (CRM `author_avatar`), present on outbound messages
+  /// when the agent has a profile photo. Null for the subscriber's messages.
+  final String? authorAvatar;
   final DateTime? createdAt;
 
   static DateTime? _parseDate(Object? v) =>
       v is String ? DateTime.tryParse(v) : null;
+
+  static String? _str(Object? v) {
+    final s = v?.toString();
+    return (s == null || s.isEmpty) ? null : s;
+  }
 
   /// From GET /session/{id}/messages (WidgetMessageRead).
   factory ChatMessage.fromHistory(Map<String, dynamic> j) => ChatMessage(
         id: (j['id'] ?? '').toString(),
         body: (j['body'] ?? '').toString(),
         fromAgent: j['direction'] == 'outbound',
-        authorName: j['author_name'] as String?,
+        authorName: _str(j['author_name']),
+        authorAvatar: _str(j['author_avatar']),
         createdAt: _parseDate(j['created_at']),
       );
 
