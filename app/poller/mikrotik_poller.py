@@ -78,6 +78,26 @@ class QueueStats:
     bytes_tx: int
     packets_rx: int
     packets_tx: int
+    max_rx: int = 0  # configured max-limit (bits/s), 0 = unlimited
+    max_tx: int = 0
+
+
+def _clamp_rate(rate_bps: int, max_bps: int, tolerance: float = 1.05) -> int:
+    """Clamp a reported queue rate to its configured max-limit.
+
+    RouterOS occasionally reports a transient ``rate`` above the queue's
+    ``max-limit`` (a measurement glitch). A queue cannot physically pass more
+    than its cap, so such a reading would otherwise surface as a bogus "peak".
+    ``max_bps <= 0`` means unlimited (no cap to apply). A small tolerance
+    absorbs rounding right at the cap.
+    """
+    if rate_bps < 0:
+        return 0
+    if max_bps <= 0:
+        return rate_bps
+    if rate_bps > int(max_bps * tolerance):
+        return max_bps
+    return rate_bps
 
 
 @dataclass
@@ -199,6 +219,8 @@ class MikroTikConnection:
                 rate = q.get("rate", "0/0").split("/")
                 bytes_val = q.get("bytes", "0/0").split("/")
                 packets = q.get("packets", "0/0").split("/")
+                # max-limit "rxMax/txMax" (bits/s); "0/0" means unlimited.
+                max_limit = q.get("max-limit", "0/0").split("/")
 
                 stats.append(
                     QueueStats(
@@ -215,6 +237,10 @@ class MikroTikConnection:
                         packets_rx=int(packets[0]) if packets[0].isdigit() else 0,
                         packets_tx=int(packets[1])
                         if len(packets) > 1 and packets[1].isdigit()
+                        else 0,
+                        max_rx=int(max_limit[0]) if max_limit[0].isdigit() else 0,
+                        max_tx=int(max_limit[1])
+                        if len(max_limit) > 1 and max_limit[1].isdigit()
                         else 0,
                     )
                 )
@@ -645,14 +671,19 @@ class BandwidthPoller:
                     device_id, qs.name
                 )
                 if subscription_id:
-                    # RouterOS simple-queue rate is already bits/s.
+                    # RouterOS simple-queue rate is already bits/s. Clamp to the
+                    # queue's configured max-limit: a queue physically cannot pass
+                    # more than its cap, so a reported rate above it is a RouterOS
+                    # glitch that would otherwise become a bogus "peak".
+                    rx_bps = _clamp_rate(qs.rate_rx, qs.max_rx)
+                    tx_bps = _clamp_rate(qs.rate_tx, qs.max_tx)
                     samples.append(
                         BandwidthSample(
                             subscription_id=str(subscription_id),
                             nas_device_id=str(device_id),
                             queue_name=qs.name,
-                            rx_bps=qs.rate_rx,
-                            tx_bps=qs.rate_tx,
+                            rx_bps=rx_bps,
+                            tx_bps=tx_bps,
                             sample_at=sample_time,
                         )
                     )

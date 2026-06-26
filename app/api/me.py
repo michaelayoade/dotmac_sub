@@ -9,6 +9,7 @@ subscriber can read their own data without holding staff permissions.
 Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 """
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -128,6 +129,11 @@ from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
 from app.services import web_support_tickets
 from app.services.auth_dependencies import require_user_auth
+from app.services.bandwidth import (
+    add_directions_to_series,
+    bandwidth_samples,
+    with_subscriber_directions,
+)
 from app.services.topology import selfcare as topology_selfcare
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -836,6 +842,45 @@ def my_usage_history(
     """
     subscriber_id = _subscriber_id(principal)
     return usage_summary_service.get_daily_usage_history(db, subscriber_id, days=days)
+
+
+# --- Live bandwidth (self-scoped, Bearer) --------------------------------------
+#
+# Bearer-authenticated mirrors of the cookie-only /bandwidth/my/* web routes,
+# which the mobile app (Bearer) could never reach (403). Scoped to the caller's
+# active subscription; throughput is returned in subscriber perspective
+# (download/upload) so the app's live-bandwidth section can read it directly.
+
+
+@router.get("/bandwidth/stats")
+async def my_bandwidth_stats(
+    period: str = Query(default="24h", pattern="^(1h|24h|7d|30d)$"),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Current + peak throughput for the caller's active subscription.
+
+    Drives the live-bandwidth section's real-time reading and the Peak figure.
+    """
+    subscription = bandwidth_samples.get_user_active_subscription(db, principal)
+    stats = await bandwidth_samples.get_bandwidth_stats(db, subscription.id, period)
+    return with_subscriber_directions(stats)
+
+
+@router.get("/bandwidth/series")
+async def my_bandwidth_series(
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    interval: str = Query(default="auto", pattern="^(auto|1m|5m|1h)$"),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Throughput time series for the caller's active subscription (chart)."""
+    subscription = bandwidth_samples.get_user_active_subscription(db, principal)
+    result = await bandwidth_samples.get_bandwidth_series(
+        db, subscription.id, start_at, end_at, interval
+    )
+    return add_directions_to_series(result)
 
 
 # --- Support tickets (self-scoped) ---------------------------------------------

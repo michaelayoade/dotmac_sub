@@ -52,16 +52,17 @@ class UsageRepository {
     return UsageHistory.fromJson(data as Map<String, dynamic>);
   }
 
-  /// GET /bandwidth/my/series — bandwidth-speed time series for the caller's
+  /// GET /me/bandwidth/series — bandwidth-speed time series for the caller's
   /// subscription over [start]..[end]. Source auto-selects Postgres (<24h) or
   /// VictoriaMetrics (older), so history reaches as far back as VM retention.
+  /// (Bearer-auth /me route; the legacy /bandwidth/my/* routes are cookie-only.)
   Future<List<BandwidthPoint>> bandwidthSeries({
     required DateTime start,
     required DateTime end,
     String interval = 'auto',
   }) async {
     final data = await guard(
-      () => dio.get('/bandwidth/my/series', queryParameters: {
+      () => dio.get('/me/bandwidth/series', queryParameters: {
         'start_at': start.toUtc().toIso8601String(),
         'end_at': end.toUtc().toIso8601String(),
         'interval': interval,
@@ -73,11 +74,12 @@ class UsageRepository {
         .toList();
   }
 
-  /// GET /bandwidth/my/stats — current throughput for the subscriber's active
-  /// subscription (subscriber-perspective download/upload).
+  /// GET /me/bandwidth/stats — current throughput for the subscriber's active
+  /// subscription (subscriber-perspective download/upload). Bearer-auth /me
+  /// route (the legacy /bandwidth/my/stats is cookie-only and 403s the app).
   Future<LiveBandwidth> liveBandwidth({String period = '1h'}) async {
     final data = await guard(() =>
-        dio.get('/bandwidth/my/stats', queryParameters: {'period': period}));
+        dio.get('/me/bandwidth/stats', queryParameters: {'period': period}));
     return LiveBandwidth.fromJson(data as Map<String, dynamic>);
   }
 
