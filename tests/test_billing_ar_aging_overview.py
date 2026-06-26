@@ -33,6 +33,43 @@ def _create_invoice(
     return invoice
 
 
+def test_ar_aging_shows_open_debt_and_excludes_draft_and_zero_balance(
+    db_session, subscriber
+):
+    """Regression: the report queries open AR directly, so live arrears are
+    never hidden behind paid history (the 2026-06-26 ₦0-buckets bug). Draft and
+    fully-settled invoices are not AR and must be excluded."""
+    now = datetime.now(UTC)
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=20),
+        balance_due="18812.50",
+        status=InvoiceStatus.overdue,
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=20),
+        balance_due="500.00",
+        status=InvoiceStatus.draft,
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=20),
+        balance_due="0.00",
+        status=InvoiceStatus.issued,
+    )
+
+    result = build_ar_aging_data(db_session, period="all")
+
+    assert result["totals"]["1_30"] == 18812.5
+    assert result["counts"]["1_30"] == 1
+    # Only the real arrears invoice is counted across all buckets.
+    assert sum(result["counts"].values()) == 1
+
+
 def test_ar_aging_includes_counts_and_supports_bucket_selection(db_session, subscriber):
     now = datetime.now(UTC)
     _create_invoice(
