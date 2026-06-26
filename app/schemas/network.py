@@ -311,6 +311,8 @@ class IpPoolBase(BaseModel):
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
+    # IPv6 pools: per-customer prefix-delegation size carved from ``cidr``.
+    delegation_prefix_length: int | None = Field(default=None, ge=1, le=128)
 
 
 class IpPoolCreate(IpPoolBase):
@@ -328,6 +330,7 @@ class IpPoolUpdate(BaseModel):
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
+    delegation_prefix_length: int | None = Field(default=None, ge=1, le=128)
 
 
 class IpPoolRead(IpPoolBase):

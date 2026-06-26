@@ -1,0 +1,83 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, empty_state %}
+
+{% block title %}IPv6 Prefix Delegation - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("purple", "violet") }}
+
+<div class="relative space-y-8">
+    {% call page_header(
+        title="IPv6 Prefix Delegation",
+        subtitle="Delegated prefixes carved from IPv6 pools — the app is the source of truth",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064"/></svg>',
+        color="purple",
+        color2="violet"
+    ) %}{% endcall %}
+
+    {% if not pd_enabled %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+        IPv6 PD is <strong>disabled</strong> (<code>IPV6_PD_ENABLED</code> is off). Prefixes can be managed here, but they are not emitted to RADIUS yet.
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {% for pool in pd_pools %}
+        <a href="/admin/network/ip-management/ipv6-pd?pool_id={{ pool.id }}"
+           class="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-purple-400 dark:border-slate-700 dark:bg-slate-800">
+            <div class="text-sm font-semibold text-slate-900 dark:text-white">{{ pool.name }}</div>
+            <div class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{{ pool.cidr }}</div>
+            <div class="mt-2 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+                <span>/{{ pool.delegation_prefix_length }} per customer</span>
+                <span class="font-semibold">{{ pool.assigned }} assigned</span>
+            </div>
+        </a>
+        {% else %}
+        <div class="sm:col-span-2 lg:col-span-3">
+            {{ empty_state("No IPv6 pools", "Create an IPv6 pool with a delegation size to start delegating prefixes.") }}
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900/50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Prefix</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">State</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Owner</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for row in pd_rows %}
+                <tr>
+                    <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ row.cidr }}</td>
+                    <td class="px-4 py-3 text-sm">
+                        {% if row.state == 'assigned' %}
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">assigned</span>
+                        {% elif row.state == 'reserved' %}
+                        <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">reserved</span>
+                        {% else %}
+                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">available</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.subscriber_name or '—' }}</td>
+                    <td class="px-4 py-3 text-right">
+                        {% if row.state != 'available' %}
+                        <form method="post" action="/admin/network/ip-management/ipv6-pd/{{ row.id }}/release{% if pd_pool_filter %}?pool_id={{ pd_pool_filter }}{% endif %}"
+                              onsubmit="return confirm('Release {{ row.cidr }} back to the pool?');" class="inline">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="text-xs font-semibold text-red-600 hover:text-red-700">Release</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="px-4 py-8 text-center text-sm text-slate-500">No delegated prefixes yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

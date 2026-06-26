@@ -744,6 +744,44 @@ def ipv6_networks_list(
 
 
 @router.get(
+    "/ip-management/ipv6-pd",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ipv6_pd_list(
+    request: Request,
+    pool_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Browse IPv6 prefix-delegation: pools and their delegated prefixes."""
+    state = web_network_ip_service.build_ipv6_pd_data(db, pool_id=pool_id)
+    context = _base_context(
+        request, db, active_page="ipv6-pd", active_menu="ip-address"
+    )
+    context.update(state)
+    return templates.TemplateResponse(
+        "admin/network/ip-management/ipv6_pd.html", context
+    )
+
+
+@router.post(
+    "/ip-management/ipv6-pd/{prefix_id}/release",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ipv6_pd_release(
+    prefix_id: str,
+    pool_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Release a delegated prefix back to its pool (available for reuse)."""
+    web_network_ip_service.release_delegated_prefix_action(db, prefix_id)
+    target = "/admin/network/ip-management/ipv6-pd"
+    if pool_id:
+        target = f"{target}?pool_id={pool_id}"
+    return RedirectResponse(url=target, status_code=303)
+
+
+@router.get(
     "/ip-management/ipv6-networks/new",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],

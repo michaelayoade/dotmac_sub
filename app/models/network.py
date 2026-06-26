@@ -75,6 +75,14 @@ class IPVersion(enum.Enum):
     ipv6 = "ipv6"
 
 
+class Ipv6PrefixState(enum.Enum):
+    """Lifecycle of a delegated IPv6 prefix carved from a pool."""
+
+    available = "available"  # free to allocate
+    reserved = "reserved"  # held (e.g. infra / manual) — not auto-allocatable
+    assigned = "assigned"  # delegated to a subscriber
+
+
 class HardwareUnitStatus(enum.Enum):
     active = "active"
     inactive = "inactive"
@@ -650,6 +658,9 @@ class IpPool(Base):
     # Cached allocation tracking for faster IP allocation
     next_available_ip: Mapped[str | None] = mapped_column(String(64))
     available_count: Mapped[int | None] = mapped_column(Integer)
+    # For IPv6 pools: the size of each customer prefix-delegation carved from
+    # ``cidr`` (the parent prefix). Configurable per pool; defaults to /64.
+    delegation_prefix_length: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -663,6 +674,7 @@ class IpPool(Base):
     blocks = relationship("IpBlock", back_populates="pool")
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
+    delegated_prefixes = relationship("Ipv6DelegatedPrefix", back_populates="pool")
     olt_device = relationship(
         "OLTDevice", back_populates="ip_pools", foreign_keys=[olt_device_id]
     )
@@ -766,6 +778,64 @@ class IPv6Address(Base):
         "IPAssignment", back_populates="ipv6_address", uselist=False
     )
     pool = relationship("IpPool", back_populates="ipv6_addresses")
+
+
+class Ipv6DelegatedPrefix(Base):
+    """A delegated IPv6 prefix (e.g. a /64) carved from an IPv6 pool's parent
+    prefix and handed to a subscriber.
+
+    First-class PD record: the app — not FreeRADIUS dynamic pools — is the source
+    of truth for who owns which prefix. One row per (pool, prefix); its ``state``
+    transitions available -> reserved/assigned and back, so a released prefix
+    stays for reuse. ``subscriber_id``/``subscription_id`` use SET NULL so deleting
+    an owner unassigns the prefix rather than destroying the inventory record.
+    """
+
+    __tablename__ = "ipv6_delegated_prefixes"
+    __table_args__ = (
+        UniqueConstraint(
+            "pool_id", "prefix", "prefix_length", name="uq_ipv6_pd_pool_prefix"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ip_pools.id"), nullable=False, index=True
+    )
+    # Network address of the delegated prefix, e.g. "2001:db8:0:1::".
+    prefix: Mapped[str] = mapped_column(String(64), nullable=False)
+    prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[Ipv6PrefixState] = mapped_column(
+        Enum(Ipv6PrefixState, name="ipv6prefixstate"),
+        default=Ipv6PrefixState.available,
+        nullable=False,
+        index=True,
+    )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    pool = relationship("IpPool", back_populates="delegated_prefixes")
 
 
 class IpPoolUtilizationSnapshot(Base):
