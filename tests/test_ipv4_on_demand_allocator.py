@@ -151,3 +151,34 @@ def test_allow_network_broadcast_includes_network_address(db_session):
     pool = _pool(db_session, cidr="10.5.0.0/30", notes="[allow_network_broadcast:true]")
     addr = _allocate_ipv4_on_demand(db_session, pool)
     assert addr.address == "10.5.0.0"  # network address usable when opted in
+
+
+def test_reactivation_address_validity_guard(db_session):
+    """A released address that has since become reserved/management or been
+    swallowed by an active routed block must not be reactivated in place."""
+    from app.services.provisioning_helpers import _reactivation_address_is_valid
+
+    pool = _pool(db_session, cidr="10.7.0.0/24")
+    ok = IPv4Address(address="10.7.0.10", pool_id=pool.id)
+    reserved = IPv4Address(address="10.7.0.11", pool_id=pool.id, is_reserved=True)
+    mgmt = IPv4Address(
+        address="10.7.0.12", pool_id=pool.id, allocation_type="management"
+    )
+    routed = IPv4Address(address="10.7.0.20", pool_id=pool.id)
+    db_session.add_all([ok, reserved, mgmt, routed])
+    db_session.add(
+        SubscriberAdditionalRoute(
+            subscriber_id=_subscriber(db_session).id,
+            cidr="10.7.0.20/30",
+            prefix_length=30,
+            metric=1,
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    assert _reactivation_address_is_valid(db_session, ok) is True
+    assert _reactivation_address_is_valid(db_session, reserved) is False
+    assert _reactivation_address_is_valid(db_session, mgmt) is False
+    assert _reactivation_address_is_valid(db_session, routed) is False
+    assert _reactivation_address_is_valid(db_session, None) is False
