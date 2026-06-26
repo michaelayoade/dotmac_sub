@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import cast
 
@@ -36,6 +35,7 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
 )
+from app.services.radius_dsn import radius_dsn_libpq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -146,9 +146,11 @@ def _radreply_attrs(
 
 
 def populate(dry_run: bool = True) -> dict[str, int]:
-    radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+    # Single authority (shared with radius.py's event-time sync) so both writers
+    # target the same radius DB and cannot split-brain.
+    radius_dsn = radius_dsn_libpq()
     if not radius_dsn:
-        raise RuntimeError("RADIUS_DB_DSN not set")
+        raise RuntimeError("RADIUS database DSN not configured")
 
     stats = {
         "subscriptions_considered": 0,
@@ -517,7 +519,8 @@ def populate_device_login(
         _conn_factory: Optional zero-arg callable that returns a DB-API 2
             connection to the RADIUS DB.  Used by tests to inject an in-memory
             SQLite connection in place of the real psycopg Postgres connection.
-            When None (production), opens psycopg.connect(RADIUS_DB_DSN).
+            When None (production), connects to the resolved radius DSN
+            (radius_dsn.radius_dsn_libpq()).
 
     Returns:
         dict with keys: considered, radcheck_upserts, radreply_upserts,
@@ -583,9 +586,9 @@ def populate_device_login(
     if _conn_factory is not None:
         conn = _conn_factory()
     else:
-        radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+        radius_dsn = radius_dsn_libpq()
         if not radius_dsn:
-            raise RuntimeError("RADIUS_DB_DSN not set")
+            raise RuntimeError("RADIUS database DSN not configured")
         conn = psycopg.connect(radius_dsn)
         conn.autocommit = False
 

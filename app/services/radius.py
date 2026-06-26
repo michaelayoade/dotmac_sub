@@ -1,11 +1,9 @@
 import hashlib
 import logging
-import os
 import re
 import threading
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from sqlalchemy import (
@@ -51,7 +49,7 @@ from app.schemas.radius import (
     RadiusSyncJobCreate,
     RadiusSyncJobUpdate,
 )
-from app.services import settings_spec
+from app.services import radius_dsn, settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -804,65 +802,20 @@ def _active_radius_servers(db: Session) -> list[RadiusServer]:
     )
 
 
-def _normalize_external_db_url(value: str | None) -> str | None:
-    if not value:
-        return None
-    db_url = value.strip()
-    if not db_url:
-        return None
-    if db_url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + db_url[len("postgresql://") :]
-    return db_url
-
-
-def _container_safe_external_db_url(value: str | None) -> str | None:
-    db_url = _normalize_external_db_url(value)
-    if not db_url:
-        return None
-    parsed = urlsplit(db_url)
-    hostname = (parsed.hostname or "").strip().lower()
-    if hostname not in {"localhost", "127.0.0.1"}:
-        return db_url
-
-    # If the URL already uses a non-default port (host-mapped), keep it as-is.
-    # Only rewrite to Docker hostname when port is the default 5432.
-    if parsed.port and parsed.port != 5432:
-        return db_url
-
-    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-    port = os.getenv("RADIUS_DB_PORT") or "5432"
-    username = parsed.username or ""
-    password = parsed.password or ""
-    auth = username
-    if password:
-        auth = f"{auth}:{password}"
-    netloc = f"{auth}@{host}:{port}" if auth else f"{host}:{port}"
-    return urlunsplit(
-        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
-    )
+# Thin re-exports — the single authority lives in app.services.radius_dsn so the
+# population sweep and the event-time sync resolve the bundled radius DB the
+# *same* way and cannot split-brain.
+_normalize_external_db_url = radius_dsn.normalize_external_db_url
+_container_safe_external_db_url = radius_dsn.container_safe_external_db_url
 
 
 def _bundled_external_db_config() -> dict | None:
-    """Fallback external RADIUS DB config for the bundled Docker stack."""
-    db_url = _container_safe_external_db_url(os.getenv("RADIUS_SYNC_DB_URL"))
-    if not db_url:
-        db_url = _container_safe_external_db_url(os.getenv("RADIUS_DB_DSN"))
-    if not db_url:
-        host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-        database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
-        username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-        from app.services.secrets import get_env_or_secret
+    """Fallback external RADIUS DB config for the bundled Docker stack.
 
-        password = get_env_or_secret(
-            "RADIUS_DB_PASS",
-            "radius",
-            "db_password",
-            default="l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-",
-        ).strip()
-        if host and database and username and password:
-            db_url = (
-                f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
-            )
+    Resolves through ``radius_dsn.resolve_radius_dsn()`` — the same authority the
+    population sweep uses — so both writers target one radius DB.
+    """
+    db_url = radius_dsn.resolve_radius_dsn()
     if not db_url:
         return None
     return {
