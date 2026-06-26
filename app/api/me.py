@@ -863,9 +863,7 @@ async def my_bandwidth_stats(
     Drives the live-bandwidth section's real-time reading and the Peak figure.
     """
     subscription = bandwidth_samples.get_user_active_subscription(db, principal)
-    stats = await bandwidth_samples.get_bandwidth_stats(
-        db, subscription.id, period
-    )
+    stats = await bandwidth_samples.get_bandwidth_stats(db, subscription.id, period)
     return with_subscriber_directions(stats)
 
 

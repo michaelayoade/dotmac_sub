@@ -37,7 +37,9 @@ def test_stats_resolves_subscription_and_maps_directions(monkeypatch):
             "peak_tx_bps": 20_000_000,
         }
 
-    monkeypatch.setattr(me.bandwidth_samples, "get_user_active_subscription", fake_active)
+    monkeypatch.setattr(
+        me.bandwidth_samples, "get_user_active_subscription", fake_active
+    )
     monkeypatch.setattr(me.bandwidth_samples, "get_bandwidth_stats", fake_stats)
 
     out = _run(me.my_bandwidth_stats(period="24h", db=None, principal=PRINCIPAL))
@@ -62,7 +64,9 @@ def test_series_resolves_subscription_and_adds_directions(monkeypatch):
             "source": "victoriametrics",
         }
 
-    monkeypatch.setattr(me.bandwidth_samples, "get_user_active_subscription", fake_active)
+    monkeypatch.setattr(
+        me.bandwidth_samples, "get_user_active_subscription", fake_active
+    )
     monkeypatch.setattr(me.bandwidth_samples, "get_bandwidth_series", fake_series)
 
     out = _run(
