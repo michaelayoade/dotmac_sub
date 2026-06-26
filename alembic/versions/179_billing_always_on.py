@@ -14,8 +14,8 @@ value_json is cleared and value_text set to "true" to match how booleans are
 stored (resolver reads value_json ?? value_text), guaranteeing TRUE regardless
 of any prior value. Idempotent via ON CONFLICT.
 
-Revision ID: 178_billing_always_on
-Revises: 177_ipam_partial_active_unique
+Revision ID: 179_billing_always_on
+Revises: 178_ipv6_delegated_prefixes
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "178_billing_always_on"
-down_revision = "177_ipam_partial_active_unique"
+revision = "179_billing_always_on"
+down_revision = "178_ipv6_delegated_prefixes"
 branch_labels = None
 depends_on = None
 
