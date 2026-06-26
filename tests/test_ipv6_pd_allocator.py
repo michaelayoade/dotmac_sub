@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.models.network import IpPool, IPVersion, Ipv6PrefixState
+from app.models.network import IpPool, Ipv6PrefixState, IPVersion
 from app.models.subscriber import Subscriber
 from app.services import ipv6_pd
 
