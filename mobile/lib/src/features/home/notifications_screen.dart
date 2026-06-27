@@ -39,6 +39,14 @@ String? notificationRoute(AppNotification n) {
   return null;
 }
 
+String _sectionLabel(String route) => switch (route) {
+      '/support/chat' => 'chat',
+      '/billing' => 'billing',
+      '/support' => 'support',
+      '/usage' => 'usage',
+      _ => 'details',
+    };
+
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
 
@@ -102,6 +110,7 @@ class NotificationsScreen extends ConsumerWidget {
                     ref.read(readNotificationsProvider.notifier).markRead(n.id);
                   },
                   onOpen: route == null ? null : () => context.go(route),
+                  openLabel: route == null ? null : _sectionLabel(route),
                 );
               },
             );
@@ -118,11 +127,13 @@ class _NotificationCard extends StatefulWidget {
     required this.unread,
     required this.onMarkRead,
     this.onOpen,
+    this.openLabel,
   });
   final AppNotification n;
   final bool unread;
   final VoidCallback onMarkRead;
   final VoidCallback? onOpen;
+  final String? openLabel;
 
   @override
   State<_NotificationCard> createState() => _NotificationCardState();
@@ -239,7 +250,7 @@ class _NotificationCardState extends State<_NotificationCard> {
                         child: TextButton.icon(
                           onPressed: widget.onOpen,
                           icon: const Icon(Icons.open_in_new),
-                          label: const Text('Open'),
+                          label: Text('Open ${widget.openLabel ?? 'details'}'),
                         ),
                       ),
                     ],
