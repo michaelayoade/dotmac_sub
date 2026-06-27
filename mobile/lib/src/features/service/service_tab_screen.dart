@@ -119,6 +119,10 @@ class ServiceTabScreen extends ConsumerWidget {
               _FupHeadroomCard(fup: summary.asData!.value.fup!),
               const SizedBox(height: 12),
             ],
+            // Real-time speed, high on the tab so it's visible without a deep
+            // scroll past the history charts.
+            const LiveBandwidthCard(),
+            const SizedBox(height: 12),
             if (service != null && canBuyData) ...[
               Align(
                 alignment: Alignment.centerLeft,
@@ -180,8 +184,6 @@ class ServiceTabScreen extends ConsumerWidget {
               const SizedBox(height: 20),
             ],
             const MonthlyUsageCard(),
-            const LiveBandwidthCard(),
-            const SizedBox(height: 12),
             const SpeedHistoryCard(),
             const SizedBox(height: 12),
             UsageSection(
@@ -254,6 +256,19 @@ class _ServiceHeader extends StatelessWidget {
             Text(details,
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.outline)),
+            // What the plan provides: provisioned line rate (download/upload).
+            if (service.speedSummary != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.speed, size: 15, color: theme.colorScheme.primary),
+                  const SizedBox(width: 5),
+                  Text('Plan speed  ${service.speedSummary}',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ],
             // Only show a renewal line for a real, upcoming date-based expiry.
             // An active service with a stale billing date isn't "due"; postpaid
             // has no date expiry. Genuine lapses show "Expired".

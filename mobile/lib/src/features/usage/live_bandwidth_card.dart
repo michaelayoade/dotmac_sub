@@ -83,7 +83,7 @@ class LiveBandwidthCard extends ConsumerWidget {
                   (v?.peakUploadBps ?? 0) > 0) ...[
                 const SizedBox(height: 12),
                 Text(
-                  'Peak (last hour)  ↓ ${Fmt.bps(v?.peakDownloadBps)}   ↑ ${Fmt.bps(v?.peakUploadBps)}',
+                  'Peak (last hour)  ↑ ${Fmt.bps(v?.peakUploadBps)}   ↓ ${Fmt.bps(v?.peakDownloadBps)}',
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
