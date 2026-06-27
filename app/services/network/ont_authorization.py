@@ -157,6 +157,16 @@ def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment
     return assignments_service.get_or_create_active_assignment(db, ont)
 
 
+def _commit_without_expiring(db: Session) -> None:
+    """Commit before slow device I/O without forcing ORM reloads afterwards."""
+    previous = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    finally:
+        db.expire_on_commit = previous
+
+
 # ---------------------------------------------------------------------------
 # Autofind candidate helpers
 # ---------------------------------------------------------------------------
@@ -507,6 +517,7 @@ def authorize_autofind_ont(
         return finish(success=False, message=dependency_error, status="error")
 
     adapter = get_protocol_adapter(olt)
+    _commit_without_expiring(db)
 
     # Handle force reauthorize - remove existing registration first
     if force_reauthorize:
@@ -557,6 +568,7 @@ def authorize_autofind_ont(
             return finish(success=False, message=profiles_msg, status="error")
 
     # Authorize on OLT
+    _commit_without_expiring(db)
     auth_description = _build_initial_ont_description(normalized_serial)
     auth_result = adapter.authorize_ont(
         fsp,
