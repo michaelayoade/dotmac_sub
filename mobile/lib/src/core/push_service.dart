@@ -170,6 +170,12 @@ class PushService {
             channelDescription: _androidChannel.description,
             importance: Importance.high,
             priority: Priority.high,
+            // Expandable: show the full message when the notification is
+            // pulled down, instead of a single truncated line.
+            styleInformation: BigTextStyleInformation(
+              n.body ?? '',
+              contentTitle: n.title,
+            ),
           ),
           iOS: const DarwinNotificationDetails(),
         ),

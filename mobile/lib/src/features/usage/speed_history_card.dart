@@ -104,6 +104,51 @@ class _SpeedBody extends StatelessWidget {
       ? '${d.hour}:${d.minute.toString().padLeft(2, '0')}'
       : '${d.day}/${d.month}';
 
+  /// X-axis ticks anchored to round local time units (e.g. 16:00, not 16:18).
+  /// We pick a "nice" step for the window, walk the round boundaries across it,
+  /// and snap each to the nearest sample index — labelling with the round
+  /// boundary time. Returns {sampleIndex: label}.
+  Map<int, String> _roundTicks() {
+    final first = points.first.at;
+    final last = points.last.at;
+    final Duration step = hours <= 1
+        ? const Duration(minutes: 15)
+        : hours <= 6
+            ? const Duration(hours: 1)
+            : hours <= 24
+                ? const Duration(hours: 4)
+                : hours <= 168
+                    ? const Duration(days: 1)
+                    : const Duration(days: 5);
+
+    // First round boundary at or after the first sample.
+    DateTime boundary;
+    if (step.inDays >= 1) {
+      boundary = DateTime(first.year, first.month, first.day);
+    } else {
+      final stepMin = step.inMinutes;
+      final mins = (first.hour * 60 + first.minute) ~/ stepMin * stepMin;
+      boundary = DateTime(first.year, first.month, first.day)
+          .add(Duration(minutes: mins));
+    }
+    if (boundary.isBefore(first)) boundary = boundary.add(step);
+
+    final ticks = <int, String>{};
+    for (var t = boundary; !t.isAfter(last); t = t.add(step)) {
+      var best = 0;
+      var bestDiff = points[0].at.difference(t).inSeconds.abs();
+      for (var i = 1; i < points.length; i++) {
+        final d = points[i].at.difference(t).inSeconds.abs();
+        if (d < bestDiff) {
+          bestDiff = d;
+          best = i;
+        }
+      }
+      ticks[best] = _xLabel(t);
+    }
+    return ticks;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -134,7 +179,7 @@ class _SpeedBody extends StatelessWidget {
                 ? (k, 'Kbps')
                 : (1, 'bps');
     final maxY = maxBps <= 0 ? 1.0 : (maxBps / div) * 1.25;
-    final labelStep = (points.length / 5).ceil().clamp(1, 99999);
+    final tickLabels = _roundTicks();
     final download = theme.colorScheme.primary;
     final upload = theme.colorScheme.tertiary;
 
@@ -205,19 +250,17 @@ class _SpeedBody extends StatelessWidget {
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 24,
-                    // Without an explicit interval, fl_chart only ticks at x=0,
-                    // so just the first time showed. Tick at each label step so
-                    // ~5 evenly-spaced times render across the window.
-                    interval: labelStep.toDouble(),
+                    // Evaluate every sample (interval 1) but only render the
+                    // round-time ticks from _roundTicks(), so labels land on
+                    // whole hours/days (16:00) rather than offsets from the
+                    // first sample (16:18).
+                    interval: 1,
                     getTitlesWidget: (v, _) {
-                      final i = v.round();
-                      if (i < 0 || i >= points.length || i % labelStep != 0) {
-                        return const SizedBox.shrink();
-                      }
+                      final label = tickLabels[v.round()];
+                      if (label == null) return const SizedBox.shrink();
                       return Padding(
                         padding: const EdgeInsets.only(top: 4),
-                        child: Text(_xLabel(points[i].at),
-                            style: theme.textTheme.labelSmall),
+                        child: Text(label, style: theme.textTheme.labelSmall),
                       );
                     },
                   ),
