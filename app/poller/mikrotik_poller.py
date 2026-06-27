@@ -47,6 +47,11 @@ def _sanitize_exc(exc: BaseException) -> str:
 # saturates the poller process and dwarfs any UI responsiveness benefit. Real
 # customer dashboards display at ~5s granularity; tune via env if needed.
 POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "5000"))
+# Hard cap on any single device's blocking socket I/O. Without this a silently-
+# dropping router (firewalled/half-open) hangs its executor thread indefinitely;
+# enough of them exhaust the thread pool and stall polling for ALL devices. Both
+# the RouterOS socket_timeout and an asyncio.wait_for guard use this.
+DEVICE_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_DEVICE_IO_TIMEOUT_SEC", "12"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 REDIS_STREAM = os.getenv("BANDWIDTH_REDIS_STREAM", "bandwidth:samples")
 POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in (
@@ -143,22 +148,31 @@ class MikroTikConnection:
         """Establish connection to the device."""
         self._last_attempt = datetime.now(UTC)
         try:
-            # RouterOS API is synchronous, run in executor
+            # RouterOS API is synchronous, run in executor. socket_timeout bounds
+            # the blocking socket ops; wait_for guarantees the async loop is never
+            # blocked by a hung device even if the executor thread lingers.
             loop = asyncio.get_event_loop()
-            self._pool = await loop.run_in_executor(
-                None,
-                lambda: RouterOsApiPool(
-                    self.host,
-                    username=self.username,
-                    password=self.password,
-                    port=self.port,
-                    plaintext_login=True,
+            self._pool = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: RouterOsApiPool(
+                        self.host,
+                        username=self.username,
+                        password=self.password,
+                        port=self.port,
+                        plaintext_login=True,
+                        socket_timeout=DEVICE_IO_TIMEOUT_SEC,
+                    ),
                 ),
+                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
             pool = self._pool
             if pool is None:
                 return False
-            self._connection = await loop.run_in_executor(None, lambda: pool.get_api())
+            self._connection = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: pool.get_api()),
+                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
+            )
             self._last_connected = datetime.now(UTC)
             self._consecutive_failures = 0
             logger.info(f"Connected to MikroTik device {self.device_id} at {self.host}")
@@ -210,8 +224,11 @@ class MikroTikConnection:
 
         try:
             loop = asyncio.get_event_loop()
-            queues = await loop.run_in_executor(
-                None, lambda: conn.get_resource("/queue/simple").get()
+            queues = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: conn.get_resource("/queue/simple").get()
+                ),
+                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
 
             stats = []
