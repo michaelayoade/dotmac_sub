@@ -564,21 +564,24 @@ class BandwidthSamples(ListResponseMixin):
             peak_rx_bps = float(peak.get("rx_peak_bps", 0) or 0)
             peak_tx_bps = float(peak.get("tx_peak_bps", 0) or 0)
 
-            # If metrics store returns zeros but PostgreSQL has samples,
-            # fallback to recent PostgreSQL values for current/peak.
-            if (
-                sample_count_value > 0
-                and current_rx_bps <= 0
-                and current_tx_bps <= 0
-                and peak_rx_bps <= 0
-                and peak_tx_bps <= 0
-            ):
+            # The metrics store (VictoriaMetrics) often has no recent _avg data
+            # even when PostgreSQL has fresh samples, so fall back to PG. Current
+            # and peak are handled INDEPENDENTLY: VM frequently returns a peak
+            # (from bandwidth_*_bps_max) but a 0 current (bandwidth_*_bps_avg
+            # empty) — gating the current fallback on peak also being 0 left the
+            # live reading stuck at 0 while a peak showed.
+            if sample_count_value > 0 and current_rx_bps <= 0 and current_tx_bps <= 0:
                 latest = (
                     db.query(BandwidthSample)
                     .filter(BandwidthSample.subscription_id == subscription_id)
                     .order_by(BandwidthSample.sample_at.desc())
                     .first()
                 )
+                if latest:
+                    current_rx_bps = float(latest.rx_bps or 0)
+                    current_tx_bps = float(latest.tx_bps or 0)
+
+            if sample_count_value > 0 and peak_rx_bps <= 0 and peak_tx_bps <= 0:
                 pg_stats = (
                     db.query(
                         func.max(BandwidthSample.rx_bps).label("peak_rx"),
@@ -590,9 +593,6 @@ class BandwidthSamples(ListResponseMixin):
                     )
                     .first()
                 )
-                if latest:
-                    current_rx_bps = float(latest.rx_bps or 0)
-                    current_tx_bps = float(latest.tx_bps or 0)
                 if pg_stats:
                     peak_rx_bps = float(pg_stats.peak_rx or 0)
                     peak_tx_bps = float(pg_stats.peak_tx or 0)
