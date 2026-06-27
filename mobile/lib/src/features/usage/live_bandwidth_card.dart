@@ -57,7 +57,9 @@ class LiveBandwidthCard extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: _Meter(
-                      label: 'Download',
+                      // Customer perspective: downloading = their device
+                      // receives (RX).
+                      label: 'Download (RX)',
                       icon: Icons.south,
                       bps: v?.downloadBps,
                       waiting: waiting,
@@ -66,7 +68,9 @@ class LiveBandwidthCard extends ConsumerWidget {
                   ),
                   Expanded(
                     child: _Meter(
-                      label: 'Upload',
+                      // Customer perspective: uploading = their device
+                      // transmits (TX).
+                      label: 'Upload (TX)',
                       icon: Icons.north,
                       bps: v?.uploadBps,
                       waiting: waiting,
