@@ -1214,3 +1214,72 @@ def disable_subscriber_from_crm(
     db.commit()
     db.refresh(subscriber)
     return {"id": str(subscriber.id), "status": enum_value(subscriber.status)}
+
+
+def create_installation_invoice(
+    db: Session,
+    *,
+    subscriber_id: str,
+    amount: Decimal,
+    description: str,
+    external_ref: str | None = None,
+    currency: str = "NGN",
+) -> Invoice:
+    """Create a one-time installation invoice (header + single line) for a
+    CRM-driven subscriber. Replaces the old Splynx installation-invoice path.
+
+    Idempotent on ``external_ref``: a repeat call with the same ref returns the
+    existing invoice rather than creating a duplicate. Raises ``LookupError``
+    when the subscriber does not exist.
+    """
+    from app.services.billing.invoices import next_invoice_number
+    from app.services.billing_adapter import (
+        BillingAdapter,
+        InvoiceIntent,
+        InvoiceLineIntent,
+    )
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    subscriber = db.get(Subscriber, sub_uuid) if sub_uuid else None
+    if subscriber is None or not subscriber.is_active:
+        raise LookupError("subscriber_not_found")
+
+    if external_ref:
+        existing = (
+            db.query(Invoice)
+            .filter(Invoice.account_id == subscriber.id)
+            .filter(Invoice.is_active.is_(True))
+            .filter(Invoice.metadata_["crm_external_ref"].astext == str(external_ref))
+            .order_by(Invoice.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+    intent = InvoiceIntent(
+        account_id=subscriber.id,
+        invoice_number=next_invoice_number(db),
+        currency=currency,
+        total=amount,
+        memo=description,
+        status=InvoiceStatus.issued,
+        issued_at=datetime.now(UTC),
+    )
+    invoice = BillingAdapter().create_invoice_with_lines(
+        db,
+        intent,
+        [
+            InvoiceLineIntent(
+                description=description, quantity=Decimal("1"), unit_price=amount
+            )
+        ],
+    )
+    metadata = dict(invoice.metadata_ or {})
+    metadata["source"] = "dotmac_crm"
+    if external_ref:
+        metadata["crm_external_ref"] = str(external_ref)
+    invoice.metadata_ = metadata
+    db.add(invoice)
+    db.commit()
+    db.refresh(invoice)
+    return invoice

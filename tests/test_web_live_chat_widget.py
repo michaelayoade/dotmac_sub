@@ -32,7 +32,7 @@ def test_live_chat_js_handles_reconnect_subscription_and_pending_identity() -> N
     js = _read("static/js/live-chat.js")
 
     assert "loadHistory(false).then(subscribeConversation)" in js
-    assert 'data-live-chat-ready' in js
+    assert "data-live-chat-ready" in js
     assert 'type: "subscribe"' in js
     assert "conversation_id: state.conversationId" in js
     assert "updateConversationId(m.conversation_id)" in js
@@ -42,7 +42,10 @@ def test_live_chat_js_handles_reconnect_subscription_and_pending_identity() -> N
     assert "setSending(true)" in js
     assert "setSending(false)" in js
     assert "reconcilePendingMessage(clientId" in js
-    assert "if (reconcilePendingMessage(clientId, m.message_id || m.id, m.created_at))" in js
+    assert (
+        "if (reconcilePendingMessage(clientId, m.message_id || m.id, m.created_at))"
+        in js
+    )
     assert "function reconcileOutboundEcho" in js
     assert "Math.abs(created - rowCreated) > 30000" in js
     assert "reconcileOutboundEcho(id, body, createdAt)" in js
@@ -50,8 +53,8 @@ def test_live_chat_js_handles_reconnect_subscription_and_pending_identity() -> N
     assert "isAgentMessage(payload)" in js
     assert "payload.sender_type" in js
     assert "payload.from_customer" in js
-    assert "if (ev.key === \"Escape\")" in js
-    assert "document.addEventListener(\"keydown\", trapFocus)" in js
+    assert 'if (ev.key === "Escape")' in js
+    assert 'document.addEventListener("keydown", trapFocus)' in js
 
 
 def test_live_chat_css_covers_contrast_pending_and_safe_area_states() -> None:
