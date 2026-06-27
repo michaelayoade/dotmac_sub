@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../core/payment_errors.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/vas.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
@@ -115,10 +116,10 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
                     color: txn.isDelivered
-                        ? Colors.green
+                        ? context.semantic.success
                         : txn.isRefunded
-                            ? Colors.red
-                            : Colors.amber.shade800,
+                            ? Theme.of(context).colorScheme.error
+                            : context.semantic.warning,
                   ),
                 ),
               ],
@@ -152,10 +153,10 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
                   ? Icons.cancel
                   : Icons.hourglass_top,
           color: txn.isDelivered
-              ? Colors.green
+              ? context.semantic.success
               : txn.isRefunded
-                  ? Colors.red
-                  : Colors.amber,
+                  ? Theme.of(context).colorScheme.error
+                  : context.semantic.warning,
           size: 40,
         ),
         title: Text(txn.isDelivered
@@ -173,8 +174,8 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             if (txn.isRefunded) ...[
               const SizedBox(height: 8),
-              const Text('The money is back in your wallet.',
-                  style: TextStyle(color: Colors.green)),
+              Text('The money is back in your wallet.',
+                  style: TextStyle(color: context.semantic.success)),
             ],
             if (txn.isProcessing) ...[
               const SizedBox(height: 8),
@@ -362,8 +363,9 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(_verifiedName!,
-                    style: const TextStyle(
-                        color: Colors.green, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: context.semantic.success,
+                        fontWeight: FontWeight.w600)),
               ),
             if (service.variations.isNotEmpty) ...[
               const SizedBox(height: 12),

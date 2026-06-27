@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../core/semantic_colors.dart';
+
 /// Small coloured label used for invoice/ticket/subscription statuses.
 class StatusChip extends StatelessWidget {
   const StatusChip(this.label, {super.key, this.tone = StatusTone.neutral});
@@ -39,13 +41,27 @@ class StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (bg, fg) = switch (tone) {
-      StatusTone.positive => (Colors.green.shade100, Colors.green.shade900),
-      StatusTone.negative => (Colors.red.shade100, Colors.red.shade900),
-      StatusTone.warning => (Colors.orange.shade100, Colors.orange.shade900),
+    final scheme = Theme.of(context).colorScheme;
+    final semantic = context.semantic;
+    // Tonal pill: a translucent fill of the foreground hue. Because the
+    // semantic tokens (and colorScheme.error) already adapt to brightness,
+    // this reads correctly in both light and dark mode.
+    final (Color bg, Color fg) = switch (tone) {
+      StatusTone.positive => (
+          semantic.success.withValues(alpha: 0.15),
+          semantic.success
+        ),
+      StatusTone.negative => (
+          scheme.error.withValues(alpha: 0.15),
+          scheme.error
+        ),
+      StatusTone.warning => (
+          semantic.warning.withValues(alpha: 0.15),
+          semantic.warning
+        ),
       StatusTone.neutral => (
-          Colors.blueGrey.shade100,
-          Colors.blueGrey.shade900
+          scheme.surfaceContainerHighest,
+          scheme.onSurfaceVariant
         ),
     };
     return Container(

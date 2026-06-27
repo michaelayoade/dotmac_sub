@@ -28,6 +28,7 @@ class ChatScreen extends ConsumerWidget {
         title: const Text('Support chat'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
           onPressed: () =>
               context.canPop() ? context.pop() : context.go(fallbackRoute),
         ),

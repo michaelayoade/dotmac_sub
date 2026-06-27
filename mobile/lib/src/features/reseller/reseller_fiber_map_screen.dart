@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../core/semantic_colors.dart';
 import '../../models/reseller.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -70,8 +71,8 @@ class ResellerFiberMapScreen extends ConsumerWidget {
                             _ => Icons.place,
                           },
                           color: switch (p.type) {
-                            'fdh_cabinet' => Colors.green.shade800,
-                            'splice_closure' => Colors.orange.shade800,
+                            'fdh_cabinet' => context.semantic.success,
+                            'splice_closure' => context.semantic.warning,
                             'access_point' => Colors.blue.shade800,
                             _ => Colors.grey.shade800,
                           },

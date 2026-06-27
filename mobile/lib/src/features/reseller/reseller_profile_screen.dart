@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/reseller.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
@@ -242,7 +243,7 @@ class _ResellerEmailVerifiedTileState
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.verified, size: 18, color: Colors.green.shade600),
+            Icon(Icons.verified, size: 18, color: context.semantic.success),
             const SizedBox(width: 6),
             const Text('Verified'),
           ],
