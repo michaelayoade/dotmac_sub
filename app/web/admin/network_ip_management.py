@@ -1,6 +1,6 @@
 """Admin network IP management and VLAN web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -779,6 +779,25 @@ def ipv6_pd_release(
     if pool_id:
         target = f"{target}?pool_id={pool_id}"
     return RedirectResponse(url=target, status_code=303)
+
+
+@router.post(
+    "/ip-management/ipv6-pd/assign",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ipv6_pd_assign(
+    pool_id: str = Form(...),
+    subscriber_id: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Manually delegate a prefix from a PD pool to a subscriber."""
+    web_network_ip_service.assign_delegated_prefix_action(
+        db, pool_id=pool_id, subscriber_id=subscriber_id
+    )
+    return RedirectResponse(
+        url=f"/admin/network/ip-management/ipv6-pd?pool_id={pool_id}",
+        status_code=303,
+    )
 
 
 @router.get(
