@@ -95,10 +95,12 @@
                     <input type="text" data-typeahead-input
                            placeholder="Search by name, account number, email, or phone"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                    <input type="hidden" data-typeahead-hidden />
+                    <input type="hidden" name="subscriber_ids" data-typeahead-hidden />
                     <div data-typeahead-results></div>
                 </div>
             </div>
+
+            <div data-service-extension-selected-inputs aria-hidden="true"></div>
 
             <div x-show="selectedCustomers.length" x-cloak class="space-y-2">
                 <template x-for="customer in selectedCustomers" :key="customer.id">
@@ -153,10 +155,38 @@ function serviceExtensionForm(initialScope) {
                 label: item.label || item.name || id,
                 meta: meta || id
             });
+            this.ensureCustomerInput(id);
             this.clearTypeahead(event);
         },
         removeCustomer(id) {
             this.selectedCustomers = this.selectedCustomers.filter((customer) => customer.id !== id);
+            this.removeCustomerInput(id);
+        },
+        ensureCustomerInput(id) {
+            const holder = document.querySelector("[data-service-extension-selected-inputs]");
+            if (!holder) {
+                return;
+            }
+            const exists = Array.from(holder.querySelectorAll("input[data-customer-id]"))
+                .some((input) => input.dataset.customerId === id);
+            if (exists) {
+                return;
+            }
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "subscriber_ids";
+            input.value = id;
+            input.dataset.customerId = id;
+            holder.appendChild(input);
+        },
+        removeCustomerInput(id) {
+            const holder = document.querySelector("[data-service-extension-selected-inputs]");
+            if (!holder) {
+                return;
+            }
+            Array.from(holder.querySelectorAll("input[data-customer-id]"))
+                .filter((input) => input.dataset.customerId === id)
+                .forEach((input) => input.remove());
         },
         clearTypeahead(event) {
             const container = event.target;

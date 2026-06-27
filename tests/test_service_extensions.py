@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -20,7 +21,10 @@ from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
 from app.services import service_extensions as svc
-from app.web.admin.billing_extensions import _subscriber_scope_inputs
+from app.web.admin.billing_extensions import (
+    _service_extension_failure_diagnostics,
+    _subscriber_scope_inputs,
+)
 
 _WIN_START = datetime(2026, 6, 10, 8, 0, tzinfo=UTC)
 _WIN_END = datetime(2026, 6, 10, 20, 0, tzinfo=UTC)
@@ -237,6 +241,40 @@ def test_subscriber_scope_inputs_prefers_selected_uuid_and_keeps_legacy_textarea
         ["ACC-EXT-3", "ACC-EXT-4"],
         False,
     )
+
+
+def test_service_extension_failure_diagnostics_reports_counts_without_identifiers():
+    selected = str(uuid4())
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id="req-123"),
+        url=SimpleNamespace(path="/admin/billing/service-extensions"),
+        method="POST",
+    )
+
+    diagnostics = _service_extension_failure_diagnostics(
+        request,
+        detail="At least one subscriber is required",
+        reason="outage",
+        window_start="2026-06-10T08:00",
+        window_end="2026-06-10T20:00",
+        days=1,
+        scope_type="subscribers",
+        scope_id="",
+        subscriber_ids=["", selected],
+        subscriber_identifiers="ACC-EXT-1\nACC-EXT-2",
+        resolved_ids=[selected],
+        ids_resolved=True,
+    )
+
+    assert diagnostics["event"] == "service_extension_create_failed"
+    assert diagnostics["request_id"] == "req-123"
+    assert diagnostics["subscriber_ids_field_count"] == 2
+    assert diagnostics["subscriber_ids_nonblank_count"] == 1
+    assert diagnostics["subscriber_ids_uuid_count"] == 1
+    assert diagnostics["subscriber_identifiers_line_count"] == 2
+    assert diagnostics["resolved_subscriber_count"] == 1
+    assert "ACC-EXT-1" not in diagnostics.values()
+    assert selected not in diagnostics.values()
 
 
 def test_subscribers_scope_resolves_customer_identifiers(

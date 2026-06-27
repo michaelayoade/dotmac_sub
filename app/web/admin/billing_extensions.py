@@ -1,5 +1,6 @@
 """Admin billing service-extension (outage compensation) routes."""
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -16,6 +17,7 @@ from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+logger = logging.getLogger(__name__)
 
 
 def _context(request: Request, db: Session, extra: dict) -> dict:
@@ -78,6 +80,58 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
+def _nonblank_lines(values: list[str] | None) -> list[str]:
+    lines: list[str] = []
+    for raw_value in values or []:
+        for item in str(raw_value or "").splitlines():
+            value = item.strip()
+            if value:
+                lines.append(value)
+    return lines
+
+
+def _service_extension_failure_diagnostics(
+    request: Request,
+    *,
+    detail: str,
+    reason: str | None,
+    window_start: str | None,
+    window_end: str | None,
+    days: int | None,
+    scope_type: str | None,
+    scope_id: str | None,
+    subscriber_ids: list[str] | None,
+    subscriber_identifiers: str | None,
+    resolved_ids: list[str] | None,
+    ids_resolved: bool,
+) -> dict:
+    selected_lines = _nonblank_lines(subscriber_ids)
+    pasted_lines = _nonblank_lines([subscriber_identifiers or ""])
+    return {
+        "event": "service_extension_create_failed",
+        "request_id": getattr(request.state, "request_id", None),
+        "actor_id": web_admin_service.get_actor_id(request),
+        "path": str(request.url.path),
+        "method": request.method,
+        "status": 400,
+        "validation_detail": detail,
+        "scope_type": scope_type,
+        "scope_id_present": bool(str(scope_id or "").strip()),
+        "reason_present": bool(str(reason or "").strip()),
+        "window_start_present": bool(str(window_start or "").strip()),
+        "window_end_present": bool(str(window_end or "").strip()),
+        "days": days,
+        "subscriber_ids_field_count": len(subscriber_ids or []),
+        "subscriber_ids_nonblank_count": len(selected_lines),
+        "subscriber_ids_uuid_count": sum(
+            1 for value in selected_lines if _is_uuid(value)
+        ),
+        "subscriber_identifiers_line_count": len(pasted_lines),
+        "resolved_subscriber_count": len(resolved_ids or []),
+        "subscriber_ids_resolved": ids_resolved,
+    }
+
+
 @router.get(
     "/service-extensions",
     response_class=HTMLResponse,
@@ -127,6 +181,8 @@ def service_extension_create(
     subscriber_identifiers: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    ids: list[str] | None = None
+    ids_resolved = False
     try:
         scope = ServiceExtensionScope(scope_type)
         ids, ids_resolved = _subscriber_scope_inputs(
@@ -146,6 +202,23 @@ def service_extension_create(
         )
     except Exception as exc:
         detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning(
+            "service_extension_create_failed",
+            extra=_service_extension_failure_diagnostics(
+                request,
+                detail=str(detail),
+                reason=reason,
+                window_start=window_start,
+                window_end=window_end,
+                days=days,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                subscriber_ids=subscriber_ids,
+                subscriber_identifiers=subscriber_identifiers,
+                resolved_ids=ids,
+                ids_resolved=ids_resolved,
+            ),
+        )
         return templates.TemplateResponse(
             "admin/billing/service_extension_form.html",
             _context(request, db, _form_context(db, error=str(detail))),
