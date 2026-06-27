@@ -31,6 +31,10 @@ services:
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: ${REDIS_URL}
       SESSION_REDIS_URL: ${SESSION_REDIS_URL}
+      # GenieACS runs network_mode: host, so it has no bridge IP/DNS name.
+      # Reach its NBI via the dotmac_sub_default gateway (= host) on the
+      # pinned 172.20.255.0/24 subnet rather than the unresolvable "genieacs".
+      GENIEACS_NBI_URL: ${GENIEACS_NBI_URL:-http://172.20.255.1:7557}
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
@@ -202,6 +206,10 @@ services:
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: ${REDIS_URL}
+      # GenieACS runs network_mode: host, so it has no bridge IP/DNS name.
+      # Reach its NBI via the dotmac_sub_default gateway (= host) on the
+      # pinned 172.20.255.0/24 subnet rather than the unresolvable "genieacs".
+      GENIEACS_NBI_URL: ${GENIEACS_NBI_URL:-http://172.20.255.1:7557}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
