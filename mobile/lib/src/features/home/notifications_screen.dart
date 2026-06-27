@@ -39,6 +39,71 @@ String? notificationRoute(AppNotification n) {
   return null;
 }
 
+String _sectionLabel(String route) => switch (route) {
+      '/support/chat' => 'chat',
+      '/billing' => 'billing',
+      '/support' => 'support',
+      '/usage' => 'usage',
+      _ => 'details',
+    };
+
+/// Open the full notification in a bottom sheet. Tapping a card here, not
+/// jumping straight to another screen, so the whole message is always
+/// readable — long bodies scroll, and a related screen (if any) is an
+/// explicit button rather than the side effect of a tap.
+void _showNotificationDetail(
+    BuildContext context, AppNotification n, String? route) {
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (sheetContext) {
+      final theme = Theme.of(sheetContext);
+      final body = n.body?.trim() ?? '';
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(n.title, style: theme.textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                '${n.channel} · ${Fmt.dateTime(n.createdAt)}',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.outline),
+              ),
+              if (body.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Text(body, style: theme.textTheme.bodyMedium),
+                  ),
+                ),
+              ],
+              if (route != null) ...[
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(sheetContext).pop();
+                      context.go(route);
+                    },
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: Text('Open ${_sectionLabel(route)}'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
 
@@ -98,10 +163,11 @@ class NotificationsScreen extends ConsumerWidget {
                 return _NotificationCard(
                   n: n,
                   unread: !readIds.contains(n.id),
-                  hasAction: route != null,
+                  // Tap opens the full message in a sheet (marking it read);
+                  // any related screen is an explicit button inside it.
                   onTap: () {
                     ref.read(readNotificationsProvider.notifier).markRead(n.id);
-                    if (route != null) context.go(route);
+                    _showNotificationDetail(context, n, route);
                   },
                 );
               },
@@ -117,14 +183,10 @@ class _NotificationCard extends StatelessWidget {
   const _NotificationCard({
     required this.n,
     required this.unread,
-    required this.hasAction,
     required this.onTap,
   });
   final AppNotification n;
   final bool unread;
-
-  /// Whether tapping opens a related screen (vs. just marking read).
-  final bool hasAction;
   final VoidCallback onTap;
 
   IconData get _icon => switch (n.channel) {
@@ -138,10 +200,11 @@ class _NotificationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final body = n.body?.trim() ?? '';
     return Card(
       margin: EdgeInsets.zero,
       child: InkWell(
-        onTap: (unread || hasAction) ? onTap : null,
+        onTap: onTap,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(14),
@@ -166,11 +229,12 @@ class _NotificationCard extends StatelessWidget {
                         ),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis),
-                    if (n.body != null && n.body!.trim().isNotEmpty) ...[
+                    if (body.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(n.body!.trim(),
+                      // Preview only — a tap opens the full text in a sheet.
+                      Text(body,
                           style: theme.textTheme.bodySmall,
-                          maxLines: 3,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis),
                     ],
                     const SizedBox(height: 6),
@@ -192,12 +256,11 @@ class _NotificationCard extends StatelessWidget {
                     shape: BoxShape.circle,
                   ),
                 ),
-              if (hasAction)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Icon(Icons.chevron_right,
-                      size: 18, color: theme.colorScheme.outline),
-                ),
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Icon(Icons.chevron_right,
+                    size: 18, color: theme.colorScheme.outline),
+              ),
             ],
           ),
         ),
