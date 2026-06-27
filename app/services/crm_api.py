@@ -1214,3 +1214,56 @@ def disable_subscriber_from_crm(
     db.commit()
     db.refresh(subscriber)
     return {"id": str(subscriber.id), "status": enum_value(subscriber.status)}
+
+
+def create_account_credit(
+    db: Session,
+    *,
+    subscriber_id: str,
+    amount: Decimal,
+    reason: str | None = None,
+    external_ref: str | None = None,
+    currency: str = "NGN",
+):
+    """Issue an account credit (an *issued* credit note) on a subscriber's
+    billing account. Used by the CRM to pay out referral rewards.
+
+    Idempotent on ``external_ref`` (embedded in the memo): a repeat call returns
+    the existing credit note rather than double-crediting. Raises ``LookupError``
+    when the subscriber does not exist.
+    """
+    from app.models.billing import CreditNote, CreditNoteStatus
+    from app.schemas.billing import CreditNoteCreate
+    from app.services import billing as billing_service
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    subscriber = db.get(Subscriber, sub_uuid) if sub_uuid else None
+    if subscriber is None or not subscriber.is_active:
+        raise LookupError("subscriber_not_found")
+
+    ref_marker = f"[ref:{external_ref}]" if external_ref else ""
+    if external_ref:
+        existing = (
+            db.query(CreditNote)
+            .filter(CreditNote.account_id == sub_uuid)
+            .filter(CreditNote.is_active.is_(True))
+            .filter(CreditNote.memo.ilike(f"%{ref_marker}%"))
+            .order_by(CreditNote.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+    memo = (reason or "Referral reward").strip()
+    if ref_marker:
+        memo = f"{memo} {ref_marker}"
+
+    payload = CreditNoteCreate(
+        account_id=sub_uuid,
+        currency=currency,
+        subtotal=amount,
+        total=amount,
+        status=CreditNoteStatus.issued,
+        memo=memo,
+    )
+    return billing_service.credit_notes.create(db, payload)
