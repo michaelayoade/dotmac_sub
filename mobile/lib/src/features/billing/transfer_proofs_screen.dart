@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/payment_proof.dart';
 import '../../models/topup.dart';
 import '../../providers/data_providers.dart';
@@ -122,7 +123,7 @@ class _ProofTile extends StatelessWidget {
     final p = proof;
     final theme = Theme.of(context);
     final (icon, color) = switch (p.status) {
-      'verified' => (Icons.check_circle, Colors.green.shade700),
+      'verified' => (Icons.check_circle, context.semantic.success),
       'rejected' => (Icons.cancel, theme.colorScheme.error),
       _ => (Icons.hourglass_top, theme.colorScheme.outline),
     };

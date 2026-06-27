@@ -28,6 +28,7 @@ class ChatScreen extends ConsumerWidget {
         title: const Text('Support chat'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
           onPressed: () =>
               context.canPop() ? context.pop() : context.go(fallbackRoute),
         ),
@@ -57,6 +58,17 @@ class _ChatViewState extends ConsumerState<ChatView> {
   String get _endpoint => widget.sessionEndpoint;
 
   @override
+  void initState() {
+    super.initState();
+    // Viewing the chat clears the unread badge + marks read.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(chatControllerProvider(_endpoint).notifier).markViewed();
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _input.dispose();
     _scroll.dispose();
@@ -79,10 +91,12 @@ class _ChatViewState extends ConsumerState<ChatView> {
       await ref.read(chatControllerProvider(_endpoint).notifier).send(text);
       _scrollToBottom();
     } catch (_) {
+      // The message stays in the log as a tappable "failed" bubble, so the
+      // draft isn't restored (that would duplicate it). A brief snackbar nudges.
       if (!mounted) return;
-      _input.text = text;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Message failed to send.')),
+        const SnackBar(
+            content: Text('Message failed to send — tap it to retry.')),
       );
     }
   }
@@ -96,6 +110,10 @@ class _ChatViewState extends ConsumerState<ChatView> {
       final grew = (prev?.messages.length ?? 0) != next.messages.length;
       final startedTyping = (prev?.agentTyping ?? false) != next.agentTyping;
       if (grew || startedTyping) _scrollToBottom();
+      // While the chat is on screen, keep it marked read (no badge buildup).
+      if (grew && next.unread > 0) {
+        ref.read(chatControllerProvider(_endpoint).notifier).markViewed();
+      }
     });
 
     return state.loading
@@ -109,6 +127,7 @@ class _ChatViewState extends ConsumerState<ChatView> {
               )
             : Column(
                 children: [
+                  if (!state.connected) _ReconnectingBar(),
                   Expanded(child: _buildLog(state)),
                   const Divider(height: 1),
                   _buildComposer(state),
@@ -199,6 +218,25 @@ class _ChatViewState extends ConsumerState<ChatView> {
             style: theme.textTheme.labelSmall
                 ?.copyWith(color: theme.colorScheme.primary)),
       ],
+      if (mine && m.status == MessageStatus.sending) ...[
+        const SizedBox(width: 6),
+        const SizedBox(
+            width: 9,
+            height: 9,
+            child: CircularProgressIndicator(strokeWidth: 1.4)),
+        const SizedBox(width: 3),
+        Text('Sending…',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+      ],
+      if (mine && m.status == MessageStatus.failed) ...[
+        const SizedBox(width: 6),
+        Icon(Icons.error_outline, size: 13, color: theme.colorScheme.error),
+        const SizedBox(width: 2),
+        Text('Failed — tap to retry',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.error)),
+      ],
     ];
 
     final column = Column(
@@ -215,7 +253,17 @@ class _ChatViewState extends ConsumerState<ChatView> {
     );
 
     if (mine) {
-      return Align(alignment: Alignment.centerRight, child: column);
+      // A failed message is tappable to retry.
+      final aligned = Align(alignment: Alignment.centerRight, child: column);
+      if (m.status == MessageStatus.failed) {
+        return GestureDetector(
+          onTap: () => ref
+              .read(chatControllerProvider(_endpoint).notifier)
+              .retryFailed(m),
+          child: aligned,
+        );
+      }
+      return aligned;
     }
     // Agent rows lead with the agent's avatar.
     return Row(
@@ -357,6 +405,35 @@ class _TypingBubbleState extends State<_TypingBubble>
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Thin banner shown while the realtime socket is down (reconnecting). Messages
+/// still send over REST; this just signals delivery may be briefly delayed.
+class _ReconnectingBar extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      color: theme.colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 11,
+            height: 11,
+            child: CircularProgressIndicator(
+                strokeWidth: 1.6, color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(width: 8),
+          Text('Reconnecting…',
+              style: theme.textTheme.labelMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        ],
+      ),
     );
   }
 }

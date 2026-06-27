@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
@@ -753,7 +754,7 @@ class _ServiceSwitcher extends StatelessWidget {
             avatar: Icon(
               s.isActive ? Icons.circle : Icons.pause_circle_outline,
               size: 14,
-              color: s.isActive ? Colors.green.shade600 : null,
+              color: s.isActive ? context.semantic.success : null,
             ),
             onSelected: (_) => onSelect(s.id),
           );
@@ -941,11 +942,11 @@ class _CurrentServiceCard extends StatelessWidget {
             // expired — show nothing rather than alarm next to the IP.
             < 0 => (theme.colorScheme.outline, null, null),
             <= 3 => (
-                Colors.orange.shade800,
+                context.semantic.warning,
                 'Validity',
                 '$days day${days == 1 ? '' : 's'} left'
               ),
-            _ => (Colors.green.shade700, 'Validity', '$days days left'),
+            _ => (context.semantic.success, 'Validity', '$days days left'),
           };
 
     return Card(

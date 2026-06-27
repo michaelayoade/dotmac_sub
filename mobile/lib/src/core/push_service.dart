@@ -256,6 +256,7 @@ class PushService {
       'message_outbound',
       'message-new',
       'message_new',
+      'chat_message',
       'support message',
       'new message',
       'agent replied',
@@ -273,7 +274,7 @@ class PushService {
       return '/billing';
     }
     if (has(['usage', 'quota', 'data', 'cap'])) return '/usage';
-    return null;
+    return '/dashboard/notifications';
   }
 
   static String? _internalRoute(Object? value) {

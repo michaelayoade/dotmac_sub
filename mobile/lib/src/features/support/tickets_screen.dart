@@ -7,6 +7,7 @@ import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
+import '../../providers/chat_controller.dart';
 import 'chat_screen.dart';
 
 /// Support tab: a Tickets | Live chat segment that switches in-place. Selecting
@@ -25,6 +26,12 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
   @override
   Widget build(BuildContext context) {
     final tickets = ref.watch(ticketsProvider);
+    // Unread agent replies (badge on the Live chat segment). Watching this opens
+    // the kept-alive chat session while on Support, so replies are tracked even
+    // before the user taps into the chat.
+    final unread = ref.watch(
+      chatControllerProvider('/me/chat/session').select((s) => s.unread),
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Support')),
@@ -40,16 +47,21 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(
+              segments: [
+                const ButtonSegment(
                   value: false,
                   icon: Icon(Icons.confirmation_number_outlined),
                   label: Text('Tickets'),
                 ),
                 ButtonSegment(
                   value: true,
-                  icon: Icon(Icons.forum_outlined),
-                  label: Text('Live chat'),
+                  icon: const Icon(Icons.forum_outlined),
+                  label: unread > 0
+                      ? Badge(
+                          label: Text('$unread'),
+                          child: const Text('Live chat'),
+                        )
+                      : const Text('Live chat'),
                 ),
               ],
               selected: {_chat},

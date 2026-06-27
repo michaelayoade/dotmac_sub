@@ -141,11 +141,22 @@ void main() {
         '/support/chat',
       );
       expect(
+        PushService.routeForNotificationData({'type': 'chat_message'}),
+        '/support/chat',
+      );
+      expect(
         PushService.routeForNotificationData(
           const {},
           title: 'New support message',
         ),
         '/support/chat',
+      );
+    });
+
+    test('routes generic push payloads to the notifications inbox', () {
+      expect(
+        PushService.routeForNotificationData({'type': 'account_notice'}),
+        '/dashboard/notifications',
       );
     });
   });

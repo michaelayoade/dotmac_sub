@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'config/env.dart';
 import 'core/messenger.dart';
+import 'core/semantic_colors.dart';
 import 'core/payment_link_handler.dart';
 import 'providers/auth_controller.dart';
 import 'providers/theme_controller.dart';
@@ -71,26 +72,34 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
 
-    ThemeData themeFor(Brightness brightness) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Brand.primaryColor,
-            brightness: brightness,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(centerTitle: false),
-          inputDecorationTheme: const InputDecorationTheme(
-            border: OutlineInputBorder(),
-          ),
-        );
-
     return MaterialApp.router(
       title: Brand.name,
       scaffoldMessengerKey: _messengerKey,
       debugShowCheckedModeBanner: false,
-      theme: themeFor(Brightness.light),
-      darkTheme: themeFor(Brightness.dark),
+      theme: dotmacThemeFor(Brightness.light),
+      darkTheme: dotmacThemeFor(Brightness.dark),
       themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
     );
   }
 }
+
+/// The app's [ThemeData] for a given [brightness]. Top-level (not a closure)
+/// so widget tests can mount the real theme — including the [SemanticColors]
+/// extension that backs `context.semantic.success/warning` in both modes.
+ThemeData dotmacThemeFor(Brightness brightness) => ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Brand.primaryColor,
+        brightness: brightness,
+      ),
+      useMaterial3: true,
+      appBarTheme: const AppBarTheme(centerTitle: false),
+      inputDecorationTheme: const InputDecorationTheme(
+        border: OutlineInputBorder(),
+      ),
+      extensions: [
+        brightness == Brightness.dark
+            ? SemanticColors.dark
+            : SemanticColors.light,
+      ],
+    );

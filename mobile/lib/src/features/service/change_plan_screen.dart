@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/plan_change.dart';
 import '../../models/subscription.dart';
 import '../../providers/data_providers.dart';
@@ -137,7 +138,8 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
               Card(
                 color: theme.colorScheme.surfaceContainerHighest,
                 child: ListTile(
-                  leading: const Icon(Icons.check_circle, color: Colors.green),
+                  leading:
+                      Icon(Icons.check_circle, color: context.semantic.success),
                   title: Text('Current: ${opts.currentOffer!.name}'),
                   subtitle: Text(
                       '${Fmt.money(opts.currentOffer!.amount, opts.currentOffer!.currency)} ${opts.currentOffer!.periodLabel}'),

@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../config/env.dart';
 import '../../core/api_exception.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/auth.dart';
 import '../../providers/auth_controller.dart';
 
@@ -484,7 +485,7 @@ class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.verified, size: 18, color: Colors.green.shade600),
+            Icon(Icons.verified, size: 18, color: context.semantic.success),
             const SizedBox(width: 6),
             const Text('Verified'),
           ],

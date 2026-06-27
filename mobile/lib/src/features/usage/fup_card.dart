@@ -83,11 +83,14 @@ class FupCard extends StatelessWidget {
                 color: accent,
               ),
             ],
-            if (fup.needsAttention && fup.resetsAt != null) ...[
+            if (fup.needsAttention) ...[
               const SizedBox(height: 4),
               Text(
-                '${blocked ? 'Paused' : 'Throttled'} until '
-                '${Fmt.date(fup.resetsAt!)}',
+                // A past reset date is stale (the cycle hasn't rolled yet) —
+                // don't show a confusing back-date; say it lifts next cycle.
+                (fup.resetsAt != null && fup.resetsAt!.isAfter(DateTime.now()))
+                    ? '${blocked ? 'Paused' : 'Throttled'} until ${Fmt.date(fup.resetsAt!)}'
+                    : '${blocked ? 'Paused' : 'Throttled'} — lifts next billing cycle',
                 style:
                     theme.textTheme.bodySmall?.copyWith(color: scheme.outline),
               ),
