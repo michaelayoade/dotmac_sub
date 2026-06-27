@@ -84,8 +84,13 @@
 
                 <div class="mt-6 grid gap-4 sm:grid-cols-2">
                     <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
-                        <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Speed</p>
-                        <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ service.speed | default('300 Kbps') }}</p>
+                        <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Plan speed</p>
+                        {# Provisioned line rate from the offer (upload / download), matching mobile. #}
+                        {% set _dl = service.offer.speed_download_mbps if service.offer else None %}
+                        {% set _ul = service.offer.speed_upload_mbps if service.offer else None %}
+                        <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">
+                            {% if _dl or _ul %}↑{{ _ul or '—' }} ↓{{ _dl or '—' }} Mbps{% else %}—{% endif %}
+                        </p>
                     </div>
                     <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
                         <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Next Bill</p>
