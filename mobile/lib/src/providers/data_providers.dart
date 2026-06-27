@@ -150,6 +150,13 @@ final accountIdProvider = Provider<String?>((ref) {
 /// refreshes on pull-to-refresh / explicit invalidation; this only governs how
 /// long an unwatched result survives in memory.
 void cacheFor(Ref ref, [Duration ttl = const Duration(minutes: 5)]) {
+  // Bind the cached result to the signed-in identity. Without this, a provider
+  // that was kept alive (5-min TTL) survives a session change: after an in-app
+  // session expiry → re-login, the dashboard kept serving the previous
+  // session's stale value/error and never refetched (only a cold relaunch
+  // fixed it). Watching the account id makes every cached provider refetch when
+  // the user changes (login, account switch).
+  ref.watch(accountIdProvider);
   final link = ref.keepAlive();
   Timer? timer;
   ref.onDispose(() => timer?.cancel());
