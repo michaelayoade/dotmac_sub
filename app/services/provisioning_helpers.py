@@ -622,6 +622,14 @@ def _ensure_ip_assignments(
                     f"{version_key}_prefix_length": assignment.prefix_length,
                 }
             )
+
+    # IPv6 prefix delegation (flag-gated by IPV6_PD_ENABLED): allocate a delegated
+    # prefix into the app's PD inventory; the RADIUS writers emit
+    # Delegated-IPv6-Prefix from there. No-op when disabled or no PD pool resolves.
+    from app.services import ipv6_pd
+
+    ipv6_pd.provision_pd_for_subscription(db, subscription)
+
     db.commit()
     return updates
 
