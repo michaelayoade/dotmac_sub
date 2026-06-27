@@ -21,6 +21,7 @@ import redis.asyncio as redis
 from routeros_api import RouterOsApiPool
 
 from app.models.catalog import (
+    CatalogOffer,
     NasDevice,
     NasDeviceStatus,
     NasVendor,
@@ -287,8 +288,18 @@ class DevicePool:
         self._connections: dict[UUID, MikroTikConnection] = {}
         self._queue_mappings: dict[UUID, dict[str, UUID]] = {}
         self._login_mappings: dict[UUID, dict[str, UUID]] = {}
+        # subscription_id -> (rx_cap_bps, tx_cap_bps) from the plan's provisioned
+        # speed. The fallback cap when a RouterOS queue is uncapped (max-limit
+        # 0/0, common on "unlimited" plans), so a glitchy rate still can't exceed
+        # the plan rate.
+        self._speed_caps: dict[UUID, tuple[int, int]] = {}
         self._refresh_interval = refresh_interval
         self._last_refresh: datetime | None = None
+
+    def resolve_speed(self, subscription_id: UUID) -> tuple[int, int]:
+        """Plan rate caps (rx_bps, tx_bps) for a subscription, or (0, 0) if
+        unknown (no cap applied)."""
+        return self._speed_caps.get(subscription_id, (0, 0))
 
     @staticmethod
     def _resolve_mikrotik_api_port(device: NasDevice) -> int:
@@ -483,6 +494,29 @@ class DevicePool:
                 self._queue_mappings.pop(device_id, None)
                 self._login_mappings.pop(device_id, None)
 
+            # Plan rate caps (subscriber download = NAS tx, upload = NAS rx),
+            # used to clamp glitchy samples on uncapped RouterOS queues.
+            speed_caps: dict[UUID, tuple[int, int]] = {}
+            speed_rows = (
+                db.query(
+                    Subscription.id,
+                    CatalogOffer.speed_download_mbps,
+                    CatalogOffer.speed_upload_mbps,
+                )
+                .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+                .filter(
+                    Subscription.status.in_(
+                        [SubscriptionStatus.active, SubscriptionStatus.pending]
+                    )
+                )
+                .all()
+            )
+            for sub_id, dl_mbps, ul_mbps in speed_rows:
+                rx_cap = int(ul_mbps) * 1_000_000 if ul_mbps else 0  # upload -> rx
+                tx_cap = int(dl_mbps) * 1_000_000 if dl_mbps else 0  # download -> tx
+                speed_caps[sub_id] = (rx_cap, tx_cap)
+            self._speed_caps = speed_caps
+
             logger.info(f"Device pool refreshed: {len(self._connections)} devices")
 
         finally:
@@ -674,9 +708,13 @@ class BandwidthPoller:
                     # RouterOS simple-queue rate is already bits/s. Clamp to the
                     # queue's configured max-limit: a queue physically cannot pass
                     # more than its cap, so a reported rate above it is a RouterOS
-                    # glitch that would otherwise become a bogus "peak".
-                    rx_bps = _clamp_rate(qs.rate_rx, qs.max_rx)
-                    tx_bps = _clamp_rate(qs.rate_tx, qs.max_tx)
+                    # glitch that would otherwise become a bogus "peak". When the
+                    # queue is uncapped (max-limit 0/0, common on "unlimited"
+                    # plans), fall back to the plan's provisioned speed so the
+                    # glitch still can't exceed the rate the customer pays for.
+                    rx_plan, tx_plan = self.device_pool.resolve_speed(subscription_id)
+                    rx_bps = _clamp_rate(qs.rate_rx, qs.max_rx or rx_plan)
+                    tx_bps = _clamp_rate(qs.rate_tx, qs.max_tx or tx_plan)
                     samples.append(
                         BandwidthSample(
                             subscription_id=str(subscription_id),

@@ -29,3 +29,19 @@ def test_unlimited_cap_passes_through():
 
 def test_negative_rate_floored_to_zero():
     assert _clamp_rate(-5, 100_000_000) == 0
+
+
+# The poller picks the cap as `queue_max_limit or plan_cap` — so uncapped queues
+# (max-limit 0/0, common on unlimited plans) fall back to the plan rate.
+
+
+def test_uncapped_queue_falls_back_to_plan_cap():
+    queue_max = 0  # RouterOS "0/0" — unlimited queue
+    plan_cap = 100_000_000  # plan provisions 100 Mbps
+    # 491 Mbps glitch on an "unlimited" queue is still clamped to the plan rate.
+    assert _clamp_rate(491_000_000, queue_max or plan_cap) == 100_000_000
+
+
+def test_uncapped_queue_no_plan_known_passes_through():
+    # No queue cap and no plan cap -> nothing to clamp against.
+    assert _clamp_rate(491_000_000, 0 or 0) == 491_000_000
