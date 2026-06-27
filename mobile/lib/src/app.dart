@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'config/env.dart';
 import 'core/messenger.dart';
@@ -29,6 +30,15 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
     // surface a snackbar from outside any BuildContext.
     _messengerKey = ref.read(scaffoldMessengerKeyProvider);
     _paymentLinks = PaymentLinkHandler(ref, _messengerKey)..start();
+    ref.read(pushServiceProvider).wireRouteHandler(_openPushRoute);
+  }
+
+  void _openPushRoute(String route) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = rootNavigatorKey.currentContext;
+      if (context == null) return;
+      GoRouter.of(context).go(route);
+    });
   }
 
   @override

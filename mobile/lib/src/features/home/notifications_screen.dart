@@ -17,6 +17,20 @@ String? notificationRoute(AppNotification n) {
       .toLowerCase();
   bool has(List<String> words) => words.any(hay.contains);
 
+  if (has([
+    'message.outbound',
+    'message_outbound',
+    'message_new',
+    'support message',
+    'new message',
+    'agent replied',
+    'agent message',
+    'live chat',
+    'chat',
+    'crm',
+  ])) {
+    return '/support/chat';
+  }
   if (has(['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {
     return '/billing';
   }
@@ -84,15 +98,10 @@ class NotificationsScreen extends ConsumerWidget {
                 return _NotificationCard(
                   n: n,
                   unread: !readIds.contains(n.id),
-                  // Every notification is now tappable: actionable ones open a
-                  // related screen; the rest fall back to home so a tap is
-                  // never a dead no-op.
-                  hasAction: true,
+                  hasAction: route != null,
                   onTap: () {
                     ref.read(readNotificationsProvider.notifier).markRead(n.id);
-                    // Unknown / unmapped types: there's nothing specific to
-                    // open, so route home rather than no-op or crash.
-                    context.go(route ?? '/dashboard');
+                    if (route != null) context.go(route);
                   },
                 );
               },
