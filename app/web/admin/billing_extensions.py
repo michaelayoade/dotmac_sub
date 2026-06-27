@@ -177,7 +177,7 @@ def service_extension_create(
     days: int = Form(...),
     scope_type: str = Form(...),
     scope_id: str | None = Form(None),
-    subscriber_ids: list[str] | None = Form(None),
+    subscriber_ids: list[str] = Form(default=[]),
     subscriber_identifiers: str | None = Form(None),
     db: Session = Depends(get_db),
 ):

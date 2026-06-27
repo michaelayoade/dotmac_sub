@@ -2,11 +2,22 @@
    exposed as --brand-primary, else a sensible default. */
 .dm-chat {
   --dm-chat-primary: var(--brand-primary, #3b82f6);
+  --dm-chat-out-bg: #dbeafe;
+  --dm-chat-out-text: #0f172a;
+  --dm-chat-in-bg: #e2e8f0;
+  --dm-chat-in-text: #0f172a;
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
   z-index: 1050;
   font-family: inherit;
+}
+
+.dark .dm-chat {
+  --dm-chat-out-bg: #1e40af;
+  --dm-chat-out-text: #f8fafc;
+  --dm-chat-in-bg: #334155;
+  --dm-chat-in-text: #f8fafc;
 }
 
 .dm-chat-bubble {
@@ -84,6 +95,21 @@
   gap: 8px;
 }
 
+.dark .dm-chat-log { background: #0f172a; }
+
+.dm-chat-empty,
+.dm-chat-history-error {
+  padding: 12px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dm-chat-history-error button {
+  margin-left: 8px;
+  color: var(--dm-chat-primary);
+  text-decoration: underline;
+}
+
 .dm-chat-msg {
   display: flex;
   flex-direction: column;
@@ -94,9 +120,36 @@
   line-height: 1.35;
 }
 .dm-chat-msg-who { font-size: 11px; opacity: 0.65; margin-bottom: 2px; }
-.dm-chat-msg-out { align-self: flex-end; background: var(--dm-chat-primary); color: #fff; }
-.dm-chat-msg-out .dm-chat-msg-who { color: #fff; }
-.dm-chat-msg-in { align-self: flex-start; background: #e2e8f0; color: #0f172a; }
+.dm-chat-msg-out {
+  align-self: flex-end;
+  background: #dbeafe !important;
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a;
+}
+.dm-chat-msg-out .dm-chat-msg-who { color: #0f172a; }
+.dm-chat-msg-in {
+  align-self: flex-start;
+  background: #e2e8f0 !important;
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a;
+}
+.dark .dm-chat-msg-out {
+  background: #1e40af !important;
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc;
+}
+.dark .dm-chat-msg-in {
+  background: #334155 !important;
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc;
+}
+.dm-chat-msg-pending { opacity: 0.72; }
+.dm-chat-msg-failed { outline: 1px solid #ef4444; }
+.dm-chat-msg-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.65;
+}
 
 .dm-chat-typing { padding: 0 12px 6px; font-size: 12px; color: #64748b; }
 
@@ -112,6 +165,12 @@
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 14px;
+  caret-color: var(--dm-chat-primary);
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a;
+}
+#dm-chat #dm-chat-input {
+  background: #fff;
 }
 .dm-chat-send {
   border: none;

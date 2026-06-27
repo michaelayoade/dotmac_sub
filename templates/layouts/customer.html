@@ -526,6 +526,8 @@
         });
     }
 </script>
+{% if not (customer and customer.read_only) %}
 {% set chat_session_endpoint = "/portal/chat/session" %}
 {% include "components/chat_widget.html" %}
+{% endif %}
 {% endblock %}

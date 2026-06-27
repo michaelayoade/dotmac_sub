@@ -16,12 +16,17 @@
   </button>
 
   <section id="dm-chat-panel" class="dm-chat-panel" role="dialog"
-           aria-label="Support chat" hidden>
+           aria-modal="true" aria-labelledby="dm-chat-title" hidden>
     <header class="dm-chat-header">
-      <span class="dm-chat-title">{{ chat_title | default('Chat with us') }}</span>
+      <span id="dm-chat-title" class="dm-chat-title">{{ chat_title | default('Chat with us') }}</span>
       <button id="dm-chat-close" class="dm-chat-close" type="button"
               aria-label="Close chat">&times;</button>
     </header>
+    <div id="dm-chat-empty" class="dm-chat-empty">No messages yet. Start the conversation below.</div>
+    <div id="dm-chat-history-error" class="dm-chat-history-error" hidden>
+      Could not load chat history.
+      <button id="dm-chat-history-retry" type="button">Retry</button>
+    </div>
     <div id="dm-chat-log" class="dm-chat-log" aria-live="polite"></div>
     <div id="dm-chat-typing" class="dm-chat-typing" hidden>Agent is typing…</div>
     <form id="dm-chat-form" class="dm-chat-form">

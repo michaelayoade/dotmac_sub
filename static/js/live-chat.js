@@ -22,6 +22,9 @@
     input: document.getElementById("dm-chat-input"),
     send: document.getElementById("dm-chat-send"),
     status: document.getElementById("dm-chat-status"),
+    empty: document.getElementById("dm-chat-empty"),
+    historyError: document.getElementById("dm-chat-history-error"),
+    historyRetry: document.getElementById("dm-chat-history-retry"),
   };
 
   var sessionEndpoint = root.getAttribute("data-session-endpoint") ||
@@ -34,6 +37,9 @@
     open: false,
     unread: 0,
     seen: {}, // message id -> true (dedupe)
+    pending: {},
+    sending: false,
+    conversationId: null,
     typingTimer: null,
     reconnect: 0,
   };
@@ -45,20 +51,83 @@
     return d.innerHTML;
   }
 
+  function updateEmptyState() {
+    if (!els.empty) return;
+    els.empty.hidden = els.log.children.length > 0;
+  }
+
+  function updateConversationId(id) {
+    if (!id) return;
+    state.conversationId = id;
+    if (state.session) state.session.conversation_id = id;
+  }
+
+  function setSending(on) {
+    state.sending = on;
+    els.send.disabled = on || !state.session;
+  }
+
+  function isAgentMessage(payload) {
+    return payload.direction === "outbound" ||
+      payload.sender_type === "agent" ||
+      payload.from_customer === false;
+  }
+
   function appendMessage(msg) {
     // msg: {id, body, direction, author_name, created_at}
     var id = msg.id || msg.message_id;
     if (id && state.seen[id]) return;
     if (id) state.seen[id] = true;
-    var dir = msg.direction === "outbound" ? "in" : "out"; // outbound (agent)=incoming to us
+    var pending = !!msg.pending;
+    var failed = !!msg.failed;
+    var dir = isAgentMessage(msg) ? "in" : "out"; // outbound (agent)=incoming to us
     var row = document.createElement("div");
     row.className = "dm-chat-msg dm-chat-msg-" + dir;
+    if (pending) row.className += " dm-chat-msg-pending";
+    if (failed) row.className += " dm-chat-msg-failed";
+    if (id) row.dataset.messageId = id;
+    if (msg.client_message_id) row.dataset.clientMessageId = msg.client_message_id;
+    if (msg.created_at) row.dataset.createdAt = msg.created_at;
     var who = dir === "in" ? (msg.author_name || "Support") : "You";
     row.innerHTML =
       '<span class="dm-chat-msg-who">' + esc(who) + "</span>" +
-      '<span class="dm-chat-msg-body">' + esc(msg.body) + "</span>";
+      '<span class="dm-chat-msg-body">' + esc(msg.body) + "</span>" +
+      '<span class="dm-chat-msg-meta">' + (pending ? "Sending…" : "") + "</span>";
     els.log.appendChild(row);
     els.log.scrollTop = els.log.scrollHeight;
+    updateEmptyState();
+  }
+
+  function reconcilePendingMessage(clientId, serverId, createdAt) {
+    if (!clientId || !state.pending[clientId]) return false;
+    var row = state.pending[clientId];
+    row.classList.remove("dm-chat-msg-pending", "dm-chat-msg-failed");
+    if (serverId) {
+      row.dataset.messageId = serverId;
+      state.seen[serverId] = true;
+    }
+    if (createdAt) row.dataset.createdAt = createdAt;
+    var meta = row.querySelector(".dm-chat-msg-meta");
+    if (meta) meta.textContent = "";
+    delete state.pending[clientId];
+    return true;
+  }
+
+  function reconcileOutboundEcho(id, body, createdAt) {
+    var created = createdAt ? Date.parse(createdAt) : 0;
+    var rows = Object.keys(state.pending).map(function (key) {
+      return state.pending[key];
+    });
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var rowCreated = row.dataset.createdAt ? Date.parse(row.dataset.createdAt) : 0;
+      if (created && rowCreated && Math.abs(created - rowCreated) > 30000) continue;
+      var text = row.querySelector(".dm-chat-msg-body");
+      if (text && text.textContent === body) {
+        return reconcilePendingMessage(row.dataset.clientMessageId, id, createdAt);
+      }
+    }
+    return false;
   }
 
   function setStatus(text) {
@@ -83,7 +152,7 @@
 
   function enableComposer(on) {
     els.input.disabled = !on;
-    els.send.disabled = !on;
+    els.send.disabled = !on || state.sending;
   }
 
   function cookieValue(name) {
@@ -106,33 +175,64 @@
     return fetch(state.session.api_base + path, opts);
   }
 
-  function loadHistory() {
+  function loadHistory(showErrors) {
+    if (els.historyError) els.historyError.hidden = true;
     return crm(
       "/session/" + state.session.session_id + "/messages?limit=50"
     )
-      .then(function (r) { return r.ok ? r.json() : { messages: [] }; })
+      .then(function (r) {
+        if (!r.ok) throw new Error("history failed");
+        return r.json();
+      })
       .then(function (data) {
         (data.messages || []).forEach(appendMessage);
+        updateEmptyState();
       })
-      .catch(function () {});
+      .catch(function () {
+        if (showErrors && els.historyError) els.historyError.hidden = false;
+      });
   }
 
   function sendMessage(body) {
+    var clientId = "client-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    var createdAt = new Date().toISOString();
+    appendMessage({
+      id: clientId,
+      client_message_id: clientId,
+      body: body,
+      direction: "inbound",
+      created_at: createdAt,
+      pending: true,
+    });
+    state.pending[clientId] = els.log.querySelector('[data-client-message-id="' + clientId + '"]');
     return crm("/session/" + state.session.session_id + "/message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: body }),
+      body: JSON.stringify({ body: body, client_message_id: clientId }),
     })
       .then(function (r) {
         if (!r.ok) throw new Error("send failed");
         return r.json();
       })
       .then(function (m) {
+        updateConversationId(m.conversation_id);
+        if (reconcilePendingMessage(clientId, m.message_id || m.id, m.created_at)) return;
         appendMessage({
-          id: m.message_id,
+          id: m.message_id || m.id,
           body: m.body,
-          direction: "inbound", // our own message → render as outgoing
+          direction: "inbound",
+          created_at: m.created_at,
         });
+      })
+      .catch(function (e) {
+        var row = state.pending[clientId];
+        if (row) {
+          row.classList.remove("dm-chat-msg-pending");
+          row.classList.add("dm-chat-msg-failed");
+          var meta = row.querySelector(".dm-chat-msg-meta");
+          if (meta) meta.textContent = "Failed";
+        }
+        throw e;
       });
   }
 
@@ -159,6 +259,7 @@
     ws.onopen = function () {
       state.reconnect = 0;
       setStatus("");
+      subscribeConversation();
     };
 
     ws.onmessage = function (ev) {
@@ -167,11 +268,19 @@
       var type = data.event || data.type;
       var payload = data.data || data.payload || data;
       if (type === "message_new") {
+        updateConversationId(payload.conversation_id);
+        var id = payload.id || payload.message_id;
+        var body = payload.body;
+        var createdAt = payload.created_at;
+        if (!isAgentMessage(payload) && reconcileOutboundEcho(id, body, createdAt)) {
+          return;
+        }
         appendMessage({
-          id: payload.id || payload.message_id,
-          body: payload.body,
+          id: id,
+          body: body,
           direction: payload.direction || "outbound",
           author_name: payload.author_name,
+          created_at: createdAt,
         });
         if (!state.open) setUnread(state.unread + 1);
         else markRead();
@@ -208,6 +317,14 @@
     }
   }
 
+  function subscribeConversation() {
+    if (!state.ws || state.ws.readyState !== 1 || !state.conversationId) return;
+    state.ws.send(JSON.stringify({
+      type: "subscribe",
+      conversation_id: state.conversationId,
+    }));
+  }
+
   // ── lifecycle ──────────────────────────────────────────────────────────
   function start() {
     if (state.started) return Promise.resolve();
@@ -232,11 +349,12 @@
       })
       .then(function (s) {
         state.session = s;
+        updateConversationId(s.conversation_id);
         setStatus("");
         enableComposer(true);
         els.input.focus();
         connectWs();
-        return loadHistory();
+        return loadHistory(false).then(subscribeConversation);
       })
       .catch(function (e) {
         state.started = false;
@@ -251,6 +369,7 @@
   function openPanel() {
     els.panel.hidden = false;
     els.bubble.setAttribute("aria-expanded", "true");
+    root.setAttribute("data-live-chat-ready", "true");
     state.open = true;
     start().then(markRead);
   }
@@ -266,15 +385,24 @@
     state.open ? closePanel() : openPanel();
   });
   els.close.addEventListener("click", closePanel);
+  if (els.historyRetry) {
+    els.historyRetry.addEventListener("click", function () {
+      if (state.session) loadHistory(true);
+    });
+  }
 
   els.form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     var body = (els.input.value || "").trim();
     if (!body || !state.session) return;
+    if (state.sending) return;
     els.input.value = "";
+    setSending(true);
     sendMessage(body).catch(function () {
       setStatus("Message failed to send.");
       els.input.value = body;
+    }).finally(function () {
+      setSending(false);
     });
   });
 
@@ -287,5 +415,15 @@
     }
   });
 
+  function trapFocus(ev) {
+    if (!state.open) return;
+    if (ev.key === "Escape") {
+      closePanel();
+      els.bubble.focus();
+    }
+  }
+  document.addEventListener("keydown", trapFocus);
+
   root.hidden = false;
+  updateEmptyState();
 })();
