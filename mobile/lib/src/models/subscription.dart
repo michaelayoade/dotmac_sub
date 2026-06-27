@@ -13,6 +13,8 @@ class Subscription {
     this.offerName,
     this.offerServiceType,
     this.offerAccessType,
+    this.downloadMbps,
+    this.uploadMbps,
     this.login,
     this.ipv4Address,
     this.ipv6Address,
@@ -34,6 +36,8 @@ class Subscription {
   final String? offerName;
   final String? offerServiceType; // business | residential | ...
   final String? offerAccessType; // fiber | wireless | ...
+  final int? downloadMbps; // provisioned line rate (offer)
+  final int? uploadMbps;
   final String? login;
   final String? ipv4Address;
   final String? ipv6Address;
@@ -73,6 +77,15 @@ class Subscription {
 
   String get displayName =>
       offerName ?? serviceDescription ?? 'Subscription ${id.substring(0, 8)}';
+
+  /// Provisioned line rate as "↓100 ↑50 Mbps" (download / upload), or null when
+  /// the offer carries no speeds.
+  String? get speedSummary {
+    if (downloadMbps == null && uploadMbps == null) return null;
+    final d = downloadMbps?.toString() ?? '—';
+    final u = uploadMbps?.toString() ?? '—';
+    return '↓$d ↑$u Mbps';
+  }
 
   /// "Business · fiber" style plan descriptor, when available.
   String? get planType {
@@ -127,6 +140,8 @@ class Subscription {
     final offer = json['offer'];
     String? offerField(String key) =>
         offer is Map ? offer[key] as String? : null;
+    int? offerInt(String key) =>
+        offer is Map ? (offer[key] as num?)?.toInt() : null;
     return Subscription(
       id: json['id'].toString(),
       accountId: (json['account_id'] ?? json['subscriber_id']).toString(),
@@ -137,6 +152,8 @@ class Subscription {
       offerName: offerField('name'),
       offerServiceType: offerField('service_type'),
       offerAccessType: offerField('access_type'),
+      downloadMbps: offerInt('speed_download_mbps'),
+      uploadMbps: offerInt('speed_upload_mbps'),
       login: json['login'] as String?,
       ipv4Address: json['ipv4_address'] as String?,
       ipv6Address: json['ipv6_address'] as String?,

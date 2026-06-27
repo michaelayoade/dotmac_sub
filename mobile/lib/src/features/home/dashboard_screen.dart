@@ -94,17 +94,24 @@ class DashboardScreen extends ConsumerWidget {
     // always-available credit balance (/me/balance), not the feature-gated VAS
     // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
     final balance = ref.watch(balanceProvider).asData?.value;
-    // Peak download throughput for the "Peak" tile. Prefer the exact
-    // billing-cycle peak from the cycle summary; fall back to the ~30d stats
-    // window until that ships. Both are subscriber-perspective download bps.
+    // Peak throughput for the "Peak" tile — shown per direction (↓ download,
+    // ↑ upload), subscriber perspective. Prefer the exact billing-cycle peak
+    // from the cycle summary; fall back to the ~30d stats window.
     final peak30 = ref.watch(peakBandwidthProvider).asData?.value;
-    final peakBps = cycleSummary?.peakDownloadBps ?? peak30?.peakDownloadBps;
+    final peakDownBps =
+        cycleSummary?.peakDownloadBps ?? peak30?.peakDownloadBps;
+    final peakUpBps = cycleSummary?.peakUploadBps ?? peak30?.peakUploadBps;
     final peakLoaded = cycleSummary != null || peak30 != null;
+    String mbps(double? b) => (b == null || b <= 0)
+        ? '—'
+        : (b / 1e6).toStringAsFixed(b >= 1e7 ? 0 : 1);
+    final peakHasData = (peakDownBps != null && peakDownBps > 0) ||
+        (peakUpBps != null && peakUpBps > 0);
     final peakValue = !peakLoaded
         ? null // still loading
-        : (peakBps == null || peakBps <= 0
+        : (!peakHasData
             ? '—'
-            : '${(peakBps / 1e6).toStringAsFixed(peakBps >= 1e7 ? 0 : 1)} Mbps');
+            : '↓${mbps(peakDownBps)} ↑${mbps(peakUpBps)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
