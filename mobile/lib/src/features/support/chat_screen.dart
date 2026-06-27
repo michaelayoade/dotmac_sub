@@ -5,10 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../../models/chat.dart';
 import '../../providers/chat_controller.dart';
 
-/// Live chat with support. A thin view over [ChatController], which owns the
-/// brokered session, history, and polling for the lifetime of the app session —
-/// so leaving this screen (or switching tabs) does not end the conversation.
-class ChatScreen extends ConsumerStatefulWidget {
+/// Standalone live-chat screen (its own Scaffold + back) — used for deep links
+/// / push-notification taps (`/chat`, `/reseller/chat`). In-app, the Support
+/// tab embeds [ChatView] directly so chat stays in the Support window.
+class ChatScreen extends ConsumerWidget {
   const ChatScreen({
     super.key,
     this.sessionEndpoint = '/me/chat/session',
@@ -22,10 +22,35 @@ class ChatScreen extends ConsumerStatefulWidget {
   final String fallbackRoute;
 
   @override
-  ConsumerState<ChatScreen> createState() => _ChatScreenState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Support chat'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go(fallbackRoute),
+        ),
+      ),
+      body: ChatView(sessionEndpoint: sessionEndpoint),
+    );
+  }
 }
 
-class _ChatScreenState extends ConsumerState<ChatScreen> {
+/// The chat UI body (message log + composer) without any Scaffold/AppBar, so it
+/// can be embedded inside another screen (the Support tab) or wrapped by
+/// [ChatScreen] for standalone use. Owns its own scroll/input; the conversation
+/// itself lives in the kept-alive [ChatController].
+class ChatView extends ConsumerStatefulWidget {
+  const ChatView({super.key, this.sessionEndpoint = '/me/chat/session'});
+
+  final String sessionEndpoint;
+
+  @override
+  ConsumerState<ChatView> createState() => _ChatViewState();
+}
+
+class _ChatViewState extends ConsumerState<ChatView> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
 
@@ -73,33 +98,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (grew || startedTyping) _scrollToBottom();
     });
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Support chat'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.canPop()
-              ? context.pop()
-              : context.go(widget.fallbackRoute),
-        ),
-      ),
-      body: state.loading
-          ? const Center(child: CircularProgressIndicator())
-          : state.error != null
-              ? _ErrorView(
-                  message: state.error!,
-                  onRetry: () => ref
-                      .read(chatControllerProvider(_endpoint).notifier)
-                      .retry(),
-                )
-              : Column(
-                  children: [
-                    Expanded(child: _buildLog(state)),
-                    const Divider(height: 1),
-                    _buildComposer(state),
-                  ],
-                ),
-    );
+    return state.loading
+        ? const Center(child: CircularProgressIndicator())
+        : state.error != null
+            ? _ErrorView(
+                message: state.error!,
+                onRetry: () => ref
+                    .read(chatControllerProvider(_endpoint).notifier)
+                    .retry(),
+              )
+            : Column(
+                children: [
+                  Expanded(child: _buildLog(state)),
+                  const Divider(height: 1),
+                  _buildComposer(state),
+                ],
+              );
   }
 
   Widget _buildLog(ChatState state) {
