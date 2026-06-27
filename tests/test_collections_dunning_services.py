@@ -2,8 +2,8 @@
 
 from datetime import UTC, datetime
 
-from app.models.collections import DunningAction, DunningCase, DunningCaseStatus
 from app.models.catalog import SubscriptionStatus
+from app.models.collections import DunningAction, DunningCase, DunningCaseStatus
 from app.models.subscriber import SubscriberStatus
 from app.schemas.collections import (
     DunningActionLogCreate,

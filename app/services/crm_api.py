@@ -1268,7 +1268,11 @@ def create_installation_invoice(
     invoice = BillingAdapter().create_invoice_with_lines(
         db,
         intent,
-        [InvoiceLineIntent(description=description, quantity=Decimal("1"), unit_price=amount)],
+        [
+            InvoiceLineIntent(
+                description=description, quantity=Decimal("1"), unit_price=amount
+            )
+        ],
     )
     metadata = dict(invoice.metadata_ or {})
     metadata["source"] = "dotmac_crm"
