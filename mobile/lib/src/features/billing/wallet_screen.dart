@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
 import '../../core/payment_errors.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/wallet.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -251,7 +252,9 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                 entry.isCredit
                     ? Icons.arrow_downward_rounded
                     : Icons.arrow_upward_rounded,
-                color: entry.isCredit ? Colors.green : Colors.grey,
+                color: entry.isCredit
+                    ? context.semantic.success
+                    : theme.colorScheme.outline,
               ),
               title: Text(entry.memo ??
                   entry.category.replaceAll('_', ' ').toUpperCase()),
@@ -262,7 +265,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                 '${entry.isCredit ? '+' : '−'}${Fmt.money(entry.amount, entry.currency)}',
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: entry.isCredit ? Colors.green : null,
+                  color: entry.isCredit ? context.semantic.success : null,
                 ),
               ),
             ),

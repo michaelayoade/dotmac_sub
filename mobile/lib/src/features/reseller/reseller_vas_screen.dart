@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/vas.dart';
 import '../../providers/data_providers.dart';
 import '../../repositories/reseller_repository.dart';
@@ -78,6 +79,7 @@ class _ResellerVasScreenState extends ConsumerState<ResellerVasScreen> {
         title: const Text('Airtime & bills'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
           onPressed: () =>
               context.canPop() ? context.pop() : context.go('/reseller'),
         ),
@@ -142,8 +144,8 @@ class _ResellerVasScreenState extends ConsumerState<ResellerVasScreen> {
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
                                     color: sale['status'] == 'delivered'
-                                        ? Colors.green
-                                        : Colors.amber.shade800,
+                                        ? context.semantic.success
+                                        : context.semantic.warning,
                                   ),
                                 ),
                               ),
@@ -258,8 +260,9 @@ class _SellSheetState extends ConsumerState<_SellSheet> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(_verifiedName!,
-                    style: const TextStyle(
-                        color: Colors.green, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: context.semantic.success,
+                        fontWeight: FontWeight.w600)),
               ),
             if (service.variations.isNotEmpty) ...[
               const SizedBox(height: 12),

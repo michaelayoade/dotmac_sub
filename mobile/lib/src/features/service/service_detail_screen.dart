@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/subscription.dart';
 import '../../widgets/status_chip.dart';
 
@@ -109,18 +110,18 @@ class _ExpiryCard extends StatelessWidget {
             // "validity unknown".
             null => s.nextBillingAt != null
                 ? (
-                    Colors.green.shade700,
+                    context.semantic.success,
                     'Next bill ${Fmt.date(s.nextBillingAt)}'
                   )
                 : (scheme.outline, 'No expiry date'),
             0 => (scheme.error, 'Expires today'),
             // Active service, stale billing date: running, not expired.
-            < 0 => (Colors.green.shade700, 'Active'),
+            < 0 => (context.semantic.success, 'Active'),
             <= 3 => (
-                Colors.orange.shade800,
+                context.semantic.warning,
                 '$days day${days == 1 ? '' : 's'} left'
               ),
-            _ => (Colors.green.shade700, '$days days left'),
+            _ => (context.semantic.success, '$days days left'),
           };
     return Card(
       child: Padding(

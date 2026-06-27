@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/addon.dart';
 import '../../models/subscription.dart';
 import '../../providers/data_providers.dart';
@@ -180,7 +181,8 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
             Card(
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
-                leading: const Icon(Icons.check_circle, color: Colors.green),
+                leading:
+                    Icon(Icons.check_circle, color: context.semantic.success),
                 title: Text(a.name),
                 subtitle: a.quantity > 1 ? Text('x${a.quantity}') : null,
                 trailing: TextButton(
