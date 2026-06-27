@@ -35,6 +35,10 @@ class _FakeDevicePool:
     def resolve_subscription(self, device_id, queue_name):
         return self.subscription_id
 
+    def resolve_speed(self, subscription_id):
+        # No plan cap in this fixture -> no clamp applied.
+        return (0, 0)
+
 
 def test_mikrotik_queue_rates_are_stored_as_bits_per_second():
     device_id = uuid4()
