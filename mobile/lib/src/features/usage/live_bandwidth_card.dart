@@ -17,7 +17,9 @@ class LiveBandwidthCard extends ConsumerWidget {
     final enabled = ref.watch(liveBandwidthEnabledProvider);
     final live = ref.watch(liveBandwidthProvider);
     final v = live.asData?.value;
-    final waiting = enabled && (live.isLoading || !(v?.hasSignal ?? false));
+    // "Measuring…" only until the first reading returns. Once it does, show the
+    // value even when it's 0 (idle) — otherwise an idle line looks stuck.
+    final waiting = enabled && v == null;
 
     return Card(
       child: Padding(
