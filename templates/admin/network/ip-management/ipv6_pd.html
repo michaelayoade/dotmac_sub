@@ -39,6 +39,27 @@
         {% endfor %}
     </div>
 
+    {% if pd_pools %}
+    <form method="post" action="/admin/network/ip-management/ipv6-pd/assign"
+          class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% include "components/forms/csrf_input.html" %}
+        <div>
+            <label class="block text-xs font-medium text-slate-500">Pool</label>
+            <select name="pool_id" required class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for pool in pd_pools %}
+                <option value="{{ pool.id }}" {% if pd_pool_filter == pool.id %}selected{% endif %}>{{ pool.name }} ({{ pool.cidr }}, /{{ pool.delegation_prefix_length }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="grow">
+            <label class="block text-xs font-medium text-slate-500">Subscriber ID</label>
+            <input type="text" name="subscriber_id" required placeholder="subscriber UUID"
+                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+        <button type="submit" class="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700">Delegate prefix</button>
+    </form>
+    {% endif %}
+
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             <thead class="bg-slate-50 dark:bg-slate-900/50">

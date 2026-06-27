@@ -2553,6 +2553,29 @@ def release_delegated_prefix_action(db, prefix_id: str) -> str | None:
     return None
 
 
+def assign_delegated_prefix_action(
+    db, *, pool_id: str, subscriber_id: str
+) -> str | None:
+    """Manually delegate a prefix from an IPv6 PD pool to a subscriber.
+    Returns an error message, or None on success."""
+    from app.models.network import IpPool
+    from app.models.subscriber import Subscriber
+    from app.services import ipv6_pd
+
+    pool = db.get(IpPool, coerce_uuid(pool_id)) if pool_id else None
+    if pool is None:
+        return "Select a valid IPv6 PD pool."
+    if not subscriber_id or db.get(Subscriber, coerce_uuid(subscriber_id)) is None:
+        return "Enter a valid subscriber ID."
+    prefix = ipv6_pd.allocate_delegated_prefix(
+        db, pool=pool, subscriber_id=coerce_uuid(subscriber_id)
+    )
+    if prefix is None:
+        return "Could not delegate a prefix (pool not IPv6/usable or exhausted)."
+    db.commit()
+    return None
+
+
 def build_ipv6_networks_data(
     db,
     *,

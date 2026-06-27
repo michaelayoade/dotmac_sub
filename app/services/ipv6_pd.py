@@ -28,7 +28,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.network import IpPool, Ipv6DelegatedPrefix, Ipv6PrefixState
+from app.models.network import IpPool, Ipv6DelegatedPrefix, Ipv6PrefixState, IPVersion
 
 DEFAULT_DELEGATION_PREFIX_LENGTH = 64
 
@@ -215,3 +215,47 @@ def release_subscriber_prefixes(db: Session, subscriber_id) -> int:
     for row in rows:
         release_delegated_prefix(db, row)
     return len(rows)
+
+
+def resolve_pd_pool(db: Session, subscription) -> IpPool | None:
+    """Select the IPv6 PD pool for a subscription.
+
+    Policy: (1) an active IPv6 pool (with a delegation size configured) whose
+    name matches the subscription's RADIUS profile ``ipv6_pool_name``; (2) else,
+    if exactly one such pool exists, use it. None -> PD is skipped (no guessing
+    when several pools are configured and the profile doesn't name one).
+    """
+    base = (
+        db.query(IpPool)
+        .filter(IpPool.ip_version == IPVersion.ipv6)
+        .filter(IpPool.is_active.is_(True))
+        .filter(IpPool.delegation_prefix_length.isnot(None))
+    )
+    profile = getattr(subscription, "radius_profile", None)
+    name = (getattr(profile, "ipv6_pool_name", None) or "").strip() if profile else ""
+    if name:
+        match = base.filter(IpPool.name == name).first()
+        if match is not None:
+            return match
+    pools = base.limit(2).all()
+    return pools[0] if len(pools) == 1 else None
+
+
+def provision_pd_for_subscription(db: Session, subscription):
+    """Allocate a delegated prefix for a subscription when PD is enabled and a
+    pool resolves. Idempotent (allocate reuses the subscriber's existing PD);
+    no-op when the flag is off / no pool / no subscriber."""
+    if not pd_enabled():
+        return None
+    subscriber_id = getattr(subscription, "subscriber_id", None)
+    if not subscriber_id:
+        return None
+    pool = resolve_pd_pool(db, subscription)
+    if pool is None:
+        return None
+    return allocate_delegated_prefix(
+        db,
+        pool=pool,
+        subscriber_id=subscriber_id,
+        subscription_id=getattr(subscription, "id", None),
+    )
