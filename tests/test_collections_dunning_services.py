@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 
 from app.models.collections import DunningAction, DunningCase, DunningCaseStatus
+from app.models.catalog import SubscriptionStatus
+from app.models.subscriber import SubscriberStatus
 from app.schemas.collections import (
     DunningActionLogCreate,
     DunningCaseCreate,
@@ -24,6 +26,25 @@ def test_create_dunning_case(db_session, subscriber_account):
     assert case.account_id == subscriber_account.id
     assert case.status == DunningCaseStatus.open
     assert case.current_step == 1
+
+
+def test_open_dunning_case_refreshes_account_status(
+    db_session, subscriber, subscription
+):
+    subscription.status = SubscriptionStatus.active
+    subscriber.status = SubscriberStatus.active
+    db_session.commit()
+
+    collections_service.dunning_cases.create(
+        db_session,
+        DunningCaseCreate(
+            account_id=subscriber.id,
+            status=DunningCaseStatus.open,
+        ),
+    )
+
+    db_session.refresh(subscriber)
+    assert subscriber.status == SubscriberStatus.delinquent
 
 
 def test_dunning_case_status_transitions(db_session, subscriber_account):
@@ -347,6 +368,8 @@ def test_payment_resolves_open_but_not_paused_cases(
         started_at=datetime.now(UTC),
     )
     db_session.add_all([open_case, paused_case])
+    subscription.status = SubscriptionStatus.active
+    subscriber.status = SubscriberStatus.delinquent
     db_session.commit()
 
     collections_service.dunning_workflow.resolve_cases_for_account(
@@ -356,8 +379,10 @@ def test_payment_resolves_open_but_not_paused_cases(
 
     db_session.refresh(open_case)
     db_session.refresh(paused_case)
+    db_session.refresh(subscriber)
     assert open_case.status == DunningCaseStatus.resolved
     assert paused_case.status == DunningCaseStatus.paused  # operator hold kept
+    assert subscriber.status == SubscriberStatus.active
 
 
 def test_suspend_proceeds_when_overdue_and_unshielded(

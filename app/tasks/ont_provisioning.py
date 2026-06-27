@@ -223,6 +223,7 @@ def authorize_ont(
                 try:
                     from app.services.network_operations import network_operations
 
+                    db.rollback()
                     network_operations.mark_failed(db, operation_id, str(exc))
                     db.commit()
                 except Exception:

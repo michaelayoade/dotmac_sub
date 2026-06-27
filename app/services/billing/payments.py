@@ -488,6 +488,9 @@ def _record_unallocated_payment_credit(
 def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
     """Recompute invoice totals, restore eligible service, then derive account status."""
     _recalculate_invoice_totals(db, invoice)
+    # Sessions use autoflush=False, so make the recomputed balance visible
+    # before has_overdue_balance queries the database.
+    db.flush()
 
     if invoice.status == InvoiceStatus.paid:
         from app.services import collections as collections_service

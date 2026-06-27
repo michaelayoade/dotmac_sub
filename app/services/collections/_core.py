@@ -294,6 +294,18 @@ def _create_action_log(
     return log
 
 
+def _refresh_account_status(db: Session, account_id) -> None:
+    """Keep subscriber status aligned with dunning case state."""
+    from app.services.account_lifecycle import compute_account_status
+
+    try:
+        compute_account_status(db, str(account_id))
+    except ValueError:
+        logger.warning(
+            "Cannot recompute account status for %s: account not found", account_id
+        )
+
+
 def _suspend_account(
     db: Session,
     account_id: str,
@@ -985,6 +997,8 @@ class DunningCases(ListResponseMixin):
                 )
         case = DunningCase(**data)
         db.add(case)
+        db.flush()
+        _refresh_account_status(db, case.account_id)
         db.commit()
         db.refresh(case)
         return case
@@ -1028,6 +1042,8 @@ class DunningCases(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Dunning case not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(case, key, value)
+        db.flush()
+        _refresh_account_status(db, case.account_id)
         db.commit()
         db.refresh(case)
         return case
@@ -1074,6 +1090,8 @@ class DunningCases(ListResponseMixin):
             },
             account_id=case.account_id,
         )
+        db.flush()
+        _refresh_account_status(db, case.account_id)
         db.commit()
         db.refresh(case)
         return case
@@ -1101,6 +1119,8 @@ class DunningCases(ListResponseMixin):
             outcome="resumed",
             notes=notes or "Case resumed",
         )
+        db.flush()
+        _refresh_account_status(db, case.account_id)
         db.commit()
         db.refresh(case)
         return case
@@ -1178,6 +1198,8 @@ class DunningCases(ListResponseMixin):
 
         # Restore any throttled credentials
         _restore_throttle(db, str(case.account_id))
+        db.flush()
+        _refresh_account_status(db, case.account_id)
 
         db.commit()
         db.refresh(case)
@@ -1407,6 +1429,7 @@ class DunningWorkflow(ListResponseMixin):
                 if not payload.dry_run:
                     db.add(case)
                     db.flush()
+                    _refresh_account_status(db, account_id)
                     # Emit dunning.started event
                     emit_event(
                         db,
@@ -1522,6 +1545,8 @@ class DunningWorkflow(ListResponseMixin):
                     )
                     # Restore throttled credentials if any
                     _restore_throttle(db, str(case.account_id))
+                    db.flush()
+                    _refresh_account_status(db, case.account_id)
         if not payload.dry_run:
             db.commit()
         return DunningRunResponse(
@@ -1562,6 +1587,8 @@ class DunningWorkflow(ListResponseMixin):
                 outcome="resolved",
                 notes="Resolved after payment",
             )
+        db.flush()
+        _refresh_account_status(db, account_id)
         if commit:
             db.commit()
         return len(cases)
