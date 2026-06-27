@@ -119,6 +119,10 @@ class ServiceTabScreen extends ConsumerWidget {
               _FupHeadroomCard(fup: summary.asData!.value.fup!),
               const SizedBox(height: 12),
             ],
+            // Real-time speed, high on the tab so it's visible without a deep
+            // scroll past the history charts.
+            const LiveBandwidthCard(),
+            const SizedBox(height: 12),
             if (service != null && canBuyData) ...[
               Align(
                 alignment: Alignment.centerLeft,
@@ -180,8 +184,6 @@ class ServiceTabScreen extends ConsumerWidget {
               const SizedBox(height: 20),
             ],
             const MonthlyUsageCard(),
-            const LiveBandwidthCard(),
-            const SizedBox(height: 12),
             const SpeedHistoryCard(),
             const SizedBox(height: 12),
             UsageSection(
