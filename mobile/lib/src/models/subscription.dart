@@ -78,13 +78,13 @@ class Subscription {
   String get displayName =>
       offerName ?? serviceDescription ?? 'Subscription ${id.substring(0, 8)}';
 
-  /// Provisioned line rate as "↓100 ↑50 Mbps" (download / upload), or null when
+  /// Provisioned line rate as "↑50 ↓100 Mbps" (upload / download), or null when
   /// the offer carries no speeds.
   String? get speedSummary {
     if (downloadMbps == null && uploadMbps == null) return null;
     final d = downloadMbps?.toString() ?? '—';
     final u = uploadMbps?.toString() ?? '—';
-    return '↓$d ↑$u Mbps';
+    return '↑$u ↓$d Mbps';
   }
 
   /// "Business · fiber" style plan descriptor, when available.

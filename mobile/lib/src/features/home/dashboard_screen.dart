@@ -111,7 +111,7 @@ class DashboardScreen extends ConsumerWidget {
         ? null // still loading
         : (!peakHasData
             ? '—'
-            : '↓${mbps(peakDownBps)} ↑${mbps(peakUpBps)} Mbps');
+            : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
