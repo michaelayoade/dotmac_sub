@@ -24,6 +24,9 @@ class ChatSession {
       );
 }
 
+/// Delivery state of one of OUR messages (agent messages are always [sent]).
+enum MessageStatus { sending, sent, failed }
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -33,10 +36,14 @@ class ChatMessage {
     this.authorAvatar,
     this.createdAt,
     this.readAt,
+    this.status = MessageStatus.sent,
   });
 
   final String id;
   final String body;
+
+  /// Delivery state — drives the "sending…/failed" indicator on our bubbles.
+  final MessageStatus status;
 
   /// True when the message came from a support agent (CRM "outbound"); false
   /// for the subscriber's own messages.
@@ -51,6 +58,19 @@ class ChatMessage {
   /// When an agent read this (our own) message — drives the "Seen" receipt.
   /// Null until read; only meaningful for the subscriber's own messages.
   final DateTime? readAt;
+
+  ChatMessage copyWith(
+          {String? id, MessageStatus? status, DateTime? createdAt}) =>
+      ChatMessage(
+        id: id ?? this.id,
+        body: body,
+        fromAgent: fromAgent,
+        authorName: authorName,
+        authorAvatar: authorAvatar,
+        createdAt: createdAt ?? this.createdAt,
+        readAt: readAt,
+        status: status ?? this.status,
+      );
 
   static DateTime? _parseDate(Object? v) =>
       v is String ? DateTime.tryParse(v) : null;

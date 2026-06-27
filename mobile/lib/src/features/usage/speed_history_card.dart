@@ -148,9 +148,11 @@ class _SpeedBody extends StatelessWidget {
       children: [
         Row(
           children: [
+            // "Latest", not "Now": this is the most recent point in the window,
+            // which may be a few minutes old — labelling it "Now" overstated it.
             Expanded(
-                child:
-                    _Stat(label: 'Now ↓', value: _fmtBps(latest.downloadBps))),
+                child: _Stat(
+                    label: 'Latest ↓', value: _fmtBps(latest.downloadBps))),
             Expanded(child: _Stat(label: 'Peak ↓', value: _fmtBps(peakDown))),
             Expanded(child: _Stat(label: 'Peak ↑', value: _fmtBps(peakUp))),
           ],

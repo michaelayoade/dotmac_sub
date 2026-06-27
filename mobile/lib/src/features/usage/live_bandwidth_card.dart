@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,13 +9,39 @@ import '../../providers/data_providers.dart';
 /// a live stream of the subscriber's current download/upload from
 /// `/me/bandwidth/stats`; Stop ends the polling. Replaces the old connection-
 /// banner "Go live" toggle with a visible, self-contained section.
-class LiveBandwidthCard extends ConsumerWidget {
+class LiveBandwidthCard extends ConsumerStatefulWidget {
   const LiveBandwidthCard({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LiveBandwidthCard> createState() => _LiveBandwidthCardState();
+}
+
+class _LiveBandwidthCardState extends ConsumerState<LiveBandwidthCard> {
+  Timer? _autoStop;
+  static const _idleLimit = Duration(minutes: 5);
+
+  @override
+  void dispose() {
+    _autoStop?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final enabled = ref.watch(liveBandwidthEnabledProvider);
+    // Auto-stop the 15s polling after a few idle minutes to spare battery/data;
+    // restarts on the next Start tap.
+    ref.listen<bool>(liveBandwidthEnabledProvider, (prev, next) {
+      _autoStop?.cancel();
+      if (next) {
+        _autoStop = Timer(_idleLimit, () {
+          if (mounted) {
+            ref.read(liveBandwidthEnabledProvider.notifier).state = false;
+          }
+        });
+      }
+    });
     final live = ref.watch(liveBandwidthProvider);
     final v = live.asData?.value;
     // "Measuring…" only until the first reading returns. Once it does, show the
