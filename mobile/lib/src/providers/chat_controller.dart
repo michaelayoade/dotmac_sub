@@ -18,6 +18,8 @@ class ChatState {
     this.error,
     this.agentTyping = false,
     this.agentReadAt,
+    this.connected = false,
+    this.unread = 0,
   });
 
   final ChatSession? session;
@@ -35,6 +37,14 @@ class ChatState {
   /// CONVERSATION_READ WebSocket event (instant).
   final DateTime? agentReadAt;
 
+  /// Whether the realtime WebSocket is currently connected. False while
+  /// reconnecting/backing off — drives the "reconnecting…" indicator.
+  final bool connected;
+
+  /// Agent messages received while the chat view wasn't open — drives the
+  /// Support tab / Live-chat badge. Reset to 0 when the chat view is shown.
+  final int unread;
+
   ChatState copyWith({
     ChatSession? session,
     List<ChatMessage>? messages,
@@ -43,6 +53,8 @@ class ChatState {
     Object? error = _unset,
     bool? agentTyping,
     Object? agentReadAt = _unset,
+    bool? connected,
+    int? unread,
   }) {
     return ChatState(
       session: session ?? this.session,
@@ -54,6 +66,8 @@ class ChatState {
       agentReadAt: identical(agentReadAt, _unset)
           ? this.agentReadAt
           : agentReadAt as DateTime?,
+      connected: connected ?? this.connected,
+      unread: unread ?? this.unread,
     );
   }
 
@@ -84,6 +98,7 @@ class ChatController extends FamilyNotifier<ChatState, String>
   bool _starting = false;
   bool _foreground = true;
   int _retry = 0;
+  int _tempSeq = 0;
 
   ChatRepository get _repo => ref.read(chatRepositoryProvider);
 
@@ -192,15 +207,18 @@ class ChatController extends FamilyNotifier<ChatState, String>
     try {
       await socket.connect(onEvent: _onSocketEvent, onClosed: _onSocketClosed);
       _retry = 0;
+      state = state.copyWith(connected: true);
       _subscribe();
     } catch (_) {
       _socket = null;
+      state = state.copyWith(connected: false);
       _scheduleReconnect();
     }
   }
 
   void _onSocketClosed() {
     _socket = null;
+    state = state.copyWith(connected: false);
     if (_foreground) _scheduleReconnect();
   }
 
@@ -252,9 +270,19 @@ class ChatController extends FamilyNotifier<ChatState, String>
     state = state.copyWith(
       messages: [...state.messages, msg],
       agentTyping: msg.fromAgent ? false : state.agentTyping,
+      // Bump the unread badge for agent replies; the chat view clears it.
+      unread: msg.fromAgent ? state.unread + 1 : state.unread,
     );
     final session = state.session;
     if (msg.fromAgent && session != null) unawaited(_repo.markRead(session));
+  }
+
+  /// Called by the chat view while it's on screen — clears the unread badge and
+  /// marks the conversation read.
+  void markViewed() {
+    if (state.unread != 0) state = state.copyWith(unread: 0);
+    final session = state.session;
+    if (session != null) unawaited(_repo.markRead(session));
   }
 
   void _setAgentTyping(bool typing) {
@@ -311,25 +339,56 @@ class ChatController extends FamilyNotifier<ChatState, String>
   Future<void> send(String text) async {
     final session = state.session;
     final body = text.trim();
-    if (session == null || body.isEmpty || state.sending) return;
+    if (session == null || body.isEmpty) return;
     _stopTyping();
-    state = state.copyWith(sending: true);
+    // Optimistic: show the message immediately as "sending", then flip to sent
+    // on ACK or failed on error (a failed bubble can be tapped to retry).
+    final tempId = 'temp-${++_tempSeq}';
+    final optimistic = ChatMessage(
+      id: tempId,
+      body: body,
+      fromAgent: false,
+      createdAt: DateTime.now(),
+      status: MessageStatus.sending,
+    );
+    state = state.copyWith(
+      messages: [...state.messages, optimistic],
+      sending: true,
+    );
     try {
       final result = await _repo.send(session, body);
-      final newMessages = state.messages.any((m) => m.id == result.message.id)
-          ? state.messages
-          : [...state.messages, result.message];
-      state = state.copyWith(messages: newMessages, sending: false);
-      // First message may have created the conversation — subscribe the socket.
+      final seen = <String>{};
+      final msgs = <ChatMessage>[];
+      for (final m in state.messages) {
+        final mapped = m.id == tempId
+            ? result.message.copyWith(status: MessageStatus.sent)
+            : m;
+        if (seen.add(mapped.id)) msgs.add(mapped); // dedupe vs WS echo
+      }
+      state = state.copyWith(messages: msgs, sending: false);
       final convId = result.conversationId;
       if (convId != null && convId != _conversationId) {
         _conversationId = convId;
         _subscribe();
       }
     } catch (_) {
-      state = state.copyWith(sending: false);
-      rethrow; // the screen surfaces a snackbar and restores the draft
+      state = state.copyWith(
+        messages: [
+          for (final m in state.messages)
+            if (m.id == tempId) m.copyWith(status: MessageStatus.failed) else m,
+        ],
+        sending: false,
+      );
+      rethrow; // the screen surfaces a snackbar
     }
+  }
+
+  /// Re-send a previously failed message (tapped in the log).
+  Future<void> retryFailed(ChatMessage failed) async {
+    state = state.copyWith(
+      messages: state.messages.where((m) => m.id != failed.id).toList(),
+    );
+    await send(failed.body);
   }
 }
 

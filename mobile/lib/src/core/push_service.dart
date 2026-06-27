@@ -4,8 +4,25 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:go_router/go_router.dart';
 
+import '../router/app_router.dart' show rootNavigatorKey;
 import 'observability.dart';
+
+/// Route a tapped notification to its target screen. Chat replies carry
+/// `type: chat_message` (see crm_webhooks.send_push) — open the chat in the
+/// Support window. Other types fall through to the notifications inbox.
+void handleNotificationTap(Map<String, dynamic> data) {
+  final ctx = rootNavigatorKey.currentContext;
+  if (ctx == null) return;
+  switch (data['type']) {
+    case 'chat_message':
+      ctx.go('/support/chat');
+      break;
+    default:
+      ctx.go('/dashboard/notifications');
+  }
+}
 
 /// Background isolate handler for data/notification messages. Must be a
 /// top-level (or static) function annotated for the Flutter entrypoint.
@@ -112,6 +129,12 @@ class PushService {
     if (!_available || messaging == null || _handlersWired) return;
     _handlersWired = true;
     FirebaseMessaging.onMessage.listen(_showForeground);
+    // Tap routing: backgrounded tap, and the launch message on a cold start.
+    FirebaseMessaging.onMessageOpenedApp
+        .listen((m) => handleNotificationTap(m.data));
+    messaging.getInitialMessage().then((m) {
+      if (m != null) handleNotificationTap(m.data);
+    });
     messaging.onTokenRefresh.listen((token) {
       onToken(token).catchError((Object e) {
         Log.breadcrumb('push: token refresh re-register failed',
