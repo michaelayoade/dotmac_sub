@@ -199,7 +199,13 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                     Expanded(
                       child: FilledButton.icon(
                         onPressed: _busy ? null : () => _fund(wallet),
-                        icon: const Icon(Icons.add),
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.add),
                         label: const Text('Fund'),
                       ),
                     ),

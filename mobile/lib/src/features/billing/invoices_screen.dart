@@ -75,6 +75,10 @@ class InvoicesScreen extends ConsumerWidget {
                           ],
                           _InvoiceFilterBar(
                             selected: filter,
+                            counts: {
+                              for (final f in InvoiceFilter.values)
+                                f: all.where(f.test).length,
+                            },
                             onChanged: (f) => ref
                                 .read(invoiceFilterProvider.notifier)
                                 .state = f,
@@ -231,9 +235,14 @@ class _OutstandingHeader extends StatelessWidget {
 
 /// Status filter chips above the invoices list.
 class _InvoiceFilterBar extends StatelessWidget {
-  const _InvoiceFilterBar({required this.selected, required this.onChanged});
+  const _InvoiceFilterBar({
+    required this.selected,
+    required this.onChanged,
+    this.counts = const {},
+  });
   final InvoiceFilter selected;
   final ValueChanged<InvoiceFilter> onChanged;
+  final Map<InvoiceFilter, int> counts;
 
   @override
   Widget build(BuildContext context) {
@@ -242,7 +251,8 @@ class _InvoiceFilterBar extends StatelessWidget {
       children: [
         for (final f in InvoiceFilter.values)
           ChoiceChip(
-            label: Text(f.label),
+            label:
+                Text(counts[f] != null ? '${f.label} (${counts[f]})' : f.label),
             selected: f == selected,
             onSelected: (_) => onChanged(f),
           ),

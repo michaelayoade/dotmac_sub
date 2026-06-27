@@ -168,6 +168,24 @@ class _SpeedBody extends StatelessWidget {
               maxY: maxY,
               gridData: const FlGridData(show: true, drawVerticalLine: false),
               borderData: FlBorderData(show: false),
+              // Tap/drag a point to see its exact value + time.
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (spots) => spots.map((s) {
+                    final i = s.x.round();
+                    final at = (i >= 0 && i < points.length)
+                        ? _xLabel(points[i].at)
+                        : '';
+                    final dir = s.barIndex == 0 ? '↓' : '↑';
+                    return LineTooltipItem(
+                      '$dir ${s.y.toStringAsFixed(1)} $unit\n$at',
+                      TextStyle(
+                          color: theme.colorScheme.onInverseSurface,
+                          fontSize: 11),
+                    );
+                  }).toList(),
+                ),
+              ),
               titlesData: FlTitlesData(
                 topTitles:
                     const AxisTitles(sideTitles: SideTitles(showTitles: false)),
