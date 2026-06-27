@@ -185,8 +185,12 @@ class _SpeedBody extends StatelessWidget {
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 24,
+                    // Without an explicit interval, fl_chart only ticks at x=0,
+                    // so just the first time showed. Tick at each label step so
+                    // ~5 evenly-spaced times render across the window.
+                    interval: labelStep.toDouble(),
                     getTitlesWidget: (v, _) {
-                      final i = v.toInt();
+                      final i = v.round();
                       if (i < 0 || i >= points.length || i % labelStep != 0) {
                         return const SizedBox.shrink();
                       }
