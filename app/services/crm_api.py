@@ -1237,7 +1237,9 @@ def create_account_credit(
     from app.services import billing as billing_service
 
     sub_uuid = coerce_subscriber_id(str(subscriber_id))
-    subscriber = db.get(Subscriber, sub_uuid) if sub_uuid else None
+    if sub_uuid is None:
+        raise LookupError("subscriber_not_found")
+    subscriber = db.get(Subscriber, sub_uuid)
     if subscriber is None or not subscriber.is_active:
         raise LookupError("subscriber_not_found")
 
