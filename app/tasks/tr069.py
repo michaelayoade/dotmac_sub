@@ -11,6 +11,7 @@ import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 
@@ -81,6 +82,18 @@ def sync_all_acs_devices() -> dict[str, int]:
                 total_local_created += result.get("local_created", 0)
                 total_local_reactivated += result.get("local_reactivated", 0)
                 synced += 1
+            except SoftTimeLimitExceeded:
+                # The soft time limit fires asynchronously and may leave the
+                # shared session's connection mid-statement. Stop now rather
+                # than continuing the loop on a poisoned session (which produced
+                # the "another command is already in progress" cascade); the
+                # finally below closes/resets the connection.
+                logger.warning(
+                    "TR-069 ACS sync hit soft time limit after %d/%d servers",
+                    synced,
+                    len(servers),
+                )
+                raise
             except Exception as e:
                 logger.error(
                     "Failed to sync ACS server %s (%s): %s", server.name, server.id, e
@@ -123,6 +136,14 @@ def sync_all_acs_devices() -> dict[str, int]:
             "total_local_reactivated": total_local_reactivated,
             "errors": errors,
         }
+    except SoftTimeLimitExceeded:
+        # Connection may be mid-statement; best-effort rollback only, then
+        # propagate. db.close() below resets/invalidates it on pool return.
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            logger.warning("rollback after ACS sync timeout failed; resetting on close")
+        raise
     except Exception:
         db.rollback()
         raise
