@@ -329,8 +329,10 @@ class DashboardScreen extends ConsumerWidget {
                   ),
                 _StatCard(
                   icon: Icons.speed_outlined,
-                  // Peak download throughput this period (~30d).
-                  label: 'Peak',
+                  // Peak download throughput over the billing period (cycle
+                  // peak; ~30d stats as fallback). Labelled so customers know
+                  // the window — matches the "This period" usage tile.
+                  label: 'Peak this period',
                   value: peakValue,
                   onTap: () => context.go('/usage'),
                 ),
