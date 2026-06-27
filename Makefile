@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -126,10 +126,21 @@ prod-build: ## Build + tag the immutable prod image from a CLEAN checkout of HEA
 	echo "Building $(APP_IMAGE) (+ dotmac_sub:latest, dotmac_sub:$$sha) from clean HEAD $$sha"; \
 	docker build -t $(APP_IMAGE) -t dotmac_sub:latest -t "dotmac_sub:$$sha" "$$wt"
 
-prod-deploy: ## Full deploy: build image, apply migrations, recreate app+workers from it
+prod-deploy: ## Full deploy: build image, pin it in .env, migrate, recreate app+workers
 	$(MAKE) prod-build
+	$(MAKE) prod-pin
 	$(MAKE) prod-migrate
 	$(MAKE) prod-restart
+
+prod-pin: ## Point .env APP_IMAGE at the freshly-built HEAD image (compose's source of truth)
+	@sha=$$(git rev-parse --short HEAD); \
+	img="dotmac_sub:$$sha"; \
+	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env; \
+	else \
+		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
+	fi; \
+	echo "Pinned APP_IMAGE=$$img in .env (compose now runs this image)"
 
 prod-up: ## Start the production (immutable-image) Docker stack
 	$(PROD_COMPOSE) up -d
