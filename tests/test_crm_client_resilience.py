@@ -12,8 +12,11 @@ import pytest
 
 from app.services.crm_client import (
     _REACHABILITY_CIRCUIT,
+    _RETRY_MAX_ATTEMPTS,
+    _RETRY_MAX_SLEEP,
     CRMClient,
     CRMClientError,
+    _retry_delay,
 )
 
 
@@ -44,6 +47,26 @@ def _client():
     c._token = "tok"
     c._token_expires_at = 10**12
     return c
+
+
+def _seq_client(responses):
+    """Patch target for httpx.Client: each construction yields the next response.
+
+    ``_request`` builds a fresh ``httpx.Client`` per attempt, so one response per
+    construction models the retry loop.
+    """
+    it = iter(responses)
+
+    def factory(*_a, **_k):
+        resp = next(it)
+        inner = MagicMock()
+        inner.request.return_value = resp
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=inner)
+        cm.__exit__ = MagicMock(return_value=False)
+        return cm
+
+    return factory
 
 
 def _raise_connect(*_a, **_k):
@@ -115,6 +138,71 @@ class TestReachabilityCircuit:
             with pytest.raises(CRMClientError):
                 c.list_work_orders(subscriber_id="s2")
         assert http_client.call_count == first_call_count
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit / unavailable retry
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitRetry:
+    def test_429_then_success_is_transparent(self):
+        c = _client()
+        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        responses = [
+            httpx.Response(429, headers={"Retry-After": "0"}, request=req),
+            httpx.Response(200, json={"ok": True}, request=req),
+        ]
+        with (
+            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client.time.sleep") as sleep,
+        ):
+            out = c._request("GET", "/api/v1/tickets")
+        assert out == {"ok": True}
+        sleep.assert_called_once()
+
+    def test_exhausts_retries_then_raises(self):
+        c = _client()
+        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        responses = [
+            httpx.Response(429, request=req) for _ in range(_RETRY_MAX_ATTEMPTS + 1)
+        ]
+        with (
+            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client.time.sleep") as sleep,
+        ):
+            with pytest.raises(CRMClientError, match="429"):
+                c._request("GET", "/api/v1/tickets")
+        assert sleep.call_count == _RETRY_MAX_ATTEMPTS
+
+    def test_non_retry_status_is_not_retried(self):
+        c = _client()
+        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        responses = [httpx.Response(404, request=req)]
+        with (
+            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client.time.sleep") as sleep,
+        ):
+            with pytest.raises(CRMClientError, match="404"):
+                c._request("GET", "/api/v1/tickets")
+        sleep.assert_not_called()
+
+    def test_retry_delay_prefers_retry_after_header(self):
+        req = httpx.Request("GET", "x://y")
+        resp = httpx.Response(429, headers={"Retry-After": "3"}, request=req)
+        assert _retry_delay(resp, 0) == 3.0
+
+    def test_retry_delay_backs_off_and_caps(self):
+        req = httpx.Request("GET", "x://y")
+        resp = httpx.Response(429, request=req)  # no header
+        assert _retry_delay(resp, 0) == 0.5
+        assert _retry_delay(resp, 1) == 1.0
+        assert _retry_delay(resp, 99) == _RETRY_MAX_SLEEP  # clamps
+        # Non-numeric Retry-After (HTTP-date) falls back to backoff.
+        bad = httpx.Response(
+            429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, request=req
+        )
+        assert _retry_delay(bad, 0) == 0.5
 
 
 # ---------------------------------------------------------------------------

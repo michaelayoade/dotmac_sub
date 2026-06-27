@@ -26,6 +26,31 @@ logger = logging.getLogger(__name__)
 _CACHE_LIST_TTL = int(os.getenv("CRM_CACHE_LIST_SECONDS", "60"))
 _CACHE_DETAIL_TTL = int(os.getenv("CRM_CACHE_DETAIL_SECONDS", "30"))
 
+# Bounded retry for transient rate-limit / unavailable responses. A 429/503
+# means the request was rejected (not processed), so retrying — including for
+# POSTs — cannot double-apply. Honour the server's Retry-After when present,
+# else back off exponentially, each delay capped so total wait stays well
+# inside the Celery task time limits.
+_RETRY_STATUSES = frozenset({429, 503})
+_RETRY_MAX_ATTEMPTS = int(os.getenv("CRM_RETRY_MAX_ATTEMPTS", "2"))  # extra tries
+_RETRY_MAX_SLEEP = float(os.getenv("CRM_RETRY_MAX_SLEEP_SECONDS", "8"))
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before the next retry of a 429/503 response.
+
+    Prefers a numeric ``Retry-After`` header; falls back to exponential
+    backoff (0.5s, 1s, 2s, …). Always clamped to ``_RETRY_MAX_SLEEP``.
+    """
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(_RETRY_MAX_SLEEP, max(0.0, float(retry_after)))
+        except ValueError:
+            # HTTP-date form is rare here; fall through to backoff.
+            pass
+    return min(_RETRY_MAX_SLEEP, 0.5 * (2**attempt))
+
 
 class CRMClientError(Exception):
     """Base exception for CRM client errors."""
@@ -142,17 +167,36 @@ class CRMClient:
         token = self._ensure_token()
         url = f"{self.base_url}{path}"
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.request(
-                    method,
-                    url,
-                    params=params,
-                    json=json_data,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        **(headers or {}),
-                    },
-                )
+            attempt = 0
+            while True:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json_data,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            **(headers or {}),
+                        },
+                    )
+                if (
+                    resp.status_code in _RETRY_STATUSES
+                    and attempt < _RETRY_MAX_ATTEMPTS
+                ):
+                    delay = _retry_delay(resp, attempt)
+                    logger.warning(
+                        "CRM %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
+                        method,
+                        path,
+                        resp.status_code,
+                        delay,
+                        attempt + 1,
+                        _RETRY_MAX_ATTEMPTS,
+                    )
+                    time.sleep(delay)
+                    attempt += 1
+                    continue
                 resp.raise_for_status()
                 _REACHABILITY_CIRCUIT.reset()
                 if not resp.text:
