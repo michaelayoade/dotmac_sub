@@ -418,6 +418,64 @@ def finance_payments(request: Request, db: Session = Depends(get_db)) -> dict[st
 
 
 @router.post(
+    "/credits",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["credits"],
+)
+def create_crm_credit(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Issue an account credit (credit note) for a subscriber — used by the CRM
+    to pay out referral rewards. Body: ``{subscriber_id, amount, reason?,
+    external_ref?, currency?}``. Idempotent on ``external_ref``.
+    """
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    amount = Decimal("0")
+    try:
+        amount = Decimal(str(payload.get("amount")))
+    except (InvalidOperation, TypeError, ValueError):
+        errors.setdefault("amount", []).append("Must be a number.")
+    else:
+        if amount <= 0:
+            errors.setdefault("amount", []).append("Must be greater than 0.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid credit payload.", errors)
+
+    currency = str(payload.get("currency") or "NGN").strip().upper() or "NGN"
+    reason = payload.get("reason")
+    reason = str(reason).strip() if reason not in (None, "") else None
+    external_ref = payload.get("external_ref")
+    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
+
+    try:
+        credit = crm_api.create_account_credit(
+            db,
+            subscriber_id=subscriber_id,
+            amount=amount,
+            reason=reason,
+            external_ref=external_ref,
+            currency=currency,
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscriber not found.")
+
+    return _envelope(
+        {
+            "id": str(credit.id),
+            "credit_number": credit.credit_number,
+            "total": str(credit.total),
+            "status": credit.status.value,
+            "account_id": str(credit.account_id),
+        }
+    )
+
+
+@router.post(
     "/invoices",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_crm_bearer)],
