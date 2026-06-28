@@ -11,6 +11,7 @@ from app.models.network import (
     OnuOnlineStatus,
     PonPort,
 )
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.models.network_monitoring import (
     Alert,
     AlertOperator,
@@ -404,25 +405,51 @@ def test_push_signal_metrics_does_not_emit_ont_status_counts(db_session, monkeyp
 
     monkeypatch.setattr(olt_polling_metrics_service.httpx, "Client", _FakeClient)
 
+    acs = Tr069AcsServer(
+        name="Test ACS",
+        base_url="http://genieacs.example:7557",
+        is_active=True,
+    )
+    db_session.add(acs)
+    db_session.flush()
+
+    ont1 = OntUnit(
+        serial_number="ONT-METRIC-1",
+        is_active=True,
+        tr069_last_snapshot_at=datetime.now(UTC),
+        tr069_last_snapshot={
+            "ethernet_ports": [{"bytes_sent": "1000", "bytes_received": "2000"}]
+        },
+        olt_status=OnuOnlineStatus.offline,
+    )
+    ont2 = OntUnit(
+        serial_number="ONT-METRIC-2",
+        is_active=True,
+        tr069_last_snapshot_at=datetime.now(UTC),
+        tr069_last_snapshot={
+            "ethernet_ports": [{"bytes_sent": "3000", "bytes_received": "4000"}]
+        },
+        olt_status=OnuOnlineStatus.online,
+    )
+    db_session.add_all([ont1, ont2])
+    db_session.flush()
+
+    # Only ONTs with an active GenieACS link are exported (see _push_signal_metrics).
     db_session.add_all(
         [
-            OntUnit(
-                serial_number="ONT-METRIC-1",
+            Tr069CpeDevice(
+                acs_server_id=acs.id,
+                ont_unit_id=ont1.id,
+                serial_number=ont1.serial_number,
+                genieacs_device_id="genie-metric-1",
                 is_active=True,
-                tr069_last_snapshot_at=datetime.now(UTC),
-                tr069_last_snapshot={
-                    "ethernet_ports": [{"bytes_sent": "1000", "bytes_received": "2000"}]
-                },
-                olt_status=OnuOnlineStatus.offline,
             ),
-            OntUnit(
-                serial_number="ONT-METRIC-2",
+            Tr069CpeDevice(
+                acs_server_id=acs.id,
+                ont_unit_id=ont2.id,
+                serial_number=ont2.serial_number,
+                genieacs_device_id="genie-metric-2",
                 is_active=True,
-                tr069_last_snapshot_at=datetime.now(UTC),
-                tr069_last_snapshot={
-                    "ethernet_ports": [{"bytes_sent": "3000", "bytes_received": "4000"}]
-                },
-                olt_status=OnuOnlineStatus.online,
             ),
         ]
     )
