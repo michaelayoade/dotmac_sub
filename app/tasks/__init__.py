@@ -1,3 +1,4 @@
+from app.tasks.admin_alerts import evaluate_infrastructure_alerts
 from app.tasks.alert_evaluation import evaluate_alert_rules
 from app.tasks.app_cache import (
     refresh_dashboard_stats_cache_task,
@@ -246,6 +247,7 @@ __all__ = [
     "execute_ont_bulk_action",
     "authorize_ont_task",
     "evaluate_alert_rules",
+    "evaluate_infrastructure_alerts",
     "refresh_dashboard_stats_cache_task",
     "refresh_ont_zabbix_snapshot_cache_task",
     "cleanup_device_metrics",

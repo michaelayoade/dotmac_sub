@@ -1935,6 +1935,13 @@ def build_beat_schedule() -> dict:
             enabled=zabbix_device_sync_enabled,
             interval_seconds=zabbix_device_sync_interval,
         )
+        _sync_scheduled_task(
+            session,
+            name="infrastructure_admin_alert_evaluation",
+            task_name="app.tasks.admin_alerts.evaluate_infrastructure_alerts",
+            enabled=True,
+            interval_seconds=60,
+        )
 
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
