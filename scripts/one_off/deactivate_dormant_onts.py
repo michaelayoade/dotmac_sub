@@ -60,12 +60,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
+from app.models.catalog import Subscription
 from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
 from app.models.tr069 import Tr069CpeDevice
 from app.models.usage import RadiusAccountingSession
-from app.models.catalog import Subscription
 
 
 @dataclass
@@ -107,7 +107,10 @@ def _subscribers_with_recent_radius(db: Session, radius_cutoff: datetime) -> set
     )
     acct = db.execute(
         select(Subscription.subscriber_id)
-        .join(RadiusAccountingSession, RadiusAccountingSession.subscription_id == Subscription.id)
+        .join(
+            RadiusAccountingSession,
+            RadiusAccountingSession.subscription_id == Subscription.id,
+        )
         .where(
             Subscription.subscriber_id.is_not(None),
             recency >= radius_cutoff,
@@ -136,8 +139,7 @@ def collect_candidates(
         .where(
             OntUnit.is_active.is_(True),
             OntUnit.olt_status != "online",
-            (OntUnit.last_seen_at.is_(None))
-            | (OntUnit.last_seen_at < offline_cutoff),
+            (OntUnit.last_seen_at.is_(None)) | (OntUnit.last_seen_at < offline_cutoff),
         )
     )
     rows = db.execute(stmt).all()
@@ -148,12 +150,16 @@ def collect_candidates(
         if ont.id in acs_linked:
             continue  # still ACS-managed; not dormant
 
-        assignment = db.execute(
-            select(OntAssignment).where(
-                OntAssignment.ont_unit_id == ont.id,
-                OntAssignment.active.is_(True),
+        assignment = (
+            db.execute(
+                select(OntAssignment).where(
+                    OntAssignment.ont_unit_id == ont.id,
+                    OntAssignment.active.is_(True),
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
         subscriber_id = assignment.subscriber_id if assignment else None
 
@@ -236,7 +242,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--apply", action="store_true", help="Write changes (default: dry-run)")
+    parser.add_argument(
+        "--apply", action="store_true", help="Write changes (default: dry-run)"
+    )
     parser.add_argument(
         "--offline-days",
         type=int,

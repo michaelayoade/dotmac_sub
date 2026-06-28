@@ -11,7 +11,6 @@ from app.models.network import (
     OnuOnlineStatus,
     PonPort,
 )
-from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.models.network_monitoring import (
     Alert,
     AlertOperator,
@@ -21,6 +20,7 @@ from app.models.network_monitoring import (
     MetricType,
 )
 from app.models.system_user import SystemUser
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
     AlertResolveRequest,
