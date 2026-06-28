@@ -1197,10 +1197,8 @@ def run_invoice_cycle(
                 period_end,
             )
             if paid_through and paid_through > period_start:
-                if (
-                    subscription.next_billing_at is None
-                    or _as_utc(subscription.next_billing_at) < paid_through
-                ):
+                current_nb = _as_utc(subscription.next_billing_at)
+                if current_nb is None or current_nb < paid_through:
                     subscription.next_billing_at = paid_through
                 logger.info(
                     "billing_prepaid_paid_coverage_skip",
