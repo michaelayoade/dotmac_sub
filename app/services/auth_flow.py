@@ -40,6 +40,7 @@ from app.models.rbac import (
 )
 from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
+from app.request_meta import client_ip
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import auth_cache
 from app.services import radius_auth as radius_auth_service
@@ -92,6 +93,18 @@ def _truncate_user_agent(value: str | None, max_len: int = 512) -> str | None:
     if len(value) <= max_len:
         return value
     return value[:max_len]
+
+
+def _clean_device_id(value: str | None, max_len: int = 64) -> str | None:
+    """Normalise the client-supplied X-Device-Id (a per-install opaque id).
+    Returns None when absent/blank so non-native callers keep the old
+    one-session-per-login behaviour."""
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return cleaned[:max_len]
 
 
 def _setting_value(db: Session | None, key: str) -> str | None:
@@ -1357,15 +1370,38 @@ class AuthFlow(ListResponseMixin):
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
+        device_id = _clean_device_id(active_request.headers.get("x-device-id"))
         session_kwargs = dict(
             status=SessionStatus.active,
             token_hash=_hash_token(refresh_token),
-            ip_address=active_request.client.host if active_request.client else None,
+            ip_address=client_ip(active_request),
             user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+            device_id=device_id,
             created_at=now,
             last_seen_at=now,
             expires_at=expires_at,
         )
+        principal_column = {
+            "system_user": AuthSession.system_user_id,
+            "reseller_user": AuthSession.reseller_user_id,
+        }.get(principal_type, AuthSession.subscriber_id)
+        # Per-device replace: a re-login from a known device supersedes that
+        # device's prior active session instead of stacking a new row. Revoked in
+        # the same transaction as the insert, so the principal always has at most
+        # one active session per device.
+        if device_id:
+            db.query(AuthSession).filter(
+                principal_column == principal_uuid,
+                AuthSession.device_id == device_id,
+                AuthSession.status == SessionStatus.active,
+                AuthSession.revoked_at.is_(None),
+            ).update(
+                {
+                    AuthSession.status: SessionStatus.revoked,
+                    AuthSession.revoked_at: now,
+                },
+                synchronize_session=False,
+            )
         if principal_type == "system_user":
             session = AuthSession(system_user_id=principal_uuid, **session_kwargs)
         elif principal_type == "reseller_user":

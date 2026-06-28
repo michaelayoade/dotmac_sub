@@ -232,6 +232,10 @@ class Session(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Stable per-install identifier sent by native clients (X-Device-Id). Lets a
+    # re-login on the same device supersede that device's prior session instead
+    # of stacking a new row each time.
+    device_id: Mapped[str | None] = mapped_column(String(64), index=True)
 
     subscriber = relationship("Subscriber")
     system_user = relationship("SystemUser")
