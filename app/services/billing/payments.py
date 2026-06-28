@@ -18,6 +18,7 @@ from app.models.billing import (
     CreditNoteStatus,
     Invoice,
     InvoiceStatus,
+    LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
@@ -28,6 +29,15 @@ from app.models.billing import (
     PaymentMethod,
     PaymentMethodType,
     PaymentStatus,
+    TaxApplication,
+    TaxRate,
+)
+from app.models.catalog import (
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    Subscription,
+    SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.schemas.billing import (
@@ -485,6 +495,186 @@ def _record_unallocated_payment_credit(
     _create_payment_ledger_entry(db, payment, None, remaining)
 
 
+def _open_invoice_balance_exists(db: Session, account_id, currency: str) -> bool:
+    return (
+        db.query(Invoice.id)
+        .filter(Invoice.account_id == account_id)
+        .filter(Invoice.is_active.is_(True))
+        .filter(
+            Invoice.status.in_(
+                [
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                ]
+            )
+        )
+        .filter(Invoice.currency == currency)
+        .filter(Invoice.balance_due > Decimal("0.00"))
+        .first()
+        is not None
+    )
+
+
+def _existing_prepaid_renewal_debit(
+    db: Session, payment: Payment
+) -> LedgerEntry | None:
+    return (
+        db.query(LedgerEntry)
+        .filter(LedgerEntry.payment_id == payment.id)
+        .filter(LedgerEntry.invoice_id.is_(None))
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .filter(LedgerEntry.source == LedgerSource.invoice)
+        .filter(LedgerEntry.is_active.is_(True))
+        .first()
+    )
+
+
+def _active_prepaid_monthly_subscription(
+    db: Session,
+    account_id,
+) -> Subscription | None:
+    rows = (
+        db.query(Subscription)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .filter(Subscription.subscriber_id == account_id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .filter(CatalogOffer.billing_cycle == BillingCycle.monthly)
+        .filter(CatalogOffer.is_active.is_(True))
+        .order_by(Subscription.created_at.asc(), Subscription.id.asc())
+        .limit(2)
+        .all()
+    )
+    if len(rows) != 1:
+        return None
+    return rows[0]
+
+
+def _prepaid_monthly_charge_amount(
+    db: Session,
+    subscription: Subscription,
+    effective_at: datetime,
+) -> tuple[Decimal, str, BillingCycle] | None:
+    from app.services.billing._common import _calculate_tax_amount
+    from app.services.billing_automation import (
+        _default_tax_application,
+        _effective_unit_price,
+        _resolve_price,
+        _resolve_tax_rate_id,
+    )
+
+    amount, currency, cycle = _resolve_price(db, subscription)
+    if amount is None:
+        return None
+    effective_cycle = cycle or BillingCycle.monthly
+    if effective_cycle != BillingCycle.monthly:
+        return None
+    base = _effective_unit_price(subscription, amount, effective_at)
+    tax_rate_id = _resolve_tax_rate_id(db, subscription)
+    if not tax_rate_id:
+        return base, currency or "NGN", effective_cycle
+    tax_rate = db.get(TaxRate, tax_rate_id)
+    if tax_rate is None:
+        return base, currency or "NGN", effective_cycle
+    tax_application = _default_tax_application(db)
+    tax_amount = _calculate_tax_amount(
+        base, Decimal(str(tax_rate.rate)), tax_application
+    )
+    total = (
+        base
+        if tax_application == TaxApplication.inclusive
+        else round_money(base + tax_amount)
+    )
+    return total, currency or "NGN", effective_cycle
+
+
+def apply_prepaid_service_credit(
+    db: Session,
+    payment: Payment,
+) -> bool:
+    """Consume unallocated credit for one active prepaid monthly renewal.
+
+    This is intentionally narrow: it runs only for succeeded account-scoped
+    payments, only when no open invoice remains, and only when exactly one active
+    prepaid monthly service exists. It leaves ambiguous wallet credit untouched.
+    """
+    if payment.account_id is None or payment.status != PaymentStatus.succeeded:
+        return False
+    if _existing_prepaid_renewal_debit(db, payment):
+        return False
+    currency = payment.currency or "NGN"
+    if _open_invoice_balance_exists(db, payment.account_id, currency):
+        return False
+    subscription = _active_prepaid_monthly_subscription(db, payment.account_id)
+    if subscription is None:
+        return False
+
+    effective_at = payment.paid_at or datetime.now(UTC)
+    charge = _prepaid_monthly_charge_amount(db, subscription, effective_at)
+    if charge is None:
+        return False
+    charge_amount, charge_currency, cycle = charge
+    if charge_currency != currency:
+        return False
+
+    from app.services.billing._common import get_account_credit_balance
+    from app.services.billing_automation import (
+        _as_utc,
+        _paid_coverage_end_for_subscription,
+        _period_end,
+    )
+
+    # effective_at is never None here (payment.paid_at or now()), so _as_utc is
+    # non-None — assert to narrow for the type checker.
+    effective_utc = _as_utc(effective_at)
+    assert effective_utc is not None
+    paid_at_day = effective_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    next_billing = _as_utc(subscription.next_billing_at) or paid_at_day
+    period_start = max(next_billing, paid_at_day)
+    period_end = _period_end(period_start, cycle)
+    paid_through = _paid_coverage_end_for_subscription(
+        db,
+        subscription.id,
+        subscription.subscriber_id,
+        period_start,
+        period_end,
+    )
+    if paid_through and paid_through > period_start:
+        if subscription.next_billing_at is None or next_billing < paid_through:
+            subscription.next_billing_at = paid_through
+        return False
+
+    db.flush()
+    available = get_account_credit_balance(
+        db, str(payment.account_id), currency=currency
+    )
+    if round_money(available) < charge_amount:
+        return False
+
+    db.add(
+        LedgerEntry(
+            account_id=payment.account_id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            category=LedgerCategory.internet_service,
+            amount=charge_amount,
+            currency=currency,
+            effective_date=effective_at,
+            memo=(
+                f"Prepaid service renewal {period_start.date()} - {period_end.date()}"
+            ),
+        )
+    )
+    subscription.next_billing_at = period_end
+
+    from app.services.account_lifecycle import compute_account_status
+
+    compute_account_status(db, str(payment.account_id))
+    return True
+
+
 def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
     """Recompute invoice totals, restore eligible service, then derive account status."""
     _recalculate_invoice_totals(db, invoice)
@@ -664,6 +854,7 @@ class Payments(ListResponseMixin):
                 break
 
         _record_unallocated_payment_credit(db, payment, remaining)
+        apply_prepaid_service_credit(db, payment)
 
         return allocations
 
@@ -1273,6 +1464,7 @@ class Payments(ListResponseMixin):
                 _primary_allocation_invoice_id(payment),
                 commit=False,
             )
+            apply_prepaid_service_credit(db, payment)
         db.commit()
         db.refresh(payment)
 

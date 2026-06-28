@@ -16,6 +16,21 @@ down_revision = "182_rbac_permission_visibility"
 branch_labels = None
 depends_on = None
 
+alert_severity_enum = postgresql.ENUM(
+    "info",
+    "warning",
+    "critical",
+    name="alertseverity",
+    create_type=False,
+)
+alert_status_enum = postgresql.ENUM(
+    "open",
+    "acknowledged",
+    "resolved",
+    name="alertstatus",
+    create_type=False,
+)
+
 
 def upgrade() -> None:
     bind = op.get_bind()
@@ -29,24 +44,12 @@ def upgrade() -> None:
             sa.Column("fingerprint", sa.String(length=180), nullable=False),
             sa.Column(
                 "severity",
-                sa.Enum(
-                    "info",
-                    "warning",
-                    "critical",
-                    name="alertseverity",
-                    create_type=False,
-                ),
+                alert_severity_enum,
                 nullable=False,
             ),
             sa.Column(
                 "status",
-                sa.Enum(
-                    "open",
-                    "acknowledged",
-                    "resolved",
-                    name="alertstatus",
-                    create_type=False,
-                ),
+                alert_status_enum,
                 nullable=False,
             ),
             sa.Column("title", sa.String(length=180), nullable=False),
