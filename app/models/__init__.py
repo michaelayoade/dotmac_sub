@@ -1,3 +1,4 @@
+from app.models.admin_alert import AdminAlert, AdminNotification  # noqa: F401
 from app.models.admin_whats_new import AdminWhatsNewItem  # noqa: F401
 from app.models.analytics import (  # noqa: F401
     KPIAggregate,

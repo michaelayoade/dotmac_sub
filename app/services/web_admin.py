@@ -17,6 +17,7 @@ from app.models.gis import (
 from app.models.notification import Notification, NotificationStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import Subscriber
+from app.services import admin_alerts as admin_alerts_service
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +129,8 @@ def _count_open_service_orders(db: Session) -> int:
 
 
 def _count_unread_notifications(db: Session) -> int:
-    """Count pending notification queue items for top-bar indicator."""
-    return (
+    """Count unread admin alerts plus pending notification queue items."""
+    queued = (
         db.query(func.count(Notification.id))
         .filter(Notification.is_active.is_(True))
         .filter(
@@ -140,6 +141,7 @@ def _count_unread_notifications(db: Session) -> int:
         .scalar()
         or 0
     )
+    return queued + admin_alerts_service.count_unread_admin_notifications(db)
 
 
 def _count_pending_location_requests(db: Session) -> int:
