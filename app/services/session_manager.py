@@ -37,11 +37,15 @@ def list_sessions(
     principal_type: str = "subscriber",
 ) -> SessionListResponse:
     """List active sessions for a principal."""
+    # Only genuinely-live sessions: active, not revoked, AND not past refresh
+    # expiry. Expired-but-not-yet-cleaned rows were still listed, which is the
+    # main reason the "Active sessions" screen accumulated stale entries.
     stmt = (
         select(AuthSession)
         .where(_principal_filter(subscriber_id, principal_type))
         .where(AuthSession.status == SessionStatus.active)
         .where(AuthSession.revoked_at.is_(None))
+        .where(AuthSession.expires_at > datetime.now(UTC))
         .order_by(AuthSession.created_at.desc())
     )
     sessions = db.scalars(stmt).all()
