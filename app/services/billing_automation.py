@@ -634,6 +634,41 @@ def _recurring_addon_line_exists(
     return False
 
 
+def _paid_coverage_end_for_subscription(
+    db: Session,
+    subscription_id,
+    account_id,
+    period_start: datetime,
+    period_end: datetime,
+) -> datetime | None:
+    """Return paid-through coverage overlapping a proposed recurring period.
+
+    Imported Splynx invoices are the migration source of truth for prepaid
+    service coverage during cutover. A locally generated prepaid invoice must
+    not overlap a paid imported period just because ``next_billing_at`` drifted
+    earlier than the actual paid-through date.
+    """
+    row = (
+        db.query(Invoice.billing_period_end)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .filter(Invoice.account_id == account_id)
+        .filter(InvoiceLine.subscription_id == subscription_id)
+        .filter(Invoice.is_active.is_(True))
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Invoice.status == InvoiceStatus.paid)
+        .filter(Invoice.balance_due <= Decimal("0.00"))
+        .filter(Invoice.billing_period_start.isnot(None))
+        .filter(Invoice.billing_period_end.isnot(None))
+        .filter(Invoice.billing_period_start < period_end)
+        .filter(Invoice.billing_period_end > period_start)
+        .order_by(Invoice.billing_period_end.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return _as_utc(row[0])
+
+
 def _activate_pending_subscription(
     db: Session,
     subscription: Subscription,
@@ -1152,6 +1187,35 @@ def run_invoice_cycle(
         if period_start > run_at:
             continue
         period_end = _period_end(period_start, effective_cycle)
+
+        if subscription.billing_mode == BillingMode.prepaid:
+            paid_through = _paid_coverage_end_for_subscription(
+                db,
+                subscription.id,
+                subscription.subscriber_id,
+                period_start,
+                period_end,
+            )
+            if paid_through and paid_through > period_start:
+                if (
+                    subscription.next_billing_at is None
+                    or _as_utc(subscription.next_billing_at) < paid_through
+                ):
+                    subscription.next_billing_at = paid_through
+                logger.info(
+                    "billing_prepaid_paid_coverage_skip",
+                    extra={
+                        "event": "billing_prepaid_paid_coverage_skip",
+                        "run_id": str(run_uuid) if run_uuid else None,
+                        "subscription_id": str(subscription.id),
+                        "subscriber_id": str(subscription.subscriber_id),
+                        "period_start": period_start.isoformat(),
+                        "period_end": period_end.isoformat(),
+                        "paid_through": paid_through.isoformat(),
+                    },
+                )
+                summary["skipped"] += 1
+                continue
 
         # Skip wholly-past billing periods instead of invoicing every missed
         # month. Migrated subscribers carry next_billing_at/start_at at
