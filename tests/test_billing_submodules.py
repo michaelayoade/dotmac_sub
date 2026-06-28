@@ -1347,6 +1347,150 @@ class TestPaymentCRUD:
             billing_service.payments.delete(db_session, str(uuid.uuid4()))
         assert exc.value.status_code == 404
 
+    def test_succeeded_prepaid_payment_consumes_credit_and_advances_billing(
+        self, db_session, subscriber, subscription
+    ):
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import SubscriberStatus
+
+        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
+        next_billing = datetime(2026, 7, 1, tzinfo=UTC)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
+        subscription.next_billing_at = next_billing
+        subscriber.status = SubscriberStatus.blocked
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=paid_at,
+            ),
+        )
+
+        credit = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.payment)
+            .one()
+        )
+        debit = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.invoice)
+            .one()
+        )
+        assert credit.entry_type == LedgerEntryType.credit
+        assert credit.amount == Decimal("37625.00")
+        assert debit.entry_type == LedgerEntryType.debit
+        assert debit.amount == Decimal("37625.00")
+        db_session.refresh(subscription)
+        db_session.refresh(subscriber)
+        assert subscription.next_billing_at == datetime(2026, 8, 1)
+        assert subscriber.status == SubscriberStatus.active
+
+    def test_succeeded_prepaid_payment_preserves_credit_when_paid_coverage_exists(
+        self, db_session, subscriber, subscription
+    ):
+        from app.models.billing import InvoiceLine
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+
+        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
+        period_start = datetime(2026, 7, 1, tzinfo=UTC)
+        period_end = datetime(2026, 8, 1, tzinfo=UTC)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
+        subscription.next_billing_at = period_start
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        paid_invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            currency="NGN",
+            subtotal=Decimal("37625.00"),
+            total=Decimal("37625.00"),
+            balance_due=Decimal("0.00"),
+            status=InvoiceStatus.paid,
+        )
+        paid_invoice.billing_period_start = period_start
+        paid_invoice.billing_period_end = period_end
+        db_session.add(paid_invoice)
+        db_session.flush()
+        db_session.add(
+            InvoiceLine(
+                invoice_id=paid_invoice.id,
+                subscription_id=subscription.id,
+                description="Paid July service",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("37625.00"),
+                amount=Decimal("37625.00"),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=paid_at,
+            ),
+        )
+
+        debit = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.invoice)
+            .first()
+        )
+        assert debit is None
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == period_end.replace(tzinfo=None)
+
 
 # ============================================================================
 # Payment with explicit allocations

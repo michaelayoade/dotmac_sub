@@ -614,6 +614,9 @@ class EnforcementHandler:
                 str(account_id),
                 invoice_id=str(invoice_id) if invoice_id else None,
             )
+            from app.services.account_lifecycle import compute_account_status
+
+            compute_account_status(db, str(account_id))
             if restored:
                 logger.info(
                     "Auto-restored %d subscription(s) for account %s after payment",
