@@ -126,6 +126,11 @@ class ApiClient {
   // Single-flight guard so concurrent 401s share one refresh round-trip.
   Future<bool>? _refreshing;
 
+  // Cached after first read; stable for the app's lifetime.
+  String? _cachedDeviceId;
+  Future<String> _deviceId() async =>
+      _cachedDeviceId ??= await _storage.deviceId();
+
   Future<void> _onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
@@ -142,6 +147,9 @@ class ApiClient {
         }
       }
     }
+    // Stable per-install id so the backend keeps one session per device
+    // (login/refresh replace this device's prior session). Sent on all calls.
+    options.headers['X-Device-Id'] = await _deviceId();
     handler.next(options);
   }
 
