@@ -189,7 +189,7 @@ def reseller_consolidated_proofs(
     }
 
 
-@router.get("/admin", dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/admin", dependencies=[Depends(require_permission("billing:proof:read"))])
 def list_payment_proofs(
     status: str | None = "submitted",
     limit: int = Query(default=100, ge=1, le=500),
@@ -203,7 +203,7 @@ def list_payment_proofs(
 
 @router.get(
     "/admin/{proof_id}/file",
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:proof:read"))],
 )
 def payment_proof_file(
     proof_id: str,
@@ -221,7 +221,7 @@ def payment_proof_file(
 
 @router.post(
     "/admin/{proof_id}/verify",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:proof:verify"))],
 )
 def verify_payment_proof(
     proof_id: str,
@@ -248,7 +248,7 @@ def verify_payment_proof(
 
 @router.post(
     "/admin/{proof_id}/reject",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:proof:verify"))],
 )
 def reject_payment_proof(
     proof_id: str,

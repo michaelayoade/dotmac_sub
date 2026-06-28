@@ -3430,7 +3430,7 @@ def settings_smtp_sender_activities(
 @router.post(
     "/settings/bank-accounts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def settings_bank_account_create(
     request: Request,
@@ -3463,7 +3463,7 @@ def settings_bank_account_create(
 @router.post(
     "/settings/bank-accounts/{bank_account_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def settings_bank_account_update(
     request: Request,
@@ -3497,7 +3497,7 @@ def settings_bank_account_update(
 @router.post(
     "/settings/bank-accounts/{bank_account_id}/deactivate",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def settings_bank_account_deactivate(
     bank_account_id: UUID, db: Session = Depends(get_db)

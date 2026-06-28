@@ -18,7 +18,7 @@ from app.services.network import device_groups as device_group_service
 router = APIRouter(prefix="/network/device-groups", tags=["network-device-groups"])
 
 
-@router.get("", dependencies=[Depends(require_permission("network:read"))])
+@router.get("", dependencies=[Depends(require_permission("network:device:read"))])
 def list_device_groups(db: Session = Depends(get_db)) -> dict:
     rows = device_group_service.list_device_groups(db)
     return {
@@ -41,7 +41,7 @@ def list_device_groups(db: Session = Depends(get_db)) -> dict:
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def create_device_group(
     payload: DeviceGroupCreate,
@@ -61,7 +61,9 @@ def create_device_group(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/{group_id}", dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/{group_id}", dependencies=[Depends(require_permission("network:device:read"))]
+)
 def get_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
     try:
         context = device_group_service.device_group_detail_context(db, group_id)
@@ -87,7 +89,7 @@ def get_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
 
 @router.patch(
     "/{group_id}",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def update_device_group(
     group_id: str,
@@ -110,7 +112,7 @@ def update_device_group(
 
 @router.delete(
     "/{group_id}",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def archive_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
     try:
@@ -125,7 +127,7 @@ def archive_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
 @router.post(
     "/{group_id}/members",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def add_device_group_member(
     group_id: str,
@@ -148,7 +150,7 @@ def add_device_group_member(
 
 @router.delete(
     "/{group_id}/members/{member_id}",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def remove_device_group_member(
     group_id: str,
@@ -171,7 +173,7 @@ def remove_device_group_member(
 @router.post(
     "/{group_id}/actions",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def queue_device_group_action(
     group_id: str,

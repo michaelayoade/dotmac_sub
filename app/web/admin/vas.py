@@ -42,7 +42,7 @@ def _context(request: Request, db: Session, **extra) -> dict:
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:vas:read"))],
 )
 def vas_admin_page(request: Request, db: Session = Depends(get_db)):
     float_balance = None
@@ -83,7 +83,7 @@ def vas_admin_page(request: Request, db: Session = Depends(get_db)):
 
 @router.post(
     "/services/{service_pk}/toggle",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:vas:write"))],
 )
 def vas_toggle_service(
     service_pk: str, db: Session = Depends(get_db)
@@ -98,7 +98,7 @@ def vas_toggle_service(
 
 @router.post(
     "/categories",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:vas:write"))],
 )
 def vas_set_categories(
     enabled_categories: str = Form(""), db: Session = Depends(get_db)
@@ -118,7 +118,7 @@ def vas_set_categories(
 
 @router.post(
     "/rate-cards",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:vas:write"))],
 )
 def vas_add_rate_card(
     category: str = Form(...),
@@ -158,7 +158,7 @@ def vas_add_rate_card(
 
 @router.post(
     "/review/{txn_id}/refund",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:vas:write"))],
 )
 def vas_review_refund(txn_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     """Manually resolve a parked transaction as failed → wallet refund."""
@@ -172,7 +172,7 @@ def vas_review_refund(txn_id: str, db: Session = Depends(get_db)) -> RedirectRes
 
 @router.post(
     "/review/{txn_id}/delivered",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:vas:write"))],
 )
 def vas_review_delivered(
     txn_id: str, token: str = Form(""), db: Session = Depends(get_db)
@@ -192,7 +192,7 @@ def vas_review_delivered(
 
 @router.post(
     "/refund-to-source",
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:vas:write"))],
 )
 def vas_refund_to_source(
     entry_id: str = Form(...),

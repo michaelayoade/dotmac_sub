@@ -31,7 +31,7 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
 @router.get(
     "/pon-interfaces",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pon:read"))],
 )
 def pon_interfaces_list(
     request: Request,
@@ -56,7 +56,7 @@ def pon_interfaces_list(
 
 @router.post(
     "/pon-interfaces/description",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def pon_interface_save_description(
     request: Request,

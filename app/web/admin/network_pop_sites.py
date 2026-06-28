@@ -32,7 +32,7 @@ def _base_context(
 @router.get(
     "/pop-sites",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_sites_list(
     request: Request, status: str | None = None, db: Session = Depends(get_db)
@@ -47,7 +47,7 @@ def pop_sites_list(
 @router.get(
     "/pop-sites/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_site_new(request: Request, db: Session = Depends(get_db)):
     reference_data = web_network_pop_sites_service.form_reference_data(db)
@@ -66,7 +66,7 @@ def pop_site_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/pop-sites",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -87,7 +87,7 @@ def pop_site_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/pop-sites/{pop_site_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_site_edit(request: Request, pop_site_id: str, db: Session = Depends(get_db)):
     pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
@@ -113,7 +113,7 @@ def pop_site_edit(request: Request, pop_site_id: str, db: Session = Depends(get_
 @router.post(
     "/pop-sites/{pop_site_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -143,7 +143,7 @@ def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(ge
 @router.get(
     "/pop-sites/{pop_site_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_site_detail(
     request: Request,
@@ -181,7 +181,7 @@ def pop_site_detail(
 @router.post(
     "/pop-sites/{pop_site_id}/photos",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_photo_upload(
     request: Request,
@@ -206,7 +206,7 @@ def pop_site_photo_upload(
 @router.post(
     "/pop-sites/{pop_site_id}/documents",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_document_upload(
     request: Request,
@@ -232,7 +232,7 @@ def pop_site_document_upload(
 
 @router.get(
     "/pop-sites/{pop_site_id}/files/{file_id}/download",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_site_file_download(
     request: Request,
@@ -258,7 +258,7 @@ def pop_site_file_download(
 
 @router.get(
     "/pop-sites/{pop_site_id}/files/{file_id}/preview",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pop:read"))],
 )
 def pop_site_file_preview(
     request: Request,
@@ -283,7 +283,7 @@ def pop_site_file_preview(
 
 @router.post(
     "/pop-sites/{pop_site_id}/files/{file_id}/delete",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_file_delete(
     request: Request,
@@ -310,7 +310,7 @@ def pop_site_file_delete(
 
 @router.post(
     "/pop-sites/{pop_site_id}/contacts",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_contact_create(
     pop_site_id: str,
@@ -348,7 +348,7 @@ def pop_site_contact_create(
 
 @router.post(
     "/pop-sites/{pop_site_id}/contacts/{contact_id}/delete",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pop:write"))],
 )
 def pop_site_contact_delete(
     pop_site_id: str,

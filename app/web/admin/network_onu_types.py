@@ -36,7 +36,7 @@ def _base_context(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:onu_type:read"))],
 )
 def onu_types_list(
     request: Request,
@@ -54,7 +54,7 @@ def onu_types_list(
 @router.get(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:onu_type:read"))],
 )
 def onu_type_create_form(
     request: Request,
@@ -68,7 +68,7 @@ def onu_type_create_form(
 @router.post(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:onu_type:write"))],
 )
 def onu_type_create(
     request: Request,
@@ -91,7 +91,7 @@ def onu_type_create(
 @router.get(
     "/{onu_type_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:onu_type:read"))],
 )
 def onu_type_edit_form(
     request: Request,
@@ -113,7 +113,7 @@ def onu_type_edit_form(
 @router.post(
     "/{onu_type_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:onu_type:write"))],
 )
 def onu_type_update(
     request: Request,
@@ -137,7 +137,7 @@ def onu_type_update(
 @router.post(
     "/{onu_type_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:onu_type:write"))],
 )
 def onu_type_delete(
     request: Request,

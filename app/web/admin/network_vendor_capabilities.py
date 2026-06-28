@@ -21,7 +21,7 @@ router = APIRouter(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:read"))],
 )
 def vendor_capabilities_list(
     request: Request,
@@ -39,7 +39,7 @@ def vendor_capabilities_list(
 @router.get(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:read"))],
 )
 def vendor_capability_create_form(
     request: Request,
@@ -55,7 +55,7 @@ def vendor_capability_create_form(
 @router.post(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def vendor_capability_create(
     request: Request,
@@ -80,7 +80,7 @@ def vendor_capability_create(
 @router.get(
     "/{capability_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:read"))],
 )
 def vendor_capability_edit_form(
     request: Request,
@@ -104,7 +104,7 @@ def vendor_capability_edit_form(
 @router.post(
     "/{capability_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def vendor_capability_update(
     request: Request,
@@ -130,7 +130,7 @@ def vendor_capability_update(
 @router.post(
     "/{capability_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def vendor_capability_delete(
     request: Request,
@@ -148,7 +148,7 @@ def vendor_capability_delete(
 @router.post(
     "/{capability_id}/params/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def param_map_create(
     request: Request,
@@ -176,7 +176,7 @@ def param_map_create(
 @router.post(
     "/{capability_id}/params/{param_map_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def param_map_delete(
     request: Request,

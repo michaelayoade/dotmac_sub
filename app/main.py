@@ -118,7 +118,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.imports", "router", "api", "perm:system:settings"),
     ("app.api.audit", "router", "api", "none"),
     ("app.api.gis", "router", "api", "admin"),
-    ("app.api.geocoding", "router", "api", "readperm:network:read"),
+    ("app.api.geocoding", "router", "api", "readperm:gis:serviceability:check"),
     ("app.api.qualification", "router", "api", "perm:provisioning"),
     ("app.api.settings", "router", "api", "perm:system:settings"),
     ("app.api.webhooks", "router", "api", "admin"),

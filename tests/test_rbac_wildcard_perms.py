@@ -47,6 +47,19 @@ def test_domain_wildcard_satisfies_granular_requirement(db_session):
     assert ad.has_permission(auth, db_session, "network:vpn:read") is True
 
 
+def test_broad_permission_does_not_satisfy_granular_requirement(db_session):
+    auth = _grant(db_session, "network:write")
+    permission = Permission(
+        key="network:olt:write",
+        description="Manage OLTs",
+        is_active=True,
+    )
+    db_session.add(permission)
+    db_session.commit()
+
+    assert ad.has_permission(auth, db_session, "network:olt:write") is False
+
+
 def test_domain_wildcard_does_not_cross_domains(db_session):
     auth = _grant(db_session, "network:*")
     assert ad.has_permission(auth, db_session, "billing:read") is False

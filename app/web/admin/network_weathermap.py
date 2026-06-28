@@ -31,7 +31,7 @@ def _base_context(
 @router.get(
     "/topology",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:weathermap:read"))],
 )
 def network_topology(
     request: Request,
@@ -59,7 +59,7 @@ def network_weathermap_redirect() -> RedirectResponse:
 @router.get(
     "/topology/links/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
 )
 def topology_link_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="topology")
@@ -76,7 +76,7 @@ def topology_link_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/topology/links/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
 )
 def topology_link_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -102,7 +102,7 @@ def topology_link_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/topology/links/{link_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
 )
 def topology_link_edit(request: Request, link_id: str, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="topology")
@@ -113,7 +113,7 @@ def topology_link_edit(request: Request, link_id: str, db: Session = Depends(get
 @router.post(
     "/topology/links/{link_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
 )
 def topology_link_update(request: Request, link_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -138,7 +138,7 @@ def topology_link_update(request: Request, link_id: str, db: Session = Depends(g
 
 @router.post(
     "/topology/links/{link_id}/delete",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
 )
 def topology_link_delete(
     link_id: str, db: Session = Depends(get_db)
@@ -153,7 +153,7 @@ def topology_link_delete(
 @router.get(
     "/topology/api/interfaces/{device_id}",
     response_class=JSONResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:weathermap:read"))],
 )
 def topology_device_interfaces(device_id: str, db: Session = Depends(get_db)):
     """Return interfaces for a device (populates dropdowns via HTMX/JS)."""
@@ -163,7 +163,7 @@ def topology_device_interfaces(device_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/topology/api/node/{device_id}",
     response_class=JSONResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:weathermap:read"))],
 )
 def topology_node_summary(device_id: str, db: Session = Depends(get_db)):
     """Return node summary for drilldown panel."""
@@ -173,7 +173,7 @@ def topology_node_summary(device_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/topology/api/graph",
     response_class=JSONResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:weathermap:read"))],
 )
 def topology_graph_data(
     group: str | None = None, site: str | None = None, db: Session = Depends(get_db)

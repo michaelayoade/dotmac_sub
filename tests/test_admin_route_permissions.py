@@ -64,7 +64,7 @@ def test_dashboard_routes_require_any_domain_read_permission():
         admin_dashboard.router,
         "/dashboard",
         "GET",
-        "billing:read",
+        "billing:invoice:read",
     )
 
 
@@ -84,9 +84,9 @@ def test_catalog_settings_routes_require_catalog_permissions():
 
 
 def test_gis_routes_require_network_permissions():
-    assert _route_has_permission(admin_gis.router, "/gis", "GET", "network:read")
+    assert _route_has_permission(admin_gis.router, "/gis", "GET", "gis:map:view")
     assert _route_has_permission(
-        admin_gis.router, "/gis/locations/new", "POST", "network:write"
+        admin_gis.router, "/gis/locations/new", "POST", "gis:map:edit"
     )
 
 
@@ -95,43 +95,43 @@ def test_profile_sync_task_routes_require_network_permissions():
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks",
         "GET",
-        "network:read",
+        "network:olt:read",
     )
     assert _route_has_permission(
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks/{task_id}/approve",
         "POST",
-        "network:write",
+        "network:olt:write",
     )
     assert _route_has_permission(
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks/{task_id}/cancel",
         "POST",
-        "network:write",
+        "network:olt:write",
     )
     assert _route_has_permission(
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks/{task_id}/execute",
         "POST",
-        "network:write",
+        "network:olt:write",
     )
     assert _route_has_permission(
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks/execute-due",
         "POST",
-        "network:write",
+        "network:olt:write",
     )
     assert _route_has_permission(
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks/{task_id}/retry",
         "POST",
-        "network:write",
+        "network:olt:write",
     )
     assert _route_has_permission(
         admin_network_olts_profiles.router,
         "/network/profile-sync-tasks/drift-check",
         "POST",
-        "network:write",
+        "network:olt:write",
     )
 
 
@@ -140,67 +140,67 @@ def test_device_group_routes_require_network_permissions():
         admin_network_device_groups.router,
         "/network/device-groups",
         "GET",
-        "network:read",
+        "network:device:read",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}",
         "GET",
-        "network:read",
+        "network:device:read",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/settings",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/archive",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/members",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/member-candidates",
         "GET",
-        "network:read",
+        "network:device:read",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/members/import",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/members/import-filter",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/actions",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
         "/network/device-groups/{group_id}/members/{member_id}/remove",
         "POST",
-        "network:write",
+        "network:device:write",
     )
 
 
@@ -209,49 +209,49 @@ def test_device_group_api_routes_require_network_permissions():
         api_network_device_groups.router,
         "/network/device-groups",
         "GET",
-        "network:read",
+        "network:device:read",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups/{group_id}",
         "GET",
-        "network:read",
+        "network:device:read",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups/{group_id}",
         "PATCH",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups/{group_id}",
         "DELETE",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups/{group_id}/members",
         "POST",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups/{group_id}/members/{member_id}",
         "DELETE",
-        "network:write",
+        "network:device:write",
     )
     assert _route_has_permission(
         api_network_device_groups.router,
         "/network/device-groups/{group_id}/actions",
         "POST",
-        "network:write",
+        "network:device:write",
     )
 
 
@@ -374,13 +374,13 @@ def test_usage_routes_require_catalog_permissions():
 
 def test_report_routes_require_domain_permissions():
     assert _route_has_permission(
-        admin_reports.router, "/reports/revenue", "GET", "billing:read"
+        admin_reports.router, "/reports/revenue", "GET", "reports:billing"
     )
     assert _route_has_permission(
         admin_reports.router, "/reports/subscribers", "GET", "customer:read"
     )
     assert _route_has_permission(
-        admin_reports.router, "/reports/network", "GET", "network:read"
+        admin_reports.router, "/reports/network", "GET", "reports:network"
     )
     assert _route_has_permission(
         admin_reports.router,

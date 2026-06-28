@@ -117,7 +117,7 @@ def _ont_form_dependencies(db: Session, ont: Any | None = None) -> dict:
 @router.get(
     "/onts/{ont_id}/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_detail_preview(
     request: Request,
@@ -197,7 +197,7 @@ def ont_detail_preview(
 @router.get(
     "/onts/{ont_id}/location-details",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_location_details_modal(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -220,7 +220,7 @@ def ont_location_details_modal(
 @router.post(
     "/onts/{ont_id}/location-details",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_location_details_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -252,7 +252,7 @@ def ont_location_details_update(
 @router.get(
     "/onts/{ont_id}/device-info",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_device_info_modal(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -275,7 +275,7 @@ def ont_device_info_modal(
 @router.post(
     "/onts/{ont_id}/device-info",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_device_info_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -307,7 +307,7 @@ def ont_device_info_update(
 @router.get(
     "/onts/{ont_id}/gpon-channel",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_gpon_channel_modal(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -327,7 +327,7 @@ def ont_gpon_channel_modal(
 @router.post(
     "/onts/{ont_id}/gpon-channel",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_gpon_channel_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -345,7 +345,7 @@ def ont_gpon_channel_update(
 @router.get(
     "/onts/{ont_id}/wifi-controls",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_wifi_controls(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -361,7 +361,7 @@ def ont_wifi_controls(
 @router.get(
     "/onts/{ont_id}/lan-ports-status",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_lan_ports_status(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -375,7 +375,7 @@ def ont_lan_ports_status(
 @router.get(
     "/onts/{ont_id}/firmware-form",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_firmware_form(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -391,7 +391,7 @@ def ont_firmware_form(
 @router.get(
     "/onts/{ont_id}/provision",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_provision_wizard(
     request: Request,
@@ -430,7 +430,7 @@ def ont_provision_wizard(
 @router.get(
     "/onts/{ont_id}/service-ports",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_service_ports(
     request: Request,
@@ -449,7 +449,7 @@ def ont_service_ports(
 @router.post(
     "/onts/{ont_id}/service-ports/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_service_port_create(
     request: Request,
@@ -509,7 +509,7 @@ def ont_service_port_create(
 @router.post(
     "/onts/{ont_id}/service-ports/{index}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_service_port_delete(
     request: Request,
@@ -539,7 +539,7 @@ def ont_service_port_delete(
 @router.post(
     "/onts/{ont_id}/service-ports/clone",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_service_port_clone(
     request: Request,
@@ -572,7 +572,7 @@ def ont_service_port_clone(
 @router.get(
     "/onts/{ont_id}/configure",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_configure_form(
     request: Request,
@@ -590,7 +590,7 @@ def ont_configure_form(
 @router.post(
     "/onts/{ont_id}/configure",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_configure_submit(
     request: Request,

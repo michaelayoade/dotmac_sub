@@ -63,7 +63,7 @@ def _enum_or_422(enum_cls, value, field: str):
 @router.get(
     "/onu-types",
     response_model=list[OnuTypeRead],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:onu_type:read"))],
 )
 def list_onu_types(
     pon_type: str | None = None,
@@ -92,7 +92,7 @@ def list_onu_types(
     "/onu-types",
     response_model=OnuTypeRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:onu_type:write"))],
 )
 def create_onu_type(
     payload: OnuTypeCreate, db: Session = Depends(get_db)
@@ -137,7 +137,7 @@ def create_onu_type(
 @router.get(
     "/onu-types/{onu_type_id}",
     response_model=OnuTypeRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:onu_type:read"))],
 )
 def get_onu_type(onu_type_id: str, db: Session = Depends(get_db)) -> OnuTypeRead:
     return OnuTypeRead.model_validate(onu_types.get(db, onu_type_id))
@@ -146,7 +146,7 @@ def get_onu_type(onu_type_id: str, db: Session = Depends(get_db)) -> OnuTypeRead
 @router.patch(
     "/onu-types/{onu_type_id}",
     response_model=OnuTypeRead,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:onu_type:write"))],
 )
 def update_onu_type(
     onu_type_id: str, payload: OnuTypeUpdate, db: Session = Depends(get_db)
@@ -166,7 +166,7 @@ def update_onu_type(
 @router.delete(
     "/onu-types/{onu_type_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:onu_type:write"))],
 )
 def delete_onu_type(onu_type_id: str, db: Session = Depends(get_db)):  # type: ignore[no-untyped-def]
     onu_types.delete(db, onu_type_id)
@@ -178,7 +178,7 @@ def delete_onu_type(onu_type_id: str, db: Session = Depends(get_db)):  # type: i
 @router.get(
     "/speed-profiles",
     response_model=list[SpeedProfileRead],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:speed_profile:read"))],
 )
 def list_speed_profiles(
     direction: str | None = None,
@@ -216,7 +216,7 @@ def list_speed_profiles(
     "/speed-profiles",
     response_model=SpeedProfileRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:speed_profile:write"))],
 )
 def create_speed_profile(
     payload: SpeedProfileCreate, db: Session = Depends(get_db)
@@ -239,7 +239,7 @@ def create_speed_profile(
 @router.get(
     "/speed-profiles/{profile_id}",
     response_model=SpeedProfileRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:speed_profile:read"))],
 )
 def get_speed_profile(
     profile_id: str, db: Session = Depends(get_db)
@@ -253,7 +253,7 @@ def get_speed_profile(
 @router.patch(
     "/speed-profiles/{profile_id}",
     response_model=SpeedProfileRead,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:speed_profile:write"))],
 )
 def update_speed_profile(
     profile_id: str, payload: SpeedProfileUpdate, db: Session = Depends(get_db)
@@ -272,7 +272,7 @@ def update_speed_profile(
 @router.delete(
     "/speed-profiles/{profile_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:speed_profile:write"))],
 )
 def delete_speed_profile(profile_id: str, db: Session = Depends(get_db)):  # type: ignore[no-untyped-def]
     SpeedProfiles.delete(db, profile_id)
@@ -284,7 +284,7 @@ def delete_speed_profile(profile_id: str, db: Session = Depends(get_db)):  # typ
 @router.get(
     "/network-zones",
     response_model=list[NetworkZoneRead],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def list_network_zones(
     is_active: bool | None = None,
@@ -311,7 +311,7 @@ def list_network_zones(
     "/network-zones",
     response_model=NetworkZoneRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:zone:write"))],
 )
 def create_network_zone(
     payload: NetworkZoneCreate, db: Session = Depends(get_db)
@@ -331,7 +331,7 @@ def create_network_zone(
 @router.get(
     "/network-zones/{zone_id}",
     response_model=NetworkZoneRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def get_network_zone(zone_id: str, db: Session = Depends(get_db)) -> NetworkZoneRead:
     return NetworkZoneRead.model_validate(NetworkZones.get(db, zone_id))
@@ -340,7 +340,7 @@ def get_network_zone(zone_id: str, db: Session = Depends(get_db)) -> NetworkZone
 @router.patch(
     "/network-zones/{zone_id}",
     response_model=NetworkZoneRead,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:zone:write"))],
 )
 def update_network_zone(
     zone_id: str, payload: NetworkZoneUpdate, db: Session = Depends(get_db)
@@ -353,7 +353,7 @@ def update_network_zone(
 @router.delete(
     "/network-zones/{zone_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:zone:write"))],
 )
 def delete_network_zone(zone_id: str, db: Session = Depends(get_db)):  # type: ignore[no-untyped-def]
     NetworkZones.delete(db, zone_id)
@@ -365,7 +365,7 @@ def delete_network_zone(zone_id: str, db: Session = Depends(get_db)):  # type: i
 @router.get(
     "/vendor-capabilities",
     response_model=list[VendorCapabilityRead],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:read"))],
 )
 def list_vendor_capabilities(
     vendor: str | None = None,
@@ -394,7 +394,7 @@ def list_vendor_capabilities(
     "/vendor-capabilities",
     response_model=VendorCapabilityRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def create_vendor_capability(
     payload: VendorCapabilityCreate, db: Session = Depends(get_db)
@@ -420,7 +420,7 @@ def create_vendor_capability(
 @router.get(
     "/vendor-capabilities/{capability_id}",
     response_model=VendorCapabilityRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:read"))],
 )
 def get_vendor_capability(
     capability_id: str, db: Session = Depends(get_db)
@@ -433,7 +433,7 @@ def get_vendor_capability(
 @router.patch(
     "/vendor-capabilities/{capability_id}",
     response_model=VendorCapabilityRead,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def update_vendor_capability(
     capability_id: str,
@@ -448,7 +448,7 @@ def update_vendor_capability(
 @router.delete(
     "/vendor-capabilities/{capability_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:vendor_capability:write"))],
 )
 def delete_vendor_capability(capability_id: str, db: Session = Depends(get_db)):  # type: ignore[no-untyped-def]
     VendorCapabilities.delete(db, capability_id)
@@ -460,7 +460,7 @@ def delete_vendor_capability(capability_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/vendor-capabilities/{capability_id}/parameter-maps",
     response_model=list[Tr069ParameterMapRead],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:tr069:read"))],
 )
 def list_parameter_maps(
     capability_id: str, db: Session = Depends(get_db)
@@ -473,7 +473,7 @@ def list_parameter_maps(
     "/vendor-capabilities/{capability_id}/parameter-maps",
     response_model=Tr069ParameterMapRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:tr069:write"))],
 )
 def create_parameter_map(
     capability_id: str,
@@ -495,7 +495,7 @@ def create_parameter_map(
 @router.get(
     "/vendor-capabilities/{capability_id}/parameter-maps/{map_id}",
     response_model=Tr069ParameterMapRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:tr069:read"))],
 )
 def get_parameter_map(
     capability_id: str, map_id: str, db: Session = Depends(get_db)
@@ -506,7 +506,7 @@ def get_parameter_map(
 @router.patch(
     "/vendor-capabilities/{capability_id}/parameter-maps/{map_id}",
     response_model=Tr069ParameterMapRead,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:tr069:write"))],
 )
 def update_parameter_map(
     capability_id: str,
@@ -522,7 +522,7 @@ def update_parameter_map(
 @router.delete(
     "/vendor-capabilities/{capability_id}/parameter-maps/{map_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:tr069:write"))],
 )
 def delete_parameter_map(
     capability_id: str, map_id: str, db: Session = Depends(get_db)

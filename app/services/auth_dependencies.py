@@ -278,38 +278,15 @@ def _permission_domain_aliases(permission_key: str) -> list[str]:
 
 def _expand_permission_key_single(permission_key: str) -> list[str]:
     """
-    Expand a permission key to include hierarchical matches.
+    Expand a permission key to aliases for the same permission.
 
-    For granular permissions like 'billing:invoice:create', this returns:
-    - 'billing:invoice:create' (exact match)
-    - 'billing:write' (domain:write implies domain:*:create/update/delete)
-    - 'billing:read' (if the action is 'read')
-
-    This allows both granular and broad permissions to work together.
+    Permission checks are intentionally exact. A route requiring
+    ``billing:invoice:create`` is not satisfied by ``billing:write`` unless the
+    principal has an explicit wildcard grant handled by ``_wildcard_ancestors``
+    or is in the admin role. This keeps broad/admin-only permissions from
+    overriding granular role containers.
     """
-    keys = [permission_key]
-    parts = permission_key.split(":")
-
-    if len(parts) >= 2:
-        domain = parts[0]
-        # For 3-part permissions like billing:invoice:create
-        if len(parts) == 3:
-            action = parts[2]
-            # billing:invoice:read -> also accept billing:read
-            if action == "read":
-                keys.append(f"{domain}:read")
-            # billing:invoice:create/update/delete -> also accept billing:write
-            elif action in ("create", "update", "delete", "write"):
-                keys.append(f"{domain}:write")
-        # For 2-part permissions like customer:read
-        elif len(parts) == 2:
-            action = parts[1]
-            # customer:read is already a broad permission
-            # customer:create/update/delete -> also accept customer:write (if it exists)
-            if action in ("create", "update", "delete"):
-                keys.append(f"{domain}:write")
-
-    return keys
+    return [permission_key]
 
 
 def _wildcard_ancestors(permission_key: str) -> list[str]:

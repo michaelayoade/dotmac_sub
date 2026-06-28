@@ -17,13 +17,15 @@ logger = logging.getLogger(__name__)
 
 def get_permissions_for_form(db: Session):
     """Return permission options for role forms."""
-    return rbac_service.permissions.list(
-        db=db,
-        is_active=None,
-        order_by="key",
-        order_dir="asc",
-        limit=1000,
-        offset=0,
+    return (
+        db.execute(
+            select(Permission)
+            .where(Permission.is_active.is_(True))
+            .where(Permission.is_ui_assignable.is_(True))
+            .order_by(Permission.key.asc())
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -112,16 +114,20 @@ def sync_role_permissions(db: Session, *, role_id, permission_ids: list[str]) ->
         UUID(permission_id)
         for permission_id in normalize_permission_ids(permission_ids)
     }
+    role = rbac_service.roles.get(db, str(role_id))
     if desired_ids:
         found_ids = {
             str(permission_id)
             for permission_id in db.execute(
-                select(Permission.id).where(Permission.id.in_(desired_ids))
+                select(Permission.id)
+                .where(Permission.id.in_(desired_ids))
+                .where(Permission.is_active.is_(True))
+                .where(Permission.is_ui_assignable.is_(True))
             ).scalars()
         }
         missing = {str(permission_id) for permission_id in desired_ids} - found_ids
         if missing:
-            raise ValueError("One or more permissions were not found.")
+            raise ValueError("One or more permissions are not assignable.")
 
     existing_links = (
         db.execute(select(RolePermission).where(RolePermission.role_id == role_id))
@@ -131,6 +137,8 @@ def sync_role_permissions(db: Session, *, role_id, permission_ids: list[str]) ->
     existing_ids = {link.permission_id: link for link in existing_links}
 
     for permission_id, link in existing_ids.items():
+        if role.name == "admin" and not link.permission.is_ui_assignable:
+            continue
         if permission_id not in desired_ids:
             db.delete(link)
     for permission_id in desired_ids - set(existing_ids.keys()):
