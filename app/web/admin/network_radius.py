@@ -35,7 +35,7 @@ def _base_context(
 @router.get(
     "/radius",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_page(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
@@ -53,7 +53,7 @@ def radius_page(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/radius/import-credentials",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_import_credentials(_request: Request, db: Session = Depends(get_db)):
     try:
@@ -73,7 +73,7 @@ def radius_import_credentials(_request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/radius/servers/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_server_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
@@ -84,7 +84,7 @@ def radius_server_new(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/radius/servers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_servers_redirect():
     return RedirectResponse("/admin/network/radius", status_code=303)
@@ -93,7 +93,7 @@ def radius_servers_redirect():
 @router.get(
     "/radius/servers/{server_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_server_edit(request: Request, server_id: str, db: Session = Depends(get_db)):
     form_data = web_network_radius_service.server_edit_form_data(db, server_id)
@@ -114,7 +114,7 @@ def radius_server_edit(request: Request, server_id: str, db: Session = Depends(g
 @router.post(
     "/radius/servers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_server_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_radius_service.create_server_from_form(
@@ -133,7 +133,7 @@ def radius_server_create(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/radius/servers/{server_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_server_update(
     request: Request, server_id: str, db: Session = Depends(get_db)
@@ -163,7 +163,7 @@ def radius_server_update(
 @router.get(
     "/radius/clients/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_client_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
@@ -174,7 +174,7 @@ def radius_client_new(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/radius/clients/{client_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_client_edit(request: Request, client_id: str, db: Session = Depends(get_db)):
     form_data = web_network_radius_service.client_edit_form_data(db, client_id)
@@ -195,7 +195,7 @@ def radius_client_edit(request: Request, client_id: str, db: Session = Depends(g
 @router.post(
     "/radius/clients",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_client_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_radius_service.create_client_from_form(
@@ -214,7 +214,7 @@ def radius_client_create(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/radius/clients/{client_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_client_update(
     request: Request, client_id: str, db: Session = Depends(get_db)
@@ -244,7 +244,7 @@ def radius_client_update(
 @router.get(
     "/radius/profiles/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_profile_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
@@ -255,7 +255,7 @@ def radius_profile_new(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/radius/profiles/{profile_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_profile_edit(
     request: Request, profile_id: str, db: Session = Depends(get_db)
@@ -278,7 +278,7 @@ def radius_profile_edit(
 @router.post(
     "/radius/profiles",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_profile_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_radius_service.create_profile_from_form(
@@ -297,7 +297,7 @@ def radius_profile_create(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/radius/profiles/{profile_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:radius:write"))],
 )
 def radius_profile_update(
     request: Request, profile_id: str, db: Session = Depends(get_db)
@@ -330,7 +330,7 @@ def radius_profile_update(
 @router.get(
     "/sessions",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def active_sessions_page(
     request: Request,
@@ -356,7 +356,7 @@ def active_sessions_page(
 @router.get(
     "/radius-errors",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:radius:read"))],
 )
 def radius_auth_errors_page(
     request: Request,

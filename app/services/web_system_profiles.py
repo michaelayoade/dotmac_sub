@@ -175,6 +175,7 @@ def get_user_edit_data(
         db.execute(
             select(Permission)
             .where(Permission.is_active.is_(True))
+            .where(Permission.is_ui_assignable.is_(True))
             .order_by(Permission.key.asc())
         )
         .scalars()

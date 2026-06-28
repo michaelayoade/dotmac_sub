@@ -19,7 +19,7 @@ router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 @router.get(
     "/payment-proofs",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:proof:read"))],
 )
 def payment_proofs_list(
     request: Request,
@@ -52,7 +52,7 @@ def payment_proofs_list(
 @router.get(
     "/payment-proofs/{proof_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:proof:read"))],
 )
 def payment_proofs_detail(
     request: Request,
@@ -87,7 +87,7 @@ def payment_proofs_detail(
 
 @router.get(
     "/payment-proofs/{proof_id}/file",
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:proof:read"))],
 )
 def payment_proofs_file(
     proof_id: UUID,
@@ -111,7 +111,7 @@ def payment_proofs_verify(
     auto_allocate: str = Form("yes"),
     review_notes: str = Form(""),
     db: Session = Depends(get_db),
-    auth: dict = Depends(require_permission("billing:write")),
+    auth: dict = Depends(require_permission("billing:proof:verify")),
 ):
     try:
         web_payment_proofs_service.verify_proof(
@@ -137,7 +137,7 @@ def payment_proofs_reject(
     proof_id: UUID,
     review_notes: str = Form(""),
     db: Session = Depends(get_db),
-    auth: dict = Depends(require_permission("billing:write")),
+    auth: dict = Depends(require_permission("billing:proof:verify")),
 ):
     try:
         web_payment_proofs_service.reject_proof(

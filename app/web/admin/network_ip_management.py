@@ -34,7 +34,7 @@ def _base_context(
 @router.get(
     "/ip-management",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_management(
     request: Request,
@@ -79,7 +79,7 @@ def ip_management(
 
 @router.post(
     "/ip-management/reconcile-pools",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def reconcile_ip_pool_memberships(request: Request, db: Session = Depends(get_db)):
     redirect_url = (
@@ -94,7 +94,7 @@ def reconcile_ip_pool_memberships(request: Request, db: Session = Depends(get_db
 @router.get(
     "/ip-management/pools/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_pool_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(
@@ -109,7 +109,7 @@ def ip_pool_new(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/pools/import",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_pool_import_form(request: Request, db: Session = Depends(get_db)):
     context = _base_context(
@@ -131,7 +131,7 @@ def ip_pool_import_form(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/ip-management/pools/import",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ip_pool_import_submit(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -175,7 +175,7 @@ def ip_pool_import_submit(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/pools/legacy",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_pools_redirect():
     return RedirectResponse("/admin/network/ip-management", status_code=303)
@@ -184,7 +184,7 @@ def ip_pools_redirect():
 @router.get(
     "/ip-management/blocks/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_block_new(
     request: Request,
@@ -205,7 +205,7 @@ def ip_block_new(
 @router.get(
     "/ip-management/blocks",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_blocks_redirect():
     return RedirectResponse("/admin/network/ip-management", status_code=303)
@@ -214,7 +214,7 @@ def ip_blocks_redirect():
 @router.post(
     "/ip-management/blocks",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ip_block_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_ip_actions_service.create_ip_block_from_form(
@@ -239,7 +239,7 @@ def ip_block_create(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/ip-management/pools",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ip_pool_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_ip_actions_service.create_ip_pool_from_form(
@@ -264,7 +264,7 @@ def ip_pool_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/pools/{pool_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_pool_detail(request: Request, pool_id: str, db: Session = Depends(get_db)):
     state = web_network_ip_service.build_ip_pool_detail_data(db, pool_id=pool_id)
@@ -304,7 +304,7 @@ def ip_pool_detail(request: Request, pool_id: str, db: Session = Depends(get_db)
 @router.get(
     "/ip-management/pools/{pool_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_pool_edit(request: Request, pool_id: str, db: Session = Depends(get_db)):
     pool = web_network_ip_service.get_ip_pool_for_edit(db, pool_id=pool_id)
@@ -334,7 +334,7 @@ def ip_pool_edit(request: Request, pool_id: str, db: Session = Depends(get_db)):
 @router.post(
     "/ip-management/pools/{pool_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ip_pool_update(request: Request, pool_id: str, db: Session = Depends(get_db)):
     result = web_network_ip_actions_service.update_ip_pool_from_form(
@@ -367,7 +367,7 @@ def ip_pool_update(request: Request, pool_id: str, db: Session = Depends(get_db)
 @router.get(
     "/ip-management/calculator",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_calculator(request: Request, db: Session = Depends(get_db)):
     """IP subnet calculator tool."""
@@ -382,7 +382,7 @@ def ip_calculator(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/assignments",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_assignments_list(request: Request, db: Session = Depends(get_db)):
     """List all IP assignments."""
@@ -409,7 +409,7 @@ def ip_assignments_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/dual-stack",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_dual_stack_view(
     request: Request,
@@ -438,7 +438,7 @@ def ip_dual_stack_view(
 @router.get(
     "/ip-management/ipv4",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv4_addresses_list(request: Request, db: Session = Depends(get_db)):
     """List all IPv4 addresses."""
@@ -465,7 +465,7 @@ def ipv4_addresses_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/ipv4-networks",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv4_networks_list(
     request: Request,
@@ -498,7 +498,7 @@ def ipv4_networks_list(
 @router.get(
     "/ip-management/ipv4-networks/{pool_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv4_network_detail(request: Request, pool_id: str, db: Session = Depends(get_db)):
     """Detailed IPv4 subnet assignment/status view."""
@@ -526,7 +526,7 @@ def ipv4_network_detail(request: Request, pool_id: str, db: Session = Depends(ge
 @router.get(
     "/ip-management/ipv4-blocks/{block_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv4_block_detail(request: Request, block_id: str, db: Session = Depends(get_db)):
     """Detailed IPv4 block assignment/status view."""
@@ -554,7 +554,7 @@ def ipv4_block_detail(request: Request, block_id: str, db: Session = Depends(get
 @router.get(
     "/ip-management/ipv4-assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv4_assignment_form(
     request: Request,
@@ -598,7 +598,7 @@ def ipv4_assignment_form(
 @router.post(
     "/ip-management/ipv4-assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
     result = web_network_ip_actions_service.assign_ipv4_address_from_form(
@@ -631,7 +631,7 @@ def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/ipv4-bulk-assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv4_bulk_assign_form(request: Request, db: Session = Depends(get_db)):
     context = _base_context(
@@ -646,7 +646,7 @@ def ipv4_bulk_assign_form(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/ip-management/ipv4-bulk-assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ipv4_bulk_assign_submit(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -672,7 +672,7 @@ def ipv4_bulk_assign_submit(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/ip-management/ipv4-release",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ipv4_release_submit(request: Request, db: Session = Depends(get_db)):
     result = web_network_ip_actions_service.release_ipv4_address_from_form(
@@ -694,7 +694,7 @@ def ipv4_release_submit(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/ipv6",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv6_addresses_list(request: Request, db: Session = Depends(get_db)):
     """List all IPv6 addresses."""
@@ -721,7 +721,7 @@ def ipv6_addresses_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/ipv6-networks",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv6_networks_list(
     request: Request,
@@ -752,7 +752,7 @@ def ipv6_networks_list(
 @router.get(
     "/ip-management/ipv6-pd",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv6_pd_list(
     request: Request,
@@ -772,7 +772,7 @@ def ipv6_pd_list(
 
 @router.post(
     "/ip-management/ipv6-pd/{prefix_id}/release",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ipv6_pd_release(
     prefix_id: str,
@@ -789,7 +789,7 @@ def ipv6_pd_release(
 
 @router.post(
     "/ip-management/ipv6-pd/assign",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ipv6_pd_assign(
     pool_id: str = Form(...),
@@ -809,7 +809,7 @@ def ipv6_pd_assign(
 @router.get(
     "/ip-management/ipv6-networks/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ipv6_network_new(request: Request, db: Session = Depends(get_db)):
     """Create form for IPv6 network prefix."""
@@ -844,7 +844,7 @@ def ipv6_network_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/ip-management/ipv6-networks/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def ipv6_network_create(request: Request, db: Session = Depends(get_db)):
     """Create IPv6 network prefix from dedicated form."""
@@ -871,7 +871,7 @@ def ipv6_network_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/ip-management/pools",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def ip_pools_list(
     request: Request,
@@ -891,7 +891,7 @@ def ip_pools_list(
 @router.get(
     "/vlans",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def vlans_list(
     request: Request,
@@ -909,7 +909,7 @@ def vlans_list(
 @router.get(
     "/vlans/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def vlan_new(
     request: Request,
@@ -926,7 +926,7 @@ def vlan_new(
 @router.post(
     "/vlans",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def vlan_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -949,7 +949,7 @@ def vlan_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/vlans/{vlan_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def vlan_detail(request: Request, vlan_id: str, db: Session = Depends(get_db)):
     state = web_network_vlans_service.build_vlan_detail_data(db, vlan_id=vlan_id)
@@ -971,7 +971,7 @@ def vlan_detail(request: Request, vlan_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/vlans/{vlan_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def vlan_edit(request: Request, vlan_id: str, db: Session = Depends(get_db)):
     state = web_network_vlans_service.build_vlan_edit_form_data(db, vlan_id=vlan_id)
@@ -989,7 +989,7 @@ def vlan_edit(request: Request, vlan_id: str, db: Session = Depends(get_db)):
 @router.post(
     "/vlans/{vlan_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def vlan_update(request: Request, vlan_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -1017,7 +1017,7 @@ def vlan_update(request: Request, vlan_id: str, db: Session = Depends(get_db)):
 @router.post(
     "/vlans/{vlan_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def vlan_delete(vlan_id: str, db: Session = Depends(get_db)):
     web_network_vlans_service.handle_vlan_delete(db, vlan_id=vlan_id)

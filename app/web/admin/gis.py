@@ -47,7 +47,7 @@ def _gis_context(request: Request, db: Session, **extra) -> dict:
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("gis:map:view"))],
 )
 def gis_index(
     request: Request,
@@ -75,7 +75,7 @@ def gis_index(
 
 @router.post(
     "/location-requests/{request_id}/approve",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("gis:map:edit"))],
 )
 def gis_location_request_approve(
     request: Request,
@@ -99,7 +99,7 @@ def gis_location_request_approve(
 
 @router.post(
     "/location-requests/{request_id}/reject",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("gis:map:edit"))],
 )
 def gis_location_request_reject(
     request: Request,
@@ -137,7 +137,7 @@ def gis_location_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/locations/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("gis:map:edit"))],
 )
 def gis_location_create(
     request: Request,

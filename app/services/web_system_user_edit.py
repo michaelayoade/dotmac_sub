@@ -57,6 +57,7 @@ def build_edit_state(db: Session, *, subscriber: SystemUser) -> dict[str, object
         "all_permissions": db.execute(
             select(Permission)
             .where(Permission.is_active.is_(True))
+            .where(Permission.is_ui_assignable.is_(True))
             .order_by(Permission.key.asc())
         )
         .scalars()
@@ -125,11 +126,28 @@ def apply_user_edit(
     ).delete(synchronize_session=False)
 
     granted_by = coerce_uuid(actor_id) if actor_id else None
-    for permission_id in set(direct_permission_ids):
+    desired_permission_ids = {
+        UUID(permission_id) for permission_id in direct_permission_ids
+    }
+    if desired_permission_ids:
+        assignable_permission_ids = {
+            permission_id
+            for permission_id in db.execute(
+                select(Permission.id)
+                .where(Permission.id.in_(desired_permission_ids))
+                .where(Permission.is_active.is_(True))
+                .where(Permission.is_ui_assignable.is_(True))
+            ).scalars()
+        }
+        if assignable_permission_ids != desired_permission_ids:
+            raise ValueError("One or more direct permissions are not assignable.")
+    else:
+        assignable_permission_ids = set()
+    for permission_id in assignable_permission_ids:
         db.add(
             SystemUserPermission(
                 system_user_id=subscriber.id,
-                permission_id=UUID(permission_id),
+                permission_id=permission_id,
                 granted_by_system_user_id=granted_by,
             )
         )

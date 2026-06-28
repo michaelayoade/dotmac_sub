@@ -34,7 +34,7 @@ def _base_context(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:speed_profile:read"))],
 )
 def speed_profiles_list(
     request: Request,
@@ -58,7 +58,7 @@ def speed_profiles_list(
 @router.get(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:speed_profile:read"))],
 )
 def speed_profile_create_form(
     request: Request,
@@ -80,7 +80,7 @@ def speed_profile_create_form(
 @router.post(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:speed_profile:write"))],
 )
 def speed_profile_create(
     request: Request,
@@ -113,7 +113,7 @@ def speed_profile_create(
 @router.get(
     "/{profile_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:speed_profile:read"))],
 )
 def speed_profile_edit_form(
     request: Request,
@@ -142,7 +142,7 @@ def speed_profile_edit_form(
 @router.post(
     "/{profile_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:speed_profile:write"))],
 )
 def speed_profile_update(
     request: Request,
@@ -187,7 +187,7 @@ def speed_profile_update(
 @router.post(
     "/{profile_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:speed_profile:write"))],
 )
 def speed_profile_delete(
     request: Request,

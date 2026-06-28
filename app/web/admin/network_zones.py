@@ -34,7 +34,7 @@ def _base_context(
 @router.get(
     "/zones",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def zones_list(
     request: Request, status: str | None = None, db: Session = Depends(get_db)
@@ -49,7 +49,7 @@ def zones_list(
 @router.get(
     "/zones/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """Show new zone form."""
@@ -66,7 +66,7 @@ def zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 @router.post(
     "/zones",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:zone:write"))],
 )
 def zone_create(request: Request, db: Session = Depends(get_db)) -> Response:
     """Create a new zone."""
@@ -91,7 +91,7 @@ def zone_create(request: Request, db: Session = Depends(get_db)) -> Response:
 @router.get(
     "/zones/{zone_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def zone_detail(
     request: Request,
@@ -114,7 +114,7 @@ def zone_detail(
 @router.get(
     "/zones/{zone_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def zone_edit(
     request: Request,
@@ -137,7 +137,7 @@ def zone_edit(
 @router.post(
     "/zones/{zone_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:zone:write"))],
 )
 def zone_update(
     request: Request,

@@ -39,6 +39,7 @@ class PermissionBase(BaseModel):
     key: str = Field(min_length=1, max_length=120)
     description: str | None = None
     is_active: bool = True
+    is_ui_assignable: bool = True
 
     @field_validator("key")
     @classmethod
@@ -66,6 +67,7 @@ class PermissionUpdate(BaseModel):
     key: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     is_active: bool | None = None
+    is_ui_assignable: bool | None = None
 
     @field_validator("key")
     @classmethod

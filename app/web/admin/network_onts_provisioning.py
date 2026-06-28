@@ -166,7 +166,7 @@ def _update_service_order_execution_context_for_ont(
 @router.get(
     "/onts/{ont_id}/available-static-ips",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_available_static_ips(
     request: Request,
@@ -192,7 +192,7 @@ def ont_available_static_ips(
 @router.get(
     "/onts/{ont_id}/provisioning-preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_provisioning_preview(
     request: Request,
@@ -213,7 +213,7 @@ def ont_provisioning_preview(
 
 @router.get(
     "/onts/{ont_id}/preflight",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_preflight_check(
     request: Request,
@@ -230,7 +230,7 @@ def ont_preflight_check(
 
 @router.post(
     "/onts/{ont_id}/save-provision-settings",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_save_provision_settings(
     request: Request,
@@ -317,7 +317,7 @@ def ont_save_provision_settings(
 
 @router.get(
     "/onts/{ont_id}/save-provision-settings",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_save_provision_settings_get(ont_id: str) -> Response:
     """Handle accidental GET navigations to the save endpoint gracefully."""
@@ -338,7 +338,7 @@ def ont_save_provision_settings_get(ont_id: str) -> Response:
 
 @router.post(
     "/onts/{ont_id}/step/wait-tr069-bootstrap",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def step_wait_tr069_bootstrap(
     request: Request,
@@ -361,7 +361,7 @@ def step_wait_tr069_bootstrap(
 
 @router.post(
     "/onts/{ont_id}/step/rollback-service-ports",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def step_rollback_service_ports(
     request: Request,
@@ -379,7 +379,7 @@ def step_rollback_service_ports(
 
 @router.post(
     "/onts/{ont_id}/step/deprovision",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def step_deprovision(
     request: Request,
@@ -402,7 +402,7 @@ def step_deprovision(
 
 @router.post(
     "/onts/{ont_id}/provision",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def provision_ont_direct(
     request: Request,
@@ -454,7 +454,7 @@ def provision_ont_direct(
 
 @router.post(
     "/onts/{ont_id}/compensation-failures/{failure_id}/retry",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def retry_ont_compensation_failure(
     request: Request,
@@ -488,7 +488,7 @@ def retry_ont_compensation_failure(
 
 @router.post(
     "/onts/{ont_id}/compensation-failures/{failure_id}/resolve",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def resolve_ont_compensation_failure(
     request: Request,
@@ -522,7 +522,7 @@ def resolve_ont_compensation_failure(
 
 @router.post(
     "/onts/{ont_id}/compensation-failures/{failure_id}/abandon",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def abandon_ont_compensation_failure(
     request: Request,

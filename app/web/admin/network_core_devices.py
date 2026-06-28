@@ -52,14 +52,15 @@ def _base_context(
         "active_menu": active_menu,
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "can_write_network": bool(auth) and has_permission(auth, db, "network:write"),
+        "can_write_network": bool(auth)
+        and has_permission(auth, db, "network:device:write"),
     }
 
 
 @router.get(
     "/network-devices",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def network_devices_consolidated(
     request: Request,
@@ -103,7 +104,7 @@ def network_devices_consolidated(
 @router.get(
     "/backups",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def network_backups_overview(
     request: Request,
@@ -131,7 +132,7 @@ def network_backups_overview(
 @router.get(
     "/core-devices",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_devices_list(
     request: Request,
@@ -167,7 +168,7 @@ def core_devices_list(
 @router.get(
     "/core-devices/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_new(
     request: Request,
@@ -198,7 +199,7 @@ def core_device_new(
 @router.post(
     "/core-devices",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -307,7 +308,7 @@ def core_device_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/core-devices/parent-options",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_parent_options(
     request: Request,
@@ -335,7 +336,7 @@ def core_device_parent_options(
 @router.get(
     "/core-devices/{device_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_edit(request: Request, device_id: str, db: Session = Depends(get_db)):
     device = web_network_core_devices_service.get_device(db, device_id)
@@ -369,7 +370,7 @@ def core_device_edit(request: Request, device_id: str, db: Session = Depends(get
 @router.get(
     "/core-devices/{device_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_detail(request: Request, device_id: str, db: Session = Depends(get_db)):
     from app.services import core_router_metrics
@@ -411,7 +412,7 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
 @router.post(
     "/core-devices/{device_id}/provisioning-access",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_provisioning_access_update(
     device_id: str,
@@ -437,7 +438,7 @@ def core_device_provisioning_access_update(
 @router.post(
     "/core-devices/{device_id}/interfaces/{interface_id}/toggle-monitored",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_interface_toggle_monitored(
     device_id: str,
@@ -462,7 +463,7 @@ def core_device_interface_toggle_monitored(
 @router.get(
     "/core-devices/{device_id}/interfaces/bandwidth",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_interfaces_bandwidth_partial(
     request: Request,
@@ -508,7 +509,7 @@ def core_device_interfaces_bandwidth_partial(
 @router.get(
     "/core-devices/{device_id}/graphs",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_graphs(
     request: Request,
@@ -537,7 +538,7 @@ def core_device_graphs(
 @router.post(
     "/core-devices/{device_id}/graphs",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_graph_create(
     device_id: str,
@@ -565,7 +566,7 @@ def core_device_graph_create(
 @router.post(
     "/core-devices/{device_id}/graphs/{graph_id}/sources",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_graph_source_add(
     device_id: str,
@@ -601,7 +602,7 @@ def core_device_graph_source_add(
 @router.post(
     "/core-devices/{device_id}/graphs/{graph_id}/toggle-public",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_graph_toggle_public(
     device_id: str,
@@ -625,7 +626,7 @@ def core_device_graph_toggle_public(
 @router.post(
     "/core-devices/{device_id}/graphs/{graph_id}/clone",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_graph_clone(
     device_id: str,
@@ -647,7 +648,7 @@ def core_device_graph_clone(
 @router.get(
     "/core-devices/graphs/dashboard",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_graphs_dashboard(
     request: Request,
@@ -670,7 +671,7 @@ def core_device_graphs_dashboard(
 @router.get(
     "/core-devices/{device_id}/backups",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_backups(
     request: Request,
@@ -705,7 +706,7 @@ def core_device_backups(
 @router.post(
     "/core-devices/{device_id}/backups/settings",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_backup_settings_update(
     device_id: str,
@@ -739,7 +740,7 @@ def core_device_backup_settings_update(
 @router.post(
     "/core-devices/{device_id}/backups/trigger",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_backup_trigger(
     device_id: str,
@@ -760,7 +761,7 @@ def core_device_backup_trigger(
 @router.get(
     "/core-devices/{device_id}/backups/{backup_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_backup_detail(
     request: Request,
@@ -790,7 +791,7 @@ def core_device_backup_detail(
 
 @router.get(
     "/core-devices/{device_id}/backups/{backup_id}/download",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_backup_download(
     device_id: str,
@@ -818,7 +819,7 @@ def core_device_backup_download(
 @router.get(
     "/core-devices/{device_id}/backups/compare",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_backup_compare(
     request: Request,
@@ -851,7 +852,7 @@ def core_device_backup_compare(
 @router.get(
     "/core-devices/{device_id}/health",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def core_device_health_partial(
     request: Request, device_id: str, db: Session = Depends(get_db)
@@ -880,7 +881,7 @@ def core_device_health_partial(
 @router.post(
     "/core-devices/{device_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def core_device_update(request: Request, device_id: str, db: Session = Depends(get_db)):
     device = web_network_core_devices_service.get_device(db, device_id)

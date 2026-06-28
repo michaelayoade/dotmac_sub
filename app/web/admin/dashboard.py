@@ -14,14 +14,12 @@ router = APIRouter(tags=["web-admin-dashboard"])
 @router.get(
     "/dashboard",
     response_class=HTMLResponse,
-    # The dashboard is the default staff landing page. Gating it on the legacy
-    # broad `billing:read` (which only the `admin` role holds) meant support /
-    # finance / auditor staff hit a 403 right after login. Allow any staff with a
-    # basic read permission to see the overview.
+    # The dashboard is the default staff landing page. Allow any staff with a
+    # granular read permission to see the overview.
     dependencies=[
         Depends(
             require_any_permission(
-                "billing:read", "billing:invoice:read", "customer:read"
+                "billing:invoice:read", "monitoring:read", "customer:read"
             )
         )
     ],

@@ -76,7 +76,7 @@ router = APIRouter()
     response_model=CPEDeviceRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def create_cpe_device(payload: CPEDeviceCreate, db: Session = Depends(get_db)):
     return network_service.cpe_devices.create(db, payload)
@@ -86,7 +86,7 @@ def create_cpe_device(payload: CPEDeviceCreate, db: Session = Depends(get_db)):
     "/cpe-devices/{device_id}",
     response_model=CPEDeviceRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def get_cpe_device(device_id: str, db: Session = Depends(get_db)):
     return network_service.cpe_devices.get(db, device_id)
@@ -96,7 +96,7 @@ def get_cpe_device(device_id: str, db: Session = Depends(get_db)):
     "/cpe-devices",
     response_model=ListResponse[CPEDeviceRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def list_cpe_devices(
     subscriber_id: str | None = None,
@@ -119,7 +119,7 @@ def list_cpe_devices(
     "/cpe-devices/{device_id}",
     response_model=CPEDeviceRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def update_cpe_device(
     device_id: str, payload: CPEDeviceUpdate, db: Session = Depends(get_db)
@@ -131,7 +131,7 @@ def update_cpe_device(
     "/cpe-devices/{device_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def delete_cpe_device(device_id: str, db: Session = Depends(get_db)):
     network_service.cpe_devices.delete(db, device_id)
@@ -142,7 +142,7 @@ def delete_cpe_device(device_id: str, db: Session = Depends(get_db)):
     response_model=PortRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def create_port(payload: PortCreate, db: Session = Depends(get_db)):
     return network_service.ports.create(db, payload)
@@ -152,7 +152,7 @@ def create_port(payload: PortCreate, db: Session = Depends(get_db)):
     "/ports/{port_id}",
     response_model=PortRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def get_port(port_id: str, db: Session = Depends(get_db)):
     return network_service.ports.get(db, port_id)
@@ -162,7 +162,7 @@ def get_port(port_id: str, db: Session = Depends(get_db)):
     "/ports",
     response_model=ListResponse[PortRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def list_ports(
     device_id: str | None = None,
@@ -181,7 +181,7 @@ def list_ports(
     "/ports/{port_id}",
     response_model=PortRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def update_port(port_id: str, payload: PortUpdate, db: Session = Depends(get_db)):
     return network_service.ports.update(db, port_id, payload)
@@ -191,7 +191,7 @@ def update_port(port_id: str, payload: PortUpdate, db: Session = Depends(get_db)
     "/ports/{port_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def delete_port(port_id: str, db: Session = Depends(get_db)):
     network_service.ports.delete(db, port_id)
@@ -202,7 +202,7 @@ def delete_port(port_id: str, db: Session = Depends(get_db)):
     response_model=VlanRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def create_vlan(payload: VlanCreate, db: Session = Depends(get_db)):
     return network_service.vlans.create(db, payload)
@@ -212,7 +212,7 @@ def create_vlan(payload: VlanCreate, db: Session = Depends(get_db)):
     "/vlans/{vlan_id}",
     response_model=VlanRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def get_vlan(vlan_id: str, db: Session = Depends(get_db)):
     return network_service.vlans.get(db, vlan_id)
@@ -222,7 +222,7 @@ def get_vlan(vlan_id: str, db: Session = Depends(get_db)):
     "/vlans",
     response_model=ListResponse[VlanRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def list_vlans(
     region_id: str | None = None,
@@ -250,7 +250,7 @@ def list_vlans(
     "/vlans/{vlan_id}",
     response_model=VlanRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def update_vlan(vlan_id: str, payload: VlanUpdate, db: Session = Depends(get_db)):
     return network_service.vlans.update(db, vlan_id, payload)
@@ -260,7 +260,7 @@ def update_vlan(vlan_id: str, payload: VlanUpdate, db: Session = Depends(get_db)
     "/vlans/{vlan_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def delete_vlan(vlan_id: str, db: Session = Depends(get_db)):
     network_service.vlans.delete(db, vlan_id)
@@ -271,7 +271,7 @@ def delete_vlan(vlan_id: str, db: Session = Depends(get_db)):
     response_model=PortVlanRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def create_port_vlan(payload: PortVlanCreate, db: Session = Depends(get_db)):
     return network_service.port_vlans.create(db, payload)
@@ -281,7 +281,7 @@ def create_port_vlan(payload: PortVlanCreate, db: Session = Depends(get_db)):
     "/port-vlans/{link_id}",
     response_model=PortVlanRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def get_port_vlan(link_id: str, db: Session = Depends(get_db)):
     return network_service.port_vlans.get(db, link_id)
@@ -291,7 +291,7 @@ def get_port_vlan(link_id: str, db: Session = Depends(get_db)):
     "/port-vlans",
     response_model=ListResponse[PortVlanRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def list_port_vlans(
     port_id: str | None = None,
@@ -307,7 +307,7 @@ def list_port_vlans(
     "/port-vlans/{link_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def delete_port_vlan(link_id: str, db: Session = Depends(get_db)):
     network_service.port_vlans.delete(db, link_id)
@@ -318,7 +318,7 @@ def delete_port_vlan(link_id: str, db: Session = Depends(get_db)):
     response_model=IPAssignmentRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def create_ip_assignment(payload: IPAssignmentCreate, db: Session = Depends(get_db)):
     return network_service.ip_assignments.create(db, payload)
@@ -328,7 +328,7 @@ def create_ip_assignment(payload: IPAssignmentCreate, db: Session = Depends(get_
     "/ip-assignments/{assignment_id}",
     response_model=IPAssignmentRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def get_ip_assignment(assignment_id: str, db: Session = Depends(get_db)):
     return network_service.ip_assignments.get(db, assignment_id)
@@ -338,7 +338,7 @@ def get_ip_assignment(assignment_id: str, db: Session = Depends(get_db)):
     "/ip-assignments",
     response_model=ListResponse[IPAssignmentRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def list_ip_assignments(
     subscriber_id: str | None = None,
@@ -369,7 +369,7 @@ def list_ip_assignments(
     "/ip-assignments/{assignment_id}",
     response_model=IPAssignmentRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def update_ip_assignment(
     assignment_id: str, payload: IPAssignmentUpdate, db: Session = Depends(get_db)
@@ -381,7 +381,7 @@ def update_ip_assignment(
     "/ip-assignments/{assignment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def delete_ip_assignment(assignment_id: str, db: Session = Depends(get_db)):
     network_service.ip_assignments.delete(db, assignment_id)
@@ -392,7 +392,7 @@ def delete_ip_assignment(assignment_id: str, db: Session = Depends(get_db)):
     response_model=IpPoolRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def create_ip_pool(payload: IpPoolCreate, db: Session = Depends(get_db)):
     return network_service.ip_pools.create(db, payload)
@@ -402,7 +402,7 @@ def create_ip_pool(payload: IpPoolCreate, db: Session = Depends(get_db)):
     "/ip-pools/{pool_id}",
     response_model=IpPoolRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def get_ip_pool(pool_id: str, db: Session = Depends(get_db)):
     return network_service.ip_pools.get(db, pool_id)
@@ -412,7 +412,7 @@ def get_ip_pool(pool_id: str, db: Session = Depends(get_db)):
     "/ip-pools",
     response_model=ListResponse[IpPoolRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def list_ip_pools(
     ip_version: IPVersion | None = None,
@@ -432,7 +432,7 @@ def list_ip_pools(
     "/ip-pools/{pool_id}",
     response_model=IpPoolRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def update_ip_pool(pool_id: str, payload: IpPoolUpdate, db: Session = Depends(get_db)):
     return network_service.ip_pools.update(db, pool_id, payload)
@@ -442,7 +442,7 @@ def update_ip_pool(pool_id: str, payload: IpPoolUpdate, db: Session = Depends(ge
     "/ip-pools/{pool_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def delete_ip_pool(pool_id: str, db: Session = Depends(get_db)):
     network_service.ip_pools.delete(db, pool_id)
@@ -453,7 +453,7 @@ def delete_ip_pool(pool_id: str, db: Session = Depends(get_db)):
     response_model=IpBlockRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def create_ip_block(payload: IpBlockCreate, db: Session = Depends(get_db)):
     return network_service.ip_blocks.create(db, payload)
@@ -463,7 +463,7 @@ def create_ip_block(payload: IpBlockCreate, db: Session = Depends(get_db)):
     "/ip-blocks/{block_id}",
     response_model=IpBlockRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def get_ip_block(block_id: str, db: Session = Depends(get_db)):
     return network_service.ip_blocks.get(db, block_id)
@@ -473,7 +473,7 @@ def get_ip_block(block_id: str, db: Session = Depends(get_db)):
     "/ip-blocks",
     response_model=ListResponse[IpBlockRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def list_ip_blocks(
     pool_id: str | None = None,
@@ -493,7 +493,7 @@ def list_ip_blocks(
     "/ip-blocks/{block_id}",
     response_model=IpBlockRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def update_ip_block(
     block_id: str, payload: IpBlockUpdate, db: Session = Depends(get_db)
@@ -505,7 +505,7 @@ def update_ip_block(
     "/ip-blocks/{block_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def delete_ip_block(block_id: str, db: Session = Depends(get_db)):
     network_service.ip_blocks.delete(db, block_id)
@@ -516,7 +516,7 @@ def delete_ip_block(block_id: str, db: Session = Depends(get_db)):
     response_model=IPv4AddressRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def create_ipv4_address(payload: IPv4AddressCreate, db: Session = Depends(get_db)):
     return network_service.ipv4_addresses.create(db, payload)
@@ -526,7 +526,7 @@ def create_ipv4_address(payload: IPv4AddressCreate, db: Session = Depends(get_db
     "/ipv4-addresses/{record_id}",
     response_model=IPv4AddressRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def get_ipv4_address(record_id: str, db: Session = Depends(get_db)):
     return network_service.ipv4_addresses.get(db, record_id)
@@ -536,7 +536,7 @@ def get_ipv4_address(record_id: str, db: Session = Depends(get_db)):
     "/ipv4-addresses",
     response_model=ListResponse[IPv4AddressRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def list_ipv4_addresses(
     pool_id: str | None = None,
@@ -554,7 +554,7 @@ def list_ipv4_addresses(
     "/ipv4-addresses/{record_id}",
     response_model=IPv4AddressRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def update_ipv4_address(
     record_id: str, payload: IPv4AddressUpdate, db: Session = Depends(get_db)
@@ -566,7 +566,7 @@ def update_ipv4_address(
     "/ipv4-addresses/{record_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def delete_ipv4_address(record_id: str, db: Session = Depends(get_db)):
     network_service.ipv4_addresses.delete(db, record_id)
@@ -577,7 +577,7 @@ def delete_ipv4_address(record_id: str, db: Session = Depends(get_db)):
     response_model=IPv6AddressRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def create_ipv6_address(payload: IPv6AddressCreate, db: Session = Depends(get_db)):
     return network_service.ipv6_addresses.create(db, payload)
@@ -587,7 +587,7 @@ def create_ipv6_address(payload: IPv6AddressCreate, db: Session = Depends(get_db
     "/ipv6-addresses/{record_id}",
     response_model=IPv6AddressRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def get_ipv6_address(record_id: str, db: Session = Depends(get_db)):
     return network_service.ipv6_addresses.get(db, record_id)
@@ -597,7 +597,7 @@ def get_ipv6_address(record_id: str, db: Session = Depends(get_db)):
     "/ipv6-addresses",
     response_model=ListResponse[IPv6AddressRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ip:read"))],
 )
 def list_ipv6_addresses(
     pool_id: str | None = None,
@@ -615,7 +615,7 @@ def list_ipv6_addresses(
     "/ipv6-addresses/{record_id}",
     response_model=IPv6AddressRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def update_ipv6_address(
     record_id: str, payload: IPv6AddressUpdate, db: Session = Depends(get_db)
@@ -627,7 +627,7 @@ def update_ipv6_address(
     "/ipv6-addresses/{record_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def delete_ipv6_address(record_id: str, db: Session = Depends(get_db)):
     network_service.ipv6_addresses.delete(db, record_id)
@@ -638,7 +638,7 @@ def delete_ipv6_address(record_id: str, db: Session = Depends(get_db)):
     response_model=OLTDeviceRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_olt_device(payload: OLTDeviceCreate, db: Session = Depends(get_db)):
     return network_service.olt_devices.create(db, payload)
@@ -648,7 +648,7 @@ def create_olt_device(payload: OLTDeviceCreate, db: Session = Depends(get_db)):
     "/olt-devices/{device_id}",
     response_model=OLTDeviceRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_olt_device(device_id: str, db: Session = Depends(get_db)):
     return network_service.olt_devices.get(db, device_id)
@@ -658,7 +658,7 @@ def get_olt_device(device_id: str, db: Session = Depends(get_db)):
     "/olt-devices",
     response_model=ListResponse[OLTDeviceRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_olt_devices(
     is_active: bool | None = None,
@@ -677,7 +677,7 @@ def list_olt_devices(
     "/olt-devices/{device_id}",
     response_model=OLTDeviceRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def update_olt_device(
     device_id: str, payload: OLTDeviceUpdate, db: Session = Depends(get_db)
@@ -689,7 +689,7 @@ def update_olt_device(
     "/olt-devices/{device_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_olt_device(device_id: str, db: Session = Depends(get_db)):
     network_service.olt_devices.delete(db, device_id)
@@ -700,7 +700,7 @@ def delete_olt_device(device_id: str, db: Session = Depends(get_db)):
     response_model=OltPowerUnitRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_olt_power_unit(payload: OltPowerUnitCreate, db: Session = Depends(get_db)):
     return network_service.olt_power_units.create(db, payload)
@@ -710,7 +710,7 @@ def create_olt_power_unit(payload: OltPowerUnitCreate, db: Session = Depends(get
     "/olt-power-units/{unit_id}",
     response_model=OltPowerUnitRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     return network_service.olt_power_units.get(db, unit_id)
@@ -720,7 +720,7 @@ def get_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     "/olt-power-units",
     response_model=ListResponse[OltPowerUnitRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_olt_power_units(
     olt_id: str | None = None,
@@ -740,7 +740,7 @@ def list_olt_power_units(
     "/olt-power-units/{unit_id}",
     response_model=OltPowerUnitRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def update_olt_power_unit(
     unit_id: str, payload: OltPowerUnitUpdate, db: Session = Depends(get_db)
@@ -752,7 +752,7 @@ def update_olt_power_unit(
     "/olt-power-units/{unit_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     network_service.olt_power_units.delete(db, unit_id)
@@ -763,7 +763,7 @@ def delete_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     response_model=OltShelfRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_olt_shelf(payload: OltShelfCreate, db: Session = Depends(get_db)):
     return network_service.olt_shelves.create(db, payload)
@@ -773,7 +773,7 @@ def create_olt_shelf(payload: OltShelfCreate, db: Session = Depends(get_db)):
     "/olt-shelves/{shelf_id}",
     response_model=OltShelfRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     return network_service.olt_shelves.get(db, shelf_id)
@@ -783,7 +783,7 @@ def get_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     "/olt-shelves",
     response_model=ListResponse[OltShelfRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_olt_shelves(
     olt_id: str | None = None,
@@ -802,7 +802,7 @@ def list_olt_shelves(
     "/olt-shelves/{shelf_id}",
     response_model=OltShelfRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def update_olt_shelf(
     shelf_id: str, payload: OltShelfUpdate, db: Session = Depends(get_db)
@@ -814,7 +814,7 @@ def update_olt_shelf(
     "/olt-shelves/{shelf_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     network_service.olt_shelves.delete(db, shelf_id)
@@ -825,7 +825,7 @@ def delete_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     response_model=OltCardRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_olt_card(payload: OltCardCreate, db: Session = Depends(get_db)):
     return network_service.olt_cards.create(db, payload)
@@ -835,7 +835,7 @@ def create_olt_card(payload: OltCardCreate, db: Session = Depends(get_db)):
     "/olt-cards/{card_id}",
     response_model=OltCardRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_olt_card(card_id: str, db: Session = Depends(get_db)):
     return network_service.olt_cards.get(db, card_id)
@@ -845,7 +845,7 @@ def get_olt_card(card_id: str, db: Session = Depends(get_db)):
     "/olt-cards",
     response_model=ListResponse[OltCardRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_olt_cards(
     shelf_id: str | None = None,
@@ -864,7 +864,7 @@ def list_olt_cards(
     "/olt-cards/{card_id}",
     response_model=OltCardRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def update_olt_card(
     card_id: str, payload: OltCardUpdate, db: Session = Depends(get_db)
@@ -876,7 +876,7 @@ def update_olt_card(
     "/olt-cards/{card_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_olt_card(card_id: str, db: Session = Depends(get_db)):
     network_service.olt_cards.delete(db, card_id)
@@ -887,7 +887,7 @@ def delete_olt_card(card_id: str, db: Session = Depends(get_db)):
     response_model=OltCardPortRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_olt_card_port(payload: OltCardPortCreate, db: Session = Depends(get_db)):
     return network_service.olt_card_ports.create(db, payload)
@@ -897,7 +897,7 @@ def create_olt_card_port(payload: OltCardPortCreate, db: Session = Depends(get_d
     "/olt-card-ports/{port_id}",
     response_model=OltCardPortRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     return network_service.olt_card_ports.get(db, port_id)
@@ -907,7 +907,7 @@ def get_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     "/olt-card-ports",
     response_model=ListResponse[OltCardPortRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_olt_card_ports(
     card_id: str | None = None,
@@ -926,7 +926,7 @@ def list_olt_card_ports(
     "/olt-card-ports/{port_id}",
     response_model=OltCardPortRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def update_olt_card_port(
     port_id: str, payload: OltCardPortUpdate, db: Session = Depends(get_db)
@@ -938,7 +938,7 @@ def update_olt_card_port(
     "/olt-card-ports/{port_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     network_service.olt_card_ports.delete(db, port_id)
@@ -949,7 +949,7 @@ def delete_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     response_model=OltSfpModuleRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_olt_sfp_module(payload: OltSfpModuleCreate, db: Session = Depends(get_db)):
     return network_service.olt_sfp_modules.create(db, payload)
@@ -959,7 +959,7 @@ def create_olt_sfp_module(payload: OltSfpModuleCreate, db: Session = Depends(get
     "/olt-sfp-modules/{module_id}",
     response_model=OltSfpModuleRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     return network_service.olt_sfp_modules.get(db, module_id)
@@ -969,7 +969,7 @@ def get_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     "/olt-sfp-modules",
     response_model=ListResponse[OltSfpModuleRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_olt_sfp_modules(
     olt_card_port_id: str | None = None,
@@ -989,7 +989,7 @@ def list_olt_sfp_modules(
     "/olt-sfp-modules/{module_id}",
     response_model=OltSfpModuleRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def update_olt_sfp_module(
     module_id: str, payload: OltSfpModuleUpdate, db: Session = Depends(get_db)
@@ -1001,7 +1001,7 @@ def update_olt_sfp_module(
     "/olt-sfp-modules/{module_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     network_service.olt_sfp_modules.delete(db, module_id)
@@ -1012,7 +1012,7 @@ def delete_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     response_model=PonPortRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def create_pon_port(payload: PonPortCreate, db: Session = Depends(get_db)):
     return network_service.pon_ports.create(db, payload)
@@ -1022,7 +1022,7 @@ def create_pon_port(payload: PonPortCreate, db: Session = Depends(get_db)):
     "/pon-ports/utilization",
     response_model=PortUtilizationRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pon:read"))],
 )
 def get_pon_port_utilization(
     olt_id: str | None = None,
@@ -1035,7 +1035,7 @@ def get_pon_port_utilization(
     "/pon-ports/{port_id}",
     response_model=PonPortRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pon:read"))],
 )
 def get_pon_port(port_id: str, db: Session = Depends(get_db)):
     return network_service.pon_ports.get(db, port_id)
@@ -1045,7 +1045,7 @@ def get_pon_port(port_id: str, db: Session = Depends(get_db)):
     "/pon-ports",
     response_model=ListResponse[PonPortRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pon:read"))],
 )
 def list_pon_ports(
     olt_id: str | None = None,
@@ -1065,7 +1065,7 @@ def list_pon_ports(
     "/pon-ports/{port_id}",
     response_model=PonPortRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def update_pon_port(
     port_id: str, payload: PonPortUpdate, db: Session = Depends(get_db)
@@ -1077,7 +1077,7 @@ def update_pon_port(
     "/pon-ports/{port_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def delete_pon_port(port_id: str, db: Session = Depends(get_db)):
     network_service.pon_ports.delete(db, port_id)
@@ -1088,7 +1088,7 @@ def delete_pon_port(port_id: str, db: Session = Depends(get_db)):
     response_model=PonPortSplitterLinkRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def create_pon_port_splitter_link(
     payload: PonPortSplitterLinkCreate, db: Session = Depends(get_db)
@@ -1100,7 +1100,7 @@ def create_pon_port_splitter_link(
     "/pon-port-splitter-links/{link_id}",
     response_model=PonPortSplitterLinkRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pon:read"))],
 )
 def get_pon_port_splitter_link(link_id: str, db: Session = Depends(get_db)):
     return network_service.pon_port_splitter_links.get(db, link_id)
@@ -1110,7 +1110,7 @@ def get_pon_port_splitter_link(link_id: str, db: Session = Depends(get_db)):
     "/pon-port-splitter-links",
     response_model=ListResponse[PonPortSplitterLinkRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:pon:read"))],
 )
 def list_pon_port_splitter_links(
     pon_port_id: str | None = None,
@@ -1131,7 +1131,7 @@ def list_pon_port_splitter_links(
     "/pon-port-splitter-links/{link_id}",
     response_model=PonPortSplitterLinkRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def update_pon_port_splitter_link(
     link_id: str, payload: PonPortSplitterLinkUpdate, db: Session = Depends(get_db)
@@ -1143,7 +1143,7 @@ def update_pon_port_splitter_link(
     "/pon-port-splitter-links/{link_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def delete_pon_port_splitter_link(link_id: str, db: Session = Depends(get_db)):
     network_service.pon_port_splitter_links.delete(db, link_id)
@@ -1154,7 +1154,7 @@ def delete_pon_port_splitter_link(link_id: str, db: Session = Depends(get_db)):
     response_model=OntUnitRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def create_ont_unit(payload: OntUnitCreate, db: Session = Depends(get_db)):
     return network_service.ont_units.create(db, payload)
@@ -1164,7 +1164,7 @@ def create_ont_unit(payload: OntUnitCreate, db: Session = Depends(get_db)):
     "/ont-units/{unit_id}",
     response_model=OntUnitRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_unit(unit_id: str, db: Session = Depends(get_db)):
     return network_service.ont_units.get(db, unit_id)
@@ -1174,7 +1174,7 @@ def get_ont_unit(unit_id: str, db: Session = Depends(get_db)):
     "/ont-units",
     response_model=ListResponse[OntUnitRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def list_ont_units(
     is_active: bool | None = None,
@@ -1193,7 +1193,7 @@ def list_ont_units(
     "/ont-units/{unit_id}",
     response_model=OntUnitRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_unit(
     unit_id: str, payload: OntUnitUpdate, db: Session = Depends(get_db)
@@ -1205,7 +1205,7 @@ def update_ont_unit(
     "/ont-units/{unit_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def delete_ont_unit(unit_id: str, db: Session = Depends(get_db)):
     network_service.ont_units.delete(db, unit_id)
@@ -1216,7 +1216,7 @@ def delete_ont_unit(unit_id: str, db: Session = Depends(get_db)):
     response_model=OntAssignmentRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def create_ont_assignment(payload: OntAssignmentCreate, db: Session = Depends(get_db)):
     return network_service.ont_assignments.create(db, payload)
@@ -1226,7 +1226,7 @@ def create_ont_assignment(payload: OntAssignmentCreate, db: Session = Depends(ge
     "/ont-assignments/{assignment_id}",
     response_model=OntAssignmentRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_assignment(assignment_id: str, db: Session = Depends(get_db)):
     return network_service.ont_assignments.get(db, assignment_id)
@@ -1236,7 +1236,7 @@ def get_ont_assignment(assignment_id: str, db: Session = Depends(get_db)):
     "/ont-assignments",
     response_model=ListResponse[OntAssignmentRead],
     tags=["network"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def list_ont_assignments(
     pon_port_id: str | None = None,
@@ -1269,7 +1269,7 @@ def list_ont_assignments(
     "/ont-assignments/{assignment_id}",
     response_model=OntAssignmentRead,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_assignment(
     assignment_id: str, payload: OntAssignmentUpdate, db: Session = Depends(get_db)
@@ -1281,7 +1281,7 @@ def update_ont_assignment(
     "/ont-assignments/{assignment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def delete_ont_assignment(assignment_id: str, db: Session = Depends(get_db)):
     network_service.ont_assignments.delete(db, assignment_id)

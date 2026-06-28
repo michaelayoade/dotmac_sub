@@ -309,7 +309,8 @@ def _hosts_partial_response(
 
 
 @router.post(
-    "/onts/{ont_id}/reboot", dependencies=[Depends(require_permission("network:write"))]
+    "/onts/{ont_id}/reboot",
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_reboot(
     request: Request,
@@ -375,7 +376,7 @@ def ont_reboot(
 
 @router.post(
     "/onts/{ont_id}/reauthorize",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_reauthorize(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -399,7 +400,7 @@ def ont_reauthorize(
 
 @router.post(
     "/onts/{ont_id}/refresh",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_refresh(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -423,7 +424,7 @@ def ont_refresh(
 
 @router.post(
     "/onts/{ont_id}/config/refresh",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_config_refresh(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -448,7 +449,7 @@ def ont_config_refresh(
 @router.get(
     "/onts/{ont_id}/config",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -464,7 +465,7 @@ def ont_config(
 @router.get(
     "/onts/{ont_id}/olt-config",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_olt_side_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -483,7 +484,7 @@ def ont_olt_side_config(
 @router.get(
     "/onts/{ont_id}/olt-status",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_olt_status(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -501,7 +502,7 @@ def ont_olt_status(
 
 @router.post(
     "/onts/{ont_id}/return-to-inventory",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_return_to_inventory(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -542,7 +543,7 @@ def ont_return_to_inventory(
 
 @router.post(
     "/onts/{ont_id}/factory-reset",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_factory_reset(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -564,7 +565,7 @@ def ont_factory_reset(
 
 @router.post(
     "/onts/{ont_id}/firmware-upgrade",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_firmware_upgrade(
     request: Request,
@@ -598,7 +599,7 @@ def ont_firmware_upgrade(
 
 @router.post(
     "/onts/{ont_id}/wifi-ssid",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wifi_ssid(
     request: Request,
@@ -626,7 +627,7 @@ def ont_set_wifi_ssid(
 
 @router.post(
     "/onts/{ont_id}/wifi-password",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wifi_password(
     request: Request,
@@ -656,7 +657,7 @@ def ont_set_wifi_password(
 
 @router.post(
     "/onts/{ont_id}/wifi-password/push",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_force_push_wifi_password(
     request: Request,
@@ -687,7 +688,7 @@ def ont_force_push_wifi_password(
 
 @router.post(
     "/onts/{ont_id}/force-resync",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_force_resync(
     request: Request,
@@ -717,7 +718,7 @@ def ont_force_resync(
 
 @router.post(
     "/onts/{ont_id}/wifi-config",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wifi_config(
     request: Request,
@@ -755,7 +756,7 @@ def ont_set_wifi_config(
 
 @router.post(
     "/onts/{ont_id}/lan-port",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_toggle_lan_port(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -814,7 +815,7 @@ def ont_toggle_lan_port(
 
 @router.post(
     "/onts/{ont_id}/lan-config",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_lan_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -852,7 +853,7 @@ def ont_set_lan_config(
 
 @router.post(
     "/onts/{ont_id}/wan-remote-access",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wan_remote_access(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -882,7 +883,7 @@ def ont_set_wan_remote_access(
 
 @router.post(
     "/onts/{ont_id}/mgmt-remote-access",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_mgmt_remote_access(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -912,7 +913,7 @@ def ont_set_mgmt_remote_access(
 
 @router.post(
     "/onts/{ont_id}/voip-config",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_voip_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -938,7 +939,7 @@ def ont_set_voip_config(
 
 @router.post(
     "/onts/{ont_id}/web-credentials",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_web_credentials(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -971,7 +972,7 @@ def ont_set_web_credentials(
 
 @router.post(
     "/onts/{ont_id}/connection-request-credentials",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_connection_request_credentials(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1014,7 +1015,7 @@ def ont_set_connection_request_credentials(
 
 @router.get(
     "/onts/{ont_id}/pppoe-password",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_reveal_pppoe_password(
     request: Request,
@@ -1035,7 +1036,7 @@ def ont_reveal_pppoe_password(
 
 @router.get(
     "/onts/{ont_id}/running-config",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_running_config(
     request: Request,
@@ -1064,7 +1065,7 @@ def ont_running_config(
 
 @router.post(
     "/onts/{ont_id}/ping-diagnostic",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_ping_diagnostic(
     request: Request,
@@ -1091,7 +1092,7 @@ def ont_ping_diagnostic(
 
 @router.post(
     "/onts/{ont_id}/traceroute-diagnostic",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_traceroute_diagnostic(
     request: Request,
@@ -1117,7 +1118,7 @@ def ont_traceroute_diagnostic(
 
 @router.post(
     "/onts/{ont_id}/connection-request",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_connection_request(
     request: Request,
@@ -1144,7 +1145,7 @@ def ont_connection_request(
 @router.get(
     "/onts/{ont_id}/lan-hosts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_lan_hosts(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1166,7 +1167,7 @@ def ont_lan_hosts(
 @router.get(
     "/onts/{ont_id}/ethernet-ports",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_ethernet_ports(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1189,7 +1190,7 @@ def ont_ethernet_ports(
 @router.get(
     "/onts/{ont_id}/tr069",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_tr069_detail(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1204,7 +1205,7 @@ def ont_tr069_detail(
 @router.get(
     "/onts/{ont_id}/charts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_charts(
     request: Request,
@@ -1224,7 +1225,7 @@ def ont_charts(
 @router.post(
     "/onts/{ont_id}/charts/refresh",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_charts_refresh(
     request: Request,
@@ -1262,7 +1263,7 @@ def ont_charts_refresh(
 @router.post(
     "/onts/{ont_id}/lan-ports-status/refresh",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_lan_ports_status_refresh(
     request: Request,
@@ -1290,7 +1291,7 @@ def ont_lan_ports_status_refresh(
 @router.get(
     "/onts/{ont_id}/topology",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_topology(
     request: Request,
@@ -1309,7 +1310,7 @@ def ont_topology(
 @router.get(
     "/onts/{ont_id}/operational-health",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_operational_health(
     request: Request,
@@ -1329,7 +1330,7 @@ def ont_operational_health(
 @router.post(
     "/onts/{ont_id}/reconcile",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_reconcile(
     request: Request,
@@ -1370,7 +1371,7 @@ def ont_reconcile(
 
 @router.post(
     "/onts/{ont_id}/actions/omci-reboot",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_omci_reboot(
     request: Request,
@@ -1394,7 +1395,7 @@ def ont_omci_reboot(
 
 @router.post(
     "/onts/{ont_id}/actions/configure-mgmt-ip",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_configure_mgmt_ip(
     request: Request,
@@ -1429,7 +1430,7 @@ def ont_configure_mgmt_ip(
 
 @router.post(
     "/onts/{ont_id}/actions/bind-tr069-profile",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_bind_tr069_profile(
     request: Request,
@@ -1457,7 +1458,7 @@ def ont_bind_tr069_profile(
 @router.get(
     "/onts/{ont_id}/config-snapshots",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_config_snapshots(
     request: Request,
@@ -1484,7 +1485,7 @@ def ont_config_snapshots(
 @router.post(
     "/onts/{ont_id}/config-snapshot",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_capture_config_snapshot(
     request: Request,
@@ -1523,7 +1524,7 @@ def ont_capture_config_snapshot(
 @router.get(
     "/onts/{ont_id}/config-snapshots/{snapshot_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_view_config_snapshot(
     request: Request,
@@ -1548,7 +1549,7 @@ def ont_view_config_snapshot(
 @router.delete(
     "/onts/{ont_id}/config-snapshots/{snapshot_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_delete_config_snapshot(
     request: Request,
@@ -1580,7 +1581,7 @@ def ont_delete_config_snapshot(
 
 @router.post(
     "/onts/{ont_id}/wan/pppoe-credentials",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_pppoe_credentials(
     request: Request,
@@ -1628,7 +1629,7 @@ def ont_set_pppoe_credentials(
 
 @router.post(
     "/onts/{ont_id}/wan/dhcp",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wan_dhcp(
     request: Request,
@@ -1663,7 +1664,7 @@ def ont_set_wan_dhcp(
 
 @router.post(
     "/onts/{ont_id}/wan/static",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wan_static(
     request: Request,
@@ -1719,7 +1720,7 @@ def ont_set_wan_static(
 
 @router.post(
     "/onts/{ont_id}/wan/config",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_wan_config(
     request: Request,
@@ -1784,7 +1785,7 @@ def ont_set_wan_config(
 
 @router.post(
     "/onts/{ont_id}/http-management",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_set_http_management(
     request: Request,
@@ -1906,7 +1907,7 @@ def ont_decommission_execute(
 @router.get(
     "/onts/{ont_id}/hosts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_hosts_tab(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1918,7 +1919,7 @@ def ont_hosts_tab(
 @router.post(
     "/onts/{ont_id}/hosts/refresh",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_hosts_refresh(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1944,7 +1945,7 @@ def ont_hosts_refresh(
 @router.get(
     "/onts/{ont_id}/tr069-status",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_tr069_status_modal(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1961,7 +1962,7 @@ def ont_tr069_status_modal(
 @router.get(
     "/onts/{ont_id}/refresh-status",
     response_class=JSONResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_refresh_status_get(
     request: Request, ont_id: str, db: Session = Depends(get_db)
