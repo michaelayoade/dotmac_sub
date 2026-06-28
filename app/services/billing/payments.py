@@ -516,7 +516,9 @@ def _open_invoice_balance_exists(db: Session, account_id, currency: str) -> bool
     )
 
 
-def _existing_prepaid_renewal_debit(db: Session, payment: Payment) -> LedgerEntry | None:
+def _existing_prepaid_renewal_debit(
+    db: Session, payment: Payment
+) -> LedgerEntry | None:
     return (
         db.query(LedgerEntry)
         .filter(LedgerEntry.payment_id == payment.id)
@@ -576,7 +578,9 @@ def _prepaid_monthly_charge_amount(
     if tax_rate is None:
         return base, currency or "NGN", effective_cycle
     tax_application = _default_tax_application(db)
-    tax_amount = _calculate_tax_amount(base, Decimal(str(tax_rate.rate)), tax_application)
+    tax_amount = _calculate_tax_amount(
+        base, Decimal(str(tax_rate.rate)), tax_application
+    )
     total = (
         base
         if tax_application == TaxApplication.inclusive
@@ -621,7 +625,11 @@ def apply_prepaid_service_credit(
         _period_end,
     )
 
-    paid_at_day = _as_utc(effective_at).replace(hour=0, minute=0, second=0, microsecond=0)
+    # effective_at is never None here (payment.paid_at or now()), so _as_utc is
+    # non-None — assert to narrow for the type checker.
+    effective_utc = _as_utc(effective_at)
+    assert effective_utc is not None
+    paid_at_day = effective_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     next_billing = _as_utc(subscription.next_billing_at) or paid_at_day
     period_start = max(next_billing, paid_at_day)
     period_end = _period_end(period_start, cycle)
@@ -638,7 +646,9 @@ def apply_prepaid_service_credit(
         return False
 
     db.flush()
-    available = get_account_credit_balance(db, str(payment.account_id), currency=currency)
+    available = get_account_credit_balance(
+        db, str(payment.account_id), currency=currency
+    )
     if round_money(available) < charge_amount:
         return False
 
@@ -653,8 +663,7 @@ def apply_prepaid_service_credit(
             currency=currency,
             effective_date=effective_at,
             memo=(
-                "Prepaid service renewal "
-                f"{period_start.date()} - {period_end.date()}"
+                f"Prepaid service renewal {period_start.date()} - {period_end.date()}"
             ),
         )
     )
