@@ -24,7 +24,15 @@ class AuthSessionInfo {
   String get deviceLabel {
     final ua = userAgent ?? '';
     if (ua.isEmpty) return 'Unknown device';
-    if (ua.contains('Dart')) return 'Mobile app';
+    // Our native client sends "DotmacSelfcare/<ver> (ios|android)".
+    if (ua.contains('DotmacSelfcare')) {
+      final lower = ua.toLowerCase();
+      final os = lower.contains('android')
+          ? 'Android'
+          : (lower.contains('ios') ? 'iOS' : '');
+      return os.isEmpty ? 'Mobile app' : 'Mobile app · $os';
+    }
+    if (ua.contains('Dart')) return 'Mobile app'; // legacy native sessions
     final match = RegExp(r'(iPhone|iPad|Android|Macintosh|Windows|Linux|CrOS)')
         .firstMatch(ua);
     final os = match?.group(1);
@@ -38,7 +46,10 @@ class AuthSessionInfo {
     } else if (ua.contains('Safari')) {
       browser = 'Safari';
     }
-    return [os, browser].where((e) => e != null && e.isNotEmpty).join(' · ');
+    // Never render a blank row: fall back to a generic label.
+    final label =
+        [os, browser].where((e) => e != null && e.isNotEmpty).join(' · ');
+    return label.isEmpty ? 'Unknown device' : label;
   }
 
   factory AuthSessionInfo.fromJson(Map<String, dynamic> json) =>
