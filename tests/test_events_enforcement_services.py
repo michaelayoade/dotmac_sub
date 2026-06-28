@@ -1471,6 +1471,27 @@ class TestPaymentReceivedRestoreGuard:
         )
 
     @patch("app.services.collections.restore_account_services")
+    def test_payment_event_recomputes_stale_blocked_account_without_lock(
+        self, mock_restore, db_session, subscriber, subscription
+    ):
+        from app.models.catalog import BillingMode
+
+        mock_restore.return_value = 0
+        subscriber.status = AccountStatus.blocked
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        db_session.commit()
+
+        handler = EnforcementHandler()
+        handler.handle(db_session, self._payment_event(subscriber.id))
+
+        mock_restore.assert_called_once_with(
+            db_session, str(subscriber.id), invoice_id=None
+        )
+        db_session.refresh(subscriber)
+        assert subscriber.status == AccountStatus.active
+
+    @patch("app.services.collections.restore_account_services")
     def test_payment_event_without_account_is_ignored(self, mock_restore, db_session):
         handler = EnforcementHandler()
         handler.handle(

@@ -9,11 +9,27 @@ import '../../core/semantic_colors.dart';
 import '../../models/auth.dart';
 import '../../providers/auth_controller.dart';
 
-class ProfileScreen extends ConsumerWidget {
+class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Refresh /auth/me when the screen opens so out-of-band changes (e.g. email
+    // verified via the email link) reflect immediately instead of the
+    // login-time snapshot. Post-frame so it runs after the first build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(authControllerProvider.notifier).reloadProfile();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final me = ref.watch(currentUserProvider);
 
     return Scaffold(

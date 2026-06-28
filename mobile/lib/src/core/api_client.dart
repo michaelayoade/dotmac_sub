@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:dio/dio.dart';
 import 'package:sentry/sentry.dart' show SentryLevel;
 
@@ -30,7 +32,14 @@ class ApiClient {
         // Native client: the backend can't hand us an httpOnly refresh cookie,
         // so opt into receiving the refresh token in the JSON body (we persist
         // it in the platform secure store). See app/services/auth_flow.py.
-        headers: const {'X-Auth-Refresh-In-Body': 'true'},
+        // A descriptive User-Agent gives each login a meaningful row on the
+        // "Active sessions" screen (backend stores it; the app derives the
+        // device label from it) instead of the generic Dart default.
+        headers: {
+          'X-Auth-Refresh-In-Body': 'true',
+          'User-Agent':
+              'DotmacSelfcare/${Brand.version} (${Platform.operatingSystem})',
+        },
         // We parse error bodies ourselves; let any status through to the
         // interceptor/caller rather than throwing on every 4xx blindly.
         validateStatus: (status) => status != null && status < 500,

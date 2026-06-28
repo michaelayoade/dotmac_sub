@@ -40,6 +40,7 @@ from app.models.rbac import (
 )
 from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
+from app.request_meta import client_ip
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import auth_cache
 from app.services import radius_auth as radius_auth_service
@@ -1373,7 +1374,7 @@ class AuthFlow(ListResponseMixin):
         session_kwargs = dict(
             status=SessionStatus.active,
             token_hash=_hash_token(refresh_token),
-            ip_address=active_request.client.host if active_request.client else None,
+            ip_address=client_ip(active_request),
             user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
             device_id=device_id,
             created_at=now,
