@@ -831,6 +831,91 @@ class TestRunInvoiceCycle:
         assert invoice.total == Decimal("100.00")
         assert subscription.next_billing_at > run_at
 
+    def test_skips_prepaid_invoice_when_paid_coverage_overlaps(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 28, tzinfo=UTC).replace(tzinfo=None)
+        paid_from = datetime(2026, 6, 1, tzinfo=UTC).replace(tzinfo=None)
+        paid_until = datetime(2026, 6, 30, tzinfo=UTC).replace(tzinfo=None)
+
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = paid_from
+        subscription.next_billing_at = run_at
+        subscriber_account.status = AccountStatus.active
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="prepaid_monthly_invoicing_enabled",
+                    value_text="true",
+                ),
+                OfferPrice(
+                    offer_id=subscription.offer_id,
+                    price_type=PriceType.recurring,
+                    amount=Decimal("100.00"),
+                    currency="NGN",
+                    billing_cycle=BillingCycle.monthly,
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        paid_invoice = Invoice(
+            account_id=subscriber_account.id,
+            invoice_number="SPX-PAID-JUNE",
+            status=InvoiceStatus.paid,
+            currency="NGN",
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("0.00"),
+            billing_period_start=paid_from,
+            billing_period_end=paid_until,
+            issued_at=paid_from,
+            due_at=paid_from,
+            paid_at=paid_from,
+            splynx_invoice_id=202601006161,
+        )
+        db_session.add(paid_invoice)
+        db_session.flush()
+        db_session.add(
+            InvoiceLine(
+                invoice_id=paid_invoice.id,
+                subscription_id=subscription.id,
+                description="Imported June service",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("100.00"),
+                amount=Decimal("100.00"),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        invoices = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .all()
+        )
+        assert len(invoices) == 1
+        assert summary["invoices_created"] == 0
+        assert summary["skipped"] == 1
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == paid_until
+
     def test_applies_existing_credit_to_new_invoice(
         self, db_session, subscription, subscriber_account
     ):

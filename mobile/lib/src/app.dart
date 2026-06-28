@@ -65,6 +65,12 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
     } else if (state == AppLifecycleState.resumed && _wasPaused) {
       _wasPaused = false;
       auth.lockOnResume();
+      // Refresh the signed-in profile on foreground so changes made while
+      // backgrounded (e.g. email verified via the link) reflect without a
+      // manual pull-to-refresh. Cheap (/auth/me); guarded to signed-in only.
+      if (ref.read(authControllerProvider).status == AuthStatus.authenticated) {
+        auth.reloadProfile();
+      }
     }
   }
 
