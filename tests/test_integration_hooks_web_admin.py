@@ -1,3 +1,4 @@
+from app.services import integration_hooks as hooks_service
 from app.web.admin import integrations as integrations_web
 
 
@@ -23,6 +24,32 @@ def test_build_hook_auth_config_basic():
         auth_config_json=None,
     )
     assert config == {"username": "user", "password": "pass"}
+
+
+def test_build_hook_auth_config_preserves_blank_existing_secret():
+    config = integrations_web._build_hook_auth_config(
+        auth_type="bearer",
+        auth_bearer_token="",
+        auth_basic_username=None,
+        auth_basic_password=None,
+        auth_hmac_secret=None,
+        auth_config_json='{"header":"X-Token"}',
+        existing_auth_config={"token": "plain:stored-token"},
+        preserve_blank_secrets=True,
+    )
+    assert config == {"token": "plain:stored-token", "header": "X-Token"}
+
+
+def test_public_hook_auth_config_excludes_known_secret_keys():
+    config = hooks_service.public_hook_auth_config(
+        {
+            "token": "plain:token",
+            "password": "plain:password",
+            "secret": "plain:secret",
+            "header": "X-Token",
+        }
+    )
+    assert config == {"header": "X-Token"}
 
 
 def test_hook_form_defaults_applies_template():

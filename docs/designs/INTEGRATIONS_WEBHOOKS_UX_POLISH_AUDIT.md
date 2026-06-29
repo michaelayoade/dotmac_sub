@@ -26,10 +26,12 @@ path are covered in the CRM and Notifications audits.)
   directly instead of hiding it behind the embedded view.
 - Integrations webhook endpoints now have edit, enable/disable, soft-delete,
   rotate-secret, and test-delivery actions from the list/detail surfaces.
+- Hook auth secrets now use credential-at-rest wrapping for bearer/basic/HMAC
+  values, execute with decrypted values, and no longer render stored secrets
+  back into the hook edit form.
 
 ### Still open
 
-- Hook auth secrets still need encrypted storage and masked edit semantics.
 - Webhook delivery retry/timeout settings, delivery observability, hook execution
   timeout controls, confirmation polish, and the separate RBAC review remain open.
 
@@ -41,6 +43,14 @@ path are covered in the CRM and Notifications audits.)
   - Result: `3 passed`
 - `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py -q`
   - Result: `9 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
+- `poetry run ruff check app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py`
+  - Result: passed
+- `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`
+  - Result: `11 passed`
+- `poetry run pytest tests/test_credential_key_rotation_service.py -q`
+  - Result: `17 passed`
 - `poetry run pytest tests/test_admin_route_permissions.py -q`
   - Result: `15 passed`
 - `poetry run ruff check app/services/web_integrations.py tests/test_web_integrations_webhooks.py`

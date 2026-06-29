@@ -868,10 +868,10 @@ def hooks_create(
                     "url": url or "",
                     "http_method": (http_method or "POST").upper(),
                     "auth_type": auth_type or "none",
-                    "auth_bearer_token": auth_bearer_token or "",
+                    "auth_bearer_token": "",
                     "auth_basic_username": auth_basic_username or "",
-                    "auth_basic_password": auth_basic_password or "",
-                    "auth_hmac_secret": auth_hmac_secret or "",
+                    "auth_basic_password": "",
+                    "auth_hmac_secret": "",
                     "auth_config_json": auth_config_json or "",
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
@@ -908,11 +908,14 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
         "url": hook.url or "",
         "http_method": hook.http_method,
         "auth_type": hook.auth_type.value,
-        "auth_bearer_token": _auth_value(hook.auth_config, "token"),
+        "auth_bearer_token": "",
         "auth_basic_username": _auth_value(hook.auth_config, "username"),
-        "auth_basic_password": _auth_value(hook.auth_config, "password"),
-        "auth_hmac_secret": _auth_value(hook.auth_config, "secret"),
-        "auth_config_json": json.dumps(hook.auth_config or {}, indent=2),
+        "auth_basic_password": "",
+        "auth_hmac_secret": "",
+        "auth_config_json": json.dumps(
+            integration_hooks_service.public_hook_auth_config(hook.auth_config),
+            indent=2,
+        ),
         "event_filters_csv": ", ".join(hook.event_filters or []),
         "retry_max": hook.retry_max,
         "retry_backoff_ms": hook.retry_backoff_ms,
@@ -975,6 +978,10 @@ def hooks_update(
                 auth_basic_password=auth_basic_password,
                 auth_hmac_secret=auth_hmac_secret,
                 auth_config_json=auth_config_json,
+                existing_auth_config=integration_hooks_service.get_hook(
+                    db, hook_id
+                ).auth_config,
+                preserve_blank_secrets=True,
             ),
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
@@ -998,10 +1005,10 @@ def hooks_update(
                     "url": url or "",
                     "http_method": (http_method or "POST").upper(),
                     "auth_type": auth_type or "none",
-                    "auth_bearer_token": auth_bearer_token or "",
+                    "auth_bearer_token": "",
                     "auth_basic_username": auth_basic_username or "",
-                    "auth_basic_password": auth_basic_password or "",
-                    "auth_hmac_secret": auth_hmac_secret or "",
+                    "auth_basic_password": "",
+                    "auth_hmac_secret": "",
                     "auth_config_json": auth_config_json or "",
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
@@ -1492,18 +1499,33 @@ def _build_hook_auth_config(
     auth_basic_password: str | None,
     auth_hmac_secret: str | None,
     auth_config_json: str | None,
+    existing_auth_config: object | None = None,
+    preserve_blank_secrets: bool = False,
 ) -> dict | None:
     auth_type_value = (auth_type or "none").strip().lower()
+    existing = (
+        existing_auth_config
+        if isinstance(existing_auth_config, dict)
+        else {}
+    )
     result: dict[str, str] = {}
-    if auth_type_value == "bearer" and auth_bearer_token and auth_bearer_token.strip():
-        result["token"] = auth_bearer_token.strip()
+    if auth_type_value == "bearer":
+        if auth_bearer_token and auth_bearer_token.strip():
+            result["token"] = auth_bearer_token.strip()
+        elif preserve_blank_secrets and existing.get("token"):
+            result["token"] = str(existing["token"])
     elif auth_type_value == "basic":
         if auth_basic_username and auth_basic_username.strip():
             result["username"] = auth_basic_username.strip()
         if auth_basic_password and auth_basic_password.strip():
             result["password"] = auth_basic_password.strip()
-    elif auth_type_value == "hmac" and auth_hmac_secret and auth_hmac_secret.strip():
-        result["secret"] = auth_hmac_secret.strip()
+        elif preserve_blank_secrets and existing.get("password"):
+            result["password"] = str(existing["password"])
+    elif auth_type_value == "hmac":
+        if auth_hmac_secret and auth_hmac_secret.strip():
+            result["secret"] = auth_hmac_secret.strip()
+        elif preserve_blank_secrets and existing.get("secret"):
+            result["secret"] = str(existing["secret"])
     extra = _parse_json_object(auth_config_json) or {}
     result.update(extra)
     return result or None
