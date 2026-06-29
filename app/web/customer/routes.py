@@ -50,6 +50,28 @@ router = APIRouter(prefix="/portal", tags=["web-customer"])
 
 logger = logging.getLogger(__name__)
 _emit_customer_event = emit_customer_event
+PAYMENT_VERIFICATION_ERROR_MESSAGE = (
+    "We could not confirm this payment yet. If you were charged, please do not "
+    "retry immediately; check your billing history or contact support with this "
+    "payment reference."
+)
+
+
+def _payment_verification_error_response(
+    request: Request,
+    exc: Exception,
+    *,
+    status_code: int = 400,
+) -> Response:
+    logger.info(
+        "Customer payment verification failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return templates.TemplateResponse(
+        "customer/errors/400.html",
+        {"request": request, "message": PAYMENT_VERIFICATION_ERROR_MESSAGE},
+        status_code=status_code,
+    )
 
 
 def _format_bps(value: float | int | None) -> str:
@@ -1698,14 +1720,13 @@ def customer_verify_payment(
                 "active_page": "billing",
             },
         )
-    except (ValueError, HTTPException) as exc:
-        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
-        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(message)},
-            status_code=status_code,
+    except HTTPException as exc:
+        status_code = exc.status_code if exc.status_code < 500 else 400
+        return _payment_verification_error_response(
+            request, exc, status_code=status_code
         )
+    except Exception as exc:
+        return _payment_verification_error_response(request, exc)
 
 
 @router.get("/billing/topup", response_class=HTMLResponse)
@@ -1944,12 +1965,8 @@ def customer_verify_topup(
                 "active_page": "billing",
             },
         )
-    except ValueError as exc:
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(exc)},
-            status_code=400,
-        )
+    except Exception as exc:
+        return _payment_verification_error_response(request, exc)
 
 
 @router.post("/billing/autopay/enable")

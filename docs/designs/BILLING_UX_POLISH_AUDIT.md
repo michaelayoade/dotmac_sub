@@ -67,6 +67,9 @@ settings/integrity/reconcilers.
   written-off states to explicit variants instead of falling back to draft-grey.
 - Payment arrangement list/detail/installment amounts now include the invoice
   currency or an NGN fallback instead of rendering bare numbers.
+- Customer invoice/top-up payment verification failures now render stable
+  customer-safe copy instead of raw gateway exceptions, and invoice Paystack
+  checkout stops with a clear message when no customer email is available.
 
 ### Partially resolved
 
@@ -81,7 +84,8 @@ settings/integrity/reconcilers.
 - Remaining irreversible money-action server-side idempotency.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
-- Customer post-payment-return states.
+- Remaining customer post-payment-return states such as richer pending/partial
+  outcome messaging and saved-card capture confirmation.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
   form normalization.
 - Remaining policy thresholds/settings work.
@@ -143,6 +147,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check tests/test_billing_arrangement_templates.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_arrangement_templates.py -q`
+  - Result: passed
+- `poetry run ruff check app/web/customer/routes.py tests/test_customer_portal_billing_routes.py`
+  - Result: passed
+- `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
   - Result: passed
 
 ## What this audit is

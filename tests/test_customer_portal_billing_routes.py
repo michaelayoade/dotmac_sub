@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -497,6 +498,55 @@ class TestSaveCardOnVerify:
             )
 
         capture.assert_not_called()
+
+    def test_pay_verify_uses_safe_message_for_gateway_exception(self) -> None:
+        from app.web.customer.routes import (
+            PAYMENT_VERIFICATION_ERROR_MESSAGE,
+            customer_verify_payment,
+        )
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_payment",
+                side_effect=RuntimeError("gateway raw stack detail"),
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                return_value=False,
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_payment(
+                request=request,
+                reference="ref-1",
+                provider="paystack",
+                save_card=True,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/errors/400.html"
+        assert render.call_args.args[1]["message"] == PAYMENT_VERIFICATION_ERROR_MESSAGE
+        assert "gateway raw stack detail" not in render.call_args.args[1]["message"]
+        assert render.call_args.kwargs["status_code"] == 400
+
+    def test_invoice_pay_template_blocks_paystack_without_email(self) -> None:
+        template = Path("templates/customer/billing/pay.html").read_text()
+
+        assert "const checkoutEmail =" in template
+        assert "Add an email address to your account before paying with Paystack." in template
+        assert "email: checkoutEmail" in template
 
     def test_topup_verify_saves_card_when_requested(self) -> None:
         from app.web.customer.routes import customer_verify_topup

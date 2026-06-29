@@ -181,9 +181,15 @@ function paymentPage() {
             }
 
             try {
+                const checkoutEmail = {{ customer_email|default("", true)|tojson }};
+                if (!checkoutEmail) {
+                    self.processing = false;
+                    self.errorMessage = 'Add an email address to your account before paying with Paystack.';
+                    return;
+                }
                 const handler = PaystackPop.setup({
                     key: intent.provider_public_key,
-                    email: '{{ customer_email }}',
+                    email: checkoutEmail,
                     // Charge the server-authoritative intent amount, not the (possibly
                     // stale) amount rendered at page load.
                     amount: Math.round((intent.amount || {{ (amount or invoice.balance_due or invoice.total or 0) | float }}) * 100),
