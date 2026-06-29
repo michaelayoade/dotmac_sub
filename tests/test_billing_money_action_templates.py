@@ -12,6 +12,7 @@ def test_manual_payment_and_credit_forms_confirm_and_bound_amounts():
 
     assert "Record this payment and allocate it" in payment_form
     assert "button[type=submit]').disabled = true" in payment_form
+    assert 'name="idempotency_token"' in payment_form
     assert 'min="0.01"' in payment_amount
     assert "Issue this credit to the selected billing account?" in credit_form
     assert "button[type=submit]').disabled = true" in credit_form

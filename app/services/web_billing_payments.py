@@ -5,16 +5,19 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
 from app.models.domain_settings import SettingDomain
+from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.billing import PaymentCreate, PaymentMethodCreate, PaymentUpdate
 from app.services import audit as audit_service
@@ -25,6 +28,8 @@ from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
+MANUAL_PAYMENT_IDEMPOTENCY_SCOPE = "admin_manual_payment"
+_IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
 
 
 def _currency_code(value: object | None) -> str:
@@ -271,6 +276,79 @@ def build_create_payload(
         memo=memo.strip() if memo else None,
         allocations=allocations,
     )
+
+
+def _manual_payment_idempotency_key(token: str | None) -> str | None:
+    key = (token or "").strip()
+    if not key:
+        return None
+    if not _IDEMPOTENCY_TOKEN_RE.fullmatch(key):
+        raise ValueError("Invalid payment submission token")
+    return key
+
+
+def _reserve_manual_payment_key(
+    db: Session, *, key: str | None, account_id: UUID
+) -> tuple[IdempotencyKey | None, Payment | None]:
+    key = _manual_payment_idempotency_key(key)
+    if key is None:
+        return None, None
+
+    prior = db.scalars(
+        select(IdempotencyKey).where(
+            IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
+            IdempotencyKey.key == key,
+        )
+    ).first()
+    if prior is not None:
+        if str(prior.account_id) != str(account_id):
+            raise ValueError("Payment submission token has already been used")
+        if prior.ref_id:
+            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
+            return None, payment
+        raise ValueError("This payment is already being recorded. Please refresh.")
+
+    reservation = IdempotencyKey(
+        scope=MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
+        key=key,
+        account_id=account_id,
+        ref_id=None,
+    )
+    db.add(reservation)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        prior = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == key,
+            )
+        ).first()
+        if prior and str(prior.account_id) == str(account_id) and prior.ref_id:
+            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
+            return None, payment
+        raise ValueError(
+            "This payment is already being recorded. Please refresh."
+        ) from exc
+    return reservation, None
+
+
+def _release_manual_payment_key(
+    db: Session, reservation: IdempotencyKey | None
+) -> None:
+    if reservation is not None:
+        db.delete(reservation)
+        db.commit()
+
+
+def _commit_manual_payment_key(
+    db: Session, reservation: IdempotencyKey | None, payment_id: object
+) -> None:
+    if reservation is not None:
+        reservation.ref_id = str(payment_id)
+        db.add(reservation)
+        db.commit()
 
 
 def build_update_payload(
@@ -985,6 +1063,7 @@ def process_payment_create(
     collection_account_id: str | None,
     payment_method_id: str | None,
     memo: str | None,
+    idempotency_token: str | None = None,
 ) -> dict[str, object]:
     """Validate inputs, create a payment, and return result dict."""
     from app.services import web_billing_payment_forms as forms_svc
@@ -1020,7 +1099,27 @@ def process_payment_create(
         memo=memo,
         invoice_id=invoice_id,
     )
-    payment = billing_service.payments.create(db, payload)
+    reservation, replayed_payment = _reserve_manual_payment_key(
+        db, key=idempotency_token, account_id=parsed_account_id
+    )
+    if replayed_payment is not None:
+        return {
+            "payment": replayed_payment,
+            "resolved_invoice": resolved_invoice,
+            "balance_value": balance_value,
+            "balance_display": balance_display,
+            "idempotent_replay": True,
+            "audit_metadata": {
+                "amount": str(replayed_payment.amount),
+                "invoice_id": payment_primary_invoice_id(replayed_payment),
+            },
+        }
+    try:
+        payment = billing_service.payments.create(db, payload)
+    except Exception:
+        _release_manual_payment_key(db, reservation)
+        raise
+    _commit_manual_payment_key(db, reservation, payment.id)
     return {
         "payment": payment,
         "resolved_invoice": resolved_invoice,
@@ -1052,6 +1151,7 @@ def process_payment_create_with_audit(
     collection_account_id: str | None,
     payment_method_id: str | None,
     memo: str | None,
+    idempotency_token: str | None = None,
 ) -> dict[str, object]:
     result = process_payment_create(
         db,
@@ -1063,17 +1163,19 @@ def process_payment_create_with_audit(
         collection_account_id=collection_account_id,
         payment_method_id=payment_method_id,
         memo=memo,
+        idempotency_token=idempotency_token,
     )
     payment = cast(Payment, result["payment"])
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="payment",
-        entity_id=str(payment.id),
-        actor_id=_actor_id(request),
-        metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
-    )
+    if not result.get("idempotent_replay"):
+        log_audit_event(
+            db=db,
+            request=request,
+            action="create",
+            entity_type="payment",
+            entity_id=str(payment.id),
+            actor_id=_actor_id(request),
+            metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
+        )
     return result
 
 

@@ -32,7 +32,8 @@ settings/integrity/reconcilers.
 - Payment import audit metadata/history now preserves and displays grouped
   currency totals.
 - Manual payment and credit forms now confirm before submit, disable their submit
-  button after confirmation, and enforce a positive minimum amount in the UI.
+  button after confirmation, enforce a positive minimum amount in the UI, and
+  manual Record Payment POSTs now replay safely on a form idempotency token.
 - Dunning pause/resume/close, bulk pause/resume, payment-arrangement approval,
   payment-channel deactivation, and collection-account deactivation actions now
   prompt before changing money-collection state.
@@ -125,7 +126,6 @@ settings/integrity/reconcilers.
 
 ### Still open
 
-- Remaining irreversible money-action server-side idempotency.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
@@ -287,6 +287,13 @@ settings/integrity/reconcilers.
 - `poetry run python -c "...customer payment/card-save endpoint assertions..."`
   - Result: passed; import-time Redis warning and expected mocked exception logs
     were emitted before the assertions completed.
+- `poetry run ruff check app/services/web_billing_payment_forms.py app/services/web_billing_payments.py app/web/admin/billing_payments.py tests/test_billing_payment_import_options.py tests/test_billing_money_action_templates.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_payment_import_options.py::test_manual_payment_create_replays_same_idempotency_token tests/test_billing_money_action_templates.py::test_manual_payment_and_credit_forms_confirm_and_bound_amounts -q`
+  - Result: interrupted locally after pytest setup produced no output for about
+    60 seconds.
+- `poetry run python -c "...manual payment idempotency template/token assertions..."`
+  - Result: passed
 
 ## What this audit is
 
@@ -321,7 +328,7 @@ bugs hiding behind "UX"** — these jump the queue ahead of cosmetic polish.
 confirm naming action + scope ("affects N customers"), disable-on-submit +
 idempotency on money-generating runs.
 - Manual **Record Payment** (real money, defaults `succeeded`, auto-allocates) —
-  no confirm/dup guard (`templates/admin/billing/payment_form.html:142`)
+  no confirm/dup guard (`templates/admin/billing/payment_form.html:142`) [resolved in draft]
 - Consolidated **Record & distribute** — no confirm, 500s on bad input (`app/web/admin/billing_consolidated.py:86`)
 - **Issue Credit** — no confirm, no `min` (`templates/admin/billing/credit_form.html:34`)
 - Dunning **Close / Pause-All / Resume-All** (`templates/admin/billing/dunning.html`)
@@ -408,7 +415,7 @@ paperless/email-invoice opt-in.
 
 | Tier | Items |
 |------|-------|
-| **P0** | Remaining irreversible money-action server idempotency |
+| **P0** | None remaining in draft; review recommended/deferred items below |
 | **P1** | **Partial-success + run observability** incl. autopay panel + health/integrity admin page (P-C); **currency/tz/status display** (P-D); **settings validation + settings_spec hygiene** (P-F, C-3); **thresholds → settings** (C-2) |
 | **P2** | currency-from-setting seeding (C-4), partial-pay + paperless (C-5), TTLs |
 
@@ -439,7 +446,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - Verified: `round_money` = ROUND_HALF_UP; invoice numbering/prefix/start, default currency/status/tax, batch schedule already settings-driven.
 
 ### Payments / gateways / webhooks / reconciliation / proofs
-- [POLISH] (High) `templates/admin/billing/payment_form.html:142-145` — manual Record-Payment no confirm/disable; defaults `succeeded`, auto-allocates; no idempotency on POST → confirm + disable on submit [partial in draft: confirm/disable done; server idempotency remains]
+- [POLISH] (High) `templates/admin/billing/payment_form.html:142-145` — manual Record-Payment no confirm/disable; defaults `succeeded`, auto-allocates; no idempotency on POST → confirm + disable on submit + form idempotency token [resolved in draft]
 - [POLISH] (Med) `app/services/web_billing_reconciliation.py:88-132` — `build_reconciliation_data` called from a GET route (`app/web/admin/billing_payments.py:674`) yet `db.add`+`commit`; refresh/filter persists duplicate `BankReconciliationRun` rows → move persist behind POST; render-only GET [resolved in draft]
 - [POLISH] (Med) `templates/admin/billing/payment_channels.html:123` (and `payment_channel_accounts.html:106`) — Deactivate posts with no confirm; stops payment routing → confirm [resolved in draft]
 - [POLISH] (Low) `app/services/web_billing_payments.py:726` — import result truncates `errors[:10]` while `total_errors` reports more → raise cap / "download full errors" [defer]

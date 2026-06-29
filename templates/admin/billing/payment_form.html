@@ -29,6 +29,9 @@
     <div class="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="post" action="{{ action_url }}" class="space-y-6 p-6" onsubmit="if (!confirm('Record this payment and allocate it to the selected billing account?')) return false; this.querySelector('button[type=submit]').disabled = true;">
             {% include "components/forms/csrf_input.html" %}
+            {% if idempotency_token %}
+            <input type="hidden" name="idempotency_token" value="{{ idempotency_token }}">
+            {% endif %}
             {% include "admin/billing/_customer_account_fields.html" with context %}
             {% if prefill and prefill.invoice_number %}
             <div class="rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-900/40 dark:bg-primary-900/20">

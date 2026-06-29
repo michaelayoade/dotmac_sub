@@ -181,6 +181,43 @@ def test_create_payment_assigns_saved_payment_method(db_session, subscriber):
     assert payment.payment_method.label == "Cash office"
 
 
+def test_manual_payment_create_replays_same_idempotency_token(db_session, subscriber):
+    result = process_payment_create(
+        db_session,
+        account_id=str(subscriber.id),
+        amount="500",
+        currency="NGN",
+        status="succeeded",
+        invoice_id=None,
+        collection_account_id=None,
+        payment_method_id=None,
+        memo="Cash receipt",
+        idempotency_token="manual-token-1",
+    )
+
+    replay = process_payment_create(
+        db_session,
+        account_id=str(subscriber.id),
+        amount="500",
+        currency="NGN",
+        status="succeeded",
+        invoice_id=None,
+        collection_account_id=None,
+        payment_method_id=None,
+        memo="Cash receipt",
+        idempotency_token="manual-token-1",
+    )
+
+    payment = result["payment"]
+    replayed_payment = replay["payment"]
+    assert replay["idempotent_replay"] is True
+    assert replayed_payment.id == payment.id
+    assert (
+        db_session.query(Payment).filter(Payment.account_id == subscriber.id).count()
+        == 1
+    )
+
+
 def test_list_payment_import_history_reads_audit_metadata(db_session):
     audit_service.audit_events.create(
         db_session,
