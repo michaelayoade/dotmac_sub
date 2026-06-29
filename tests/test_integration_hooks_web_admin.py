@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.services import integration_hooks as hooks_service
 from app.web.admin import integrations as integrations_web
 
@@ -50,6 +52,13 @@ def test_public_hook_auth_config_excludes_known_secret_keys():
         }
     )
     assert config == {"header": "X-Token"}
+
+
+def test_hook_index_confirms_enable_disable_toggle():
+    template = Path("templates/admin/integrations/hooks/index.html").read_text()
+
+    assert "Disable this hook?" in template
+    assert "Enable this hook?" in template
 
 
 def test_hook_form_defaults_applies_template():

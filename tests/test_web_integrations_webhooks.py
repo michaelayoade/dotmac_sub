@@ -213,3 +213,14 @@ def test_connector_detail_exposes_check_connection_action():
 
     assert "Check Connection" in template
     assert "/embed?check=1" in template
+
+
+def test_installed_integrations_template_confirms_bulk_relay_and_toggle_actions():
+    template = Path("templates/admin/integrations/installed.html").read_text()
+
+    assert "Enable the selected integrations?" in template
+    assert "Disable the selected integrations?" in template
+    assert "Relay this integration to the portal?" in template
+    assert "Stop relaying this integration to the portal?" in template
+    assert "Disable this integration?" in template
+    assert "Enable this integration?" in template

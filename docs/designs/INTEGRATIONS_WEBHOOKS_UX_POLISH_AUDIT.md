@@ -31,11 +31,14 @@ path are covered in the CRM and Notifications audits.)
   back into the hook edit form.
 - Integrations webhook detail pages now summarize latest delivery, latest
   failure, and recent delivered/pending/failed outcomes above the delivery log.
+- Installed integration bulk enable/disable, relay toggle, integration
+  enable/disable, and hook enable/disable actions now prompt before changing
+  state.
 
 ### Still open
 
-- Webhook delivery retry/timeout settings, hook execution timeout controls,
-  confirmation polish, and the separate RBAC review remain open.
+- Webhook delivery retry/timeout settings, hook execution timeout controls, and
+  the separate RBAC review remain open.
 
 ### Verification
 
@@ -53,6 +56,10 @@ path are covered in the CRM and Notifications audits.)
   - Result: `7 passed`
 - `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
   - Result: `12 passed`
+- `poetry run ruff check tests/test_integration_hooks_web_admin.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_integration_hooks_web_admin.py tests/test_web_integrations_webhooks.py -q`
+  - Result: `14 passed`
 - `poetry run ruff check app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py`
   - Result: passed
 - `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`
