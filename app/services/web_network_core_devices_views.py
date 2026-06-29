@@ -3371,8 +3371,10 @@ def backup_overview_page_data(
                 "last_message": last_message,
                 "backup_status": backup_status,
                 "device_url": f"/admin/network/olts/{olt.id}",
-                "backup_url": None,
-                "history_url": f"/admin/network/olts/{olt.id}",
+                "backup_url": f"/admin/network/olts/backups/{latest.id}"
+                if latest
+                else None,
+                "history_url": f"/admin/network/olts/{olt.id}/backups",
             }
         )
 
