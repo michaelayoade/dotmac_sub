@@ -64,6 +64,7 @@ from app.services.audit_helpers import (
 )
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
+from app.services.network._common import decode_huawei_hex_serial
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,27 @@ ACTIVE_SERVICE_ORDER_STATUSES = {
     ServiceOrderStatus.scheduled,
     ServiceOrderStatus.provisioning,
 }
+
+
+def _display_ont_serial(value: object) -> str:
+    serial = str(value or "").strip()
+    if not serial:
+        return ""
+    return decode_huawei_hex_serial(serial) or serial
+
+
+def _ont_display_serial_by_id(assignments: list[OntAssignment]) -> dict[str, str]:
+    display_by_id: dict[str, str] = {}
+    for assignment in assignments:
+        ont = getattr(assignment, "ont_unit", None)
+        if ont is None:
+            continue
+        display = _display_ont_serial(getattr(ont, "vendor_serial_number", None))
+        if not display:
+            display = _display_ont_serial(getattr(ont, "serial_number", None))
+        if display:
+            display_by_id[str(ont.id)] = display
+    return display_by_id
 
 
 def _coerce_setting_int(value: object | None) -> int | None:
@@ -908,6 +930,7 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         "active_additional_routes": active_additional_routes,
         "active_additional_route_rows": active_additional_route_rows,
         "ont_assignments": ont_assignments,
+        "ont_serial_display_by_id": _ont_display_serial_by_id(ont_assignments),
         "linked_resellers": linked_resellers,
         "relationship_summary": relationship_summary,
     }

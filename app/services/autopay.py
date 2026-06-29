@@ -15,7 +15,7 @@ Safety properties:
 - Before charging, any already-succeeded autopay payment for the same
   (invoice, amount) is detected (DB check across attempts + provider-side
   recovery of prior attempt references) so the card is never captured twice.
-- Mandates are suspended after ``MAX_CONSECUTIVE_FAILURES`` failed runs and the
+- Mandates are suspended after the configured max failed runs and the
   customer is notified on every failed charge via the payment_failed event.
 """
 
@@ -59,9 +59,20 @@ _OPEN_STATUSES = (
     InvoiceStatus.overdue,
 )
 
-# Stop charging a mandate after this many consecutive failed runs; the customer
-# must re-enable autopay (or pick a new default card) to reset the counter.
+# Default max consecutive failed runs before the customer must re-enable autopay
+# or pick a new default card to reset the counter.
 MAX_CONSECUTIVE_FAILURES = 3
+
+
+def _max_consecutive_failures(db: Session) -> int:
+    value = settings_spec.resolve_value(
+        db, SettingDomain.billing, "autopay_max_consecutive_failures"
+    )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return MAX_CONSECUTIVE_FAILURES
+    return max(1, parsed)
 
 
 def _mandate(db: Session, account_id: str) -> AutopayMandate | None:
@@ -92,7 +103,7 @@ def get_status(db: Session, account_id: str) -> dict:
         "last_failure_reason": m.last_failure_reason if m else None,
         # Active but no longer charged until the customer intervenes.
         "suspended": bool(
-            m and m.is_active and failure_count >= MAX_CONSECUTIVE_FAILURES
+            m and m.is_active and failure_count >= _max_consecutive_failures(db)
         ),
     }
 
@@ -326,7 +337,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
         return {"charged": 0, "failed": 0, "skipped": "no_live_service"}
 
     attempt = int(mandate.failure_count or 0)
-    if attempt >= MAX_CONSECUTIVE_FAILURES:
+    if attempt >= _max_consecutive_failures(db):
         return {"charged": 0, "failed": 0, "skipped": "too_many_failures"}
 
     # Serialize concurrent runs for this account so two runs can't both charge
