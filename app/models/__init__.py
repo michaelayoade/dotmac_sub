@@ -566,3 +566,7 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeerStatus,
     WireGuardServer,
 )
+from app.models.work_order_mirror import (  # noqa: F401
+    WorkOrderMirror,
+    WorkOrderSyncState,
+)

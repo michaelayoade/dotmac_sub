@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.services import projects_mirror, referrals_mirror
+from app.services import projects_mirror, referrals_mirror, work_orders_mirror
 from app.services.crm_customers import upsert_customer_from_payload
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,13 @@ PROJECT_EVENTS = {
     "project.canceled",
     "project_task.completed",
     "project_task.updated",
+}
+WORK_ORDER_EVENTS = {
+    "work_order.created",
+    "work_order.updated",
+    "work_order.dispatched",
+    "work_order.completed",
+    "work_order.canceled",
 }
 
 
@@ -265,3 +272,35 @@ async def receive_crm_project_event(
     body = inner if isinstance(inner, dict) else payload
 
     return projects_mirror.apply_webhook(db, event_type, body)
+
+
+@router.post("/work-orders")
+async def receive_crm_work_order_event(
+    request: Request, db: Session = Depends(get_db)
+) -> dict:
+    """Mirror a CRM work-order lifecycle event for the field-service tracker.
+
+    Handles ``work_order.created/updated/dispatched/completed/canceled``.
+    HMAC-gated; the service acks unmapped/incomplete events. Logic lives in the
+    service.
+    """
+    raw_body = await request.body()
+    _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
+
+    event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
+    if event_type and event_type not in WORK_ORDER_EVENTS:
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        ) from None
+    if not isinstance(payload, dict):
+        payload = {}
+
+    inner = payload.get("payload")
+    body = inner if isinstance(inner, dict) else payload
+
+    return work_orders_mirror.apply_webhook(db, event_type, body)
