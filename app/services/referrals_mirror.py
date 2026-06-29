@@ -211,13 +211,13 @@ def read_for_subscriber(
         .order_by(ReferralMirror.created_at.desc())
     ).all()
 
-    totals = {"total": 0, "pending": 0, "qualified": 0, "rewarded": 0}
+    counts: dict[str, int] = {"total": 0, "pending": 0, "qualified": 0, "rewarded": 0}
     earned = Decimal("0")
     referrals = []
     for r in rows:
-        totals["total"] += 1
-        if r.status in totals:
-            totals[r.status] += 1
+        counts["total"] += 1
+        if r.status in counts:
+            counts[r.status] += 1
         if r.status == "rewarded":
             earned += r.reward_amount or Decimal("0")
         referrals.append(
@@ -236,8 +236,6 @@ def read_for_subscriber(
                 "qualified_at": r.qualified_at.isoformat() if r.qualified_at else None,
             }
         )
-    totals["total_earned"] = str(earned)
-
     return {
         "code": cache.code if cache else "",
         "share_url": cache.share_url if cache else "",
@@ -248,7 +246,7 @@ def read_for_subscriber(
             else "0",
             "reward_currency": cache.reward_currency if cache else "NGN",
         },
-        "totals": totals,
+        "totals": {**counts, "total_earned": str(earned)},
         "referrals": referrals,
     }
 
