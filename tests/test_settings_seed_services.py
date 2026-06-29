@@ -401,6 +401,7 @@ class TestSeedBillingNotificationSettings:
                         "arrangement_max_installments",
                         "arrangement_default_overdue_installments",
                         "service_extension_max_days",
+                        "topup_preset_amounts",
                         "topup_reconciliation_stale_minutes",
                         "topup_reconciliation_max_age_days",
                         "payment_gateway_timeout_seconds",
@@ -426,6 +427,9 @@ class TestSeedBillingNotificationSettings:
         assert settings["arrangement_max_installments"] == "24"
         assert settings["arrangement_default_overdue_installments"] == "2"
         assert settings["service_extension_max_days"] == "30"
+        assert settings["topup_preset_amounts"] == (
+            "1000,2000,5000,10000,20000,50000"
+        )
         assert settings["topup_reconciliation_stale_minutes"] == "15"
         assert settings["topup_reconciliation_max_age_days"] == "7"
         assert settings["payment_gateway_timeout_seconds"] == "30"

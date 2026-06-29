@@ -1506,6 +1506,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="topup_preset_amounts",
+        env_var="BILLING_TOPUP_PRESET_AMOUNTS",
+        value_type=SettingValueType.string,
+        default="1000,2000,5000,10000,20000,50000",
+        label="Top-Up Preset Amounts",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="auto_suspend_on_overdue",
         env_var="BILLING_AUTO_SUSPEND_ON_OVERDUE",
         value_type=SettingValueType.boolean,

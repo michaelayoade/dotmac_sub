@@ -1605,6 +1605,14 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="topup_preset_amounts",
+        value_type=SettingValueType.string,
+        value_text=os.getenv(
+            "BILLING_TOPUP_PRESET_AMOUNTS", "1000,2000,5000,10000,20000,50000"
+        ),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="topup_reconciliation_stale_minutes",
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_STALE_MINUTES", "15"),

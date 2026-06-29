@@ -91,6 +91,9 @@ settings/integrity/reconcilers.
   existing default of 24 hours.
 - Billing-health scan/payment-volume alert thresholds now resolve from billing
   settings with existing defaults of 0.5, 0.4, and 5.0.
+- Customer top-up preset amounts now resolve from billing settings with the
+  existing default of `1000,2000,5000,10000,20000,50000` and are constrained by
+  the configured minimum/maximum top-up limits.
 
 ### Partially resolved
 
@@ -215,6 +218,13 @@ settings/integrity/reconcilers.
 - `poetry run pytest tests/test_billing_health_thresholds.py -q`
   - Result: interrupted locally after pytest setup hung on stale DB sessions left
     by earlier interrupted runs; ruff and the direct helper assertion passed.
+- `poetry run ruff check app/services/customer_portal_flow_payments.py app/services/settings_spec.py app/services/settings_seed.py tests/test_customer_portal_topup_flow.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run python -c "...customer_portal_flow_payments._resolve_topup_presets..."`
+  - Result: passed
+- `poetry run pytest tests/test_customer_portal_topup_flow.py tests/test_settings_seed_services.py -q`
+  - Result: interrupted locally after pytest setup produced no output for about
+    90 seconds; a single-test retry also stalled before the assertion body.
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -332,7 +342,7 @@ forms/adapters (`credit_form`, `collection_accounts`, `billing_consolidated`,
 portal. Single-currency today → mostly defer, but seed from the setting.
 
 **C-5. Customer-facing controls to offer:** top-up presets `[1000…50000]` hardcoded
-→ per-market setting (`app/services/customer_portal_flow_payments.py:1113`);
+→ per-market setting (`app/services/customer_portal_flow_payments.py:1113`) [resolved in draft];
 optional **partial-pay an invoice** (operator toggle); statement-period selector +
 paperless/email-invoice opt-in.
 
@@ -342,7 +352,7 @@ paperless/email-invoice opt-in.
 |------|-------|
 | **P0** | Reconciliation **GET route that writes+commits** dup rows (`app/services/web_billing_reconciliation.py:88`); **AR-aging counts drafts** → overstates receivables (`app/services/billing/reporting.py:271`); fix/remove **dead buttons + dead filters + fake stat cards + batch bare-fragment** (P-B); add **confirms on irreversible money actions** (P-A); **centralize billable-status set** (C-1) |
 | **P1** | Customer **post-payment-return states** (P-E); **partial-success + run observability** incl. autopay admin panel + health/integrity admin page (P-C); **currency/tz/status display** (P-D); **settings validation + settings_spec hygiene** (P-F, C-3); **thresholds → settings** (C-2) |
-| **P2** | currency-from-setting seeding (C-4), top-up presets + partial-pay + paperless (C-5), TTLs, gateway/provider timeouts |
+| **P2** | currency-from-setting seeding (C-4), partial-pay + paperless (C-5), TTLs |
 
 ## Cross-audit observation
 
