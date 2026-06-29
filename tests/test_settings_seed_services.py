@@ -363,6 +363,20 @@ class TestSeedCollectionsSettings:
         assert setting is not None
         assert setting.value_json == ["2026-01-01"]
 
+    def test_seeds_suspension_notification_dedupe_hours(self, db_session):
+        settings_seed.seed_collections_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "suspension_notification_dedupe_hours",
+            )
+            .first()
+        )
+        assert setting is not None
+        assert setting.value_text == "24"
+
 
 class TestSeedBillingNotificationSettings:
     def test_seeds_phase7_notification_keys(self, db_session):

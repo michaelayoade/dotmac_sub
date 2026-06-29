@@ -1004,6 +1004,14 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
+        key="suspension_notification_dedupe_hours",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv(
+            "COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"
+        ),
+    )
+    collections_settings.ensure_by_key(
+        db,
         key="prepaid_blocking_time",
         value_type=SettingValueType.string,
         value_text=os.getenv("PREPAID_BLOCKING_TIME", "08:00"),

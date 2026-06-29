@@ -87,6 +87,8 @@ settings/integrity/reconcilers.
   billing settings with the existing default of 30 seconds.
 - Billing reporting AR-aging bucket cutoffs now resolve from billing settings
   with the existing default of `30,60,90`.
+- Suspension-notification dedupe now resolves from collections settings with the
+  existing default of 24 hours.
 
 ### Partially resolved
 
@@ -107,7 +109,8 @@ settings/integrity/reconcilers.
   policy defaults.
 - Remaining policy thresholds/settings work outside autopay, payment
   arrangements, service extensions, top-up reconciliation sweep windows, gateway
-  HTTP timeouts, and reporting AR-aging bucket cutoffs.
+  HTTP timeouts, reporting AR-aging bucket cutoffs, and suspension-notification
+  dedupe.
 
 ### Verification
 
@@ -198,6 +201,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/billing/reporting.py app/services/settings_spec.py app/services/settings_seed.py tests/test_billing_submodules.py tests/test_settings_seed_services.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_submodules.py tests/test_settings_seed_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/collections/_core.py app/services/settings_spec.py app/services/settings_seed.py tests/test_collections_dunning_services.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_collections_dunning_services.py tests/test_settings_seed_services.py -q`
   - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
@@ -377,7 +384,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (Med) `app/services/payment_arrangements.py:546` — defaults when `overdue_count>=2` hardcoded → missed-installment threshold setting (default 2, range 1-5) [resolved in draft]
 - [POLISH] (Low) `payment_arrangements.html:120` + detail — amounts `"{:,.2f}"` no currency → prefix account currency [defer]
 - [POLISH] (Low) `dunning.html:172,175` — timestamps strftime on UTC, no tz → render in tz or label UTC [defer]
-- [CONTROL] (Low) `app/services/collections/_core.py:696` — suspension-notification idempotency 24h hardcoded → setting (default 24h) [defer]
+- [CONTROL] (Low) `app/services/collections/_core.py:696` — suspension-notification idempotency 24h hardcoded → setting (default 24h) [resolved in draft]
 
 ### Accounts / deposits / prepaid / consolidated / reseller
 - [POLISH] (High) `templates/admin/billing/accounts.html:168-182` — Deactivate (hx-post) + Delete (hx-delete) hit routes that don't exist (only GET); 404/405 silent → add routes (confirm + audit) or remove buttons [recommend]

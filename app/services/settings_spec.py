@@ -639,6 +639,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="suspension_notification_dedupe_hours",
+        env_var="COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS",
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=1,
+        max_value=168,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="billing_enforcement_notification_max_oldest_queued_minutes",
         env_var="BILLING_ENFORCEMENT_NOTIFICATION_MAX_OLDEST_QUEUED_MINUTES",
         value_type=SettingValueType.integer,
