@@ -11,6 +11,7 @@ from app.web.customer.projects import router as projects_router
 from app.web.customer.referrals import router as referrals_router
 from app.web.customer.routes import router as portal_router
 from app.web.customer.wallet import router as wallet_router
+from app.web.customer.work_orders import router as work_orders_router
 
 router = APIRouter()
 
@@ -36,5 +37,6 @@ router.include_router(bills_router)
 router.include_router(location_router)
 router.include_router(referrals_router)
 router.include_router(projects_router)
+router.include_router(work_orders_router)
 
 __all__ = ["router"]
