@@ -12,10 +12,12 @@ from app.schemas.router_management import (
     RouterCreate,
     RouterUpdate,
 )
+from app.services.credential_crypto import decrypt_credential
 from app.services.router_management.inventory import (
     JumpHostInventory,
     RouterInventory,
 )
+from app.services.web_network_routers import _display_rest_api_username
 
 
 def test_create_router(db_session):
@@ -30,6 +32,23 @@ def test_create_router(db_session):
     assert router.name == "test-router-1"
     assert router.status == RouterStatus.offline
     assert router.is_active is True
+
+
+def test_create_router_encrypts_username_and_keeps_display_value(db_session):
+    username = "admin-user-with-long-enough-name"
+    payload = RouterCreate(
+        name="encrypted-user-router",
+        hostname="eur1",
+        management_ip="10.0.0.20",
+        rest_api_username=username,
+        rest_api_password="secret123",
+    )
+
+    router = RouterInventory.create(db_session, payload)
+
+    assert router.rest_api_username != username
+    assert decrypt_credential(router.rest_api_username) == username
+    assert _display_rest_api_username(router) == username
 
 
 def test_create_router_duplicate_name(db_session):

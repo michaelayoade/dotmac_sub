@@ -7,6 +7,7 @@ insert samples into PostgreSQL, and push aggregates to VictoriaMetrics.
 
 import logging
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -35,6 +36,7 @@ _DEFAULT_BATCH_SIZE = 1000
 _DEFAULT_HOT_RETENTION_HOURS = 24
 _DEFAULT_REDIS_STREAM_MAX_LENGTH = 100000
 _DEFAULT_REDIS_READ_TIMEOUT_MS = 1000
+VM_WRITE_MAX_ATTEMPTS = int(os.getenv("BANDWIDTH_VM_WRITE_MAX_ATTEMPTS", "3"))
 _POSTGRES_INTEGER_MAX = 2_147_483_647
 _POSTGRES_INTEGER_MIN = -2_147_483_648
 
@@ -359,13 +361,28 @@ def aggregate_to_metrics():
 
         # Push to VictoriaMetrics in a single batched HTTP call (sync)
         adapter = get_bandwidth_metrics_adapter()
+        # Retry transient VM write failures (network blip / VM restart) before
+        # giving up — otherwise a single failure silently loses that minute's
+        # aggregates with no backfill. Runs once a minute, so a short retry is
+        # cheap relative to the data it saves.
         result = adapter.write_aggregates_batch(batch)
+        attempts = 1
+        while not result.success and attempts < VM_WRITE_MAX_ATTEMPTS:
+            time.sleep(0.5 * attempts)
+            attempts += 1
+            result = adapter.write_aggregates_batch(batch)
 
         if result.success:
-            logger.info("Pushed %d aggregates to VictoriaMetrics", result.written)
+            logger.info(
+                "Pushed %d aggregates to VictoriaMetrics (attempt %d)",
+                result.written,
+                attempts,
+            )
         else:
             logger.error(
-                "Failed to push aggregates to VictoriaMetrics: %s", result.error
+                "Failed to push aggregates to VictoriaMetrics after %d attempts: %s",
+                attempts,
+                result.error,
             )
 
         return {"pushed": result.written, "success": result.success}

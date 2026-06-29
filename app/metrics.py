@@ -340,6 +340,65 @@ class _ConnectivityShadowCollector(Collector):
 
 REGISTRY.register(_ConnectivityShadowCollector())
 
+
+class _PollerHealthCollector(Collector):
+    """Exports bandwidth-poller health at scrape time.
+
+    The poller is a separate process, so Prometheus metrics set there aren't
+    visible here. It writes a Redis snapshot each cycle and this collector reads
+    it on scrape — fail-soft. ``bandwidth_poller_last_cycle_age_seconds`` is the
+    key liveness signal: if the poller dies it grows unbounded (alert on it);
+    ``bandwidth_poller_devices_failing`` surfaces silently-broken routers.
+    """
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.poller_health import load_poller_health
+
+            data = load_poller_health()
+        except Exception:
+            return
+        if not data:
+            return
+
+        for key, help_text in (
+            ("devices_total", "MikroTik devices in the poller pool"),
+            ("devices_ok", "Devices polled without recent failures"),
+            ("devices_failing", "Devices in failure backoff (silently broken)"),
+        ):
+            gauge = GaugeMetricFamily(f"bandwidth_poller_{key}", help_text)
+            gauge.add_metric([], float(data.get(key) or 0))
+            yield gauge
+
+        cycle = data.get("cycle_seconds")
+        if cycle is not None:
+            gauge = GaugeMetricFamily(
+                "bandwidth_poller_cycle_seconds",
+                "Duration of the poller's last completed cycle",
+            )
+            gauge.add_metric([], float(cycle))
+            yield gauge
+
+        ts = data.get("ts")
+        if ts:
+            from datetime import UTC, datetime
+
+            try:
+                age = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds()
+            except ValueError:
+                return
+            gauge = GaugeMetricFamily(
+                "bandwidth_poller_last_cycle_age_seconds",
+                "Seconds since the poller's last completed cycle (liveness)",
+            )
+            gauge.add_metric([], max(age, 0))
+            yield gauge
+
+
+REGISTRY.register(_PollerHealthCollector())
+
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     "genieacs_identity_recovery_events_total",
     "Total GenieACS identity recovery events",
