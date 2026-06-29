@@ -162,8 +162,51 @@ def require_audit_auth(
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _api_key_principal(
+    db: Session, raw_key: str, request: Request | None
+) -> dict | None:
+    """Authenticate an ``X-Api-Key`` as a first-class principal.
+
+    The key's access is exactly its ``scopes`` (wildcard-aware via
+    ``require_permission``); it carries no roles, so there is no admin shortcut.
+    Returns the auth dict, or ``None`` if the key is missing/invalid.
+    """
+    now = datetime.now(UTC)
+    api_key = (
+        db.query(ApiKey)
+        .filter(ApiKey.key_hash == hash_api_key(raw_key))
+        .filter(ApiKey.is_active.is_(True))
+        .filter(ApiKey.revoked_at.is_(None))
+        .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
+        .first()
+    )
+    if not api_key:
+        return None
+    api_key.last_used_at = now
+    db.commit()
+    actor_id = str(api_key.id)
+    owner = str(api_key.subscriber_id) if api_key.subscriber_id else actor_id
+    auth = {
+        "subscriber_id": owner,
+        "person_id": owner,
+        "principal_id": actor_id,
+        "principal_type": "api_key",
+        "session_id": None,
+        "roles": [],
+        "scopes": list(api_key.scopes or []),
+        "impersonated_by": None,
+        "api_key_id": actor_id,
+    }
+    if request is not None:
+        request.state.actor_id = actor_id
+        request.state.actor_type = "api_key"
+        request.state.auth = auth
+    return auth
+
+
 def require_user_auth(
     authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
     request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(_get_db),
 ):
@@ -176,6 +219,15 @@ def require_user_auth(
     if not token and request is not None:
         token = request.cookies.get("session_token")
     if not token:
+        # No bearer/session token — accept a scoped API key as a principal whose
+        # access is exactly its scopes (wildcard-aware). require_admin_web_auth
+        # still rejects api_key principals from /admin (staff-only baseline).
+        # (isinstance guard: direct (non-DI) callers leave x_api_key as the
+        # ``Header`` sentinel rather than a str.)
+        if isinstance(x_api_key, str) and x_api_key:
+            api_key_auth = _api_key_principal(db, x_api_key, request)
+            if api_key_auth is not None:
+                return api_key_auth
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_access_token(db, token)
     # Reseller "view as customer" tokens are strictly read-only: any mutation
