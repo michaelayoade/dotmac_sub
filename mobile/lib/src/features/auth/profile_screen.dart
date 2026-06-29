@@ -467,7 +467,7 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
       return Card(
         child: ListTile(
           leading: const Icon(Icons.fingerprint),
-          title: const Text('Biometric unlock'),
+          title: const Text('Sign in with Face ID / fingerprint'),
           subtitle: const Text(
             'Not available on this device. Tap to check again.',
           ),
@@ -478,8 +478,10 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
     return Card(
       child: SwitchListTile(
         secondary: const Icon(Icons.fingerprint),
-        title: const Text('Biometric unlock'),
-        subtitle: const Text('Require Face ID / fingerprint to open the app'),
+        title: const Text('Sign in with Face ID / fingerprint'),
+        subtitle: const Text(
+          'Unlock the app with biometrics instead of your password',
+        ),
         value: _enabled,
         onChanged: _busy ? null : _toggle,
       ),
