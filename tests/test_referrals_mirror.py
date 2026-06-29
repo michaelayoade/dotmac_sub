@@ -75,11 +75,11 @@ def test_read_builds_payload_from_mirror(db_session):
     assert out["code"] == "DOTMAC-AB12"
     assert out["share_url"].endswith("/r/DOTMAC-AB12")
     assert out["program"]["enabled"] is True
-    assert out["program"]["reward_amount"] == "5000"
+    assert out["program"]["reward_amount"] == "5000.00"  # Numeric(12,2) scale
     assert out["totals"]["total"] == 2
     assert out["totals"]["pending"] == 1
     assert out["totals"]["rewarded"] == 1
-    assert out["totals"]["total_earned"] == "5000"
+    assert out["totals"]["total_earned"] == "5000.00"
     assert {r["id"] for r in out["referrals"]} == {"r1", "r2"}
 
 
