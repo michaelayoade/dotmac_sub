@@ -10,3 +10,11 @@ def test_invoice_detail_status_badge_map_covers_terminal_and_partial_states():
     assert "'written_off': 'inactive'" in template
     assert "replace('_', ' ') | title" in template
     assert "status_variant_map.get(status_val, 'default')" in template
+
+
+def test_invoice_edit_form_locks_currency_while_submitting_existing_value():
+    template = Path("templates/admin/billing/invoice_form.html").read_text()
+
+    assert '<input type="hidden" name="currency" value="{{ invoice_currency }}">' in template
+    assert "name=\"{{ 'currency_display' if invoice else 'currency' }}\"" in template
+    assert "{% if invoice %}disabled aria-disabled=\"true\"{% endif %}" in template
