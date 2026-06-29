@@ -1,7 +1,7 @@
 """Add referral_mirror + referral_program_cache (local copy of CRM referrals).
 
 Revision ID: 186_add_referral_mirror
-Revises: 185_router_rest_api_username_width
+Revises: 186_connector_auth_config_text
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from alembic import op
 
 revision = "186_add_referral_mirror"
-down_revision = "185_router_rest_api_username_width"
+down_revision = "186_connector_auth_config_text"
 branch_labels = None
 depends_on = None
 
