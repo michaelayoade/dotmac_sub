@@ -301,8 +301,15 @@ def customer_login_submit(
             if not local_credential.is_active:
                 raise ValueError("Account disabled. Please contact support.")
             now = datetime.now(UTC)
-            if local_credential.locked_until and local_credential.locked_until > now:
-                raise ValueError("Account locked. Please try again later.")
+            locked_until = local_credential.locked_until
+            if locked_until and locked_until.tzinfo is None:
+                locked_until = locked_until.replace(tzinfo=UTC)
+            if locked_until and locked_until > now:
+                raise ValueError(
+                    auth_flow_service.lockout_detail(
+                        "Account locked", locked_until=locked_until
+                    )
+                )
             if not verify_password(password, local_credential.password_hash):
                 local_password_failed = True
             else:
@@ -337,7 +344,12 @@ def customer_login_submit(
                 window_seconds=900,
             )
             if not decision.allowed:
-                raise ValueError("Account locked. Please try again later.")
+                raise ValueError(
+                    auth_flow_service.lockout_detail(
+                        "Account locked",
+                        retry_after_seconds=decision.retry_after_seconds,
+                    )
+                )
 
             # Try RADIUS server authentication first
             radius_authenticated = False

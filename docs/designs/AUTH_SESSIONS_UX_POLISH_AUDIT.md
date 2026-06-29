@@ -21,20 +21,27 @@ UX-polish + operator-control lens (**not** a full security review).
   `/auth/mfa/recovery` route. The dead recovery-code affordance was replaced with
   an explicit administrator-reset fallback, and the stale Playwright page helper
   was removed.
+- Admin credential lockouts, MFA-code lockouts, customer local-account lockouts,
+  and customer portal throttle lockouts now include the remaining cooldown in
+  minutes instead of the generic "try again later" copy.
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
-- Admin lockout/MFA policy drift, lockout cooldown copy, forgot-password loading
-  states, password-min/remember-me copy, active sessions, and customer auth loading
-  parity remain open.
+- Admin lockout/MFA policy drift, forgot-password loading states,
+  password-min/remember-me copy, active sessions, customer auth loading parity, and
+  schema-backed MFA recovery codes remain open.
 
 ### Verification
 
 - `poetry run pytest tests/test_auth_services.py -q`
   - Result: `18 passed`
 - `poetry run ruff check tests/test_auth_services.py tests/playwright/pages/auth/mfa_page.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_flow.py tests/test_web_customer_auth.py -q`
+  - Result: `55 passed`
+- `poetry run ruff check app/services/auth_flow.py app/services/web_customer_auth.py tests/test_auth_flow.py tests/test_web_customer_auth.py`
   - Result: passed
 
 ## What this audit is

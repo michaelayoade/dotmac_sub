@@ -850,6 +850,7 @@ def test_login_locked_account_is_not_a_password_oracle(db_session, person, monke
         with pytest.raises(HTTPException) as exc:
             AuthFlow.login(db_session, "oracle@example.com", password, request, None)
         assert exc.value.status_code == 403
+        assert "Try again in 10 minutes." in str(exc.value.detail)
 
     db_session.refresh(credential)
     # Attempts while locked must not extend the lock or bump the counter.
@@ -957,6 +958,7 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
     with pytest.raises(HTTPException) as exc:
         AuthFlow.mfa_verify(db_session, mfa_token, totp.now(), request)
     assert exc.value.status_code == 429
+    assert "Try again in 15 minutes." in str(exc.value.detail)
 
     method = db_session.get(MFAMethod, setup["method_id"])
     assert method.locked_until is not None

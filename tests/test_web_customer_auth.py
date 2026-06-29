@@ -1,4 +1,6 @@
+from datetime import UTC, datetime, timedelta
 from http.cookies import SimpleCookie
+from types import SimpleNamespace
 
 import pyotp
 from cryptography.fernet import Fernet
@@ -188,6 +190,66 @@ def test_customer_login_records_local_failure_when_pppoe_fallback_fails(
     assert response.status_code == 401
     assert customer_portal.SESSION_COOKIE_NAME not in _response_cookies(response)
     assert local_credential.failed_login_attempts == 1
+
+
+def test_customer_login_locked_account_shows_remaining_cooldown(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setattr(
+        web_customer_auth_service.radius_auth,
+        "authenticate",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
+    )
+    local_credential = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username="100024882",
+        password_hash=hash_password("portal-secret"),
+        is_active=True,
+        failed_login_attempts=5,
+        locked_until=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    db_session.add(local_credential)
+    db_session.commit()
+
+    response = web_customer_auth_service.customer_login_submit(
+        _request(),
+        db_session,
+        "100024882",
+        "portal-secret",
+        False,
+        "/portal/dashboard",
+    )
+
+    assert response.status_code == 401
+    body = response.body.decode()
+    assert "Account locked. Try again in 10 minutes." in body
+
+
+def test_customer_login_radius_throttle_shows_remaining_cooldown(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        web_customer_auth_service,
+        "allow_operation",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            allowed=False,
+            retry_after_seconds=125,
+        ),
+    )
+
+    response = web_customer_auth_service.customer_login_submit(
+        _request(),
+        db_session,
+        "100024883",
+        "portal-secret",
+        False,
+        "/portal/dashboard",
+    )
+
+    assert response.status_code == 401
+    body = response.body.decode()
+    assert "Account locked. Try again in 3 minutes." in body
 
 
 def test_customer_login_redirects_to_mfa_when_enabled(

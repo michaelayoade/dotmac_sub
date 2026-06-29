@@ -87,6 +87,26 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value
 
 
+def lockout_detail(
+    prefix: str,
+    *,
+    locked_until: datetime | None = None,
+    retry_after_seconds: int | None = None,
+) -> str:
+    remaining_seconds = 0
+    normalized_until = _as_utc(locked_until)
+    if normalized_until:
+        remaining_seconds = max(int((normalized_until - _now()).total_seconds()), 0)
+    elif retry_after_seconds is not None:
+        remaining_seconds = max(int(retry_after_seconds), 0)
+
+    if remaining_seconds <= 0:
+        return f"{prefix}. Please try again later."
+    minutes = max(1, (remaining_seconds + 59) // 60)
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"{prefix}. Try again in {minutes} {unit}."
+
+
 def _truncate_user_agent(value: str | None, max_len: int = 512) -> str | None:
     if not value:
         return value
@@ -755,13 +775,17 @@ def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
 
 MFA_MAX_FAILED_ATTEMPTS = 5
 MFA_LOCKOUT_MINUTES = 15
-MFA_LOCKED_DETAIL = "Too many incorrect codes. Try again later."
 
 
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
     locked_until = _as_utc(method.locked_until)
     if locked_until and locked_until > _now():
-        raise HTTPException(status_code=429, detail=MFA_LOCKED_DETAIL)
+        raise HTTPException(
+            status_code=429,
+            detail=lockout_detail(
+                "Too many incorrect codes", locked_until=locked_until
+            ),
+        )
 
 
 def record_mfa_failure(db: Session, method: MFAMethod) -> None:
@@ -876,7 +900,10 @@ class AuthFlow(ListResponseMixin):
         now = _now()
         locked_until = _as_utc(credential.locked_until)
         if locked_until and locked_until > now:
-            raise HTTPException(status_code=403, detail="Account locked")
+            raise HTTPException(
+                status_code=403,
+                detail=lockout_detail("Account locked", locked_until=locked_until),
+            )
         if locked_until:
             # Lock expired: start a fresh window so a single wrong attempt
             # doesn't immediately re-lock for another full period.
