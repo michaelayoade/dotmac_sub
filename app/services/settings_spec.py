@@ -1172,6 +1172,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="suspended_address_list",
+        env_var="RADIUS_SUSPENDED_ADDRESS_LIST",
+        value_type=SettingValueType.string,
+        default="suspended",
+        label="Suspended Subscriber Address List",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="refresh_sessions_on_profile_change",
         env_var="RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE",
         value_type=SettingValueType.boolean,
@@ -2205,6 +2213,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=8,
         min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="internet_service_vlans",
+        env_var="NETWORK_INTERNET_SERVICE_VLANS",
+        value_type=SettingValueType.string,
+        default="203",
+        label="Internet Service VLANs",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="speedtest_sla_ratio",
+        env_var="NETWORK_SPEEDTEST_SLA_RATIO",
+        value_type=SettingValueType.string,
+        default="0.8",
+        label="Speedtest SLA Ratio",
     ),
     # Fiber installation planning cost rates
     SettingSpec(

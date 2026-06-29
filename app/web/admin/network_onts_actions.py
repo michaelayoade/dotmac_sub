@@ -1834,7 +1834,10 @@ def ont_decommission_preview(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Show simplified decommission confirmation modal."""
-    from app.services.network.ont_decommission import preview_decommission
+    from app.services.network.ont_decommission import (
+        DECOMMISSION_REASONS,
+        preview_decommission,
+    )
 
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
@@ -1850,6 +1853,7 @@ def ont_decommission_preview(
         {
             "preview": preview.to_dict(),
             "ont_id": ont_id,
+            "decommission_reasons": DECOMMISSION_REASONS,
         }
     )
     return templates.TemplateResponse(

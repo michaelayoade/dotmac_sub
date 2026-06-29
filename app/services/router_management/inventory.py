@@ -119,10 +119,22 @@ class RouterInventory(ListResponseMixin):
         return list(db.execute(query).scalars().all())
 
     @staticmethod
-    def count(db: Session, status: str | None = None) -> int:
+    def count(
+        db: Session,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> int:
         query = select(func.count(Router.id)).where(Router.is_active.is_(True))
         if status:
             query = query.where(Router.status == RouterStatus(status))
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(
+                Router.name.ilike(pattern)
+                | Router.hostname.ilike(pattern)
+                | Router.management_ip.ilike(pattern)
+                | Router.location.ilike(pattern)
+            )
         return db.execute(query).scalar_one()
 
     @staticmethod

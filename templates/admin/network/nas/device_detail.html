@@ -525,7 +525,7 @@
                                 Test API connection
                             </button>
                         </form>
-                        <form id="mikrotik-bootstrap-script-form" method="post" action="/admin/network/nas/devices/{{ device.id }}/vendor/mikrotik/bootstrap-script" class="mt-2">
+                        <form id="mikrotik-bootstrap-script-form" method="post" action="/admin/network/nas/devices/{{ device.id }}/vendor/mikrotik/bootstrap-script" class="mt-2" onsubmit="return confirm('Generate a new MikroTik setup script for ' + {{ device.name|tojson }} + '? This rotates the stored API credentials.');">
                             {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
                                 Generate setup script

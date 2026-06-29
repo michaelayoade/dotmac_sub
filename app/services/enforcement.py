@@ -31,6 +31,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
 from app.services.radius import sync_credential_to_radius
+from app.services.radius_address_lists import suspended_address_list
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
@@ -1057,11 +1058,7 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         return 0
-    profile = _resolve_effective_profile(db, subscription)
-    list_name = profile.mikrotik_address_list if profile else None
-    list_name = list_name or _default_address_list(db)
-    if not list_name:
-        return 0
+    list_name = suspended_address_list(db)
     if not subscription.ipv4_address:
         return 0
     sessions = (
@@ -1103,11 +1100,7 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         return 0
-    profile = _resolve_effective_profile(db, subscription)
-    list_name = profile.mikrotik_address_list if profile else None
-    list_name = list_name or _default_address_list(db)
-    if not list_name:
-        return 0
+    list_name = suspended_address_list(db)
     if not subscription.ipv4_address:
         return 0
     sessions = (

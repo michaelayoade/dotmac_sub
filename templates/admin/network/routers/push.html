@@ -137,6 +137,8 @@ function pushWizard() {
         },
         async executePush() {
             const cmds = this.commands.split('\n').filter(l => l.trim());
+            const confirmed = confirm(`Push ${cmds.length} command(s) to ${this.selectedRouters.length} router(s)?`);
+            if (!confirmed) return;
             this.pushing = true;
             document.getElementById('push-error').classList.add('hidden');
             try {

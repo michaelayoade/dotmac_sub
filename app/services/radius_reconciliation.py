@@ -33,6 +33,10 @@ from app.services.radius_access_state import (
 from app.services.radius_access_state import (
     NO_ACCESS_STATUSES as _NO_ACCESS_STATUSES,
 )
+from app.services.radius_address_lists import (
+    DEFAULT_SUSPENDED_ADDRESS_LIST,
+    suspended_address_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +50,7 @@ logger = logging.getLogger(__name__)
 # Per-user walled-garden marker written by app.services.radius_population and
 # the enforcement address-list path (MikroTik filter rules allow only the
 # portal for IPs on this list).
-WALLED_GARDEN_ADDRESS_LIST = "suspended"
+WALLED_GARDEN_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 # How fresh an open radacct session must be to count as "still online".
 # Interim updates arrive every ~5 minutes; 2 hours tolerates missed interims
@@ -141,6 +145,7 @@ def audit_suspension_enforcement(db: Session) -> dict[str, Any]:
     }
     if not usernames:
         return _finalize(result)
+    walled_garden_address_list = suspended_address_list(db)
 
     configs = _active_external_sync_configs(db)
     if not configs:
@@ -207,7 +212,7 @@ def audit_suspension_enforcement(db: Session) -> dict[str, Any]:
                             .distinct()
                             .where(radreply.c.username.in_(chunk))
                             .where(radreply.c.attribute == "Mikrotik-Address-List")
-                            .where(radreply.c.value == WALLED_GARDEN_ADDRESS_LIST)
+                            .where(radreply.c.value == walled_garden_address_list)
                         ).scalars()
                     ) | set(
                         conn.execute(

@@ -155,7 +155,7 @@
 
     <!-- Bulk Actions Toolbar -->
     <div id="bulk-actions-bar" class="hidden rounded-2xl border border-sky-200/60 bg-sky-50 p-4 shadow-sm dark:border-sky-800/40 dark:bg-sky-900/20">
-        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" class="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
+        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" onsubmit="return confirmTr069BulkAction(this)" class="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
             <input type="hidden" id="bulk-device-ids" name="device_ids" value="">
@@ -782,6 +782,19 @@ function clearBulkSelection() {
     document.querySelectorAll(".bulk-device-checkbox").forEach(cb => cb.checked = false);
     document.querySelectorAll(".bulk-select-all").forEach(cb => cb.checked = false);
     updateBulkUI();
+}
+
+function confirmTr069BulkAction(form) {
+    const action = form.querySelector('select[name="bulk_action"]')?.value || "";
+    const count = selectedDevices.size;
+    if (!action || count === 0) return true;
+    if (action === "reboot") {
+        return confirm(`Reboot ${count} selected CPE device(s)? Subscriber service may be interrupted.`);
+    }
+    if (action === "factory_reset") {
+        return confirm(`Factory reset ${count} selected CPE device(s)? This erases customer device configuration.`);
+    }
+    return true;
 }
 
 // Individual checkbox change

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from starlette.requests import Request
 
 from app.models.catalog import CatalogOffer, Subscription
+from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import (
     NetworkDevice,
     PopSite,
@@ -17,10 +18,12 @@ from app.models.network_monitoring import (
     SpeedTestSource,
 )
 from app.models.subscriber import Subscriber, SubscriberCategory
+from app.services import settings_spec
 from app.services.audit_helpers import log_audit_event
 from app.services.common import coerce_uuid, validate_enum
 
 logger = logging.getLogger(__name__)
+DEFAULT_SPEEDTEST_SLA_RATIO = 0.8
 
 
 @dataclass
@@ -659,7 +662,9 @@ def list_page_data(
             "avg_download": avg_download,
             "avg_upload": avg_upload,
             "avg_latency": avg_latency,
-            "underperforming": count_underperforming_connections(items),
+            "underperforming": count_underperforming_connections(
+                items, sla_ratio=_speedtest_sla_ratio(db)
+            ),
         },
         "filters": {
             "search": str(search or "").strip(),
@@ -675,7 +680,22 @@ def list_page_data(
     }
 
 
-def count_underperforming_connections(items: list[SpeedTestResult]) -> int:
+def _speedtest_sla_ratio(db: Session) -> float:
+    raw = settings_spec.resolve_value(db, SettingDomain.network, "speedtest_sla_ratio")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_SPEEDTEST_SLA_RATIO
+    if value <= 0 or value > 1:
+        return DEFAULT_SPEEDTEST_SLA_RATIO
+    return value
+
+
+def count_underperforming_connections(
+    items: list[SpeedTestResult],
+    *,
+    sla_ratio: float = DEFAULT_SPEEDTEST_SLA_RATIO,
+) -> int:
     underperforming = 0
     for item in items:
         if not item.subscription or not item.subscription.offer:
@@ -689,6 +709,6 @@ def count_underperforming_connections(items: list[SpeedTestResult]) -> int:
             (float(item.download_mbps or 0) / plan_down) if plan_down > 0 else 1.0
         )
         up_ratio = (float(item.upload_mbps or 0) / plan_up) if plan_up > 0 else 1.0
-        if min(down_ratio, up_ratio) < 0.8:
+        if min(down_ratio, up_ratio) < sla_ratio:
             underperforming += 1
     return underperforming
