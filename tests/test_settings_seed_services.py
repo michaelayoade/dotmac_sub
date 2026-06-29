@@ -383,6 +383,9 @@ class TestSeedBillingNotificationSettings:
                         "blocking_period_days",
                         "deactivation_period_days",
                         "minimum_balance",
+                        "arrangement_min_installments",
+                        "arrangement_max_installments",
+                        "arrangement_default_overdue_installments",
                     ]
                 ),
             )
@@ -397,6 +400,9 @@ class TestSeedBillingNotificationSettings:
         assert settings["blocking_period_days"] == "0"
         assert settings["deactivation_period_days"] == "0"
         assert settings["minimum_balance"] == "0"
+        assert settings["arrangement_min_installments"] == "2"
+        assert settings["arrangement_max_installments"] == "24"
+        assert settings["arrangement_default_overdue_installments"] == "2"
 
 
 # =============================================================================

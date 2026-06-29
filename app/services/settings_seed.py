@@ -1571,6 +1571,24 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("PLAN_CHANGE_MINIMUM_INVOICE_AMOUNT", "0.00"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_min_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_MIN_INSTALLMENTS", "2"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_max_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_MAX_INSTALLMENTS", "24"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_default_overdue_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_DEFAULT_OVERDUE_INSTALLMENTS", "2"),
+    )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
         db,
