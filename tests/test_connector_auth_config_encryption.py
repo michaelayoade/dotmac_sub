@@ -15,7 +15,6 @@ from app.services.credential_crypto import (
 )
 from app.services.credential_key_rotation import _rotate_connector_auth_config
 
-
 # --- unit tests on the type (no DB) -----------------------------------------
 
 
