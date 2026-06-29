@@ -89,6 +89,8 @@ settings/integrity/reconcilers.
   with the existing default of `30,60,90`.
 - Suspension-notification dedupe now resolves from collections settings with the
   existing default of 24 hours.
+- Billing-health scan/payment-volume alert thresholds now resolve from billing
+  settings with existing defaults of 0.5, 0.4, and 5.0.
 
 ### Partially resolved
 
@@ -109,8 +111,8 @@ settings/integrity/reconcilers.
   policy defaults.
 - Remaining policy thresholds/settings work outside autopay, payment
   arrangements, service extensions, top-up reconciliation sweep windows, gateway
-  HTTP timeouts, reporting AR-aging bucket cutoffs, and suspension-notification
-  dedupe.
+  HTTP timeouts, reporting AR-aging bucket cutoffs, suspension-notification
+  dedupe, and billing-health alert thresholds.
 
 ### Verification
 
@@ -206,6 +208,13 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run pytest tests/test_collections_dunning_services.py tests/test_settings_seed_services.py -q`
   - Result: passed
+- `poetry run ruff check app/services/billing_health.py app/services/settings_spec.py app/services/settings_seed.py tests/test_billing_health_thresholds.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run python -c "...billing_health._health_thresholds..."`
+  - Result: passed
+- `poetry run pytest tests/test_billing_health_thresholds.py -q`
+  - Result: interrupted locally after pytest setup hung on stale DB sessions left
+    by earlier interrupted runs; ruff and the direct helper assertion passed.
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -305,7 +314,7 @@ comments (`app/services/billing_health.py:314,54`; `billing_settings.py:14`;
 - arrangement installment bounds `2–24` + default-on-`overdue>=2` (`app/services/payment_arrangements.py:147,546`)
 - `MAX_EXTENSION_DAYS=30` (`app/services/service_extensions.py:31`)
 - AR-aging buckets `30/60/90` (`app/services/billing/reporting.py:300`) [resolved in draft]
-- billing-health alert thresholds (`SCAN_MIN_RATIO 0.5` etc.; "tune via ops" but needs deploy) (`billing_health.py:62`)
+- billing-health alert thresholds (`SCAN_MIN_RATIO 0.5` etc.; "tune via ops" but needs deploy) (`billing_health.py:62`) [resolved in draft]
 - reconcile sweep windows `15min/7d` not configurable — abandoned-redirect >1wk never recovered (`app/services/payment_reconciliation.py:110`) [resolved in draft]
 - gateway HTTP `timeout=30` across Paystack/Flutterwave [resolved in draft]
 

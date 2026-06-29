@@ -94,6 +94,9 @@ class BillingHealthSnapshot:
     # §6.1 billing-path coverage.
     unbilled_no_path: int = 0
     active_subs_on_terminal_account: int = 0
+    scan_min_ratio: float = SCAN_MIN_RATIO
+    payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
+    payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
 
     @property
     def stale_runners(self) -> list[str]:
@@ -104,7 +107,7 @@ class BillingHealthSnapshot:
         out: list[str] = []
         if self.paid_with_balance_count > 0:
             out.append("paid_invoices_with_balance")
-        if self.scan_ratio is not None and self.scan_ratio < SCAN_MIN_RATIO:
+        if self.scan_ratio is not None and self.scan_ratio < self.scan_min_ratio:
             out.append("invoice_scan_count_low")
         if self.payment_volume_collapsed:
             out.append("payment_volume_collapse")
@@ -128,6 +131,47 @@ def paid_with_balance(db: Session) -> tuple[int, Decimal]:
         .where(Invoice.balance_due != 0)
     ).one()
     return int(count_ or 0), Decimal(str(total or 0))
+
+
+def _resolve_float_setting(
+    db: Session,
+    key: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _health_thresholds(db: Session) -> tuple[float, float, float]:
+    scan_min_ratio = _resolve_float_setting(
+        db,
+        "billing_health_scan_min_ratio",
+        SCAN_MIN_RATIO,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    payment_volume_min_ratio = _resolve_float_setting(
+        db,
+        "billing_health_payment_volume_min_ratio",
+        PAYMENT_VOLUME_MIN_RATIO,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    payment_baseline_min_daily = _resolve_float_setting(
+        db,
+        "billing_health_payment_baseline_min_daily",
+        PAYMENT_BASELINE_MIN_DAILY,
+        minimum=0.0,
+        maximum=100000.0,
+    )
+    return scan_min_ratio, payment_volume_min_ratio, payment_baseline_min_daily
 
 
 def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
@@ -169,6 +213,7 @@ def payment_volume(
 ) -> tuple[int, float, float | None, bool]:
     """(count_24h, daily_avg_prev_7d, ratio, collapsed) for succeeded payments."""
     now = now or datetime.now(UTC)
+    _, payment_volume_min_ratio, payment_baseline_min_daily = _health_thresholds(db)
     last_24h = now - timedelta(hours=24)
     baseline_start = now - timedelta(days=8)  # 7-day window ending 24h ago
 
@@ -194,9 +239,9 @@ def payment_volume(
     daily_avg = float(count_prev_7d) / 7.0
     ratio = float(count_24h) / daily_avg if daily_avg > 0 else None
     collapsed = (
-        daily_avg >= PAYMENT_BASELINE_MIN_DAILY
+        daily_avg >= payment_baseline_min_daily
         and ratio is not None
-        and ratio < PAYMENT_VOLUME_MIN_RATIO
+        and ratio < payment_volume_min_ratio
     )
     return int(count_24h), daily_avg, ratio, collapsed
 
@@ -339,6 +384,9 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
 def billing_health_snapshot(
     db: Session, now: datetime | None = None
 ) -> BillingHealthSnapshot:
+    scan_min_ratio, payment_volume_min_ratio, payment_baseline_min_daily = (
+        _health_thresholds(db)
+    )
     pwb_count, pwb_total = paid_with_balance(db)
     last_scanned, eligible, scan_ratio = invoice_scan_coverage(db)
     c24, avg7, ratio, collapsed = payment_volume(db, now=now)
@@ -357,4 +405,7 @@ def billing_health_snapshot(
         covered_but_locked=covered_but_locked(db),
         unbilled_no_path=no_path,
         active_subs_on_terminal_account=terminal,
+        scan_min_ratio=scan_min_ratio,
+        payment_volume_min_ratio=payment_volume_min_ratio,
+        payment_baseline_min_daily=payment_baseline_min_daily,
     )

@@ -1627,6 +1627,24 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_AR_AGING_BUCKET_DAYS", "30,60,90"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_scan_min_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_SCAN_MIN_RATIO", "0.5"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_payment_volume_min_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_PAYMENT_VOLUME_MIN_RATIO", "0.4"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_payment_baseline_min_daily",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_PAYMENT_BASELINE_MIN_DAILY", "5.0"),
+    )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
         db,
