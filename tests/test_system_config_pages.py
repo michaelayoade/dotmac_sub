@@ -1,0 +1,47 @@
+from pathlib import Path
+
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.services import web_system_config as web_system_config_service
+
+
+def test_portal_config_saves_only_consumed_domain_routing_keys(db_session):
+    web_system_config_service.save_portal_config(
+        db_session,
+        {
+            "selfcare_domain": "selfcare.example.test",
+            "selfcare_redirect_root": "/portal/auth/login",
+            "admin_domain": "admin.example.test",
+            "reseller_domain": "reseller.example.test",
+            "portal_language": "fr",
+            "show_payment_due": "false",
+            "mobile_app_google_play_id": "com.example.app",
+        },
+    )
+
+    rows = {
+        row.key: row.value_text
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .all()
+    }
+
+    assert rows["selfcare_domain"] == "selfcare.example.test"
+    assert rows["selfcare_redirect_root"] == "/portal/auth/login"
+    assert rows["admin_domain"] == "admin.example.test"
+    assert rows["reseller_domain"] == "reseller.example.test"
+    assert "portal_language" not in rows
+    assert "show_payment_due" not in rows
+    assert "mobile_app_google_play_id" not in rows
+
+
+def test_portal_config_template_exposes_only_domain_routing_controls():
+    template = Path("templates/admin/system/config/portal.html").read_text()
+
+    assert 'name="selfcare_domain"' in template
+    assert 'name="selfcare_redirect_root"' in template
+    assert 'name="admin_domain"' in template
+    assert 'name="reseller_domain"' in template
+    assert 'name="portal_language"' not in template
+    assert 'name="portal_auth_field"' not in template
+    assert 'name="show_payment_due"' not in template
+    assert 'name="mobile_app_google_play_id"' not in template

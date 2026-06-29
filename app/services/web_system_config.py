@@ -105,17 +105,6 @@ PORTAL_KEYS = [
     "selfcare_redirect_root",
     "admin_domain",
     "reseller_domain",
-    # Portal behaviour
-    "portal_language",
-    "portal_auth_field",
-    "portal_password_reset",
-    "portal_help_url",
-    "show_payment_due",
-    "show_bandwidth_usage",
-    "show_fup_rules",
-    "show_session_stats",
-    "mobile_app_google_play_id",
-    "mobile_app_appstore_id",
 ]
 
 
