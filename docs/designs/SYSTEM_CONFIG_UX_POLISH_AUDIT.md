@@ -20,13 +20,15 @@ theme.
 - Legal create/update/upload-file/delete-file/publish/unpublish/delete actions now
   emit `legal_document` audit events after successful mutation.
 - Legal Publish and Unpublish actions now require an explicit browser confirmation.
+- GIS location, area, layer, and customer-location request mutation routes now
+  consistently require `gis:map:edit`.
 
 ### Still open
 
 - Dead config pages and toggles: Data Retention, Monitoring drift, and the largely
   inert preference/subscriber/portal/CPE/IPv6 key groups.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
-- GIS route-guard asymmetry and GIS sync last-run/result observability.
+- GIS sync last-run/result observability.
 - Whats-new publish confirmation and invalid-status feedback cleanup.
 - Geocoding provider/rate-limit controls and broader bespoke-save validation
   consistency.
