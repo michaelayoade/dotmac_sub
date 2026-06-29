@@ -63,10 +63,26 @@
             </div>
             {% endif %}
 
-            {# Hidden defaults #}
-            <input type="hidden" name="reason" value="hardware_fault">
-            <input type="hidden" name="deauthorize_on_olt" value="true">
-            <input type="hidden" name="remove_from_acs" value="true">
+            <div class="mb-4 space-y-3 text-left">
+                <div>
+                    <label for="decommission-reason" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Reason</label>
+                    <select id="decommission-reason" name="reason" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        {% for value, label in decommission_reasons.items() %}
+                        <option value="{{ value }}" {% if value == "hardware_fault" %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="hidden" name="deauthorize_on_olt" value="false">
+                    <input type="checkbox" name="deauthorize_on_olt" value="true" checked class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500">
+                    Deauthorize on OLT
+                </label>
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="hidden" name="remove_from_acs" value="false">
+                    <input type="checkbox" name="remove_from_acs" value="true" checked class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500">
+                    Remove from ACS
+                </label>
+            </div>
 
             <div class="flex gap-3">
                 <button type="button"

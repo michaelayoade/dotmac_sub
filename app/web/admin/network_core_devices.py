@@ -713,7 +713,7 @@ def core_device_backup_settings_update(
     enabled: bool = Form(False),
     ssh_username: str = Form(""),
     ssh_password: str | None = Form(None),
-    ssh_port: int = Form(120),
+    ssh_port: int = Form(22),
     backup_type: str = Form("commands"),
     backup_commands: str | None = Form("export"),
     hours_csv: str | None = Form(None),
