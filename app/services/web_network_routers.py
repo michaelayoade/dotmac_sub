@@ -170,6 +170,12 @@ def edit_form_context(
     return context
 
 
+# An HTML checkbox is simply absent from the POST body when unticked, so an
+# omitted field must be read as an explicit False — otherwise these flags can
+# only ever be turned on, never cleared, from the edit form.
+_ROUTER_CHECKBOX_FIELDS = ("use_ssl", "verify_tls")
+
+
 def _display_rest_api_username(router) -> str:
     return decrypt_credential(router.rest_api_username) or router.rest_api_username
 
@@ -178,11 +184,24 @@ def _form_strings(form: FormData) -> dict[str, Any]:
     return {key: value for key, value in form.items() if isinstance(value, str)}
 
 
+def _form_payload(form: FormData) -> dict[str, Any]:
+    data = _form_strings(form)
+    for field in _ROUTER_CHECKBOX_FIELDS:
+        raw = form.get(field)
+        data[field] = isinstance(raw, str) and raw.strip().lower() in {
+            "1",
+            "true",
+            "on",
+            "yes",
+        }
+    return data
+
+
 def create_router(db: Session, form: FormData):
-    payload = RouterCreate(**_form_strings(form))
+    payload = RouterCreate(**_form_payload(form))
     return RouterInventory.create(db, payload)
 
 
 def update_router(db: Session, router_id: uuid.UUID, form: FormData) -> None:
-    payload = RouterUpdate(**_form_strings(form))
+    payload = RouterUpdate(**_form_payload(form))
     RouterInventory.update(db, router_id, payload)

@@ -841,7 +841,9 @@ def olt_backups_list(
             "test_message": test_message,
         }
     )
-    return templates.TemplateResponse("admin/network/olts/backups.html", context)
+    return templates.TemplateResponse(
+        request, "admin/network/olts/backups.html", context
+    )
 
 
 # NOTE: this static route must be registered BEFORE /olts/backups/{backup_id};
