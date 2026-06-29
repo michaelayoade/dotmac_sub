@@ -25,10 +25,11 @@ def router_list(
     request: Request,
     status: str | None = None,
     search: str | None = None,
+    page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    offset = (page - 1) * limit
     context = web_routers_service.list_context(
         request,
         db,

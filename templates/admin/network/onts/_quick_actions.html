@@ -71,6 +71,7 @@
             <button type="button"
                     hx-post="/admin/network/onts/{{ ont.id }}/reboot"
                     hx-swap="none"
+                    hx-confirm="Soft reboot ONT {{ ont.serial_number or ont.id }}? Service may be interrupted."
                     @click="open = false"
                     class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
@@ -82,6 +83,7 @@
             <button type="button"
                     hx-post="/admin/network/onts/{{ ont.id }}/reboot?source=olt"
                     hx-swap="none"
+                    hx-confirm="Power-cycle ONT {{ ont.serial_number or ont.id }} from the OLT? Service will be interrupted."
                     @click="open = false"
                     class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>

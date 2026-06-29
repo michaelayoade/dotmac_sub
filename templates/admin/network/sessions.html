@@ -36,11 +36,17 @@
 
     <!-- Search -->
     <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-        <form method="get" class="flex gap-3">
+        <form method="get" class="flex flex-col gap-3 sm:flex-row">
             <input type="text" name="search" value="{{ search }}" placeholder="Search by username or IP..."
                    class="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="nas_filter" class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All NAS devices</option>
+                {% for nas in nas_devices %}
+                <option value="{{ nas.id }}" {% if nas_filter == nas.id|string %}selected{% endif %}>{{ nas.name }}</option>
+                {% endfor %}
+            </select>
             <button type="submit" class="rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700">Search</button>
-            {% if search %}<a href="/admin/network/sessions" class="rounded-xl border border-slate-200 px-4 py-2.5 text-sm dark:border-slate-600 dark:text-slate-300">Clear</a>{% endif %}
+            {% if search or nas_filter %}<a href="/admin/network/sessions" class="rounded-xl border border-slate-200 px-4 py-2.5 text-sm dark:border-slate-600 dark:text-slate-300">Clear</a>{% endif %}
         </form>
     </div>
 
