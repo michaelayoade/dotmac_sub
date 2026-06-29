@@ -124,6 +124,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 const SizedBox(height: 12),
                 Card(
                   child: ListTile(
+                    leading: const Icon(Icons.timeline_outlined),
+                    title: const Text('Installation progress'),
+                    subtitle:
+                        const Text('Track your install, survey to activation'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/installation-progress'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
                     leading: const Icon(Icons.card_giftcard_outlined),
                     title: const Text('Refer & Earn'),
                     subtitle: const Text('Invite friends, earn wallet credit'),
