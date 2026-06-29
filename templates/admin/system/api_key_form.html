@@ -49,6 +49,14 @@
                             <option value="365">1 year</option>
                         </select>
                     </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="scopes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Scopes</label>
+                        <input type="text" name="scopes" id="scopes"
+                            placeholder="audit:read"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Comma- or space-separated permission keys the key may use (e.g. <code>audit:read</code>). Leave blank for an identity-only key with no access (fail-closed).</p>
+                    </div>
                 </div>
             </div>
         </div>
