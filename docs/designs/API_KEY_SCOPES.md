@@ -37,8 +37,15 @@ scopes as chips, or a "no scopes" badge.
 
 ## Follow-up (out of scope here)
 
-Making API keys first-class on **every** `require_permission` endpoint (not just the
-audit path) means teaching `require_user_auth` to accept `x_api_key` and inject the
-key's scopes as the principal's scopes — a larger change to the central auth
-dependency. The scopes model added here is the prerequisite; do that as a separate,
-carefully-reviewed change.
+**DONE.** `require_user_auth` now accepts an `X-Api-Key` header when there is no
+bearer/session token (`_api_key_principal`): it returns an auth dict with
+`principal_type="api_key"`, `roles=[]`, and `scopes=` the key's scopes. So **any**
+`require_permission`-gated endpoint honors a key's scopes (wildcard-aware, e.g. a
+`billing:*` scope satisfies `billing:invoice:read`; `*` grants all). No roles → no
+admin shortcut; access is exactly the scopes.
+
+Safety: keys cannot reach `/admin` (`require_web_auth` is cookie/session-only and
+`require_admin_web_auth` is default-deny to `system_user`); the audit endpoint keeps
+its own stricter `require_audit_auth` gate; direct (non-DI) callers leave `x_api_key`
+as the `Header` sentinel, so the branch is `isinstance`-guarded. Covered by
+`tests/test_api_key_principal.py`.
