@@ -45,3 +45,36 @@ def test_portal_config_template_exposes_only_domain_routing_controls():
     assert 'name="portal_auth_field"' not in template
     assert 'name="show_payment_due"' not in template
     assert 'name="mobile_app_google_play_id"' not in template
+
+
+def test_preferences_config_saves_only_consumed_force_2fa(db_session):
+    web_system_config_service.save_preferences(
+        db_session,
+        {
+            "force_2fa": "true",
+            "default_landing_page": "reseller",
+            "admin_portal_title": "Unused Title",
+            "search_debounce_ms": "750",
+        },
+    )
+
+    rows = {
+        row.key: row.value_text
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .all()
+    }
+
+    assert rows["force_2fa"] == "true"
+    assert "default_landing_page" not in rows
+    assert "admin_portal_title" not in rows
+    assert "search_debounce_ms" not in rows
+
+
+def test_preferences_template_exposes_only_force_2fa_control():
+    template = Path("templates/admin/system/config/preferences.html").read_text()
+
+    assert 'name="force_2fa"' in template
+    assert 'name="default_landing_page"' not in template
+    assert 'name="admin_portal_title"' not in template
+    assert 'name="search_debounce_ms"' not in template

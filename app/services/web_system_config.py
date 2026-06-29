@@ -76,10 +76,7 @@ def _save_settings(
 # 8.5 System Preferences & Security
 # ---------------------------------------------------------------------------
 PREFERENCE_KEYS = [
-    "default_landing_page",
-    "admin_portal_title",
     "force_2fa",
-    "search_debounce_ms",
 ]
 
 

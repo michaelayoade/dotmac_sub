@@ -42,10 +42,13 @@ theme.
 - The Customer Portal config page now only exposes consumed domain-routing keys;
   inert language/auth-field/display/mobile controls were removed from the save
   allowlist and template.
+- The Preferences config page now only exposes and saves the consumed
+  `force_2fa` control; inert landing-page, portal-title, and search-debounce
+  controls were removed from the save allowlist and template.
 
 ### Still open
 
-- Dead config pages and toggles: remaining inert Preference and CPE controls.
+- Dead config pages and toggles: remaining inert CPE controls.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
 - Broader bespoke-save validation consistency.
 
@@ -73,6 +76,10 @@ theme.
   - Result: passed
 - `poetry run pytest tests/test_system_config_pages.py tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
   - Result: `29 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_auth_services.py tests/test_auth_flow.py -q`
+  - Result: `64 passed`
 - `poetry run ruff check app/services/web_system_config.py tests/test_system_config_pages.py`
   - Result: passed
 - `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
