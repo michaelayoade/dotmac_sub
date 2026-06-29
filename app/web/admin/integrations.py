@@ -513,7 +513,18 @@ def connector_detail(
 
     context = _base_context(request, db, active_page="connectors")
     context.update(
-        {"connector": connector, **web_integrations_service.connector_form_options()}
+        {
+            "connector": connector,
+            # Secret-keyed header/metadata values are masked for display; the
+            # update path restores them unless overwritten (see web_integrations).
+            "headers_display": web_integrations_service.mask_secret_values(
+                connector.headers
+            ),
+            "metadata_display": web_integrations_service.mask_secret_values(
+                connector.metadata_
+            ),
+            **web_integrations_service.connector_form_options(),
+        }
     )
     return templates.TemplateResponse(
         "admin/integrations/connectors/detail.html", context
