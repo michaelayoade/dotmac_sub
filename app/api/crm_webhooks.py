@@ -20,16 +20,13 @@ import hashlib
 import hmac
 import json
 import logging
-from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models.subscriber import Subscriber
-from app.services import crm_api
-from app.services.common import coerce_uuid
+from app.services import referrals_mirror
 from app.services.crm_customers import upsert_customer_from_payload
 
 logger = logging.getLogger(__name__)
@@ -43,7 +40,7 @@ EVENT_HEADER = "X-Webhook-Event"
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
-REFERRAL_EVENTS = {"referral.rewarded"}
+REFERRAL_EVENTS = {"referral.captured", "referral.qualified", "referral.rewarded"}
 
 
 def _verify_signature(
@@ -200,12 +197,12 @@ async def receive_crm_chat_event(
 async def receive_crm_referral_event(
     request: Request, db: Session = Depends(get_db)
 ) -> dict:
-    """Apply a CRM-issued referral reward as an account credit (RFC #73).
+    """Apply a CRM referral lifecycle event to the local mirror (RFC #73).
 
-    When a referred friend qualifies, the CRM issues the reward and fires
-    ``referral.rewarded``. We map the CRM subscriber back to the local account
-    and post a credit note. Idempotent on the referral id (carried into the
-    credit memo via ``external_ref``), so CRM redeliveries don't double-credit.
+    Handles ``referral.captured`` / ``referral.qualified`` / ``referral.rewarded``;
+    rewarded also posts an account credit (idempotent on the referral id via
+    ``external_ref``). HMAC-gated; the service acks unmapped/incomplete events so
+    the CRM doesn't retry forever. All DB/CRM logic lives in the service.
     """
     raw_body = await request.body()
     _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
@@ -227,68 +224,4 @@ async def receive_crm_referral_event(
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    crm_subscriber_id = str(body.get("crm_subscriber_id") or "").strip()
-    referral_id = str(body.get("referral_id") or "").strip()
-    amount_raw = body.get("amount")
-    if not crm_subscriber_id or not referral_id or amount_raw is None:
-        return {"status": "ignored", "reason": "incomplete_payload"}
-
-    try:
-        amount = Decimal(str(amount_raw))
-    except (InvalidOperation, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reward amount."
-        ) from None
-    if amount <= 0:
-        return {"status": "ignored", "reason": "non_positive_amount"}
-
-    try:
-        crm_uuid = coerce_uuid(crm_subscriber_id)
-    except (ValueError, TypeError):
-        return {"status": "ignored", "reason": "invalid_crm_subscriber_id"}
-
-    subscriber = (
-        db.query(Subscriber).filter(Subscriber.crm_subscriber_id == crm_uuid).first()
-    )
-    if subscriber is None:
-        # No local account maps to this CRM subscriber; ack so the CRM doesn't
-        # retry indefinitely, but log for reconciliation.
-        logger.warning(
-            "crm_referral_reward_unmapped crm_subscriber_id=%s referral_id=%s",
-            crm_subscriber_id,
-            referral_id,
-        )
-        return {"status": "ignored", "reason": "unmapped_subscriber"}
-
-    currency = str(body.get("currency") or "NGN")
-    reason = str(body.get("reason") or "Referral reward")
-    try:
-        credit = crm_api.create_account_credit(
-            db,
-            subscriber_id=str(subscriber.id),
-            amount=amount,
-            reason=reason,
-            external_ref=f"referral:{referral_id}",
-            currency=currency,
-        )
-    except LookupError:
-        return {"status": "ignored", "reason": "subscriber_not_creditable"}
-
-    # Best-effort: nudge the customer that they earned a reward. Never let a push
-    # failure undo the (already committed) credit.
-    try:
-        from app.services import push as push_service
-
-        push_service.send_push(
-            db,
-            str(subscriber.id),
-            title="You earned a referral reward!",
-            body=f"{currency} {amount} has been credited to your account.",
-            data={"type": "referral_reward", "referral_id": referral_id},
-        )
-    except Exception as exc:  # noqa: BLE001 - notification is advisory
-        logger.warning(
-            "crm_referral_reward_push_failed referral_id=%s: %s", referral_id, exc
-        )
-
-    return {"status": "ok", "event": event_type, "credit_id": str(credit.id)}
+    return referrals_mirror.apply_webhook(db, event_type, body)

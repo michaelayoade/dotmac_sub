@@ -419,6 +419,10 @@ from app.models.rbac import (  # noqa: F401
     SystemUserPermission,
     SystemUserRole,
 )
+from app.models.referral import (  # noqa: F401
+    ReferralMirror,
+    ReferralProgramCache,
+)
 from app.models.router_management import (  # noqa: F401
     JumpHost,
     Router,

@@ -496,6 +496,59 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
+    def _portal_token(self, crm_subscriber_id: str, scopes: list[str]) -> str:
+        minted = self.create_portal_session(
+            crm_subscriber_id=crm_subscriber_id, actor="subscriber", scopes=scopes
+        )
+        token = str(minted.get("portal_token") or "")
+        if not token:
+            raise CRMClientError("portal token mint returned an empty token")
+        return token
+
+    def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's referrals from the CRM Portal API (server-side).
+
+        Mints a scoped portal token then calls the portal API with it (the
+        per-request ``Authorization`` overrides the service token). Used by the
+        local-mirror reconcile, not the customer's own request path.
+        """
+        token = self._portal_token(crm_subscriber_id, ["referrals:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/referrals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def create_portal_referral(
+        self,
+        crm_subscriber_id: str,
+        *,
+        name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
+        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
+        payload: dict[str, Any] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "note": note,
+            }.items()
+            if v
+        }
+        data = self._request(
+            "POST",
+            "/api/v1/portal/referrals",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""
         data = self._cached_get(

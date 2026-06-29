@@ -69,7 +69,12 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
-from app.schemas.portal import PortalSessionResponse
+from app.schemas.portal import (
+    MyReferralsResponse,
+    PortalSessionResponse,
+    ReferAFriendRequest,
+    ReferAFriendResponse,
+)
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
     AccountDeletionRequest,
@@ -124,12 +129,12 @@ from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
 from app.services import push as push_service
+from app.services import referrals_mirror, web_support_tickets
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
 from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
-from app.services import web_support_tickets
 from app.services.auth_dependencies import require_user_auth
 from app.services.bandwidth import (
     add_directions_to_series,
@@ -764,6 +769,38 @@ def my_portal_session(
     """
     subscriber_id = _subscriber_id(principal)
     return portal_session_service.broker_customer_portal_session(db, subscriber_id)
+
+
+@router.get("/referrals", response_model=MyReferralsResponse)
+def my_referrals(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's Refer & Earn summary — code, share link, program terms, and
+    history — served from the local mirror (refreshed from the CRM lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.post("/referrals", response_model=ReferAFriendResponse, status_code=201)
+def my_refer_a_friend(
+    payload: ReferAFriendRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Refer a friend: capture in the CRM (source of truth), mirror locally."""
+    subscriber_id = _subscriber_id(principal)
+    try:
+        return referrals_mirror.refer_a_friend(
+            db,
+            subscriber_id,
+            name=payload.name,
+            email=payload.email,
+            phone=payload.phone,
+            note=payload.note,
+        )
+    except referrals_mirror.ReferralError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 @router.get("/notifications", response_model=ListResponse[NotificationRead])

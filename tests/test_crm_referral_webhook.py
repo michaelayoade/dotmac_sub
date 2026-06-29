@@ -1,4 +1,9 @@
-"""Inbound CRM ``referral.rewarded`` webhook: HMAC auth + account credit (RFC #73)."""
+"""Inbound CRM referral webhook endpoint (RFC #73): HMAC gate + delegation.
+
+The handler is a thin wrapper — the mirror/credit logic is unit-tested in
+test_referrals_mirror.py. Here we cover the signature gate, event filtering, and
+that a valid event reaches the service (a mirror row appears).
+"""
 
 from __future__ import annotations
 
@@ -9,13 +14,12 @@ import json
 import threading
 import uuid
 from contextlib import contextmanager
-from decimal import Decimal
-from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
 from app.api.crm_webhooks import receive_crm_referral_event
 from app.config import settings
+from app.models.referral import ReferralMirror
 from app.models.subscriber import Subscriber
 
 SECRET = "test-webhook-secret"
@@ -45,9 +49,6 @@ def _sign(body: bytes, secret: str = SECRET) -> str:
 
 
 def _run(coro):
-    # Drive the async route on a fresh loop in a dedicated thread (matches
-    # test_crm_webhooks): immune to a leaked running loop; the test SQLite engine
-    # is check_same_thread=False + StaticPool so the session is safe cross-thread.
     box: dict[str, object] = {}
 
     def _runner() -> None:
@@ -67,7 +68,7 @@ def _run(coro):
     return box["result"]
 
 
-def _post(db_session, body: dict, event: str = "referral.rewarded", signature=...):
+def _post(db_session, body: dict, event: str = "referral.captured", signature=...):
     raw = json.dumps(body).encode()
     headers = {"X-Webhook-Event": event, "Content-Type": "application/json"}
     sig = _sign(raw) if signature is ... else signature
@@ -95,107 +96,44 @@ def _linked_subscriber(db_session, crm_id: uuid.UUID) -> Subscriber:
     return sub
 
 
-def _credit_patch():
-    credit = MagicMock()
-    credit.id = uuid.uuid4()
-    return (
-        patch(
-            "app.api.crm_webhooks.crm_api.create_account_credit", return_value=credit
-        ),
-        patch("app.services.push.send_push"),
-        credit,
-    )
-
-
-def test_reward_credits_mapped_subscriber(db_session):
-    crm_id = uuid.uuid4()
-    sub = _linked_subscriber(db_session, crm_id)
-    body = {
-        "crm_subscriber_id": str(crm_id),
-        "referral_id": "ref-123",
-        "amount": "5000",
-        "currency": "NGN",
-    }
-    credit_p, push_p, credit = _credit_patch()
-    with _with_secret(SECRET), credit_p as create_credit, push_p:
-        code, resp = _post(db_session, body)
-
-    assert code == 200, resp
-    assert resp["status"] == "ok"
-    assert resp["credit_id"] == str(credit.id)
-    kwargs = create_credit.call_args.kwargs
-    assert kwargs["subscriber_id"] == str(sub.id)
-    assert kwargs["amount"] == Decimal("5000")
-    assert kwargs["external_ref"] == "referral:ref-123"
-    assert kwargs["currency"] == "NGN"
-
-
-def test_reward_accepts_event_envelope(db_session):
+def test_valid_captured_event_reaches_service(db_session):
     crm_id = uuid.uuid4()
     _linked_subscriber(db_session, crm_id)
     body = {
-        "payload": {
-            "crm_subscriber_id": str(crm_id),
-            "referral_id": "ref-9",
-            "amount": 2500,
-        }
+        "crm_subscriber_id": str(crm_id),
+        "referral_id": "r-1",
+        "referred_name": "Ada",
     }
-    credit_p, push_p, _ = _credit_patch()
-    with _with_secret(SECRET), credit_p as create_credit, push_p:
+    with _with_secret(SECRET):
         code, resp = _post(db_session, body)
-    assert code == 200
+    assert code == 200, resp
     assert resp["status"] == "ok"
-    assert create_credit.call_args.kwargs["amount"] == Decimal("2500")
+    assert (
+        db_session.query(ReferralMirror).filter_by(crm_referral_id="r-1").count() == 1
+    )
+
+
+def test_event_envelope_form_is_accepted(db_session):
+    crm_id = uuid.uuid4()
+    _linked_subscriber(db_session, crm_id)
+    body = {"payload": {"crm_subscriber_id": str(crm_id), "referral_id": "r-2"}}
+    with _with_secret(SECRET):
+        code, resp = _post(db_session, body, event="referral.qualified")
+    assert code == 200
+    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r-2").one()
+    assert row.status == "qualified"
 
 
 def test_bad_signature_rejected(db_session):
-    body = {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "x", "amount": "1"}
+    body = {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "x"}
     with _with_secret(SECRET):
         code, _ = _post(db_session, body, signature="sha256=deadbeef")
     assert code == 401
 
 
 def test_unknown_event_ignored(db_session):
-    body = {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "x", "amount": "1"}
+    body = {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "x"}
     with _with_secret(SECRET):
-        code, resp = _post(db_session, body, event="referral.captured")
+        code, resp = _post(db_session, body, event="referral.expired")
     assert code == 200
     assert resp["status"] == "ignored"
-
-
-def test_unmapped_subscriber_ignored_without_credit(db_session):
-    body = {
-        "crm_subscriber_id": str(uuid.uuid4()),
-        "referral_id": "ref-x",
-        "amount": "5000",
-    }
-    credit_p, push_p, _ = _credit_patch()
-    with _with_secret(SECRET), credit_p as create_credit, push_p:
-        code, resp = _post(db_session, body)
-    assert code == 200
-    assert resp["reason"] == "unmapped_subscriber"
-    create_credit.assert_not_called()
-
-
-def test_incomplete_payload_ignored(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-    body = {"crm_subscriber_id": str(crm_id), "referral_id": "ref-1"}  # no amount
-    credit_p, push_p, _ = _credit_patch()
-    with _with_secret(SECRET), credit_p as create_credit, push_p:
-        code, resp = _post(db_session, body)
-    assert code == 200
-    assert resp["reason"] == "incomplete_payload"
-    create_credit.assert_not_called()
-
-
-def test_non_positive_amount_ignored(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-    body = {"crm_subscriber_id": str(crm_id), "referral_id": "ref-1", "amount": "0"}
-    credit_p, push_p, _ = _credit_patch()
-    with _with_secret(SECRET), credit_p as create_credit, push_p:
-        code, resp = _post(db_session, body)
-    assert code == 200
-    assert resp["reason"] == "non_positive_amount"
-    create_credit.assert_not_called()
