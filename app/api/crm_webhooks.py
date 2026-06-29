@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.services import referrals_mirror
+from app.services import projects_mirror, referrals_mirror
 from app.services.crm_customers import upsert_customer_from_payload
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,14 @@ TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
 REFERRAL_EVENTS = {"referral.captured", "referral.qualified", "referral.rewarded"}
+PROJECT_EVENTS = {
+    "project.created",
+    "project.updated",
+    "project.completed",
+    "project.canceled",
+    "project_task.completed",
+    "project_task.updated",
+}
 
 
 def _verify_signature(
@@ -225,3 +233,35 @@ async def receive_crm_referral_event(
     body = inner if isinstance(inner, dict) else payload
 
     return referrals_mirror.apply_webhook(db, event_type, body)
+
+
+@router.post("/projects")
+async def receive_crm_project_event(
+    request: Request, db: Session = Depends(get_db)
+) -> dict:
+    """Mirror a CRM project lifecycle event for the installation tracker.
+
+    Handles ``project.created/updated/completed/canceled`` and
+    ``project_task.completed/updated``. HMAC-gated; the service acks
+    unmapped/incomplete events. All DB/CRM logic lives in the service.
+    """
+    raw_body = await request.body()
+    _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
+
+    event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
+    if event_type and event_type not in PROJECT_EVENTS:
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        ) from None
+    if not isinstance(payload, dict):
+        payload = {}
+
+    inner = payload.get("payload")
+    body = inner if isinstance(inner, dict) else payload
+
+    return projects_mirror.apply_webhook(db, event_type, body)
