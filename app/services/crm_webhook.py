@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
-import time
 from datetime import UTC, datetime
 
 from requests import RequestException, post
@@ -11,34 +13,6 @@ from requests import RequestException, post
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-
-# Token cache
-_cached_token: str | None = None
-_token_expires_at: float = 0
-
-
-def _get_token() -> str | None:
-    """Get a valid JWT token, refreshing if needed."""
-    global _cached_token, _token_expires_at
-
-    if _cached_token and time.time() < _token_expires_at - 60:
-        return _cached_token
-
-    try:
-        resp = post(
-            f"{settings.crm_base_url}/api/v1/auth/login",
-            json={"username": settings.crm_username, "password": settings.crm_password},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            _cached_token = data.get("access_token")
-            _token_expires_at = time.time() + 840  # 14 min (token lasts 15)
-            return _cached_token
-        logger.warning("CRM login failed: %d %s", resp.status_code, resp.text[:100])
-    except RequestException as e:
-        logger.warning("CRM login error: %s", e)
-    return None
 
 
 def push_subscriber_change(
@@ -55,24 +29,33 @@ def push_subscriber_change(
             system; CRM Subscriber column names for any other system (the
             CRM's generic handler instantiates its model from the payload
             verbatim, so unknown keys break creation).
-        external_system: CRM external system the payload is keyed under.
+        external_system: CRM external system the payload is keyed under
+            (carried in the body so the CRM keeps splynx/native records keyed
+            correctly).
 
     Returns:
         The CRM subscriber UUID on success (or "ok" when the response carries
         no id — still truthy), None on failure.
     """
-    token = _get_token()
-    if not token:
-        logger.warning("Cannot push to CRM: no auth token")
+    secret = settings.crm_webhook_secret
+    if not secret:
+        logger.warning("Cannot push to CRM: no webhook secret configured")
         return None
 
-    payload = {"id": external_id, **subscriber_data}
+    payload = {"id": external_id, "external_system": external_system, **subscriber_data}
+    # Sign the exact bytes we send: the CRM verifies HMAC over the raw request
+    # body, so serialize once and post that buffer (not json=, which re-encodes).
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    signature = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
     try:
         resp = post(
-            f"{settings.crm_base_url}/api/v1/subscribers/sync/webhook/{external_system}",
-            json=payload,
-            headers={"Authorization": f"Bearer {token}"},
+            f"{settings.crm_base_url}/webhooks/crm/subscribers/sync",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Selfcare-Signature": signature,
+            },
             timeout=15,
         )
         if resp.status_code == 200:
