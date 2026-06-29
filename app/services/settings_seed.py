@@ -1450,6 +1450,12 @@ def seed_billing_settings(db: Session) -> None:
         value_text=auto_suspend_raw,
         value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="autopay_max_consecutive_failures",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES", "3"),
+    )
     prepaid_monthly_invoicing_raw = os.getenv(
         "PREPAID_MONTHLY_INVOICING_ENABLED", "false"
     )

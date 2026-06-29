@@ -379,6 +379,7 @@ class TestSeedBillingNotificationSettings:
                         "expiry_reminder_days",
                         "invoice_reminder_days",
                         "dunning_escalation_days",
+                        "autopay_max_consecutive_failures",
                         "blocking_period_days",
                         "deactivation_period_days",
                         "minimum_balance",
@@ -392,6 +393,7 @@ class TestSeedBillingNotificationSettings:
         assert settings["expiry_reminder_days"] == "7"
         assert settings["invoice_reminder_days"] == "7,1"
         assert settings["dunning_escalation_days"] == "3,7,14,30"
+        assert settings["autopay_max_consecutive_failures"] == "3"
         assert settings["blocking_period_days"] == "0"
         assert settings["deactivation_period_days"] == "0"
         assert settings["minimum_balance"] == "0"

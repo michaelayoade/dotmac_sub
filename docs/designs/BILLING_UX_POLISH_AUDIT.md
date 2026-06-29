@@ -75,6 +75,8 @@ settings/integrity/reconcilers.
 - Billing settings spec/seed coverage now includes `billing_enabled_expected`,
   `blocking_period_days`, `deactivation_period_days`, and `minimum_balance`, and
   the Billing Settings page backfills the same defaults when rows are absent.
+- Autopay's consecutive-failure suspension threshold now resolves from
+  `billing.autopay_max_consecutive_failures` with the existing default of 3.
 
 ### Partially resolved
 
@@ -160,6 +162,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/settings_spec.py app/services/settings_seed.py app/services/web_system_config.py tests/test_billing_settings.py tests/test_settings_seed_services.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_settings.py tests/test_settings_seed_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/autopay.py app/services/settings_spec.py app/services/settings_seed.py tests/test_autopay.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_autopay.py tests/test_settings_seed_services.py -q`
   - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed

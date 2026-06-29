@@ -1428,6 +1428,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="autopay_max_consecutive_failures",
+        env_var="BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES",
+        value_type=SettingValueType.integer,
+        default=3,
+        min_value=1,
+        label="Autopay Max Consecutive Failures",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="customer_balance_notifications_enabled",
         env_var="BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED",
         value_type=SettingValueType.boolean,
