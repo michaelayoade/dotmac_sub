@@ -1691,6 +1691,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="ar_aging_bucket_days",
+        env_var="BILLING_AR_AGING_BUCKET_DAYS",
+        value_type=SettingValueType.string,
+        default="30,60,90",
+        label="AR Aging Bucket Days",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="proration_enabled",
         env_var="BILLING_PRORATION_ENABLED",
         value_type=SettingValueType.boolean,

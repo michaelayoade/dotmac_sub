@@ -1613,6 +1613,12 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS", "30"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="ar_aging_bucket_days",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_AR_AGING_BUCKET_DAYS", "30,60,90"),
+    )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
         db,
