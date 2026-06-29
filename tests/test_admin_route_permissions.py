@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.routing import APIRoute
 
 from app.api import network_device_groups as api_network_device_groups
@@ -322,12 +324,31 @@ def test_legal_routes_require_system_permissions():
         "GET",
         "system:read",
     )
+    for path, method in [
+        ("/legal/new", "GET"),
+        ("/legal/new", "POST"),
+        ("/legal/{document_id}/edit", "GET"),
+        ("/legal/{document_id}/edit", "POST"),
+        ("/legal/{document_id}/upload", "POST"),
+        ("/legal/{document_id}/delete-file", "POST"),
+        ("/legal/{document_id}/publish", "POST"),
+        ("/legal/{document_id}/unpublish", "POST"),
+        ("/legal/{document_id}/delete", "POST"),
+    ]:
+        assert _route_has_permission(admin_legal.router, path, method, "system:write")
     assert _route_has_permission(
         admin_legal.router,
-        "/legal/{document_id}/publish",
-        "POST",
-        "system:write",
+        "/legal/{document_id}",
+        "GET",
+        "system:read",
     )
+
+
+def test_legal_publish_actions_require_confirmation():
+    template = Path("templates/admin/system/legal/detail.html").read_text()
+
+    assert "Publish this legal document?" in template
+    assert "Unpublish this legal document?" in template
 
 
 def test_integrations_routes_require_settings_permissions():

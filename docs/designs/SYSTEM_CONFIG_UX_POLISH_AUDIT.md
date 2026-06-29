@@ -4,9 +4,37 @@
 **Method:** single-agent read-only review of the settings control plane + legal,
 GIS, whats-new, design-system, admin-hub. (The billing settings form is covered in
 `BILLING_UX_POLISH_AUDIT.md`.)
-**Status:** audit only. Part of the remaining-module audit series. This is the
+**Status:** remediation in progress via draft PR #518. Part of the remaining-module audit series. This is the
 natural home for the cross-audit **"single-source-of-truth + no dead controls"**
 theme.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #518 (`audit/system-config-remediation`)
+
+### Resolved in current draft
+
+- Legal mutating routes now declare `system:write` route-level permissions for
+  create, edit, upload, delete-file, publish, unpublish, and delete actions.
+- Legal create/update/upload-file/delete-file/publish/unpublish/delete actions now
+  emit `legal_document` audit events after successful mutation.
+- Legal Publish and Unpublish actions now require an explicit browser confirmation.
+
+### Still open
+
+- Dead config pages and toggles: Data Retention, Monitoring drift, and the largely
+  inert preference/subscriber/portal/CPE/IPv6 key groups.
+- Unifying bespoke config saves with the typed/cached `settings_spec` system.
+- GIS route-guard asymmetry and GIS sync last-run/result observability.
+- Whats-new publish confirmation and invalid-status feedback cleanup.
+- Geocoding provider/rate-limit controls and broader bespoke-save validation
+  consistency.
+
+### Verification
+
+- `poetry run pytest tests/test_admin_route_permissions.py tests/test_legal_services.py`
+  - Result: `46 passed`
 
 ## What this audit is
 
