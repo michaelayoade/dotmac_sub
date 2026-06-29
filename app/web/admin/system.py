@@ -4145,21 +4145,8 @@ def config_email_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/email", status_code=303)
 
 
-# --- 8.7 Subscriber Settings ---
-@router.get("/config/subscribers", response_class=HTMLResponse)
-def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_subscriber_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/subscribers.html",
-        _config_context(request, db, {"active_page": "config-subscribers", **data}),
-    )
-
-
-@router.post("/config/subscribers", response_class=HTMLResponse)
-def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_subscriber_config(db, form)
-    return RedirectResponse(url="/admin/system/config/subscribers", status_code=303)
+# --- 8.7 Subscriber Settings: REMOVED (inert/dead config; subscriber defaults
+# are governed by feature-specific workflows) ---
 
 
 # --- 8.8 Customer Portal ---
@@ -4599,21 +4586,7 @@ def config_nas_types_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-# --- 8.27 IPv6 ---
-@router.get("/config/ipv6", response_class=HTMLResponse)
-def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_ipv6_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/ipv6.html",
-        _config_context(request, db, {"active_page": "config-ipv6", **data}),
-    )
-
-
-@router.post("/config/ipv6", response_class=HTMLResponse)
-def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_ipv6_config(db, form)
-    return RedirectResponse(url="/admin/system/config/ipv6", status_code=303)
+# --- 8.27 IPv6: REMOVED (inert/dead config; no provisioning/IPAM consumer) ---
 
 
 # ── Secrets Management (OpenBao) ─────────────────────────────────────

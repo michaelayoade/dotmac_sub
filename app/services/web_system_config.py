@@ -91,34 +91,9 @@ def save_preferences(db: Session, data: Mapping[str, Any]) -> None:
     _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS)
 
 
-# ---------------------------------------------------------------------------
-# 8.7 Subscriber Settings
-# ---------------------------------------------------------------------------
-SUBSCRIBER_KEYS = [
-    "login_format",
-    "password_length",
-    "password_charset",
-    "welcome_enabled",
-    "welcome_channel",
-    "welcome_delay",
-    "default_billing_type",
-    "max_search_results",
-    "stats_format",
-    "portal_2fa_enabled",
-    "portal_2fa_method",
-]
-
-
-def get_subscriber_config_context(db: Session) -> dict:
-    return {
-        "subscriber_settings": _read_settings(
-            db, SettingDomain.subscriber, SUBSCRIBER_KEYS
-        )
-    }
-
-
-def save_subscriber_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.subscriber, data, SUBSCRIBER_KEYS)
+# 8.7 Subscriber Settings — REMOVED. The page's keys were not consumed by
+# subscriber creation, welcome messaging, search, statistics, or portal auth.
+# Real subscriber defaults live on their feature-specific forms/workflows.
 
 
 # ---------------------------------------------------------------------------
@@ -806,23 +781,8 @@ def get_nas_types_context(db: Session) -> dict:
     return {"nas_types": types, "nas_types_raw": settings["nas_types_list"]}
 
 
-# ---------------------------------------------------------------------------
-# 8.27 IPv6 Configuration
-# ---------------------------------------------------------------------------
-IPV6_KEYS = [
-    "ipv6_auto_assign_enabled",
-    "ipv6_auto_assign_network",
-    "ipv6_default_prefix",
-    "ipv6_dual_stack_default",
-]
-
-
-def get_ipv6_config_context(db: Session) -> dict:
-    return {"ipv6": _read_settings(db, SettingDomain.network, IPV6_KEYS)}
-
-
-def save_ipv6_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, IPV6_KEYS)
+# 8.27 IPv6 Configuration — REMOVED. These defaults were not consumed by IPAM,
+# subscriber provisioning, or ONT service-intent code.
 
 
 def get_templates_context(db: Session) -> dict:

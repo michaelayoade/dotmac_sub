@@ -36,11 +36,14 @@ theme.
   system-health evaluator instead of orphan `cpu/mem/interface_warn_pct` keys.
 - The inert Data Retention config page was removed from the Settings Hub and admin
   router; enforced retention remains on feature-specific settings/tasks.
+- The inert Subscriber Settings and IPv6 config pages were removed from the
+  Settings Hub/admin router because their keys had no provisioning, portal-auth,
+  welcome-message, search, statistics, or IPAM consumers.
 
 ### Still open
 
-- Dead config pages and toggles: the largely inert preference/subscriber/portal/CPE/IPv6
-  key groups.
+- Dead config pages and toggles: remaining inert Preference, Portal, and CPE
+  controls.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
 - Broader bespoke-save validation consistency.
 
@@ -64,6 +67,10 @@ theme.
   - Result: passed
 - `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
   - Result: `26 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
+  - Result: `27 passed`
 - `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
   - Result: passed
 
@@ -157,7 +164,7 @@ finding.
 ## Appendix — full findings
 - [CONTROL] (High) `app/services/web_system_config.py:42-72` — `_save_settings`/`_read_settings` persist string-typed, unvalidated, invisible to `resolve_value()`/cache → migrate to settings_spec or validate against spec on save [recommend]
 - [CONTROL] (High) `web_system_config.py:158-188` — Data Retention keys had zero consumers; page inert → removed from Settings Hub/router [done]
-- [CONTROL] (High) `web_system_config.py:78,97,127,616,818` — PREFERENCE/SUBSCRIBER/PORTAL/CPE/IPV6 largely dead toggles (only force_2fa + selfcare_domain consumed) → audit each; delete inert or implement consumers [recommend]
+- [CONTROL] (High) `web_system_config.py:78,97,127,616,818` — PREFERENCE/SUBSCRIBER/PORTAL/CPE/IPV6 largely dead toggles (only force_2fa + selfcare_domain consumed) → Subscriber and IPv6 pages removed; remaining Preference/Portal/CPE controls still under review [partial]
 - [CONTROL] (High) `web_system_config.py:647-768` vs `web_admin_dashboard.py:225-247` — Monitoring page edits `*_warn_pct` (no consumer) while evaluator reads `server_health_*`/`network_health_*` spec keys; no disk/load field → collapse to spec keys [recommend]
 - [POLISH] (High) `app/services/legal.py:122-153` + `web_legal.py:225-242` — legal create/update/publish/unpublish/delete emit no audit event → emit audit on publish/unpublish/delete [recommend]
 - [POLISH] (Med) `templates/admin/system/legal/detail.html:179,187` — Publish/Unpublish no confirm (only Delete confirms) → confirm-before-publish/unpublish [recommend]
