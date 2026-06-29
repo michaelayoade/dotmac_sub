@@ -952,7 +952,9 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
         "auth_basic_username": _auth_value(hook.auth_config, "username"),
         "auth_basic_password": _auth_value(hook.auth_config, "password"),
         "auth_hmac_secret": _auth_value(hook.auth_config, "secret"),
-        "auth_config_json": json.dumps(_decrypted_auth_config(hook.auth_config), indent=2),
+        "auth_config_json": json.dumps(
+            _decrypted_auth_config(hook.auth_config), indent=2
+        ),
         "event_filters_csv": ", ".join(hook.event_filters or []),
         "retry_max": hook.retry_max,
         "retry_backoff_ms": hook.retry_backoff_ms,
