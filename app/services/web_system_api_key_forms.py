@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.auth import ApiKey
-from app.services.auth_flow import hash_password
+from app.services.auth import hash_api_key
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,10 @@ def create_api_key(
 ) -> str:
     """Create API key and return raw secret once for display."""
     raw_key = secrets.token_urlsafe(32)
-    key_hash = hash_password(raw_key)
+    # Must match the verification path (auth_dependencies.require_audit_auth /
+    # ApiKeys.generate), which looks keys up by sha256 hash_api_key. Using bcrypt
+    # here produced keys that could never authenticate.
+    key_hash = hash_api_key(raw_key)
 
     expires_at = None
     if expires_in:

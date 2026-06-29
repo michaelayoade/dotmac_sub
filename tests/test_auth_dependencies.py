@@ -406,7 +406,10 @@ def test_require_audit_auth_loads_admin_role_from_db_when_jwt_has_no_claims(
     assert auth["actor_id"] == str(user.id)
 
 
-def test_require_audit_auth_accepts_api_key(db_session, person):
+def test_require_audit_auth_rejects_api_key(db_session, person):
+    # Security fix (2026-06-29): API keys carry no scopes, so they can never
+    # satisfy the audit-scope gate that bearer tokens must pass. Accepting them
+    # was an unscoped authorization bypass — audit auth now rejects API keys.
     raw_key = "raw-api-key"
     api_key = ApiKey(
         subscriber_id=person.id,
@@ -418,13 +421,14 @@ def test_require_audit_auth_accepts_api_key(db_session, person):
     db_session.add(api_key)
     db_session.commit()
 
-    auth = require_audit_auth(
-        authorization=None,
-        x_session_token=None,
-        x_api_key=raw_key,
-        db=db_session,
-    )
-    assert auth["actor_type"] == "api_key"
+    with pytest.raises(HTTPException) as exc:
+        require_audit_auth(
+            authorization=None,
+            x_session_token=None,
+            x_api_key=raw_key,
+            db=db_session,
+        )
+    assert exc.value.status_code == 401
 
 
 def test_require_audit_auth_requires_scope(db_session, person, monkeypatch):
@@ -614,7 +618,9 @@ def test_require_audit_auth_session_token_sets_actor_id(db_session, person):
     assert auth["actor_type"] == "user"
 
 
-def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
+def test_require_audit_auth_api_key_no_longer_authenticates(db_session, person):
+    # Security fix (2026-06-29): an otherwise-valid API key must NOT grant audit
+    # access (no audit scope possible on a key).
     raw_key = "raw-key"
     api_key = ApiKey(
         subscriber_id=person.id,
@@ -626,15 +632,15 @@ def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
     db_session.add(api_key)
     db_session.commit()
     request = Request({"type": "http", "headers": []})
-    auth = require_audit_auth(
-        authorization=None,
-        x_session_token=None,
-        x_api_key=raw_key,
-        request=request,
-        db=db_session,
-    )
-    assert request.state.actor_id == str(api_key.id)
-    assert auth["actor_type"] == "api_key"
+    with pytest.raises(HTTPException) as exc:
+        require_audit_auth(
+            authorization=None,
+            x_session_token=None,
+            x_api_key=raw_key,
+            request=request,
+            db=db_session,
+        )
+    assert exc.value.status_code == 401
 
 
 def test_require_role_missing_role(db_session, person, monkeypatch):
