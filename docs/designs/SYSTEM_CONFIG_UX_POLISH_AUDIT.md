@@ -68,9 +68,11 @@ theme.
 
 ### Still open
 
-- Unifying the remaining bespoke config saves with the typed/cached
-  `settings_spec` system.
-- Broader bespoke-save validation consistency.
+- Remaining billing/collections config saves still use bespoke helpers, but those
+  pages belong to the Billing/Notifications audit PRs rather than this
+  System/Config PR.
+- Broader bespoke-save validation consistency should continue in the domain audit
+  PR for each remaining form.
 
 ### Verification
 
