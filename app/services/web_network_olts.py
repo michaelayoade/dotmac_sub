@@ -19,7 +19,9 @@ from app.services.network import olt_web_forms as _forms
 backup_file_path = _operations.backup_file_path
 compare_olt_backups = _operations.compare_olt_backups
 list_olt_backups = _operations.list_olt_backups
+olt_backup_storage_status = _operations.olt_backup_storage_status
 read_backup_preview = _operations.read_backup_preview
+read_backup_preview_info = _operations.read_backup_preview_info
 restore_from_backup = _operations.restore_from_backup
 test_olt_ssh_connection = _operations.test_olt_ssh_connection
 _extract_firmware_version = _operations.extract_firmware_version
@@ -49,7 +51,7 @@ def test_olt_connection(db: Session, olt_id: str) -> tuple[bool, str]:
         return False, "Management IP is required"
     config = _operations.fetch_running_config(olt)
     if not config:
-        return False, "Connection test failed: unable to fetch SNMP data"
+        return False, "Connection test failed: unable to fetch running configuration"
     return True, "Connection test successful"
 
 

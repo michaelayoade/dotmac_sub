@@ -35,6 +35,8 @@ from app.services.network.serial_utils import (
 logger = logging.getLogger(__name__)
 
 _FALLBACK_OLT_BACKUP_DIR = Path("uploads/olt_config_backups")
+DEFAULT_BACKUP_PREVIEW_CHARS = 120_000
+DEFAULT_BACKUP_COMPARE_BYTES = 2 * 1024 * 1024
 
 _CLI_ALLOWED_PREFIXES: list[str] = [
     "display ",
@@ -76,6 +78,24 @@ def olt_backup_base_dir() -> Path:
     if candidate.exists():
         return candidate
     return _FALLBACK_OLT_BACKUP_DIR
+
+
+def olt_backup_storage_status() -> dict[str, object]:
+    configured = os.getenv("OLT_BACKUP_DIR", "/app/uploads/olt_config_backups")
+    candidate = Path(configured)
+    active = olt_backup_base_dir()
+    using_fallback = active != candidate
+    return {
+        "configured_dir": str(candidate),
+        "active_dir": str(active),
+        "using_fallback": using_fallback,
+        "message": (
+            f"Configured OLT backup directory {candidate} is not available; "
+            f"using {active}."
+            if using_fallback
+            else ""
+        ),
+    }
 
 
 def resolve_backup_file(file_path: str) -> Path:
@@ -120,9 +140,26 @@ def backup_file_path(backup: OltConfigBackup) -> Path:
     return resolve_backup_file(backup.file_path)
 
 
-def read_backup_preview(backup: OltConfigBackup, limit_chars: int = 120_000) -> str:
+def read_backup_preview(
+    backup: OltConfigBackup, limit_chars: int = DEFAULT_BACKUP_PREVIEW_CHARS
+) -> str:
+    return read_backup_preview_info(backup, limit_chars=limit_chars)["preview"]
+
+
+def read_backup_preview_info(
+    backup: OltConfigBackup, limit_chars: int = DEFAULT_BACKUP_PREVIEW_CHARS
+) -> dict[str, object]:
     path = backup_file_path(backup)
-    return path.read_text(errors="replace")[:limit_chars]
+    preview = path.read_text(errors="replace")[: limit_chars + 1]
+    truncated = len(preview) > limit_chars
+    if truncated:
+        preview = preview[:limit_chars]
+    return {
+        "preview": preview,
+        "truncated": truncated,
+        "limit_chars": limit_chars,
+        "path": path,
+    }
 
 
 def read_backup_content(backup: OltConfigBackup) -> str:
@@ -174,14 +211,41 @@ def compare_olt_backups(
     db: Session,
     backup_id_1: str,
     backup_id_2: str,
+    *,
+    max_bytes: int = DEFAULT_BACKUP_COMPARE_BYTES,
 ) -> tuple[OltConfigBackup, OltConfigBackup, dict[str, object]]:
     backup1 = get_olt_backup_or_none(db, backup_id_1)
     backup2 = get_olt_backup_or_none(db, backup_id_2)
     if not backup1 or not backup2:
         raise HTTPException(status_code=404, detail="One or both backups not found")
+    if backup1.id == backup2.id:
+        raise HTTPException(
+            status_code=400, detail="Select two different backups to compare"
+        )
     if backup1.olt_device_id != backup2.olt_device_id:
         raise HTTPException(
             status_code=400, detail="Backups must belong to the same OLT"
+        )
+
+    path1 = backup_file_path(backup1)
+    path2 = backup_file_path(backup2)
+    size1 = (
+        backup1.file_size_bytes
+        if backup1.file_size_bytes is not None
+        else path1.stat().st_size
+    )
+    size2 = (
+        backup2.file_size_bytes
+        if backup2.file_size_bytes is not None
+        else path2.stat().st_size
+    )
+    if size1 > max_bytes or size2 > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Backup compare is too large for the web diff view; download the "
+                "snapshots and compare them offline"
+            ),
         )
 
     text1 = read_backup_content(backup1)

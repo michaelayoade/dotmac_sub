@@ -25,6 +25,7 @@ from __future__ import annotations
 import atexit
 import logging
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -173,13 +174,17 @@ class OltSshPool:
         ttl_seconds: int = DEFAULT_CONNECTION_TTL_SECONDS,
         idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_SECONDS,
         max_reuses: int = DEFAULT_MAX_REUSES,
+        acquire_timeout_seconds: float = 30.0,
     ):
         self._pools: dict[str, list[PooledConnection]] = {}
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
+        self._pending_creates: dict[str, int] = {}
         self._max_per_olt = max_connections_per_olt
         self._ttl = timedelta(seconds=ttl_seconds)
         self._idle_timeout = timedelta(seconds=idle_timeout_seconds)
         self._max_reuses = max_reuses
+        self._acquire_timeout_seconds = acquire_timeout_seconds
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -206,44 +211,79 @@ class OltSshPool:
 
         olt_key = str(olt.id)
 
-        with self._lock:
-            # Clean up expired connections first
-            self._cleanup_pool(olt_key)
+        deadline = time.monotonic() + self._acquire_timeout_seconds
+        with self._condition:
+            while True:
+                # Clean up expired connections first
+                self._cleanup_pool(olt_key)
 
-            # Try to find an available connection
-            if olt_key in self._pools:
-                for conn in self._pools[olt_key]:
-                    if not conn.in_use and conn.is_valid(self._ttl, self._max_reuses):
-                        conn.in_use = True
-                        conn.touch()
-                        self._stats["hits"] += 1
-                        logger.debug(
-                            "SSH pool hit for %s (use #%d)",
-                            olt.name,
-                            conn.use_count,
-                        )
-                        return conn
+                # Try to find an available connection
+                if olt_key in self._pools:
+                    for conn in self._pools[olt_key]:
+                        if not conn.in_use and conn.is_valid(
+                            self._ttl, self._max_reuses
+                        ):
+                            conn.in_use = True
+                            conn.touch()
+                            self._stats["hits"] += 1
+                            logger.debug(
+                                "SSH pool hit for %s (use #%d)",
+                                olt.name,
+                                conn.use_count,
+                            )
+                            return conn
 
-            # No available connection, create new one
-            self._stats["misses"] += 1
+                current_count = len(self._pools.get(olt_key, []))
+                pending_count = self._pending_creates.get(olt_key, 0)
+                if current_count + pending_count < self._max_per_olt:
+                    self._pending_creates[olt_key] = pending_count + 1
+                    self._stats["misses"] += 1
+                    break
 
-        # Create connection outside lock to avoid blocking other threads
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"SSH connection pool exhausted for OLT {olt.name} "
+                        f"({self._max_per_olt} connection(s) in use)"
+                    )
+                self._condition.wait(timeout=remaining)
+
+        # Create connection outside lock to avoid blocking other threads.
+        # A pending slot was reserved above, so concurrent acquires cannot exceed
+        # the per-OLT connection cap while this transport is being opened.
         logger.debug("SSH pool miss for %s, creating new connection", olt.name)
-        conn = self._create_connection(olt)
+        try:
+            conn = self._create_connection(olt)
+        except Exception:
+            with self._condition:
+                self._pending_creates[olt_key] = max(
+                    0, self._pending_creates.get(olt_key, 1) - 1
+                )
+                if self._pending_creates.get(olt_key) == 0:
+                    self._pending_creates.pop(olt_key, None)
+                self._condition.notify_all()
+            raise
 
-        with self._lock:
+        with self._condition:
+            self._pending_creates[olt_key] = max(
+                0, self._pending_creates.get(olt_key, 1) - 1
+            )
+            if self._pending_creates.get(olt_key) == 0:
+                self._pending_creates.pop(olt_key, None)
             if olt_key not in self._pools:
                 self._pools[olt_key] = []
 
-            # Only pool if under limit
             if len(self._pools[olt_key]) < self._max_per_olt:
                 self._pools[olt_key].append(conn)
             else:
-                logger.debug(
-                    "Pool full for %s (%d connections), connection will not be pooled",
-                    olt.name,
-                    len(self._pools[olt_key]),
+                conn.close()
+                self._stats["evictions"] += 1
+                self._condition.notify_all()
+                raise TimeoutError(
+                    f"SSH connection pool exhausted for OLT {olt.name} "
+                    f"({self._max_per_olt} connection(s) in use)"
                 )
+            self._condition.notify_all()
 
         return conn
 
@@ -254,7 +294,7 @@ class OltSshPool:
             conn: Connection to release.
             close: If True, close and remove from pool instead of returning.
         """
-        with self._lock:
+        with self._condition:
             conn.in_use = False
 
             if close or not conn.is_valid(self._ttl, self._max_reuses):
@@ -267,6 +307,7 @@ class OltSshPool:
                 conn.close()
                 self._stats["evictions"] += 1
                 logger.debug("Closed connection to %s", conn.olt_name)
+            self._condition.notify_all()
 
     def invalidate(self, olt_id: str) -> int:
         """Close and remove all connections for an OLT.
