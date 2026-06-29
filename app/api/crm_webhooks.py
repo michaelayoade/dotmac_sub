@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.services import referrals_mirror
 from app.services.crm_customers import upsert_customer_from_payload
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ EVENT_HEADER = "X-Webhook-Event"
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
+REFERRAL_EVENTS = {"referral.captured", "referral.qualified", "referral.rewarded"}
 
 
 def _verify_signature(
@@ -189,3 +191,37 @@ async def receive_crm_chat_event(
         },
     )
     return {"status": "ok", "event": event_type}
+
+
+@router.post("/referrals")
+async def receive_crm_referral_event(
+    request: Request, db: Session = Depends(get_db)
+) -> dict:
+    """Apply a CRM referral lifecycle event to the local mirror (RFC #73).
+
+    Handles ``referral.captured`` / ``referral.qualified`` / ``referral.rewarded``;
+    rewarded also posts an account credit (idempotent on the referral id via
+    ``external_ref``). HMAC-gated; the service acks unmapped/incomplete events so
+    the CRM doesn't retry forever. All DB/CRM logic lives in the service.
+    """
+    raw_body = await request.body()
+    _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
+
+    event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
+    if event_type and event_type not in REFERRAL_EVENTS:
+        return {"status": "ignored", "event": event_type}
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
+        ) from None
+    if not isinstance(payload, dict):
+        payload = {}
+
+    # Tolerate both the CRM event envelope ({"payload": {...}}) and a flat body.
+    inner = payload.get("payload")
+    body = inner if isinstance(inner, dict) else payload
+
+    return referrals_mirror.apply_webhook(db, event_type, body)

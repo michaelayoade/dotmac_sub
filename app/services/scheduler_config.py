@@ -1482,6 +1482,22 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(nas_backup_interval, 900),
         )
+        # Referral mirror reconcile (RFC #73). Webhooks keep the local copy of
+        # CRM referrals fresh in near-real-time; this is the backstop that repairs
+        # drift from any missed deliveries. Hourly is plenty.
+        referral_reconcile_seconds = _resolve_int(
+            session,
+            SettingDomain.subscriber,
+            "referral_reconcile_interval_seconds",
+            3600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="referral_mirror_reconcile",
+            task_name="app.tasks.referrals.reconcile_referral_mirror",
+            enabled=True,
+            interval_seconds=max(referral_reconcile_seconds, 900),
+        )
         olt_profile_sync_enabled = _effective_bool(
             session,
             SettingDomain.network,
