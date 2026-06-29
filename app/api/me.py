@@ -69,6 +69,7 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
+from app.schemas.portal import PortalSessionResponse
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
     AccountDeletionRequest,
@@ -121,6 +122,7 @@ from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
+from app.services import portal_session as portal_session_service
 from app.services import push as push_service
 from app.services import support as support_service
 from app.services import usage as usage_service
@@ -747,6 +749,21 @@ def my_chat_session(
     """
     subscriber_id = _subscriber_id(principal)
     return chat_session_service.broker_customer_session(db, subscriber_id)
+
+
+@router.post("/portal/session", response_model=PortalSessionResponse)
+def my_portal_session(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Mint a scoped customer Portal API token (RFC #73).
+
+    The sub asserts the authenticated subscriber's identity to the CRM and
+    returns a short-lived, scoped token plus the absolute base URL the client
+    uses to call the CRM Portal API directly (e.g. Refer & Earn).
+    """
+    subscriber_id = _subscriber_id(principal)
+    return portal_session_service.broker_customer_portal_session(db, subscriber_id)
 
 
 @router.get("/notifications", response_model=ListResponse[NotificationRead])

@@ -473,6 +473,29 @@ class CRMClient:
             session_data["conversation_id"] = identify_data.get("conversation_id")
         return session_data
 
+    def create_portal_session(
+        self,
+        *,
+        crm_subscriber_id: str,
+        actor: str = "subscriber",
+        scopes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Mint a customer Portal API token (server-to-server, RFC #73).
+
+        The CRM trusts this service JWT to assert the subject, so the client
+        never authenticates to the CRM directly — it presents the returned
+        short-lived, scoped token. Returns {portal_token, expires_at, api_base}.
+        """
+        payload: dict[str, Any] = {
+            "crm_subscriber_id": crm_subscriber_id,
+            "actor": actor,
+            "scopes": list(scopes or []),
+        }
+        data = self._request(
+            "POST", "/api/v1/portal/internal/session", json_data=payload
+        )
+        return data if isinstance(data, dict) else {}
+
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""
         data = self._cached_get(
