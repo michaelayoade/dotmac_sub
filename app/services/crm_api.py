@@ -1271,6 +1271,53 @@ def create_account_credit(
     return billing_service.credit_notes.create(db, payload)
 
 
+def credit_referral_reward_to_wallet(
+    db: Session,
+    *,
+    subscriber_id: str,
+    amount: Decimal,
+    reason: str | None = None,
+    external_ref: str | None = None,
+    currency: str = "NGN",
+):
+    """Pay a referral reward into the subscriber's VAS wallet (a spendable
+    balance), not the billing account. Individual subscribers only — resellers
+    have a separate float wallet that referral rewards must never touch.
+
+    Idempotent on ``external_ref`` (stored as the wallet entry ``reference``,
+    which is unique): a repeat call returns the existing entry. Raises
+    ``LookupError`` when the subscriber does not exist or is inactive.
+    """
+    from app.models.vas import VasEntryCategory, VasWalletEntry
+    from app.services import vas_wallet
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    if sub_uuid is None:
+        raise LookupError("subscriber_not_found")
+    subscriber = db.get(Subscriber, sub_uuid)
+    if subscriber is None or not subscriber.is_active:
+        raise LookupError("subscriber_not_found")
+
+    if external_ref:
+        existing = (
+            db.query(VasWalletEntry)
+            .filter(VasWalletEntry.reference == external_ref)
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+    wallet = vas_wallet.get_or_create_wallet(db, str(sub_uuid))
+    return vas_wallet.credit_wallet(
+        db,
+        wallet,
+        amount=amount,
+        category=VasEntryCategory.adjustment,
+        reference=external_ref,
+        memo=(reason or "Referral reward").strip(),
+    )
+
+
 def create_installation_invoice(
     db: Session,
     *,

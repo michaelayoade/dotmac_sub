@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session
 
 from app.models.referral import ReferralMirror, ReferralProgramCache
 from app.models.subscriber import Subscriber
-from app.services import crm_api
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.crm_portal import resolve_crm_subscriber_id
@@ -317,23 +316,45 @@ def refer_a_friend(
 # ── webhook application ─────────────────────────────────────────────────────
 
 
-def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
-    """Apply a CRM referral lifecycle event to the mirror (and pay rewards).
+def _resolve_local_subscriber(db: Session, body: dict) -> Subscriber | None:
+    """Find the local subscriber a referral event is about.
 
-    Returns a small status dict for the webhook response. Acks (ignores)
-    unmapped/incomplete events so the CRM doesn't retry forever.
+    Prefers the sub's own subscriber id (the CRM knows it as ``external_id`` and
+    sends it as ``subscriber_id``), falling back to the CRM subscriber id link.
     """
+    local_id = str(body.get("subscriber_id") or "").strip()
+    if local_id:
+        try:
+            sub = db.get(Subscriber, coerce_uuid(local_id))
+        except (ValueError, TypeError):
+            sub = None
+        if sub is not None:
+            return sub
     crm_subscriber_id = str(body.get("crm_subscriber_id") or "").strip()
+    if crm_subscriber_id:
+        return _local_subscriber_for_crm(db, crm_subscriber_id)
+    return None
+
+
+def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
+    """Mirror a CRM referral lifecycle event locally.
+
+    The CRM is the crediting authority — ``issue_reward`` already posts the
+    account credit via ``/crm/credits`` before emitting ``referral.rewarded`` — so
+    this only reflects the outcome into the mirror (it never credits, avoiding a
+    cross-repo double-pay). Acks unmapped/incomplete events so the CRM doesn't
+    retry forever.
+    """
     crm_referral_id = str(body.get("referral_id") or body.get("id") or "").strip()
-    if not crm_subscriber_id or not crm_referral_id:
+    has_subject = body.get("subscriber_id") or body.get("crm_subscriber_id")
+    if not crm_referral_id or not has_subject:
         return {"status": "ignored", "reason": "incomplete_payload"}
 
-    subscriber = _local_subscriber_for_crm(db, crm_subscriber_id)
+    subscriber = _resolve_local_subscriber(db, body)
     if subscriber is None:
         logger.warning(
-            "crm_referral_event_unmapped event=%s crm_subscriber_id=%s referral_id=%s",
+            "crm_referral_event_unmapped event=%s referral_id=%s",
             event_type,
-            crm_subscriber_id,
             crm_referral_id,
         )
         return {"status": "ignored", "reason": "unmapped_subscriber"}
@@ -347,23 +368,7 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
     amount = _to_decimal(body.get("amount") or body.get("reward_amount"))
     currency = str(body.get("currency") or body.get("reward_currency") or "NGN")
     now = datetime.now(UTC)
-
-    credit_id: str | None = None
-    if event_type == "referral.rewarded":
-        if amount is None or amount <= 0:
-            return {"status": "ignored", "reason": "non_positive_amount"}
-        try:
-            credit = crm_api.create_account_credit(
-                db,
-                subscriber_id=str(subscriber.id),
-                amount=amount,
-                reason=str(body.get("reason") or "Referral reward"),
-                external_ref=f"referral:{crm_referral_id}",
-                currency=currency,
-            )
-            credit_id = str(credit.id)
-        except LookupError:
-            return {"status": "ignored", "reason": "subscriber_not_creditable"}
+    rewarded = event_type == "referral.rewarded"
 
     _upsert_row(
         db,
@@ -371,25 +376,26 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         crm_referral_id=crm_referral_id,
         referred_name=body.get("referred_name"),
         status=new_status,
-        reward_amount=amount if event_type == "referral.rewarded" else None,
-        reward_currency=currency if amount is not None else None,
-        reward_status="paid" if event_type == "referral.rewarded" else None,
+        reward_amount=amount if rewarded else None,
+        reward_currency=currency if (rewarded and amount is not None) else None,
+        reward_status="paid" if rewarded else None,
         referral_created_at=_to_dt(body.get("created_at")),
         qualified_at=now if event_type == "referral.qualified" else None,
-        rewarded_at=now if event_type == "referral.rewarded" else None,
+        rewarded_at=now if rewarded else None,
     )
     db.commit()
 
-    if event_type == "referral.rewarded":
-        # Best-effort nudge; never let a push failure undo the committed credit.
+    if rewarded:
+        # Best-effort nudge; the credit itself was already applied by the CRM.
         try:
             from app.services import push as push_service
 
+            credited = f"{currency} {amount}" if amount is not None else "A reward"
             push_service.send_push(
                 db,
                 str(subscriber.id),
                 title="You earned a referral reward!",
-                body=f"{currency} {amount} has been credited to your account.",
+                body=f"{credited} has been added to your wallet.",
                 data={"type": "referral_reward", "referral_id": crm_referral_id},
             )
         except Exception as exc:  # noqa: BLE001 - notification is advisory
@@ -397,7 +403,4 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
                 "referral_reward_push_failed referral_id=%s: %s", crm_referral_id, exc
             )
 
-    result = {"status": "ok", "event": event_type}
-    if credit_id:
-        result["credit_id"] = credit_id
-    return result
+    return {"status": "ok", "event": event_type}

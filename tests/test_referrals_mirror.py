@@ -192,20 +192,7 @@ def test_refer_a_friend_requires_crm_link(db_session):
 # ── webhook application ─────────────────────────────────────────────────────
 
 
-def _credit_patches():
-    credit = MagicMock()
-    credit.id = uuid.uuid4()
-    return (
-        patch(
-            "app.services.referrals_mirror.crm_api.create_account_credit",
-            return_value=credit,
-        ),
-        patch("app.services.push.send_push"),
-        credit,
-    )
-
-
-def test_webhook_captured_creates_pending_row(db_session):
+def test_webhook_captured_creates_pending_row_via_crm_id(db_session):
     crm_id = uuid.uuid4()
     sub = _subscriber(db_session, crm_id=crm_id)
     out = referrals_mirror.apply_webhook(
@@ -219,11 +206,25 @@ def test_webhook_captured_creates_pending_row(db_session):
     assert row.subscriber_id == sub.id
 
 
-def test_webhook_rewarded_credits_and_marks_rewarded(db_session):
+def test_webhook_maps_by_local_subscriber_id(db_session):
+    # The CRM knows the sub's own id (external_id) and sends it as subscriber_id.
+    sub = _subscriber(db_session)  # no crm link
+    out = referrals_mirror.apply_webhook(
+        db_session,
+        "referral.qualified",
+        {"subscriber_id": str(sub.id), "referral_id": "r-loc"},
+    )
+    assert out["status"] == "ok"
+    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r-loc").one()
+    assert row.status == "qualified"
+    assert row.subscriber_id == sub.id
+
+
+def test_webhook_rewarded_mirrors_without_crediting(db_session):
+    # The CRM already credited via /crm/credits; the webhook only mirrors status.
     crm_id = uuid.uuid4()
-    sub = _subscriber(db_session, crm_id=crm_id)
-    credit_p, push_p, credit = _credit_patches()
-    with credit_p as create_credit, push_p:
+    _subscriber(db_session, crm_id=crm_id)
+    with patch("app.services.push.send_push") as push:
         out = referrals_mirror.apply_webhook(
             db_session,
             "referral.rewarded",
@@ -235,12 +236,12 @@ def test_webhook_rewarded_credits_and_marks_rewarded(db_session):
             },
         )
     assert out["status"] == "ok"
-    assert out["credit_id"] == str(credit.id)
-    assert create_credit.call_args.kwargs["external_ref"] == "referral:r9"
-    assert create_credit.call_args.kwargs["subscriber_id"] == str(sub.id)
+    assert "credit_id" not in out  # we never credit here
+    push.assert_called_once()
     row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r9").one()
     assert row.status == "rewarded"
     assert row.reward_amount == Decimal("5000")
+    assert row.reward_status == "paid"
 
 
 def test_webhook_unmapped_subscriber_ignored(db_session):
@@ -257,14 +258,3 @@ def test_webhook_incomplete_ignored(db_session):
         db_session, "referral.captured", {"referral_id": "rX"}
     )
     assert out["reason"] == "incomplete_payload"
-
-
-def test_webhook_rewarded_non_positive_ignored(db_session):
-    crm_id = uuid.uuid4()
-    _subscriber(db_session, crm_id=crm_id)
-    out = referrals_mirror.apply_webhook(
-        db_session,
-        "referral.rewarded",
-        {"crm_subscriber_id": str(crm_id), "referral_id": "r9", "amount": "0"},
-    )
-    assert out["reason"] == "non_positive_amount"
