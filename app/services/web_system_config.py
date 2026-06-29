@@ -253,6 +253,9 @@ def get_billing_config_context(db: Session) -> dict:
         "expiry_reminder_days": "7",
         "invoice_reminder_days": "7,1",
         "dunning_escalation_days": "3,7,14,30",
+        "blocking_period_days": "0",
+        "deactivation_period_days": "0",
+        "minimum_balance": "0",
     }
     for key, value in defaults.items():
         if not billing.get(key):

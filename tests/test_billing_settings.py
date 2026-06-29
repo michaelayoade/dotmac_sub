@@ -5,6 +5,7 @@ import pytest
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.settings_spec import get_spec
 from app.services.web_system_config import (
     get_billing_config_context,
     save_billing_config,
@@ -58,6 +59,23 @@ def test_billing_config_context_backfills_notification_defaults(db_session):
     assert context["billing"]["expiry_reminder_days"] == "7"
     assert context["billing"]["invoice_reminder_days"] == "7,1"
     assert context["billing"]["dunning_escalation_days"] == "3,7,14,30"
+    assert context["billing"]["blocking_period_days"] == "0"
+    assert context["billing"]["deactivation_period_days"] == "0"
+    assert context["billing"]["minimum_balance"] == "0"
+
+
+def test_billing_policy_settings_have_specs():
+    expected = {
+        "billing_enabled_expected": True,
+        "blocking_period_days": 0,
+        "deactivation_period_days": 0,
+        "minimum_balance": "0",
+    }
+
+    for key, default in expected.items():
+        spec = get_spec(SettingDomain.billing, key)
+        assert spec is not None
+        assert spec.default == default
 
 
 def test_save_billing_config_normalizes_valid_policy_values(db_session):

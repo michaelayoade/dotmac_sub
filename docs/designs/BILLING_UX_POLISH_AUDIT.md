@@ -72,6 +72,9 @@ settings/integrity/reconcilers.
   checkout stops with a clear message when no customer email is available.
 - Customer invoice payment success now uses invoice currency and shows the
   remaining invoice balance when a payment only partially settles the invoice.
+- Billing settings spec/seed coverage now includes `billing_enabled_expected`,
+  `blocking_period_days`, `deactivation_period_days`, and `minimum_balance`, and
+  the Billing Settings page backfills the same defaults when rows are absent.
 
 ### Partially resolved
 
@@ -89,7 +92,7 @@ settings/integrity/reconcilers.
 - Remaining customer post-payment-return states such as richer pending outcome
   messaging and saved-card capture confirmation.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
-  form normalization.
+  policy defaults.
 - Remaining policy thresholds/settings work.
 
 ### Verification
@@ -153,6 +156,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/web/customer/routes.py tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/settings_spec.py app/services/settings_seed.py app/services/web_system_config.py tests/test_billing_settings.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_settings.py tests/test_settings_seed_services.py -q`
   - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed

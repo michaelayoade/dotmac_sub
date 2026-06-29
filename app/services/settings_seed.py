@@ -1497,6 +1497,24 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="blocking_period_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_BLOCKING_PERIOD_DAYS", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="deactivation_period_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_DEACTIVATION_PERIOD_DAYS", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="minimum_balance",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_MINIMUM_BALANCE", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="refund_policy",
         value_type=SettingValueType.string,
         value_text=os.getenv("PLAN_CHANGE_REFUND_POLICY", "none"),

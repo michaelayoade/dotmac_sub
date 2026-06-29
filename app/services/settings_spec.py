@@ -1380,6 +1380,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
+        domain=SettingDomain.billing,
+        key="billing_enabled_expected",
+        env_var="BILLING_ENABLED_EXPECTED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Expected Billing Enabled State",
+    ),
+    SettingSpec(
         # Kill-switch for the billing runner's inline "settle open invoices from
         # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
         # per-invoice balance_due/allocations aren't authoritative (deposit-paid
@@ -1517,6 +1525,32 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="3,7,14,30",
         label="Dunning Escalation (days after overdue)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="blocking_period_days",
+        env_var="BILLING_BLOCKING_PERIOD_DAYS",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+        label="Blocking Period (days after due)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="deactivation_period_days",
+        env_var="BILLING_DEACTIVATION_PERIOD_DAYS",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+        label="Deactivation Period (days)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="minimum_balance",
+        env_var="BILLING_MINIMUM_BALANCE",
+        value_type=SettingValueType.string,
+        default="0",
+        label="Minimum Balance",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
