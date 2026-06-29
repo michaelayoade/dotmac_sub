@@ -1155,6 +1155,7 @@ def customer_profile(
     request: Request,
     saved: str | None = None,
     verify_sent: str | None = None,
+    sessions: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer profile settings."""
@@ -1177,6 +1178,15 @@ def customer_profile(
         mfa_methods = web_customer_auth_service.list_active_mfa_methods(
             db, subscriber_id
         )
+    current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+    active_sessions = (
+        customer_portal.list_customer_sessions_for_subscriber(
+            subscriber_id,
+            current_session_token=current_session_token,
+        )
+        if subscriber_id
+        else []
+    )
     return templates.TemplateResponse(
         "customer/profile/index.html",
         {
@@ -1187,11 +1197,41 @@ def customer_profile(
             "mfa_enabled": any(
                 bool(method.enabled and method.is_active) for method in mfa_methods
             ),
+            "active_sessions": active_sessions,
+            "other_session_count": sum(
+                1 for session in active_sessions if not session["is_current"]
+            ),
             "active_page": "profile",
-            "success": "Profile updated successfully" if saved else None,
+            "success": (
+                "Other portal sessions signed out."
+                if sessions == "signed-out"
+                else "Profile updated successfully"
+                if saved
+                else None
+            ),
             "verify_sent": verify_sent,
         },
     )
+
+
+@router.post("/profile/sessions/sign-out-others")
+def customer_profile_sign_out_other_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Sign out other customer portal sessions while keeping the current one."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    subscriber_id = customer.get("subscriber_id")
+    current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+    if subscriber_id and not customer.get("read_only"):
+        customer_portal.revoke_other_customer_sessions_for_subscriber(
+            subscriber_id,
+            current_session_token,
+            db=db,
+        )
+    return RedirectResponse(url="/portal/profile?sessions=signed-out", status_code=303)
 
 
 @router.post("/profile", response_class=HTMLResponse)

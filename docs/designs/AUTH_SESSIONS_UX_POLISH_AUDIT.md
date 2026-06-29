@@ -41,13 +41,15 @@ UX-polish + operator-control lens (**not** a full security review).
 - The admin profile now lists active system-user sessions, marks the current
   session, and provides a self-service "sign out other sessions" action backed by
   the existing session revocation service.
+- Customer and reseller profile pages now list active portal sessions, mark the
+  current session, and provide a "sign out other sessions" action that preserves
+  the current portal cookie while revoking older sessions.
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
-- Customer/reseller active-session views and schema-backed MFA recovery codes
-  remain open.
+- Schema-backed MFA recovery codes remain open.
 
 ### Verification
 
@@ -79,6 +81,12 @@ UX-polish + operator-control lens (**not** a full security review).
   - Result: `11 passed`
 - `poetry run ruff check app/services/web_system_profiles.py app/web/admin/system.py tests/test_admin_system_route_guards.py`
   - Result: passed
+- `poetry run ruff check app/services/session_store.py app/services/customer_portal_session.py app/services/customer_portal.py app/services/reseller_portal.py app/services/web_reseller_routes.py app/web/customer/routes.py app/web/reseller/routes.py tests/test_portal_session_lifecycle.py`
+  - Result: passed
+- `poetry run pytest tests/test_portal_session_lifecycle.py -q`
+  - Result: `10 passed`
+- `poetry run pytest tests/test_web_customer_auth.py tests/test_web_reseller_auth.py -q`
+  - Result: `21 passed`
 
 ## What this audit is
 

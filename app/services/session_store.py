@@ -28,6 +28,12 @@ def _fallback_enabled() -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _decode_redis_text(value: object) -> str:
+    if isinstance(value, bytes):
+        return value.decode()
+    return str(value)
+
+
 def get_session_redis() -> redis.Redis | None:
     """Get a shared Redis client for session storage.
 
@@ -65,21 +71,34 @@ def store_session(
     payload: dict[str, Any],
     ttl_seconds: int,
     fallback_store: dict[str, dict[str, Any]],
+    principal_id: str | None = None,
+    fallback_index: dict[str, set[str]] | None = None,
 ) -> None:
     client = get_session_redis()
     if client:
         try:
+            ttl = max(1, int(ttl_seconds))
             client.setex(
                 f"{prefix}:{session_token}",
-                max(1, int(ttl_seconds)),
+                ttl,
                 json.dumps(payload),
             )
+            if principal_id:
+                index_key = _principal_sessions_key(prefix, str(principal_id))
+                client.sadd(index_key, session_token)
+                index_ttl = client.ttl(index_key)
+                if index_ttl < ttl:
+                    client.expire(index_key, ttl)
             fallback_store.pop(session_token, None)
+            if principal_id and fallback_index is not None:
+                fallback_index.get(str(principal_id), set()).discard(session_token)
             return
         except (redis.RedisError, TypeError, ValueError) as exc:
             logger.warning("Session write failed, falling back to memory: %s", exc)
     if _fallback_enabled():
         fallback_store[session_token] = payload
+        if principal_id and fallback_index is not None:
+            fallback_index.setdefault(str(principal_id), set()).add(session_token)
         return
     raise RuntimeError("Session store unavailable and in-memory fallback is disabled")
 
@@ -88,15 +107,64 @@ def delete_session(
     prefix: str,
     session_token: str,
     fallback_store: dict[str, dict[str, Any]],
+    principal_id: str | None = None,
+    fallback_index: dict[str, set[str]] | None = None,
 ) -> None:
     client = get_session_redis()
     if client:
         try:
             client.delete(f"{prefix}:{session_token}")
+            if principal_id:
+                client.srem(_principal_sessions_key(prefix, str(principal_id)), session_token)
         except redis.RedisError as exc:
             logger.warning("Session delete failed in Redis: %s", exc)
     if _fallback_enabled():
         fallback_store.pop(session_token, None)
+        if principal_id and fallback_index is not None:
+            tokens = fallback_index.get(str(principal_id))
+            if tokens is not None:
+                tokens.discard(session_token)
+                if not tokens:
+                    fallback_index.pop(str(principal_id), None)
+
+
+def _principal_sessions_key(prefix: str, principal_id: str) -> str:
+    return f"{prefix}:principal:{principal_id}"
+
+
+def list_sessions_for_principal(
+    prefix: str,
+    principal_id: str,
+    fallback_store: dict[str, dict[str, Any]],
+    fallback_index: dict[str, set[str]],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return active session payloads tracked for a principal."""
+    principal = str(principal_id)
+    sessions: list[tuple[str, dict[str, Any]]] = []
+    client = get_session_redis()
+    if client:
+        try:
+            raw_tokens = client.smembers(_principal_sessions_key(prefix, principal))
+            for raw_token in raw_tokens:
+                token = _decode_redis_text(raw_token)
+                payload = load_session(prefix, token, fallback_store)
+                if payload is None:
+                    client.srem(_principal_sessions_key(prefix, principal), token)
+                    continue
+                sessions.append((token, payload))
+            return sessions
+        except redis.RedisError as exc:
+            logger.warning("Session index read failed, falling back to memory: %s", exc)
+    if not _fallback_enabled():
+        return sessions
+    indexed_tokens = set(fallback_index.get(principal, set()))
+    for token in indexed_tokens:
+        payload = fallback_store.get(token)
+        if payload is None:
+            fallback_index.get(principal, set()).discard(token)
+            continue
+        sessions.append((token, payload))
+    return sessions
 
 
 def _epoch_key(prefix: str, principal_id: str) -> str:
@@ -108,7 +176,7 @@ def set_session_revocation_epoch(
     principal_id: str,
     ttl_seconds: int,
     fallback_epochs: dict[str, str],
-) -> None:
+) -> str:
     """Mark every session for the principal created before now as revoked.
 
     Portal sessions are opaque Redis keys with no per-principal index, so
@@ -127,6 +195,7 @@ def set_session_revocation_epoch(
             logger.warning("Session revocation epoch write failed: %s", exc)
     if _fallback_enabled():
         fallback_epochs[str(principal_id)] = now_iso
+    return now_iso
 
 
 def get_session_revocation_epoch(

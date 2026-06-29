@@ -420,15 +420,40 @@ def reseller_profile(request: Request, db: Session):
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     mfa_methods = _reseller_mfa_methods(db, context)
+    current_session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    active_sessions = reseller_portal.list_reseller_sessions_for_principal(
+        context["principal_id"],
+        current_session_token=current_session_token,
+    )
     return templates.TemplateResponse(
         "reseller/profile/index.html",
         _profile_context(
             request,
             context,
             mfa_methods=mfa_methods,
+            active_sessions=active_sessions,
+            other_session_count=sum(
+                1 for session in active_sessions if not session["is_current"]
+            ),
+            success="Other portal sessions signed out."
+            if request.query_params.get("sessions") == "signed-out"
+            else None,
             verify_sent=request.query_params.get("verify_sent"),
         ),
     )
+
+
+def reseller_profile_sign_out_other_sessions(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    current_session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    reseller_portal.revoke_other_reseller_sessions_for_principal(
+        context["principal_id"],
+        current_session_token,
+        db=db,
+    )
+    return RedirectResponse(url="/reseller/profile?sessions=signed-out", status_code=303)
 
 
 def reseller_resend_email_verification(request: Request, db: Session):

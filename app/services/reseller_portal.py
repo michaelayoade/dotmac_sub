@@ -42,6 +42,7 @@ from app.services.common import coerce_uuid
 from app.services.session_store import (
     delete_session,
     get_session_revocation_epoch,
+    list_sessions_for_principal,
     load_session,
     set_session_revocation_epoch,
     store_session,
@@ -71,6 +72,7 @@ _DEFAULT_REMEMBER_TTL = 2592000  # 30 days
 _DEFAULT_ABSOLUTE_TTL = 2592000  # 30 days
 
 _RESELLER_SESSIONS: dict[str, dict] = {}
+_RESELLER_SESSION_INDEX: dict[str, set[str]] = {}
 _RESELLER_SESSION_EPOCHS: dict[str, str] = {}
 _RESELLER_SESSION_PREFIX = "session:reseller_portal"
 
@@ -304,6 +306,8 @@ def _create_session(
         session_payload,
         ttl_seconds,
         _RESELLER_SESSIONS,
+        principal_id=str(principal_id) if principal_id else None,
+        fallback_index=_RESELLER_SESSION_INDEX,
     )
     return session_token
 
@@ -420,7 +424,7 @@ def _reseller_session_revoked(session: dict) -> bool:
     )
     if not epoch:
         return False
-    created_raw = session.get("created_at")
+    created_raw = session.get("revocation_exempted_at") or session.get("created_at")
     if not created_raw:
         return True
     try:
@@ -435,13 +439,68 @@ def revoke_reseller_sessions_for_subscriber(
     subscriber_id: object, db: Session | None = None
 ) -> None:
     """Invalidate every existing reseller portal session for a subscriber."""
+    revoke_reseller_sessions_for_principal(subscriber_id, db=db)
+
+
+def revoke_reseller_sessions_for_principal(
+    principal_id: object, db: Session | None = None
+) -> None:
+    """Invalidate every existing reseller portal session for a principal."""
     ttl = max(
         _session_ttl_seconds(remember=True, db=db),
         _session_ttl_seconds(remember=False, db=db),
         _absolute_ttl_seconds(db),
     )
     set_session_revocation_epoch(
-        _RESELLER_SESSION_PREFIX, str(subscriber_id), ttl, _RESELLER_SESSION_EPOCHS
+        _RESELLER_SESSION_PREFIX, str(principal_id), ttl, _RESELLER_SESSION_EPOCHS
+    )
+
+
+def revoke_other_reseller_sessions_for_principal(
+    principal_id: object,
+    current_session_token: str | None,
+    db: Session | None = None,
+) -> None:
+    """Invalidate a reseller principal's other sessions while keeping this one."""
+    current_session = (
+        load_session(_RESELLER_SESSION_PREFIX, current_session_token, _RESELLER_SESSIONS)
+        if current_session_token
+        else None
+    )
+    ttl = max(
+        _session_ttl_seconds(remember=True, db=db),
+        _session_ttl_seconds(remember=False, db=db),
+        _absolute_ttl_seconds(db),
+    )
+    epoch = set_session_revocation_epoch(
+        _RESELLER_SESSION_PREFIX, str(principal_id), ttl, _RESELLER_SESSION_EPOCHS
+    )
+    if not current_session or str(
+        current_session.get("principal_id")
+        or current_session.get("subscriber_id")
+        or current_session.get("person_id")
+    ) != str(principal_id):
+        return
+    now = _now()
+    try:
+        expires_at = datetime.fromisoformat(str(current_session["expires_at"]))
+    except (KeyError, ValueError, TypeError):
+        return
+    if now >= expires_at:
+        invalidate_session(current_session_token or "", db=db)
+        return
+    epoch_at = datetime.fromisoformat(epoch)
+    current_session["revocation_exempted_at"] = (
+        epoch_at + timedelta(microseconds=1)
+    ).isoformat()
+    store_session(
+        _RESELLER_SESSION_PREFIX,
+        current_session_token or "",
+        current_session,
+        max(1, int((expires_at - now).total_seconds())),
+        _RESELLER_SESSIONS,
+        principal_id=str(principal_id),
+        fallback_index=_RESELLER_SESSION_INDEX,
     )
 
 
@@ -462,7 +521,22 @@ def _revoke_auth_session(db: Session, auth_session_id: str | None) -> None:
 def invalidate_session(session_token: str, db: Session | None = None) -> None:
     # Read raw session without going through _get_session (which calls invalidate on expiry)
     session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
-    delete_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
+    principal_id = (
+        str(
+            session.get("principal_id")
+            or session.get("subscriber_id")
+            or session.get("person_id")
+        )
+        if session
+        else None
+    )
+    delete_session(
+        _RESELLER_SESSION_PREFIX,
+        session_token,
+        _RESELLER_SESSIONS,
+        principal_id=principal_id,
+        fallback_index=_RESELLER_SESSION_INDEX,
+    )
     if db and session:
         _revoke_auth_session(db, session.get("auth_session_id"))
         _emit_reseller_event(
@@ -701,8 +775,43 @@ def refresh_session(
         session,
         max(1, int((new_expires_at - now).total_seconds())),
         _RESELLER_SESSIONS,
+        principal_id=str(
+            session.get("principal_id") or session.get("subscriber_id") or ""
+        )
+        or None,
+        fallback_index=_RESELLER_SESSION_INDEX,
     )
     return session
+
+
+def list_reseller_sessions_for_principal(
+    principal_id: object,
+    current_session_token: str | None = None,
+) -> list[dict[str, object]]:
+    """List currently valid reseller portal sessions for a principal."""
+    sessions = []
+    for token, payload in list_sessions_for_principal(
+        _RESELLER_SESSION_PREFIX,
+        str(principal_id),
+        _RESELLER_SESSIONS,
+        _RESELLER_SESSION_INDEX,
+    ):
+        active_payload = _get_session(token)
+        if not active_payload:
+            continue
+        sessions.append(
+            {
+                "token": token,
+                "created_at": active_payload.get("created_at"),
+                "expires_at": active_payload.get("expires_at"),
+                "is_current": bool(current_session_token and token == current_session_token),
+                "remember": bool(active_payload.get("remember")),
+                "username": active_payload.get("username"),
+                "principal_type": active_payload.get("principal_type") or "subscriber",
+            }
+        )
+    sessions.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return sessions
 
 
 def _session_ttl_seconds(remember: bool, db: Session | None = None) -> int:
