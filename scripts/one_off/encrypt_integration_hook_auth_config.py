@@ -27,8 +27,10 @@ def _has_plaintext_secret(auth_config) -> bool:
         return False
     for key in SECRET_AUTH_CONFIG_KEYS:
         value = auth_config.get(key)
-        if value is not None and str(value) and not str(value).startswith(
-            ("enc:", "plain:")
+        if (
+            value is not None
+            and str(value)
+            and not str(value).startswith(("enc:", "plain:"))
         ):
             return True
     return False

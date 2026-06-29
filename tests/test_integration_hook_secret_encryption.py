@@ -42,9 +42,7 @@ def test_secret_values_encrypted_non_secret_kept(db_session):
 
 
 def test_execute_sends_decrypted_bearer_token(db_session, monkeypatch):
-    hook = _make_hook(
-        db_session, auth_type="bearer", auth_config={"token": "abc123"}
-    )
+    hook = _make_hook(db_session, auth_type="bearer", auth_config={"token": "abc123"})
     assert hook.auth_config["token"] != "abc123"  # encrypted at rest
 
     captured: dict = {}
