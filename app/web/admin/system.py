@@ -2606,6 +2606,7 @@ def webhook_create(
     url: str = Form(...),
     secret: str = Form(None),
     is_active: str = Form(None),
+    events: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2617,6 +2618,7 @@ def webhook_create(
             url=url,
             secret=secret,
             is_active=is_active == "true",
+            events=events,
         )
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
@@ -2628,7 +2630,10 @@ def webhook_create(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "endpoint": None,
-            "subscribed_events": [],
+            "subscribed_events": events,
+            "event_types": web_system_webhook_forms_service.get_webhook_new_form_context()[
+                "event_types"
+            ],
             "action_url": "/admin/system/webhooks",
             "error": str(e),
         }
@@ -2655,6 +2660,7 @@ def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_d
         "sidebar_stats": get_sidebar_stats(db),
         "endpoint": form_data["endpoint"],
         "subscribed_events": form_data["subscribed_events"],
+        "event_types": form_data["event_types"],
         "action_url": f"/admin/system/webhooks/{endpoint_id}",
         "error": None,
     }
@@ -2673,6 +2679,7 @@ def webhook_update(
     url: str = Form(...),
     secret: str = Form(None),
     is_active: str = Form(None),
+    events: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2685,6 +2692,7 @@ def webhook_update(
             url=url,
             secret=secret,
             is_active=is_active == "true",
+            events=events,
         )
         if endpoint is None:
             return RedirectResponse(url="/admin/system/webhooks", status_code=303)
@@ -2701,7 +2709,16 @@ def webhook_update(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "endpoint": form_data["endpoint"] if form_data else None,
-            "subscribed_events": form_data["subscribed_events"] if form_data else [],
+            "subscribed_events": events
+            if events
+            else form_data["subscribed_events"]
+            if form_data
+            else [],
+            "event_types": form_data["event_types"]
+            if form_data
+            else web_system_webhook_forms_service.get_webhook_new_form_context()[
+                "event_types"
+            ],
             "action_url": f"/admin/system/webhooks/{endpoint_id}",
             "error": str(e),
         }

@@ -4,7 +4,42 @@
 **Method:** single-agent read-only review of integrations (connectors/hooks/webhook
 endpoints) + the system webhooks UI. (CRM sync/dead-letters and the WhatsApp *send*
 path are covered in the CRM and Notifications audits.)
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** remediation in progress via draft PR #520. Part of the remaining-module audit series.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #520 (`audit/integrations-webhooks-remediation`)
+
+### Resolved in current draft
+
+- System webhook create/update now persists selected `WebhookEventType`
+  subscriptions instead of rendering a dead checkbox grid.
+- System webhook edit no longer renders the stored encrypted signing secret back
+  into the password field; leaving the field blank preserves the current secret.
+- System webhook event choices now render from the enum-backed event list instead
+  of a hardcoded static subset.
+
+### Still open
+
+- Integrations webhook endpoints are still create-only and need edit/disable/
+  rotate/delete/test remediation controls.
+- Integrations webhook secrets and hook auth secrets still need unified encrypted
+  storage and masked edit semantics.
+- Webhook delivery retry/timeout settings, delivery observability, connector
+  check-connection, hook execution timeout controls, confirmation polish, and the
+  separate RBAC review remain open.
+
+### Verification
+
+- `poetry run ruff check app/services/web_system_webhook_forms.py app/web/admin/system.py tests/test_web_system_webhook_forms.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_webhook_forms.py -q`
+  - Result: `3 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py -q`
+  - Result: `9 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
 
 ## What this audit is
 
