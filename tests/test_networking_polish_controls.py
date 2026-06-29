@@ -155,3 +155,23 @@ def test_destructive_actions_have_confirmations():
     assert "Regenerate keys for VPN server" in vpn
     assert "rotates the stored API credentials" in nas
     assert "Import PPPoE credentials now" in radius
+
+
+def test_async_network_actions_have_busy_state_and_visible_results():
+    cpe = Path("templates/admin/network/cpes/_tr069_partial.html").read_text()
+    router_detail = Path("templates/admin/network/routers/detail.html").read_text()
+    service_ports = Path(
+        "templates/admin/network/onts/_service_ports_tab.html"
+    ).read_text()
+
+    assert 'id="cpe-tr069-panel"' in cpe
+    assert 'hx-target="#cpe-tr069-panel"' in cpe
+    assert 'hx-swap="outerHTML"' in cpe
+    assert 'data-loading-label="Refreshing..."' in cpe
+    assert 'data-loading-label="Enabling..."' in cpe
+    assert "/admin/network/routers/{{ router.id }}/test-connection" in router_detail
+    assert "/admin/network/routers/{{ router.id }}/sync" in router_detail
+    assert 'data-loading-label="Testing..."' in router_detail
+    assert 'data-loading-label="Syncing..."' in router_detail
+    assert 'data-loading-label="Creating..."' in service_ports
+    assert 'data-loading-label="Deleting..."' in service_ports
