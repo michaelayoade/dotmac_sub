@@ -24,14 +24,15 @@ UX-polish + operator-control lens (**not** a full security review).
 - Admin credential lockouts, MFA-code lockouts, customer local-account lockouts,
   and customer portal throttle lockouts now include the remaining cooldown in
   minutes instead of the generic "try again later" copy.
+- Admin and customer forgot-password forms now disable submit on submission and
+  show a loading spinner/text state, matching the existing reset/login patterns.
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
-- Admin lockout/MFA policy drift, forgot-password loading states,
-  password-min/remember-me copy, active sessions, customer auth loading parity, and
-  schema-backed MFA recovery codes remain open.
+- Admin lockout/MFA policy drift, password-min/remember-me copy, active sessions,
+  customer auth loading parity, and schema-backed MFA recovery codes remain open.
 
 ### Verification
 
@@ -42,6 +43,10 @@ UX-polish + operator-control lens (**not** a full security review).
 - `poetry run pytest tests/test_auth_flow.py tests/test_web_customer_auth.py -q`
   - Result: `55 passed`
 - `poetry run ruff check app/services/auth_flow.py app/services/web_customer_auth.py tests/test_auth_flow.py tests/test_web_customer_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_services.py tests/test_web_customer_auth.py -q`
+  - Result: `31 passed`
+- `poetry run ruff check tests/test_auth_services.py tests/test_web_customer_auth.py`
   - Result: passed
 
 ## What this audit is

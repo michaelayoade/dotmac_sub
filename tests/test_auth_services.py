@@ -147,6 +147,15 @@ def test_mfa_template_does_not_link_to_unimplemented_recovery_route():
     assert "Contact an administrator to reset MFA" in template
 
 
+def test_admin_forgot_password_template_has_submit_loading_state():
+    template = Path("templates/auth/forgot-password.html").read_text()
+
+    assert 'x-data="{ loading: false }"' in template
+    assert 'x-on:submit="loading = true"' in template
+    assert ':disabled="loading"' in template
+    assert "loading ? 'Sending...' : 'Send reset link'" in template
+
+
 def test_user_credentials_soft_delete(db_session, person):
     payload = UserCredentialCreate(
         person_id=person.id,

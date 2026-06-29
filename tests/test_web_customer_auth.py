@@ -384,6 +384,10 @@ def test_customer_forgot_password_page_renders_form(monkeypatch, db_session):
     body = response.body.decode()
     assert 'action="/portal/auth/forgot-password"' in body
     assert "_csrf_token" in body
+    assert 'x-data="{ loading: false }"' in body
+    assert 'x-on:submit="loading = true"' in body
+    assert ':disabled="loading"' in body
+    assert "loading ? 'Sending...' : 'Send reset link'" in body
 
 
 def test_customer_forgot_password_page_redirects_signed_in(monkeypatch, db_session):
