@@ -9,6 +9,7 @@ from typing import cast
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
 from app.models.payment_arrangement import (
     ArrangementStatus,
     InstallmentStatus,
@@ -16,10 +17,49 @@ from app.models.payment_arrangement import (
     PaymentArrangementInstallment,
     PaymentFrequency,
 )
+from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MIN_INSTALLMENTS = 2
+DEFAULT_MAX_INSTALLMENTS = 24
+DEFAULT_OVERDUE_INSTALLMENTS_TO_DEFAULT = 2
+
+
+def _setting_int(db: Session, key: str, default: int, *, minimum: int = 1) -> int:
+    raw = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
+
+
+def _installment_bounds(db: Session) -> tuple[int, int]:
+    minimum = _setting_int(
+        db,
+        "payment_arrangement_min_installments",
+        DEFAULT_MIN_INSTALLMENTS,
+        minimum=1,
+    )
+    maximum = _setting_int(
+        db,
+        "payment_arrangement_max_installments",
+        DEFAULT_MAX_INSTALLMENTS,
+        minimum=minimum,
+    )
+    return minimum, max(minimum, maximum)
+
+
+def _default_overdue_installment_threshold(db: Session) -> int:
+    return _setting_int(
+        db,
+        "payment_arrangement_default_overdue_installments",
+        DEFAULT_OVERDUE_INSTALLMENTS_TO_DEFAULT,
+        minimum=1,
+    )
 
 
 def _add_month_clamped(current_date: date, anchor_day: int | None = None) -> date:
@@ -144,13 +184,16 @@ class PaymentArrangements(ListResponseMixin):
                 )
 
         # Validate installments
-        if installments < 2:
+        min_installments, max_installments = _installment_bounds(db)
+        if installments < min_installments:
             raise HTTPException(
-                status_code=400, detail="Minimum 2 installments required"
+                status_code=400,
+                detail=f"Minimum {min_installments} installments required",
             )
-        if installments > 24:
+        if installments > max_installments:
             raise HTTPException(
-                status_code=400, detail="Maximum 24 installments allowed"
+                status_code=400,
+                detail=f"Maximum {max_installments} installments allowed",
             )
         if total_amount <= 0:
             raise HTTPException(
@@ -520,6 +563,8 @@ class PaymentArrangements(ListResponseMixin):
                 .filter(PaymentArrangement.is_active.is_(True))
             )
 
+        default_overdue_threshold = _default_overdue_installment_threshold(db)
+
         # 1. Mark past-due "due" installments overdue
         overdue = (
             _active_installments(InstallmentStatus.due)
@@ -533,7 +578,8 @@ class PaymentArrangements(ListResponseMixin):
             # change visible to the count query below.
             db.flush()
 
-            # Arrangement defaults once 2+ installments are overdue
+            # Arrangement defaults once the configured number of installments
+            # are overdue.
             arrangement = installment.arrangement
             overdue_count = (
                 db.query(PaymentArrangementInstallment)
@@ -543,7 +589,10 @@ class PaymentArrangements(ListResponseMixin):
                 )
                 .count()
             )
-            if overdue_count >= 2 and arrangement.status == ArrangementStatus.active:
+            if (
+                overdue_count >= default_overdue_threshold
+                and arrangement.status == ArrangementStatus.active
+            ):
                 arrangement.status = ArrangementStatus.defaulted
                 defaulted.append(arrangement)
                 logger.warning(f"Payment arrangement {arrangement.id} defaulted")

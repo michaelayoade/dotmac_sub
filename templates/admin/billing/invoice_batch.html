@@ -28,7 +28,8 @@
 
     <div class="grid gap-6 lg:grid-cols-3">
         <div class="lg:col-span-2">
-            <form id="batch-form" method="post" action="/admin/billing/invoices/generate-batch" class="space-y-6">
+            <form id="batch-form" method="post" action="/admin/billing/invoices/generate-batch" class="space-y-6"
+                  x-on:submit="if (!$refs.confirmed?.checked || !confirm('Run invoice batch for the previewed scope? This can create invoices for affected accounts.')) { $event.preventDefault(); return; } $event.target.querySelector('button[type=submit]').disabled = true;">
                 {% include "components/forms/csrf_input.html" %}
                 <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                     <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -85,7 +86,7 @@
                             </div>
                         </label>
                         <label class="flex cursor-pointer items-start gap-3">
-                            <input type="checkbox" name="confirmed" value="1" id="confirmed" class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="checkbox" name="confirmed" value="1" id="confirmed" x-ref="confirmed" class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             <div>
                                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">I have reviewed the preview</span>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">Required before running batch generation</p>

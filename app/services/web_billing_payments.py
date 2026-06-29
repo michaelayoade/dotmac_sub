@@ -721,10 +721,13 @@ def resolve_default_currency(db: Session) -> str:
 def build_import_result_payload(
     *, imported_count: int, errors: list[str]
 ) -> dict[str, object]:
+    displayed_errors = errors[:10] if errors else []
     return {
         "imported": imported_count,
-        "errors": errors[:10] if errors else [],
+        "errors": displayed_errors,
+        "displayed_errors": len(displayed_errors),
         "total_errors": len(errors),
+        "errors_truncated": len(displayed_errors) < len(errors),
     }
 
 

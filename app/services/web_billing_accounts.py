@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import func, or_
+
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
@@ -14,6 +18,12 @@ from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
 
+_OPEN_BALANCE_INVOICE_STATUSES = (
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+)
+
 
 def build_accounts_list_data(
     db,
@@ -22,39 +32,102 @@ def build_accounts_list_data(
     per_page: int,
     customer_ref: str | None,
     reseller_id: str | None = None,
+    search: str | None = None,
+    status: str | None = None,
+    balance_filter: str | None = None,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
-    accounts = []
-    total = 0
+    balance_subquery = (
+        db.query(
+            Invoice.account_id.label("account_id"),
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
+        )
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_(_OPEN_BALANCE_INVOICE_STATUSES))
+        .group_by(Invoice.account_id)
+        .subquery()
+    )
+    balance_value = func.coalesce(balance_subquery.c.open_balance, 0)
+
+    query = db.query(Subscriber).outerjoin(
+        balance_subquery, balance_subquery.c.account_id == Subscriber.id
+    )
     if customer_ref:
         subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(
             db, customer_ref
         )
         if subscriber_ids:
-            query = (
-                db.query(Subscriber)
-                .filter(Subscriber.id.in_(subscriber_ids))
-                .order_by(Subscriber.created_at.desc())
-            )
-            total = query.count()
-            accounts = query.offset(offset).limit(per_page).all()
+            query = query.filter(Subscriber.id.in_(subscriber_ids))
+        else:
+            query = query.filter(Subscriber.id.is_(None))
     else:
-        accounts = subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=reseller_id,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
-        )
-        total_query = db.query(Subscriber)
         if reseller_id:
-            total_query = total_query.filter(
-                Subscriber.reseller_id == UUID(reseller_id)
+            query = query.filter(Subscriber.reseller_id == UUID(reseller_id))
+
+    normalized_status = (status or "").strip().lower()
+    if normalized_status:
+        try:
+            query = query.filter(
+                Subscriber.status == SubscriberStatus(normalized_status)
             )
-        total = total_query.count()
-    total_pages = (total + per_page - 1) // per_page
+        except ValueError:
+            logger.info(
+                "Ignoring unsupported billing account status filter: %s", status
+            )
+
+    term = (search or "").strip()
+    if term:
+        like_term = f"%{term}%"
+        query = query.filter(
+            or_(
+                Subscriber.subscriber_number.ilike(like_term),
+                Subscriber.account_number.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.display_name.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
+            )
+        )
+
+    normalized_balance = (balance_filter or "").strip().lower()
+    if normalized_balance == "positive":
+        query = query.filter(balance_value > 0)
+    elif normalized_balance == "zero":
+        query = query.filter(balance_value == 0)
+    elif normalized_balance == "credit":
+        query = query.filter(balance_value < 0)
+
+    total = query.count()
+    stats = (
+        query.with_entities(
+            func.coalesce(func.sum(balance_value), 0).label("total_balance"),
+            func.count(Subscriber.id)
+            .filter(Subscriber.status == SubscriberStatus.active)
+            .label("active_count"),
+            func.count(Subscriber.id)
+            .filter(
+                Subscriber.status.in_(
+                    (SubscriberStatus.blocked, SubscriberStatus.suspended)
+                )
+            )
+            .label("suspended_count"),
+        ).one()
+        if total
+        else None
+    )
+    rows = (
+        query.add_columns(balance_value.label("open_balance"))
+        .order_by(Subscriber.created_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
+    accounts = []
+    for account, open_balance in rows:
+        account.balance = Decimal(str(open_balance or 0))
+        accounts.append(account)
+    total_pages = max(1, (total + per_page - 1) // per_page)
     return {
         "accounts": accounts,
         "page": page,
@@ -63,6 +136,12 @@ def build_accounts_list_data(
         "total_pages": total_pages,
         "customer_ref": customer_ref,
         "reseller_id": reseller_id,
+        "search": search or "",
+        "status": normalized_status,
+        "balance_filter": normalized_balance,
+        "total_balance": Decimal(str(stats.total_balance if stats else 0)),
+        "active_count": int(stats.active_count if stats else 0),
+        "suspended_count": int(stats.suspended_count if stats else 0),
     }
 
 

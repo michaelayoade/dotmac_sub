@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.domain_settings import SettingDomain
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionEntry,
@@ -23,6 +24,7 @@ from app.models.service_extension import (
     ServiceExtensionStatus,
 )
 from app.models.subscriber import Subscriber
+from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.customer_identity_resolution import resolve_customer_identity
 
@@ -34,6 +36,17 @@ APPLY_BATCH_SIZE = 500
 # Postgres int4 ceiling: digit strings above this are not legacy customer IDs.
 # (e.g. phone numbers) and would overflow the column comparison.
 _MAX_INT4 = 2_147_483_647
+
+
+def _max_extension_days(db: Session) -> int:
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.billing, "service_extension_max_days"
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return MAX_EXTENSION_DAYS
+    return max(1, value)
 
 
 def _parse_uuid(value: str) -> uuid.UUID | None:
@@ -347,11 +360,12 @@ def _iter_scope_subscriptions(
         offset += len(ids)
 
 
-def _validated_days(days: int) -> int:
-    if not 1 <= int(days) <= MAX_EXTENSION_DAYS:
+def _validated_days(db: Session, days: int) -> int:
+    max_days = _max_extension_days(db)
+    if not 1 <= int(days) <= max_days:
         raise HTTPException(
             status_code=400,
-            detail=f"Days must be between 1 and {MAX_EXTENSION_DAYS}",
+            detail=f"Days must be between 1 and {max_days}",
         )
     return int(days)
 
@@ -376,7 +390,7 @@ def create_extension(
         raise HTTPException(
             status_code=400, detail="Outage end must be after its start"
         )
-    days = _validated_days(days)
+    days = _validated_days(db, days)
     resolved_subscriber_ids = None
     if scope_type == ServiceExtensionScope.subscribers:
         resolver = (
@@ -570,7 +584,7 @@ def scope_options(db: Session) -> dict:
             db.scalars(select(NasDevice).order_by(NasDevice.name)).all()
         ),
         "scope_types": [item.value for item in ServiceExtensionScope],
-        "max_days": MAX_EXTENSION_DAYS,
+        "max_days": _max_extension_days(db),
     }
 
 

@@ -15,11 +15,13 @@ def _create_invoice(
     due_at: datetime,
     balance_due: str,
     status: InvoiceStatus = InvoiceStatus.issued,
+    currency: str = "NGN",
 ):
     invoice = Invoice(
         account_id=account_id,
         invoice_number=f"INV-{datetime.now(UTC).timestamp()}-{balance_due}",
         status=status,
+        currency=currency,
         subtotal=Decimal(balance_due),
         tax_total=Decimal("0.00"),
         total=Decimal(balance_due),
@@ -68,6 +70,33 @@ def test_ar_aging_shows_open_debt_and_excludes_draft_and_zero_balance(
     assert result["counts"]["1_30"] == 1
     # Only the real arrears invoice is counted across all buckets.
     assert sum(result["counts"].values()) == 1
+
+
+def test_ar_aging_exposes_bucket_totals_by_currency(db_session, subscriber):
+    now = datetime.now(UTC)
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=20),
+        balance_due="25.00",
+        currency="USD",
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=20),
+        balance_due="1000.00",
+        currency="NGN",
+    )
+
+    result = build_ar_aging_data(db_session, period="all")
+
+    assert result["totals_by_currency"]["1_30"] == [
+        {"currency": "NGN", "amount": 1000.0},
+        {"currency": "USD", "amount": 25.0},
+    ]
+    assert result["bucket_order"][1]["amounts"] == result["totals_by_currency"]["1_30"]
+    assert result["bucket_rows"]["1_30"][0]["currency"] in {"NGN", "USD"}
 
 
 def test_ar_aging_includes_counts_and_supports_bucket_selection(db_session, subscriber):

@@ -17,13 +17,14 @@ def _create_ledger_entry(
     entry_type: LedgerEntryType,
     amount: str,
     source: LedgerSource = LedgerSource.other,
+    currency: str = "NGN",
 ):
     entry = LedgerEntry(
         account_id=account_id,
         entry_type=entry_type,
         source=source,
         amount=Decimal(amount),
-        currency="NGN",
+        currency=currency,
         memo="test",
     )
     db_session.add(entry)
@@ -57,6 +58,50 @@ def test_build_ledger_entries_data_includes_totals(db_session, subscriber):
     assert state["ledger_totals"]["credit_total"] == pytest.approx(120.0)
     assert state["ledger_totals"]["debit_total"] == pytest.approx(30.0)
     assert state["ledger_totals"]["net_total"] == pytest.approx(90.0)
+
+
+def test_build_ledger_entries_data_groups_totals_by_currency(db_session, subscriber):
+    _create_ledger_entry(
+        db_session,
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        amount="120.00",
+        currency="NGN",
+    )
+    _create_ledger_entry(
+        db_session,
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        amount="5.00",
+        currency="USD",
+    )
+    _create_ledger_entry(
+        db_session,
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        amount="2.00",
+        currency="USD",
+    )
+
+    state = build_ledger_entries_data(
+        db_session,
+        customer_ref=str(subscriber.id),
+        entry_type=None,
+    )
+
+    assert state["ledger_totals"]["credit_amounts"] == [
+        {"currency": "NGN", "amount": 120.0},
+        {"currency": "USD", "amount": 5.0},
+    ]
+    assert state["ledger_totals"]["debit_amounts"] == [
+        {"currency": "USD", "amount": 2.0}
+    ]
+    assert state["ledger_totals"]["net_amounts"] == [
+        {"currency": "NGN", "amount": 120.0},
+        {"currency": "USD", "amount": 3.0},
+    ]
+    assert state["ledger_totals"]["credit_display"] == "2 currencies"
+    assert state["ledger_totals"]["debit_display"] == "USD 2.00"
 
 
 def test_build_ledger_entries_data_applies_date_range(db_session, subscriber):

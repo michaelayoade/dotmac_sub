@@ -142,12 +142,13 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
                         {% if statement.rows %}
                         {% for row in statement.rows %}
+                        {% set row_currency = row.entry.currency or 'NGN' %}
                         <tr class="bg-white dark:bg-slate-900/30">
                             <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry.created_at.strftime('%Y-%m-%d') if row.entry.created_at else '-' }}</td>
                             <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry.entry_type.value | title }}</td>
                             <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry.source.value | replace('_', ' ') | title if row.entry.source else '-' }}</td>
-                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(row.signed_amount) }}</td>
-                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(row.running_balance) }}</td>
+                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{{ row_currency }} {{ '{:,.2f}'.format(row.signed_amount) }}</td>
+                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{{ row_currency }} {{ '{:,.2f}'.format(row.running_balance) }}</td>
                             <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ row.entry.memo or '-' }}</td>
                         </tr>
                         {% endfor %}
@@ -177,6 +178,7 @@
                     {% if invoices %}
                     {% for invoice in invoices %}
                     {% set inv_status = invoice.status.value if invoice.status else 'draft' %}
+                    {% set invoice_currency = invoice.currency or 'NGN' %}
                     {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
                             <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 transition-colors">
@@ -188,13 +190,17 @@
                             {{ status_badge("Paid", variant="paid") }}
                             {% elif inv_status == 'issued' %}
                             {{ status_badge("Issued", variant="info") }}
+                            {% elif inv_status == 'partially_paid' %}
+                            {{ status_badge("Partially Paid", variant="warning") }}
                             {% elif inv_status == 'overdue' %}
                             {{ status_badge("Overdue", variant="overdue") }}
+                            {% elif inv_status in ('void', 'written_off') %}
+                            {{ status_badge(inv_status | replace('_', ' ') | title, variant="inactive") }}
                             {% else %}
                             {{ status_badge(inv_status | title, variant="default") }}
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</td>
                         {% call row_actions() %}
                             {{ row_action(href="/admin/billing/invoices/" ~ invoice.id, icon=icon_view(), title="View", color="amber") }}

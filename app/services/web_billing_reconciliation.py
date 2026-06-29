@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import BankReconciliationItem, BankReconciliationRun, Payment
+from app.models.billing import Payment
 from app.services import web_billing_payments as web_billing_payments_service
 
 logger = logging.getLogger(__name__)
@@ -85,54 +85,8 @@ def build_reconciliation_data(
         item for item in history_rows if str(item.get("status")) == "partial"
     ][:25]
 
-    run = BankReconciliationRun(
-        date_range=(date_range or "").strip() or None,
-        handler=(handler or "").strip() or None,
-        statement_rows=statement_rows,
-        imported_rows=imported_rows,
-        unmatched_rows=unmatched_rows,
-        system_payment_count=len(payments),
-        statement_total=statement_total,
-        payment_total=payment_total,
-        difference_total=(statement_total - payment_total),
-    )
-    db.add(run)
-    db.flush()
-
-    items: list[BankReconciliationItem] = []
-    for row in unmatched_imports:
-        items.append(
-            BankReconciliationItem(
-                run_id=run.id,
-                item_type="unmatched",
-                reference=str(row.get("handler") or ""),
-                file_name=str(row.get("file_name") or ""),
-                count=int(row.get("unmatched_count", 0) or 0),
-                amount=Decimal(str(row.get("total_amount", 0) or 0)),
-                metadata_={
-                    "status": row.get("status"),
-                    "occurred_at": str(row.get("occurred_at") or ""),
-                },
-            )
-        )
-    for row in duplicate_candidates[:25]:
-        items.append(
-            BankReconciliationItem(
-                run_id=run.id,
-                item_type="duplicate",
-                reference=str(row.get("external_id") or ""),
-                file_name=None,
-                count=int(row.get("count", 0) or 0),
-                amount=Decimal(str(row.get("total_amount", 0) or 0)),
-                metadata_={},
-            )
-        )
-    if items:
-        db.add_all(items)
-    db.commit()
-
     return {
-        "last_run_id": str(run.id),
+        "last_run_id": None,
         "date_range": date_range or "",
         "selected_handler": (handler or "").strip() or "",
         "handler_options": [

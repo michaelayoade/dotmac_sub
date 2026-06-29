@@ -81,6 +81,32 @@ def test_create_requires_valid_window_and_days(db_session, subscriber, catalog_o
         )
 
 
+def test_service_extension_max_days_comes_from_settings(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    _sub(db_session, subscriber, catalog_offer)
+
+    def _resolve(_db, _domain, key):
+        if key == "service_extension_max_days":
+            return 2
+        return None
+
+    monkeypatch.setattr(svc.settings_spec, "resolve_value", _resolve)
+
+    assert svc.scope_options(db_session)["max_days"] == 2
+    with pytest.raises(HTTPException) as exc:
+        svc.create_extension(
+            db_session,
+            reason="x",
+            window_start=_WIN_START,
+            window_end=_WIN_END,
+            days=3,
+            scope_type=ServiceExtensionScope.network,
+        )
+    assert exc.value.status_code == 400
+    assert "between 1 and 2" in str(exc.value.detail)
+
+
 def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_offer):
     s1 = _sub(
         db_session,

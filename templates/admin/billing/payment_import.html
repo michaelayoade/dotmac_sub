@@ -197,11 +197,15 @@
                     <span x-text="importResult?.total_errors || 0"></span> failed
                 </p>
                 <template x-if="importErrors.length > 0">
-                    <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-red-600 dark:text-red-400">
-                        <template x-for="(err, idx) in importErrors" :key="idx">
-                            <li x-text="err"></li>
-                        </template>
-                    </ul>
+                    <div class="mt-3">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400"
+                           x-text="(importResult?.errors_truncated ? 'Showing first ' : 'Showing ') + (importResult?.displayed_errors || importErrors.length) + ' of ' + (importResult?.total_errors || importErrors.length) + ' failed row(s)'"></p>
+                        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-red-600 dark:text-red-400">
+                            <template x-for="(err, idx) in importErrors" :key="idx">
+                                <li x-text="err"></li>
+                            </template>
+                        </ul>
+                    </div>
                 </template>
             </div>
 

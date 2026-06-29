@@ -53,7 +53,8 @@ def run_batch(
             f"Skipped: {summary.get('skipped', 0)}."
         )
     except Exception as exc:
-        return f"Batch run failed: {exc}"
+        logger.warning("Invoice batch run failed", exc_info=True)
+        return "Batch run failed. Review billing settings and recent run history, then retry."
 
 
 def retry_batch_run(
@@ -219,12 +220,17 @@ def run_batch_with_date(
             f"Skipped: {summary.get('skipped', 0)}."
         )
     except Exception as exc:
-        return f"Batch run failed: {exc}"
+        logger.warning("Invoice batch run with date failed", exc_info=True)
+        return "Batch run failed. Review billing settings and recent run history, then retry."
 
 
 def preview_error_payload(exc: Exception) -> dict[str, object]:
+    logger.warning(
+        "Invoice batch preview failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     return {
-        "error": str(exc),
+        "error": "Preview failed. Review billing settings and try again.",
         "invoice_count": 0,
         "account_count": 0,
         "total_amount_formatted": "NGN 0.00",

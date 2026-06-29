@@ -12,6 +12,7 @@ from app.services.web_billing_invoice_batch import (
     render_runs_csv,
     render_single_run_csv,
     retry_batch_run,
+    run_batch,
     run_batch_with_date,
 )
 
@@ -45,10 +46,28 @@ def test_list_recent_runs_returns_structured_rows(db_session):
 
 
 def test_preview_error_payload_includes_safe_defaults():
-    payload = preview_error_payload(ValueError("boom"))
-    assert payload["error"] == "boom"
+    payload = preview_error_payload(ValueError("provider secret boom"))
+    assert payload["error"] == "Preview failed. Review billing settings and try again."
+    assert "provider secret boom" not in payload["error"]
     assert payload["invoice_count"] == 0
     assert payload["subscriptions"] == []
+
+
+def test_run_batch_failure_note_does_not_expose_raw_exception(monkeypatch):
+    def _fake_run_invoice_cycle(**_kwargs):
+        raise RuntimeError("database password leaked")
+
+    monkeypatch.setattr(
+        "app.services.web_billing_invoice_batch.billing_automation_service.run_invoice_cycle",
+        _fake_run_invoice_cycle,
+    )
+
+    note = run_batch(db=None, billing_cycle=None, parse_cycle_fn=lambda value: value)
+
+    assert note == (
+        "Batch run failed. Review billing settings and recent run history, then retry."
+    )
+    assert "database password leaked" not in note
 
 
 def test_retry_batch_run_reuses_previous_cycle(db_session, monkeypatch):

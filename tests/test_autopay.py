@@ -401,6 +401,36 @@ def test_mandate_skipped_after_three_consecutive_failures(
     assert len(calls) == autopay.MAX_CONSECUTIVE_FAILURES  # no further charges
 
 
+def test_mandate_uses_configured_failure_threshold(db_session, subscriber, monkeypatch):
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    def _resolve(_db, _domain, key):
+        if key == "autopay_max_consecutive_failures":
+            return 2
+        if key == "autopay_charge_only_due":
+            return True
+        return None
+
+    monkeypatch.setattr(autopay.settings_spec, "resolve_value", _resolve)
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="failed", calls=calls)
+
+    for _ in range(2):
+        autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == 2
+    assert status["max_consecutive_failures"] == 2
+    assert status["suspended"] is True
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result.get("skipped") == "too_many_failures"
+    assert len(calls) == 2
+
+
 def test_success_resets_failure_count(db_session, subscriber, monkeypatch):
     _card(db_session, subscriber.id)
     _open_invoice(db_session, subscriber.id, Decimal("5000.00"))

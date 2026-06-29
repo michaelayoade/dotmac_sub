@@ -27,7 +27,8 @@
     {% endif %}
 
     <div class="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6"
+              onsubmit="if (!confirm('{{ submit_label }} for the selected account/invoice? This records a money movement and may allocate it immediately.')) return false; this.querySelector('button[type=submit]').disabled = true;">
             {% include "components/forms/csrf_input.html" %}
             {% include "admin/billing/_customer_account_fields.html" with context %}
             {% if prefill and prefill.invoice_number %}

@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 import logging
 import zipfile
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus, PaymentStatus
@@ -19,6 +21,53 @@ from app.services.audit_adapter import record_audit_event
 from app.services.object_storage import ObjectNotFoundError
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class BulkInvoiceActionResult:
+    """Outcome for a bulk invoice action."""
+
+    selected_ids: list[str]
+    processed_ids: list[str] = field(default_factory=list)
+    skipped_ids: list[str] = field(default_factory=list)
+    failed_ids: list[str] = field(default_factory=list)
+
+    @property
+    def selected(self) -> int:
+        return len(self.selected_ids)
+
+    @property
+    def processed(self) -> int:
+        return len(self.processed_ids)
+
+    @property
+    def skipped(self) -> int:
+        return len(self.skipped_ids)
+
+    @property
+    def failed(self) -> int:
+        return len(self.failed_ids)
+
+    def message(self, verb: str, noun: str = "invoice") -> str:
+        noun_text = noun if self.selected == 1 else f"{noun}s"
+        message = f"{verb} {self.processed} of {self.selected} selected {noun_text}"
+        details = []
+        if self.skipped:
+            details.append(f"{self.skipped} skipped")
+        if self.failed:
+            details.append(f"{self.failed} failed")
+        if details:
+            message += f"; {', '.join(details)}"
+        return message
+
+    def as_response(self, verb: str) -> dict[str, object]:
+        return {
+            "message": self.message(verb),
+            "count": self.processed,
+            "selected": self.selected,
+            "skipped": self.skipped,
+            "failed": self.failed,
+        }
 
 
 def parse_ids_csv(ids_csv: str) -> list[str]:
@@ -65,6 +114,37 @@ def bulk_issue(db, invoice_ids_csv: str) -> list[str]:
     return updated
 
 
+def bulk_issue_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
+    """Issue draft invoices and report processed/skipped/failed counts."""
+    result = BulkInvoiceActionResult(selected_ids=parse_ids_csv(invoice_ids_csv))
+    for invoice_id in result.selected_ids:
+        try:
+            invoice = billing_service.invoices.get(db, invoice_id)
+            if invoice and invoice.status == InvoiceStatus.draft:
+                invoice.status = InvoiceStatus.issued
+                invoice.issued_at = datetime.now(UTC)
+                db.commit()
+                result.processed_ids.append(invoice_id)
+            else:
+                result.skipped_ids.append(invoice_id)
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                result.skipped_ids.append(invoice_id)
+                continue
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk issue", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+        except Exception:
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk issue", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+    return result
+
+
 def bulk_send(db, invoice_ids_csv: str) -> list[str]:
     """Send invoice notifications for eligible invoices."""
     queued: list[str] = []
@@ -84,6 +164,39 @@ def bulk_send(db, invoice_ids_csv: str) -> list[str]:
             )
             continue
     return queued
+
+
+def bulk_send_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
+    """Send invoice notifications and report processed/skipped/failed counts."""
+    result = BulkInvoiceActionResult(selected_ids=parse_ids_csv(invoice_ids_csv))
+    for invoice_id in result.selected_ids:
+        try:
+            invoice = billing_service.invoices.get(db, invoice_id)
+            if invoice:
+                web_billing_invoices_service.maybe_send_invoice_notification(
+                    db,
+                    invoice=invoice,
+                    send_notification="1",
+                )
+                result.processed_ids.append(invoice_id)
+            else:
+                result.skipped_ids.append(invoice_id)
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                result.skipped_ids.append(invoice_id)
+                continue
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk send", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+        except Exception:
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk send", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+    return result
 
 
 def bulk_void(db, invoice_ids_csv: str) -> list[str]:
@@ -108,6 +221,39 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
             )
             continue
     return updated
+
+
+def bulk_void_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
+    """Void eligible invoices and report processed/skipped/failed counts."""
+    result = BulkInvoiceActionResult(selected_ids=parse_ids_csv(invoice_ids_csv))
+    for invoice_id in result.selected_ids:
+        try:
+            invoice = billing_service.invoices.get(db, invoice_id)
+            if invoice and invoice.status not in [
+                InvoiceStatus.paid,
+                InvoiceStatus.void,
+                InvoiceStatus.written_off,
+            ]:
+                billing_service.invoices.void(db, invoice_id)
+                result.processed_ids.append(invoice_id)
+            else:
+                result.skipped_ids.append(invoice_id)
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                result.skipped_ids.append(invoice_id)
+                continue
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk void", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+        except Exception:
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk void", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+    return result
 
 
 def bulk_mark_paid(db, invoice_ids_csv: str) -> list[str]:
@@ -157,6 +303,58 @@ def bulk_mark_paid(db, invoice_ids_csv: str) -> list[str]:
     return updated
 
 
+def bulk_mark_paid_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
+    """Mark eligible invoices as paid and report processed/skipped/failed counts."""
+    result = BulkInvoiceActionResult(selected_ids=parse_ids_csv(invoice_ids_csv))
+    eligible_statuses = {
+        InvoiceStatus.issued,
+        InvoiceStatus.overdue,
+        InvoiceStatus.partially_paid,
+    }
+    for invoice_id in result.selected_ids:
+        try:
+            invoice = billing_service.invoices.get(db, invoice_id)
+            if not invoice or invoice.status not in eligible_statuses:
+                result.skipped_ids.append(invoice_id)
+                continue
+            balance = invoice.balance_due or Decimal("0")
+            if balance <= 0:
+                result.skipped_ids.append(invoice_id)
+                continue
+            billing_service.payments.create(
+                db,
+                PaymentCreate(
+                    account_id=invoice.account_id,
+                    amount=balance,
+                    currency=invoice.currency,
+                    status=PaymentStatus.succeeded,
+                    external_id=f"bulk-mark-paid:{invoice.id}",
+                    allocations=[
+                        PaymentAllocationApply(invoice_id=invoice.id, amount=balance)
+                    ],
+                ),
+            )
+            result.processed_ids.append(invoice_id)
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                result.skipped_ids.append(invoice_id)
+                continue
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk mark paid",
+                invoice_id,
+                exc_info=True,
+            )
+            result.failed_ids.append(invoice_id)
+        except Exception:
+            db.rollback()
+            logger.debug(
+                "Skipping invoice %s during bulk mark paid", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+    return result
+
+
 def execute_bulk_action(db, *, action: str, invoice_ids_csv: str) -> list[str]:
     """Execute a named bulk invoice action and return processed IDs."""
     if action == "issue":
@@ -167,6 +365,21 @@ def execute_bulk_action(db, *, action: str, invoice_ids_csv: str) -> list[str]:
         return bulk_void(db, invoice_ids_csv)
     if action == "mark_paid":
         return bulk_mark_paid(db, invoice_ids_csv)
+    raise ValueError("Unsupported invoice bulk action")
+
+
+def execute_bulk_action_result(
+    db, *, action: str, invoice_ids_csv: str
+) -> BulkInvoiceActionResult:
+    """Execute a named bulk invoice action and return a full outcome."""
+    if action == "issue":
+        return bulk_issue_result(db, invoice_ids_csv)
+    if action == "send":
+        return bulk_send_result(db, invoice_ids_csv)
+    if action == "void":
+        return bulk_void_result(db, invoice_ids_csv)
+    if action == "mark_paid":
+        return bulk_mark_paid_result(db, invoice_ids_csv)
     raise ValueError("Unsupported invoice bulk action")
 
 
@@ -196,6 +409,34 @@ def execute_audited_bulk_action(
             actor_id=actor_id,
         )
     return updated_ids
+
+
+def execute_audited_bulk_action_result(
+    db,
+    request,
+    *,
+    action: str,
+    invoice_ids_csv: str,
+) -> BulkInvoiceActionResult:
+    """Execute a bulk invoice action and audit only affected invoices."""
+    result = execute_bulk_action_result(
+        db,
+        action=action,
+        invoice_ids_csv=invoice_ids_csv,
+    )
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    for invoice_id in result.processed_ids:
+        record_audit_event(
+            db,
+            action=action,
+            entity_type="invoice",
+            entity_id=invoice_id,
+            actor_id=actor_id,
+        )
+    return result
 
 
 def bulk_queue_pdf_exports(

@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 
-from app.models.subscriber import Reseller
+from app.models.billing import Invoice, InvoiceStatus
+from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.billing import (
     BillingAccountCreate,
     BillingAccountUpdate,
     PaymentCreate,
 )
 from app.services import billing as billing_service
+from app.services.web_billing_accounts import build_accounts_list_data
 
 
 def _make_reseller(db_session, *, name: str = "Acme Partner", is_house: bool = False):
@@ -126,6 +129,121 @@ def test_list_filters_by_reseller(db_session):
     only_r1 = billing_service.billing_accounts.list(db_session, reseller_id=str(r1.id))
     assert len(only_r1) == 1
     assert only_r1[0].reseller_id == r1.id
+
+
+def test_web_accounts_list_filters_and_stats_are_query_backed(db_session):
+    """The admin accounts page should not show dead filters or fabricated stats."""
+    alpha = Subscriber(
+        first_name="Alpha",
+        last_name="Customer",
+        display_name="Alpha Fibre",
+        email=f"alpha-{uuid.uuid4().hex}@example.com",
+        subscriber_number="SUB-ALPHA",
+        account_number="ACC-ALPHA",
+        status=SubscriberStatus.active,
+    )
+    beta = Subscriber(
+        first_name="Beta",
+        last_name="Customer",
+        email=f"beta-{uuid.uuid4().hex}@example.com",
+        subscriber_number="SUB-BETA",
+        account_number="ACC-BETA",
+        status=SubscriberStatus.suspended,
+    )
+    gamma = Subscriber(
+        first_name="Gamma",
+        last_name="Customer",
+        email=f"gamma-{uuid.uuid4().hex}@example.com",
+        subscriber_number="SUB-GAMMA",
+        account_number="ACC-GAMMA",
+        status=SubscriberStatus.active,
+    )
+    db_session.add_all([alpha, beta, gamma])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Invoice(
+                account_id=alpha.id,
+                status=InvoiceStatus.issued,
+                currency="NGN",
+                total=Decimal("125.00"),
+                balance_due=Decimal("125.00"),
+            ),
+            Invoice(
+                account_id=alpha.id,
+                status=InvoiceStatus.draft,
+                currency="NGN",
+                total=Decimal("999.00"),
+                balance_due=Decimal("999.00"),
+            ),
+            Invoice(
+                account_id=beta.id,
+                status=InvoiceStatus.overdue,
+                currency="NGN",
+                total=Decimal("300.00"),
+                balance_due=Decimal("300.00"),
+            ),
+            Invoice(
+                account_id=gamma.id,
+                status=InvoiceStatus.issued,
+                currency="NGN",
+                total=Decimal("-25.00"),
+                balance_due=Decimal("-25.00"),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    context = build_accounts_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+    )
+    assert context["total"] == 3
+    assert context["total_balance"] == Decimal("400.00")
+    assert context["active_count"] == 2
+    assert context["suspended_count"] == 1
+
+    search_context = build_accounts_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        search="alpha",
+    )
+    assert search_context["total"] == 1
+    assert search_context["accounts"][0].id == alpha.id
+    assert search_context["accounts"][0].balance == Decimal("125.00")
+
+    suspended_context = build_accounts_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        status="suspended",
+    )
+    assert suspended_context["total"] == 1
+    assert suspended_context["accounts"][0].id == beta.id
+
+    positive_context = build_accounts_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        balance_filter="positive",
+    )
+    assert positive_context["total"] == 2
+
+    credit_context = build_accounts_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        balance_filter="credit",
+    )
+    assert credit_context["total"] == 1
+    assert credit_context["accounts"][0].id == gamma.id
 
 
 def test_statement_aggregates_open_invoices(db_session, subscriber):

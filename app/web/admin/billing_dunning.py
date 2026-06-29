@@ -1,5 +1,7 @@
 """Admin billing dunning web routes."""
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -46,6 +48,8 @@ def billing_dunning(
     per_page: int = Query(50, ge=10, le=100),
     status: str | None = None,
     customer_ref: str | None = Query(None),
+    notice: str | None = Query(None),
+    error: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     state = web_billing_dunning_service.build_listing_data(
@@ -60,6 +64,8 @@ def billing_dunning(
         {
             **_base_context(request, db, "dunning"),
             **state,
+            "notice": notice,
+            "error": error,
         },
     )
 
@@ -116,14 +122,18 @@ def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db))
 def dunning_bulk_pause(
     request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
 ):
-    web_billing_dunning_service.execute_action_with_audit(
+    result = web_billing_dunning_service.execute_bulk_action_with_audit_result(
         db,
         request=request,
         action="pause",
         actor_id=_actor_id(request),
         case_ids_csv=case_ids,
     )
-    return RedirectResponse(url="/admin/billing/dunning", status_code=303)
+    key = "error" if result.processed == 0 and result.failed else "notice"
+    return RedirectResponse(
+        url=f"/admin/billing/dunning?{key}={quote_plus(result.message('pause'))}",
+        status_code=303,
+    )
 
 
 @router.post(
@@ -133,11 +143,15 @@ def dunning_bulk_pause(
 def dunning_bulk_resume(
     request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
 ):
-    web_billing_dunning_service.execute_action_with_audit(
+    result = web_billing_dunning_service.execute_bulk_action_with_audit_result(
         db,
         request=request,
         action="resume",
         actor_id=_actor_id(request),
         case_ids_csv=case_ids,
     )
-    return RedirectResponse(url="/admin/billing/dunning", status_code=303)
+    key = "error" if result.processed == 0 and result.failed else "notice"
+    return RedirectResponse(
+        url=f"/admin/billing/dunning?{key}={quote_plus(result.message('resume'))}",
+        status_code=303,
+    )

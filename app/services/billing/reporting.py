@@ -267,9 +267,9 @@ class BillingReporting:
         """
         today = datetime.now(UTC).date()
 
-        # Only fetch unpaid invoices — paid/void are excluded
+        # Only fetch receivable invoices. Drafts are not yet billed/owed and
+        # zero-balance invoices are not open receivables.
         unpaid_statuses = [
-            InvoiceStatus.draft,
             InvoiceStatus.issued,
             InvoiceStatus.overdue,
             InvoiceStatus.partially_paid,
@@ -278,6 +278,7 @@ class BillingReporting:
             select(Invoice)
             .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
             .where(Invoice.status.in_(unpaid_statuses))
+            .where(Invoice.balance_due > 0)
             .order_by(Invoice.due_at.asc())
         )
         invoices = db.scalars(stmt).all()

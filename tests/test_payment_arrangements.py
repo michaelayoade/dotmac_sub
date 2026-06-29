@@ -229,6 +229,43 @@ class TestPaymentArrangements:
         assert arrangement.end_date == date(2025, 3, 31)
         assert len(arrangement.installments) == 3
 
+    def test_create_uses_configured_installment_bounds(
+        self, db_session, subscriber, monkeypatch
+    ):
+        _overdue_invoice(db_session, subscriber, amount="600.00")
+
+        def _resolve(_db, _domain, key):
+            if key == "payment_arrangement_min_installments":
+                return 3
+            if key == "payment_arrangement_max_installments":
+                return 4
+            return None
+
+        monkeypatch.setattr(
+            "app.services.payment_arrangements.settings_spec.resolve_value", _resolve
+        )
+
+        with pytest.raises(HTTPException) as min_exc:
+            payment_arrangements.create(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                total_amount=Decimal("300.00"),
+                installments=2,
+                frequency=PaymentFrequency.monthly.value,
+                start_date=date(2026, 7, 1),
+            )
+        assert "Minimum 3" in min_exc.value.detail
+
+        arrangement = payment_arrangements.create(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            total_amount=Decimal("300.00"),
+            installments=3,
+            frequency=PaymentFrequency.monthly.value,
+            start_date=date(2026, 7, 1),
+        )
+        assert arrangement.installments_total == 3
+
     def test_create_arrangement_directly(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(
             db_session,
@@ -558,6 +595,33 @@ class TestArrangementLifecycle:
         _, event_type = emit_mock.call_args[0][0], emit_mock.call_args[0][1]
         assert event_type.value == "arrangement.defaulted"
         assert emit_mock.call_args[0][2]["arrangement_id"] == str(arrangement.id)
+
+    def test_check_overdue_uses_configured_default_threshold(
+        self, db_session, subscriber, monkeypatch
+    ):
+        arrangement = _create_arrangement_directly(
+            db_session,
+            subscriber,
+            start=date.today() - timedelta(days=90),
+            frequency=PaymentFrequency.weekly,
+        )
+        payment_arrangements.approve(db_session, str(arrangement.id))
+
+        def _resolve(_db, _domain, key):
+            if key == "payment_arrangement_default_overdue_installments":
+                return 1
+            return None
+
+        monkeypatch.setattr(
+            "app.services.payment_arrangements.settings_spec.resolve_value", _resolve
+        )
+
+        with patch("app.services.events.emit_event"):
+            result = payment_arrangements.check_overdue_installments(db_session)
+
+        assert result["arrangements_defaulted"] == 1
+        db_session.refresh(arrangement)
+        assert arrangement.status == ArrangementStatus.defaulted
 
     def test_check_overdue_ignores_unapproved_arrangements(
         self, db_session, subscriber

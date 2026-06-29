@@ -92,14 +92,34 @@ def consolidated_record_payment(
     collection_account_id: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    web_consolidated_billing_service.record_bulk_payment(
-        db,
-        billing_account_id=billing_account_id,
-        amount=amount,
-        currency=currency,
-        memo=memo,
-        collection_account_id=collection_account_id or None,
-    )
+    try:
+        web_consolidated_billing_service.record_bulk_payment(
+            db,
+            billing_account_id=billing_account_id,
+            amount=amount,
+            currency=currency,
+            memo=memo,
+            collection_account_id=collection_account_id or None,
+        )
+    except Exception as exc:
+        db.rollback()
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        context = web_consolidated_billing_service.build_detail_context(
+            db,
+            billing_account_id,
+        )
+        return templates.TemplateResponse(
+            "admin/billing/consolidated/detail.html",
+            {
+                "request": request,
+                **context,
+                "error": str(exc),
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
     return RedirectResponse(
         url=f"/admin/billing/consolidated-accounts/{billing_account_id}",
         status_code=303,

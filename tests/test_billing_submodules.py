@@ -7,7 +7,7 @@ and billing reporting.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import patch
@@ -2018,6 +2018,46 @@ class TestReportingHelpers:
         assert "31_60" in result["buckets"]
         assert "61_90" in result["buckets"]
         assert "90_plus" in result["buckets"]
+
+    def test_ar_aging_buckets_excludes_non_receivables(self, db_session, subscriber):
+        """Draft and zero-balance invoices should not inflate receivables."""
+        due_at = datetime.now(UTC) - timedelta(days=10)
+        draft = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.draft,
+        )
+        draft.due_at = due_at
+        zero_balance = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("0.00"),
+            status=InvoiceStatus.issued,
+        )
+        zero_balance.due_at = due_at
+        receivable = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("75.00"),
+            total=Decimal("75.00"),
+            balance_due=Decimal("75.00"),
+            status=InvoiceStatus.issued,
+        )
+        receivable.due_at = due_at
+        db_session.commit()
+
+        result = BillingReporting.get_ar_aging_buckets(db_session)
+
+        aged_ids = {invoice.id for invoice in result["buckets"]["1_30"]}
+        assert receivable.id in aged_ids
+        assert draft.id not in aged_ids
+        assert zero_balance.id not in aged_ids
+        assert result["totals"]["1_30"] == 75.0
 
 
 # ============================================================================

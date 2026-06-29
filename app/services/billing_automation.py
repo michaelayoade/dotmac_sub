@@ -40,6 +40,7 @@ from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
+from app.services.billing_policy import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.billing_settings import (
     accounts_with_collectible_service,
     resolve_payment_due_days,
@@ -1083,12 +1084,6 @@ def run_invoice_cycle(
     # Query billable active subscriptions. Network/account enforcement states
     # like blocked/suspended must not suppress invoicing: those accounts still
     # owe for active service periods and may need the invoice to clear the block.
-    billable_account_statuses = (
-        SubscriberStatus.active,
-        SubscriberStatus.blocked,
-        SubscriberStatus.suspended,
-        SubscriberStatus.delinquent,
-    )
     # Postpaid subscriptions are always invoiced. ``prepaid_monthly`` accounts
     # (prepaid billing_mode on a MONTHLY-cycle offer) are invoiced too — billed
     # in advance, due on issue — but ONLY when the cutover flag is enabled;
@@ -1112,7 +1107,7 @@ def run_invoice_cycle(
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(Subscriber.status.in_(billable_account_statuses))
+        .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
         .filter(mode_filter)
         .all()
     )
@@ -1133,7 +1128,7 @@ def run_invoice_cycle(
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(Subscriber.status.in_(billable_account_statuses))
+        .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
         .filter(Subscription.billing_mode == BillingMode.prepaid)
         .count()
     )

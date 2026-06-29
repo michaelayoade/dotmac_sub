@@ -53,7 +53,7 @@ class TestPaymentSuccessBanner:
         request = MagicMock()
         customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
         result = {
-            "payment": SimpleNamespace(receipt_number="RCT-1"),
+            "payment": SimpleNamespace(receipt_number="RCT-1", currency="USD"),
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
@@ -90,6 +90,7 @@ class TestPaymentSuccessBanner:
         context = render.call_args.args[1]
         assert context["was_restricted"] is True
         assert context["service_restored"] is True
+        assert context["currency"] == "USD"
 
     def test_payment_success_does_not_claim_restoration_after_partial_payment(
         self,
@@ -136,6 +137,89 @@ class TestPaymentSuccessBanner:
         context = render.call_args.args[1]
         assert context["was_restricted"] is True
         assert context["service_restored"] is False
+
+    def test_payment_verify_decline_renders_payment_status_page(self) -> None:
+        from app.web.customer.routes import customer_verify_payment
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_payment",
+                side_effect=ValueError("Payment was not successful"),
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                return_value=False,
+            ),
+            patch(
+                "app.web.customer.routes.customer_cards.capture_card_after_payment"
+            ) as capture,
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_payment(
+                request=request,
+                reference="ref-declined",
+                provider="paystack",
+                save_card=True,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/payment_status.html"
+        context = render.call_args.args[1]
+        assert context["status_kind"] == "declined"
+        assert context["reference"] == "ref-declined"
+        assert "not confirm" in context["message"]
+        capture.assert_not_called()
+
+    def test_payment_verify_transient_error_renders_pending_status_page(self) -> None:
+        from app.web.customer.routes import customer_verify_payment
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_payment",
+                side_effect=RuntimeError("gateway unavailable"),
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                return_value=False,
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_payment(
+                request=request,
+                reference="ref-pending",
+                provider="paystack",
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/payment_status.html"
+        context = render.call_args.args[1]
+        assert context["status_kind"] == "pending"
+        assert context["reference"] == "ref-pending"
+        assert "reconciled automatically" in context["message"]
 
 
 class TestCustomerTopupRoutes:
@@ -225,6 +309,39 @@ class TestCustomerTopupRoutes:
         assert payload["reference"] == "ref-topup"
         assert payload["checkout_metadata"]["topup_intent_id"] == "intent-1"
 
+    def test_topup_intent_route_returns_safe_error_on_provider_failure(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_topup_intent
+
+        request = MagicMock()
+        request.headers = {}
+        request.url_for.return_value = (
+            "https://selfcare.test/portal/billing/topup/verify"
+        )
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.create_topup_intent",
+                side_effect=RuntimeError("provider exploded"),
+            ),
+        ):
+            response = customer_create_topup_intent(
+                request=request,
+                payload={"amount": 5000, "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 400
+        detail = json.loads(response.body)["detail"]
+        assert "Unable to start the payment" in detail
+        assert "provider exploded" not in detail
+
     def test_pay_intent_route_returns_json_payload(self) -> None:
         import json
 
@@ -308,6 +425,37 @@ class TestCustomerTopupRoutes:
         assert response.status_code == 403
         assert "View-only" in json.loads(response.body)["detail"]
 
+    def test_pay_intent_route_returns_safe_error_on_provider_failure(self) -> None:
+        import json
+
+        from app.web.customer.routes import customer_create_invoice_payment_intent
+
+        request = MagicMock()
+        request.headers = {}
+        request.url_for.return_value = "https://selfcare.test/portal/billing/pay/verify"
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.create_invoice_payment_intent",
+                side_effect=RuntimeError("provider exploded"),
+            ),
+        ):
+            response = customer_create_invoice_payment_intent(
+                request=request,
+                payload={"invoice": "inv-1", "provider": "paystack"},
+                db=MagicMock(),
+            )
+
+        assert response.status_code == 400
+        detail = json.loads(response.body)["detail"]
+        assert "Unable to start the payment" in detail
+        assert "provider exploded" not in detail
+
     def test_topup_success_marks_service_restored_after_post_payment_check(
         self,
     ) -> None:
@@ -316,7 +464,7 @@ class TestCustomerTopupRoutes:
         request = MagicMock()
         customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
         result = {
-            "payment": SimpleNamespace(receipt_number="RCT-T1"),
+            "payment": SimpleNamespace(receipt_number="RCT-T1", currency="GHS"),
             "amount": 5000,
             "reference": "ref-topup-1",
             "already_recorded": False,
@@ -360,6 +508,50 @@ class TestCustomerTopupRoutes:
         assert context["was_restricted"] is True
         assert context["service_restored"] is True
         assert context["credit_added"] == 5000
+        assert context["currency"] == "GHS"
+
+    def test_topup_verify_decline_renders_payment_status_page(self) -> None:
+        from app.web.customer.routes import customer_verify_topup
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_topup",
+                side_effect=ValueError("Payment was not successful"),
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                return_value=False,
+            ),
+            patch(
+                "app.web.customer.routes.customer_cards.capture_card_after_payment"
+            ) as capture,
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
+        ):
+            response = customer_verify_topup(
+                request=request,
+                reference="ref-topup-declined",
+                provider="paystack",
+                save_card=True,
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        assert render.call_args.args[0] == "customer/billing/payment_status.html"
+        context = render.call_args.args[1]
+        assert context["status_kind"] == "declined"
+        assert context["flow"] == "account_topup"
+        capture.assert_not_called()
 
 
 class TestSaveCardOnVerify:

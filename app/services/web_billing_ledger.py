@@ -124,6 +124,50 @@ def _display_date(entry) -> datetime:  # type: ignore[no-untyped-def]
     return getattr(entry, "effective_date", None) or entry.created_at
 
 
+def _amounts_by_currency(entries: list[object]) -> list[dict[str, object]]:
+    totals: dict[str, Decimal] = {}
+    for entry in entries:
+        currency = (getattr(entry, "currency", None) or "NGN").upper()
+        totals[currency] = totals.get(currency, Decimal("0.00")) + Decimal(
+            str(getattr(entry, "amount", 0) or 0)
+        )
+    return [
+        {"currency": currency, "amount": float(amount)}
+        for currency, amount in sorted(totals.items())
+        if amount
+    ]
+
+
+def _net_amounts_by_currency(
+    credit_entries: list[object], debit_entries: list[object]
+) -> list[dict[str, object]]:
+    totals: dict[str, Decimal] = {}
+    for entry in credit_entries:
+        currency = (getattr(entry, "currency", None) or "NGN").upper()
+        totals[currency] = totals.get(currency, Decimal("0.00")) + Decimal(
+            str(getattr(entry, "amount", 0) or 0)
+        )
+    for entry in debit_entries:
+        currency = (getattr(entry, "currency", None) or "NGN").upper()
+        totals[currency] = totals.get(currency, Decimal("0.00")) - Decimal(
+            str(getattr(entry, "amount", 0) or 0)
+        )
+    return [
+        {"currency": currency, "amount": float(amount)}
+        for currency, amount in sorted(totals.items())
+        if amount
+    ]
+
+
+def _amounts_display(amounts: list[dict[str, object]]) -> str:
+    if not amounts:
+        return "0.00"
+    if len(amounts) == 1:
+        amount = amounts[0]
+        return f"{amount['currency']} {float(amount['amount']):,.2f}"
+    return f"{len(amounts)} currencies"
+
+
 def build_ledger_entries_data(
     db,
     *,
@@ -332,12 +376,21 @@ def build_ledger_entries_data(
     debit_total = sum(
         float(getattr(entry, "amount", 0) or 0) for entry in debit_entries
     )
+    credit_amounts = _amounts_by_currency(credit_entries)
+    debit_amounts = _amounts_by_currency(debit_entries)
+    net_amounts = _net_amounts_by_currency(credit_entries, debit_entries)
     ledger_totals = {
         "credit_count": len(credit_entries),
         "credit_total": credit_total,
+        "credit_amounts": credit_amounts,
+        "credit_display": _amounts_display(credit_amounts),
         "debit_count": len(debit_entries),
         "debit_total": debit_total,
+        "debit_amounts": debit_amounts,
+        "debit_display": _amounts_display(debit_amounts),
         "net_total": credit_total - debit_total,
+        "net_amounts": net_amounts,
+        "net_display": _amounts_display(net_amounts),
     }
 
     return {

@@ -7,6 +7,7 @@ from app.schemas.billing import PaymentMethodCreate
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services.web_billing_payments import (
+    build_import_result_payload,
     import_payments,
     list_payment_import_history,
     list_payment_import_history_filtered,
@@ -14,6 +15,18 @@ from app.services.web_billing_payments import (
     process_payment_create,
     render_payment_import_history_csv,
 )
+
+
+def test_import_result_payload_reports_truncated_error_sample():
+    errors = [f"row {idx} failed" for idx in range(12)]
+
+    payload = build_import_result_payload(imported_count=3, errors=errors)
+
+    assert payload["imported"] == 3
+    assert payload["total_errors"] == 12
+    assert payload["displayed_errors"] == 10
+    assert payload["errors_truncated"] is True
+    assert payload["errors"] == errors[:10]
 
 
 def test_import_payments_applies_payment_source_to_memo(db_session, subscriber):

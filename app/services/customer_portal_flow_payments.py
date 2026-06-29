@@ -48,6 +48,7 @@ _ONLINE_PROVIDER_LABELS = {
 _DIRECT_TRANSFER_PROVIDER = "direct_bank_transfer"
 _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
 _DIRECT_TRANSFER_TTL = timedelta(days=7)
+_DEFAULT_TOPUP_PRESET_AMOUNTS = [1000, 2000, 5000, 10000, 20000, 50000]
 
 
 def _resolve_payment_provider(db: Session) -> str:
@@ -253,6 +254,25 @@ def _resolve_topup_limits(db: Session) -> tuple[int, int]:
         int(max_amount) if isinstance(max_amount, (str, int, float)) else 500000
     )
     return min_amount_value, max_amount_value
+
+
+def _resolve_topup_preset_amounts(db: Session) -> list[int]:
+    raw = resolve_value(db, SettingDomain.billing, "topup_preset_amounts")
+    if raw is None:
+        return list(_DEFAULT_TOPUP_PRESET_AMOUNTS)
+    values = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    presets: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        try:
+            amount = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0 or amount in seen:
+            continue
+        presets.append(amount)
+        seen.add(amount)
+    return presets or list(_DEFAULT_TOPUP_PRESET_AMOUNTS)
 
 
 def _format_naira(amount: Decimal | int | float) -> str:
@@ -795,6 +815,8 @@ def create_invoice_payment_intent(
             invoice_id=str(invoice.id),
             enforce_limits=False,
         )
+    customer_email = _resolve_customer_email(db, customer)
+    _require_gateway_email(provider_type, customer_email)
 
     invoice_number = getattr(invoice, "invoice_number", None)
     checkout_metadata = {
@@ -845,7 +867,7 @@ def create_invoice_payment_intent(
         "amount": amount,
         "currency": "NGN",
         "invoice_number": invoice_number,
-        "customer_email": _resolve_customer_email(db, customer),
+        "customer_email": customer_email,
         "checkout_metadata": checkout_metadata,
         "charged": False,
         "checkout_url": None,
@@ -1070,6 +1092,13 @@ def _resolve_customer_email(db: Session, customer: dict) -> str:
     return ""
 
 
+def _require_gateway_email(provider_type: str, email: str) -> None:
+    if provider_type in {"paystack", "flutterwave"} and not email:
+        raise ValueError(
+            "Add an email address to your customer profile before paying online."
+        )
+
+
 def get_topup_page(
     db: Session,
     customer: dict,
@@ -1110,7 +1139,7 @@ def get_topup_page(
         "prepaid_balance": prepaid_balance,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
-        "preset_amounts": [1000, 2000, 5000, 10000, 20000, 50000],
+        "preset_amounts": _resolve_topup_preset_amounts(db),
         "payment_methods": payment_methods,
     }
     try:
@@ -1252,6 +1281,8 @@ def create_topup_intent(
     provider_type = provider or _resolve_payment_provider(db)
     if provider_type == _DIRECT_TRANSFER_PROVIDER:
         return create_direct_transfer_topup_intent(db, customer, requested_amount)
+    customer_email = _resolve_customer_email(db, customer)
+    _require_gateway_email(provider_type, customer_email)
 
     _cancel_pending_direct_transfer_intents(db, account_id)
     selected_payment_method_id = str(payment_method_id or "").strip() or None
@@ -1328,7 +1359,7 @@ def create_topup_intent(
             paystack.charge_authorization(
                 db,
                 authorization_code=selected_payment_token,
-                email=_resolve_customer_email(db, customer),
+                email=customer_email,
                 amount_kobo=paystack.amount_to_kobo(requested_amount),
                 reference=gateway_context.reference,
                 metadata=checkout_metadata,

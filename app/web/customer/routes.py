@@ -52,6 +52,65 @@ logger = logging.getLogger(__name__)
 _emit_customer_event = emit_customer_event
 
 
+def _render_payment_return_status(
+    request: Request,
+    *,
+    reference: str,
+    provider: str | None,
+    flow: str,
+    exc: Exception,
+) -> Response:
+    is_decline = isinstance(exc, (ValueError, HTTPException)) and not (
+        isinstance(exc, HTTPException) and exc.status_code >= 500
+    )
+    if is_decline:
+        status_kind = "declined"
+        title = "Payment not confirmed"
+        message = (
+            "The payment provider did not confirm a successful payment. "
+            "No duplicate payment was recorded."
+        )
+    else:
+        status_kind = "pending"
+        title = "Payment verification pending"
+        message = (
+            "We could not confirm the payment provider response right now. "
+            "If you were debited, the payment will be reconciled automatically."
+        )
+        logger.warning(
+            "Customer payment verification returned pending state",
+            extra={
+                "reference": reference,
+                "provider": provider,
+                "flow": flow,
+            },
+            exc_info=exc,
+        )
+    return templates.TemplateResponse(
+        "customer/billing/payment_status.html",
+        {
+            "request": request,
+            "status_kind": status_kind,
+            "title": title,
+            "message": message,
+            "reference": reference,
+            "provider": provider,
+            "flow": flow,
+            "active_page": "billing",
+        },
+        status_code=200,
+    )
+
+
+def _card_save_status(
+    db: Session, customer: dict, reference: str, provider: str | None
+):
+    method = customer_cards.capture_card_after_payment(
+        db, str(customer.get("account_id") or ""), reference, provider
+    )
+    return "saved" if method else "not_saved"
+
+
 def _format_bps(value: float | int | None) -> str:
     amount = float(value or 0)
     if amount <= 0:
@@ -1635,8 +1694,23 @@ def customer_create_invoice_payment_intent(
             redirect_url=str(request.url_for("customer_verify_payment")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning(
+            "Unable to start customer invoice payment intent",
+            extra={"invoice_id": invoice_id, "account_id": customer.get("account_id")},
+            exc_info=True,
+        )
+        return JSONResponse(
+            {
+                "detail": (
+                    "Unable to start the payment. If your card was charged, "
+                    "the payment will be reconciled automatically."
+                )
+            },
+            status_code=400,
+        )
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1669,12 +1743,11 @@ def customer_verify_payment(
         customer_portal.complete_invoice_payment_intent(
             db, reference, result.get("payment")
         )
+        card_save_status = None
         if save_card is True:
             # Best-effort, Paystack-only; never breaks the recorded payment.
             # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+            card_save_status = _card_save_status(db, customer, reference, provider)
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1688,23 +1761,33 @@ def customer_verify_payment(
                 "payment": result["payment"],
                 "invoice": result["invoice"],
                 "amount": result["amount"],
+                "currency": getattr(result.get("payment"), "currency", None) or "NGN",
                 "reference": result["reference"],
                 "allocated_total": result.get("allocated_total"),
                 "credit_added": result.get("credit_added"),
                 "available_balance": result.get("available_balance"),
                 "already_recorded": result.get("already_recorded", False),
+                "card_save_status": card_save_status,
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
                 "active_page": "billing",
             },
         )
     except (ValueError, HTTPException) as exc:
-        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
-        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(message)},
-            status_code=status_code,
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
+        )
+    except Exception as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
         )
 
 
@@ -1780,8 +1863,23 @@ def customer_create_topup_intent(
             redirect_url=str(request.url_for("customer_verify_topup")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning(
+            "Unable to start customer top-up intent",
+            extra={"account_id": customer.get("account_id")},
+            exc_info=True,
+        )
+        return JSONResponse(
+            {
+                "detail": (
+                    "Unable to start the payment. If your card was charged, "
+                    "the payment will be reconciled automatically."
+                )
+            },
+            status_code=400,
+        )
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1914,12 +2012,11 @@ def customer_verify_topup(
         result = customer_portal.verify_and_record_topup(
             db, customer, reference, provider=provider
         )
+        card_save_status = None
         if save_card is True:
             # Best-effort, Paystack-only; never breaks the recorded payment.
             # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+            card_save_status = _card_save_status(db, customer, reference, provider)
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1932,6 +2029,7 @@ def customer_verify_topup(
                 "customer": customer,
                 "payment": result["payment"],
                 "amount": result["amount"],
+                "currency": getattr(result.get("payment"), "currency", None) or "NGN",
                 "reference": result["reference"],
                 "already_recorded": result["already_recorded"],
                 "allocated_to_invoices": result["allocated_to_invoices"],
@@ -1939,16 +2037,27 @@ def customer_verify_topup(
                 "credit_added": result["credit_added"],
                 "available_balance": result["available_balance"],
                 "policy_warnings": result["policy_warnings"],
+                "card_save_status": card_save_status,
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
                 "active_page": "billing",
             },
         )
     except ValueError as exc:
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(exc)},
-            status_code=400,
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
+        )
+    except Exception as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
         )
 
 

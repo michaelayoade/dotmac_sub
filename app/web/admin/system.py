@@ -4222,7 +4222,28 @@ def config_billing_page(request: Request, db: Session = Depends(get_db)):
 def config_billing_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_billing_config_context(db)["billing"])
-    web_system_config_service.save_billing_config(db, form)
+    try:
+        web_system_config_service.save_billing_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        data = web_system_config_service.get_billing_config_context(db)
+        billing = dict(data["billing"])
+        for key, value in form.items():
+            billing[key] = str(value)
+        return templates.TemplateResponse(
+            "admin/system/config/billing.html",
+            _config_context(
+                request,
+                db,
+                {
+                    "active_page": "config-billing",
+                    "audit_items": _billing_config_audit_items(db),
+                    "billing": billing,
+                    "error": str(exc),
+                },
+            ),
+            status_code=400,
+        )
     after = dict(web_system_config_service.get_billing_config_context(db)["billing"])
     changes = _diff_audit_snapshots(before, after)
     if changes:

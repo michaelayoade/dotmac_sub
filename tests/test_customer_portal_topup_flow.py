@@ -49,13 +49,19 @@ def _make_invoice(
 
 
 def _patch_topup_settings(
-    monkeypatch, *, min_amount: int = 1000, max_amount: int = 500000
+    monkeypatch,
+    *,
+    min_amount: int = 1000,
+    max_amount: int = 500000,
+    preset_amounts: str | None = None,
 ) -> None:
     def _fake_resolve_value(_db, _domain, key):
         if key == "topup_min_amount":
             return min_amount
         if key == "topup_max_amount":
             return max_amount
+        if key == "topup_preset_amounts":
+            return preset_amounts
         return None
 
     monkeypatch.setattr(
@@ -108,6 +114,30 @@ def test_get_topup_page_includes_limits_and_public_key(
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
     ]
+
+
+def test_get_topup_page_uses_configured_preset_amounts(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_topup",
+            reference="unused-ref",
+        ),
+    )
+    _patch_topup_settings(
+        monkeypatch,
+        preset_amounts="1500, 3000, bad, 3000, 7500",
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["preset_amounts"] == [1500, 3000, 7500]
 
 
 def test_get_topup_page_includes_saved_payment_methods(
@@ -317,6 +347,24 @@ def test_create_topup_intent_persists_server_owned_reference(
     assert intent.status == "pending"
 
 
+def test_create_topup_intent_rejects_gateway_when_customer_email_blank(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    subscriber.email = ""
+    db_session.commit()
+
+    with pytest.raises(ValueError) as exc:
+        create_topup_intent(
+            db_session,
+            {"account_id": str(subscriber.id), "username": "pppoe-login"},
+            "5000.00",
+            provider="paystack",
+        )
+
+    assert "email address" in str(exc.value)
+
+
 def test_create_topup_intent_records_selected_payment_method(
     monkeypatch, db_session, subscriber
 ):
@@ -450,6 +498,27 @@ def test_create_invoice_payment_intent_gateway_paystack(
     assert payload["amount"] == Decimal("2500.00")
     assert payload["checkout_metadata"]["invoice_id"] == str(invoice.id)
     assert payload["checkout_metadata"]["payment_flow"] == "invoice_payment"
+
+
+def test_create_invoice_payment_intent_rejects_gateway_when_customer_email_blank(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    subscriber.email = ""
+    db_session.commit()
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-BLANK"
+    )
+
+    with pytest.raises(ValueError) as exc:
+        create_invoice_payment_intent(
+            db_session,
+            {"account_id": str(subscriber.id), "username": "pppoe-login"},
+            str(invoice.id),
+            provider="paystack",
+        )
+
+    assert "email address" in str(exc.value)
 
 
 def test_create_invoice_payment_intent_charges_saved_card(

@@ -5,6 +5,11 @@
 {{ ambient_background("emerald", "teal") }}
 <div class="relative space-y-8">
     {% call page_header(title="Billing & Invoice Settings", subtitle="Billing cycle, invoice numbering, payment terms, and blocking rules", icon=icon_credit_card(), color="emerald", color2="teal") %}{% endcall %}
+    {% if error %}
+    <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+        {{ error }}
+    </div>
+    {% endif %}
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         {% call card("Recurring Billing", color="emerald") %}

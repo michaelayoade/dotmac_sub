@@ -29,17 +29,22 @@ def invoice_generate_batch(
     request: Request,
     billing_cycle: str | None = Form(None),
     billing_date: str | None = Form(None),
+    confirmed: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    note = web_billing_invoice_batch_service.run_batch_with_date(
-        db,
-        billing_cycle=billing_cycle,
-        billing_date=billing_date,
-    )
-    return HTMLResponse(
-        '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
-        f"{note}"
-        "</div>"
+    if not confirmed:
+        note = (
+            "Batch run was not started. Review the preview and confirm before running."
+        )
+    else:
+        note = web_billing_invoice_batch_service.run_batch_with_date(
+            db,
+            billing_cycle=billing_cycle,
+            billing_date=billing_date,
+        )
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/batch?{urlencode({'note': note})}",
+        status_code=303,
     )
 
 

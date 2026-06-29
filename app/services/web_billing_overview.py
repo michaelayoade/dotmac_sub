@@ -486,6 +486,20 @@ def _in_period(invoice: Invoice, *, period: str, today: date) -> bool:
     return False
 
 
+def _currency_amounts_for_invoices(invoices: list[Invoice]) -> list[dict[str, object]]:
+    amounts: dict[str, Decimal] = {}
+    for invoice in invoices:
+        currency = (invoice.currency or "NGN").upper()
+        amounts[currency] = amounts.get(currency, Decimal("0.00")) + Decimal(
+            str(invoice.balance_due or 0)
+        )
+    return [
+        {"currency": currency, "amount": float(amount)}
+        for currency, amount in sorted(amounts.items())
+        if amount
+    ]
+
+
 def build_ar_aging_data(
     db,
     *,
@@ -588,6 +602,9 @@ def build_ar_aging_data(
         key: sum(float(getattr(inv, "balance_due", 0) or 0) for inv in items)
         for key, items in buckets.items()
     }
+    totals_by_currency = {
+        key: _currency_amounts_for_invoices(items) for key, items in buckets.items()
+    }
     counts = {key: len(items) for key, items in buckets.items()}
 
     bucket_rows: dict[str, list[dict[str, object]]] = {}
@@ -596,6 +613,7 @@ def build_ar_aging_data(
         bucket_rows[key] = [
             {
                 "invoice": invoice,
+                "currency": (invoice.currency or "NGN").upper(),
                 "account_label": _account_label(invoice),
                 "last_payment_at": _last_payment_date(invoice),
             }
@@ -630,6 +648,7 @@ def build_ar_aging_data(
     )
 
     debtor_totals: dict[UUID, float] = {}
+    debtor_totals_by_currency: dict[UUID, dict[str, Decimal]] = {}
     debtor_names: dict[UUID, str] = {}
     for invoice in debtor_source_invoices:
         if not _debtor_period_match(invoice):
@@ -638,6 +657,11 @@ def build_ar_aging_data(
         debtor_totals[account_id] = debtor_totals.get(account_id, 0.0) + float(
             invoice.balance_due or 0
         )
+        currency = (invoice.currency or "NGN").upper()
+        currency_totals = debtor_totals_by_currency.setdefault(account_id, {})
+        currency_totals[currency] = currency_totals.get(currency, Decimal("0.00")) + (
+            Decimal(str(invoice.balance_due or 0))
+        )
         debtor_names.setdefault(account_id, _account_label(invoice))
 
     top_debtors = [
@@ -645,6 +669,13 @@ def build_ar_aging_data(
             "account_id": str(account_id),
             "account_label": debtor_names.get(account_id, "Account"),
             "amount": amount,
+            "amounts": [
+                {"currency": currency, "amount": float(currency_amount)}
+                for currency, currency_amount in sorted(
+                    debtor_totals_by_currency.get(account_id, {}).items()
+                )
+                if currency_amount
+            ],
         }
         for account_id, amount in sorted(
             debtor_totals.items(), key=lambda item: item[1], reverse=True
@@ -656,6 +687,7 @@ def build_ar_aging_data(
             "key": key,
             "label": _BUCKET_LABELS[key],
             "amount": totals[key],
+            "amounts": totals_by_currency[key],
             "count": counts[key],
             "is_selected": selected_bucket == key,
         }
@@ -695,6 +727,7 @@ def build_ar_aging_data(
     return {
         "buckets": buckets,
         "totals": totals,
+        "totals_by_currency": totals_by_currency,
         "counts": counts,
         "bucket_rows": bucket_rows,
         "bucket_invoice_ids": bucket_invoice_ids,

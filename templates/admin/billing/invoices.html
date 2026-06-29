@@ -194,7 +194,8 @@
                     {% for invoice in invoices %}
                     {% set status = invoice.status | default('draft') %}
                     {% set status_val = status.value if status is not string else status %}
-                    {% set status_map = {'paid': 'paid', 'issued': 'info', 'partially_paid': 'warning', 'overdue': 'overdue', 'void': 'inactive', 'draft': 'draft'} %}
+                    {% set status_map = {'paid': 'paid', 'issued': 'info', 'partially_paid': 'warning', 'overdue': 'overdue', 'void': 'inactive', 'written_off': 'inactive', 'draft': 'draft'} %}
+                    {% set invoice_currency = invoice.currency or 'NGN' %}
                     <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/40"
                         :class="{ 'bg-emerald-50/30 dark:bg-emerald-900/5': selectedIds.includes('{{ invoice.id }}') }">
                         <td class="whitespace-nowrap px-3 py-2.5">
@@ -227,9 +228,9 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5">
-                            <p class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</p>
+                            <p class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</p>
                             {% if invoice.balance_due and invoice.balance_due > 0 and invoice.balance_due != invoice.total %}
-                            <p class="text-xs font-mono tabular-nums text-amber-600 dark:text-amber-400">₦{{ '{:,.2f}'.format(invoice.balance_due) }} due</p>
+                            <p class="text-xs font-mono tabular-nums text-amber-600 dark:text-amber-400">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.balance_due) }} due</p>
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5">
@@ -249,10 +250,10 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">
-                            ₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}
+                            {{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">
-                            ₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}
+                            {{ invoice_currency }} {{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5 text-right">
                             <div class="flex items-center justify-end gap-1">

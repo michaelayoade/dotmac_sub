@@ -3,6 +3,7 @@
 {% block title %}Payment Successful - Customer Portal{% endblock %}
 
 {% block content %}
+{% set payment_currency = currency or (payment.currency if payment else 'NGN') or 'NGN' %}
 <div class="space-y-6">
     <div>
         <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
@@ -43,12 +44,24 @@
         </div>
         {% endif %}
 
+        {% if card_save_status == 'saved' %}
+        <div class="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-left dark:border-blue-900/50 dark:bg-blue-900/20">
+            <p class="text-sm font-semibold text-blue-800 dark:text-blue-300">Card saved</p>
+            <p class="mt-1 text-sm text-blue-700 dark:text-blue-400">This card is available for future payments.</p>
+        </div>
+        {% elif card_save_status == 'not_saved' %}
+        <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-left dark:border-amber-900/50 dark:bg-amber-900/20">
+            <p class="text-sm font-semibold text-amber-800 dark:text-amber-300">Payment confirmed</p>
+            <p class="mt-1 text-sm text-amber-700 dark:text-amber-400">We could not save this card. You can still add a saved card from billing later.</p>
+        </div>
+        {% endif %}
+
         <!-- Payment Details Card -->
         <div class="mt-8 rounded-2xl border border-stone-200 bg-white p-6 text-left shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <div class="space-y-4">
                 <div class="flex items-center justify-between">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Amount Paid</span>
-                    <span class="text-lg font-bold text-emerald-600 dark:text-emerald-400">&#8358;{{ "{:,.2f}".format(amount) }}</span>
+                    <span class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ payment_currency }} {{ "{:,.2f}".format(amount) }}</span>
                 </div>
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Invoice</span>
@@ -57,19 +70,19 @@
                 {% if allocated_total is not none %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Applied to Invoice</span>
-                    <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(allocated_total) }}</span>
+                    <span class="text-sm font-semibold text-stone-900 dark:text-white">{{ payment_currency }} {{ "{:,.2f}".format(allocated_total) }}</span>
                 </div>
                 {% endif %}
                 {% if credit_added and credit_added > 0 %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Added to Account Balance</span>
-                    <span class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">&#8358;{{ "{:,.2f}".format(credit_added) }}</span>
+                    <span class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ payment_currency }} {{ "{:,.2f}".format(credit_added) }}</span>
                 </div>
                 {% endif %}
                 {% if available_balance is not none %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Current Balance</span>
-                    <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(available_balance) }}</span>
+                    <span class="text-sm font-semibold text-stone-900 dark:text-white">{{ payment_currency }} {{ "{:,.2f}".format(available_balance) }}</span>
                 </div>
                 {% endif %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">

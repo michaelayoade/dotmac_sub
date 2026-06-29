@@ -233,6 +233,48 @@ BILLING_KEYS = [
     "postpaid_default_min_balance",
 ]
 
+_BILLING_INTEGER_FIELDS: dict[str, tuple[str, int, int | None]] = {
+    "billing_day": ("Billing day", 1, 28),
+    "payment_due_days": ("Payment due days", 0, 3650),
+    "suspension_grace_hours": ("Suspension grace hours", 0, 87600),
+    "expiry_reminder_days": ("Expiry reminder days", 0, 3650),
+    "blocking_period_days": ("Blocking period days", 0, 3650),
+    "deactivation_period_days": ("Deactivation period days", 0, 3650),
+    "proforma_generation_day": ("Proforma generation day", 1, 28),
+    "proforma_payment_period": ("Proforma payment period", 0, 3650),
+    "prepaid_default_billing_day": ("Prepaid default billing day", 1, 28),
+    "prepaid_default_payment_due_days": (
+        "Prepaid default payment due days",
+        0,
+        3650,
+    ),
+    "prepaid_default_grace_period_days": (
+        "Prepaid default grace period days",
+        0,
+        3650,
+    ),
+    "postpaid_default_billing_day": ("Postpaid default billing day", 1, 28),
+    "postpaid_default_payment_due_days": (
+        "Postpaid default payment due days",
+        0,
+        3650,
+    ),
+    "postpaid_default_grace_period_days": (
+        "Postpaid default grace period days",
+        0,
+        3650,
+    ),
+}
+_BILLING_MONEY_FIELDS = {
+    "minimum_balance": "Minimum balance",
+    "prepaid_default_min_balance": "Prepaid default minimum balance",
+    "postpaid_default_min_balance": "Postpaid default minimum balance",
+}
+_BILLING_DAY_LIST_FIELDS = {
+    "invoice_reminder_days": "Invoice reminder days",
+    "dunning_escalation_days": "Dunning escalation days",
+}
+
 DIRECT_BANK_TRANSFER_KEYS = [
     "direct_bank_transfer_enabled",
     "direct_bank_transfer_bank_name",
@@ -261,7 +303,64 @@ def get_billing_config_context(db: Session) -> dict:
 
 
 def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.billing, data, BILLING_KEYS)
+    _save_settings(
+        db,
+        SettingDomain.billing,
+        _normalize_billing_config_payload(data),
+        BILLING_KEYS,
+    )
+
+
+def _normalize_billing_config_payload(data: Mapping[str, Any]) -> dict[str, str]:
+    normalized = {key: str(data.get(key) or "").strip() for key in BILLING_KEYS}
+    for key, (label, min_value, max_value) in _BILLING_INTEGER_FIELDS.items():
+        if not normalized.get(key):
+            continue
+        try:
+            value = int(normalized[key])
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a whole number") from exc
+        if value < min_value:
+            raise ValueError(f"{label} must be at least {min_value}")
+        if max_value is not None and value > max_value:
+            raise ValueError(f"{label} must be at most {max_value}")
+        normalized[key] = str(value)
+
+    for key, label in _BILLING_MONEY_FIELDS.items():
+        if not normalized.get(key):
+            continue
+        try:
+            amount = Decimal(normalized[key])
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"{label} must be a valid amount") from exc
+        if amount < 0:
+            raise ValueError(f"{label} must be zero or greater")
+        normalized[key] = f"{amount.quantize(Decimal('0.01'))}"
+
+    for key, label in _BILLING_DAY_LIST_FIELDS.items():
+        if not normalized.get(key):
+            continue
+        normalized[key] = _normalize_day_list(normalized[key], label)
+
+    return normalized
+
+
+def _normalize_day_list(value: str, label: str) -> str:
+    parts = [part.strip() for part in value.split(",")]
+    if not parts or any(not part for part in parts):
+        raise ValueError(f"{label} must be comma-separated whole days")
+    days: list[int] = []
+    for part in parts:
+        try:
+            day = int(part)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be comma-separated whole days") from exc
+        if day < 0:
+            raise ValueError(f"{label} cannot include negative days")
+        if day > 3650:
+            raise ValueError(f"{label} cannot include days greater than 3650")
+        days.append(day)
+    return ",".join(str(day) for day in days)
 
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
