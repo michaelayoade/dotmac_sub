@@ -69,9 +69,8 @@ def _upsert_row(db: Session, *, subscriber_id, item: dict) -> QuoteMirror | None
         row = QuoteMirror(crm_quote_id=crm_quote_id, subscriber_id=subscriber_id)
         db.add(row)
     row.subscriber_id = subscriber_id
-    feasibility = (
-        item.get("feasibility") if isinstance(item.get("feasibility"), dict) else {}
-    )
+    feasibility_raw = item.get("feasibility")
+    feasibility = feasibility_raw if isinstance(feasibility_raw, dict) else {}
     if item.get("status"):
         row.status = str(item["status"])
     if item.get("currency"):
