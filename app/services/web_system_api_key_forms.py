@@ -20,12 +20,26 @@ def get_api_key_new_form_context() -> dict:
     return {"error": None}
 
 
+def parse_scopes(raw: str | None) -> list[str]:
+    """Parse the comma/space/newline-separated scopes field into a clean list."""
+    if not raw:
+        return []
+    tokens = raw.replace(",", " ").split()
+    seen: list[str] = []
+    for token in tokens:
+        token = token.strip()
+        if token and token not in seen:
+            seen.append(token)
+    return seen
+
+
 def create_api_key(
     db: Session,
     *,
     subscriber_id: str,
     label: str,
     expires_in: str | None,
+    scopes: list[str] | None = None,
 ) -> str:
     """Create API key and return raw secret once for display."""
     raw_key = secrets.token_urlsafe(32)
@@ -43,6 +57,7 @@ def create_api_key(
         subscriber_id=coerce_uuid(subscriber_id),
         label=label,
         key_hash=key_hash,
+        scopes=scopes or [],
         is_active=True,
         expires_at=expires_at,
     )
