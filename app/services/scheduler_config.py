@@ -633,6 +633,17 @@ def build_beat_schedule() -> dict:
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
         )
+        # Companion to the app-side reaper above: this one closes the *external*
+        # FreeRADIUS radacct table (the mirror reaper only touches the app-side
+        # RadiusAccountingSession). Same flag/interval — without it, dead NAS
+        # leave phantom radacct "online" sessions forever.
+        _sync_scheduled_task(
+            session,
+            name="radacct_ghost_reaper",
+            task_name="app.tasks.radius.reap_radacct_ghosts",
+            enabled=radius_reap_enabled,
+            interval_seconds=radius_reap_interval_seconds,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions

@@ -839,9 +839,12 @@ def olt_backups_list(
             "end_at": end_at,
             "test_status": test_status,
             "test_message": test_message,
+            "storage_status": olt_operations_service.olt_backup_storage_status(),
         }
     )
-    return templates.TemplateResponse("admin/network/olts/backups.html", context)
+    return templates.TemplateResponse(
+        request, "admin/network/olts/backups.html", context
+    )
 
 
 # NOTE: this static route must be registered BEFORE /olts/backups/{backup_id};
@@ -886,7 +889,11 @@ def olt_backup_compare(
     dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_backup_detail(
-    request: Request, backup_id: str, db: Session = Depends(get_db)
+    request: Request,
+    backup_id: str,
+    test_status: str | None = None,
+    test_message: str | None = None,
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
     backup = olt_operations_service.get_olt_backup_or_none(db, backup_id)
     if not backup:
@@ -902,13 +909,25 @@ def olt_backup_detail(
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-    preview = olt_operations_service.read_backup_preview(backup)
+    try:
+        preview_info = olt_operations_service.read_backup_preview_info(backup)
+    except HTTPException as exc:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": str(exc.detail)},
+            status_code=exc.status_code,
+        )
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
             "olt": olt,
             "backup": backup,
-            "preview": preview,
+            "preview": preview_info["preview"],
+            "preview_truncated": preview_info["truncated"],
+            "preview_limit_chars": preview_info["limit_chars"],
+            "storage_status": olt_operations_service.olt_backup_storage_status(),
+            "test_status": test_status,
+            "test_message": test_message,
         }
     )
     return templates.TemplateResponse("admin/network/olts/backup_detail.html", context)
@@ -976,8 +995,23 @@ def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectRespon
     dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_backup_restore(
-    olt_id: str, backup_id: str, db: Session = Depends(get_db)
+    olt_id: str,
+    backup_id: str,
+    confirm_olt_name: str | None = Form(None),
+    db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return RedirectResponse(
+            "/admin/network/olts?test_status=error&test_message=OLT+not+found",
+            status_code=303,
+        )
+    if (confirm_olt_name or "").strip() != olt.name:
+        message = "Type the exact OLT name to confirm restore"
+        return RedirectResponse(
+            f"/admin/network/olts/backups/{backup_id}?test_status=error&test_message={quote_plus(message)}",
+            status_code=303,
+        )
     ok, message = olt_operations_service.restore_from_backup(db, olt_id, backup_id)
     status = "success" if ok else "error"
     return RedirectResponse(

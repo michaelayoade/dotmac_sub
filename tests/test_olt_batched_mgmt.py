@@ -204,6 +204,47 @@ class TestBuildManagementCommandBatch:
         with pytest.raises(ValueError, match="missing gateway"):
             build_management_command_batch(spec)
 
+    def test_rejects_invalid_fsp_before_command_generation(self):
+        """F/S/P is interpolated into Huawei CLI and must be validated."""
+        spec = BatchedMgmtSpec(
+            fsp="0/1/0\nsave",
+            ont_id_on_olt=10,
+            mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
+        )
+
+        with pytest.raises(ValueError, match="format 'F/S/P'"):
+            build_management_command_batch(spec)
+
+    def test_rejects_invalid_static_ip_values_before_command_generation(self):
+        """Static IP fields are interpolated into CLI and must be IP-safe."""
+        spec = BatchedMgmtSpec(
+            fsp="0/2/1",
+            ont_id_on_olt=10,
+            mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
+            ip_mode="static",
+            ip_address="10.0.0.100;save",
+            subnet_mask="255.255.255.0",
+            gateway="10.0.0.1",
+        )
+
+        with pytest.raises(ValueError, match="invalid characters"):
+            build_management_command_batch(spec)
+
+    def test_rejects_unsupported_ip_mode_before_command_generation(self):
+        """Unknown IP modes should fail instead of becoming DHCP commands."""
+        spec = BatchedMgmtSpec(
+            fsp="0/2/1",
+            ont_id_on_olt=10,
+            mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
+            ip_mode="static-ish",
+        )
+
+        with pytest.raises(ValueError, match="Unsupported management IP mode"):
+            build_management_command_batch(spec)
+
     def test_dhcp_mode(self):
         """DHCP mode should generate simpler iphost command."""
         spec = BatchedMgmtSpec(
@@ -523,23 +564,22 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         assert spec.gateway == "10.0.0.1"
         assert spec.ip_priority == 2
 
-    def test_partial_static_falls_back_to_dhcp(self):
-        """Should use DHCP if not all static params provided."""
+    def test_partial_static_fails_before_spec_creation(self):
+        """Partial static management config should not silently become DHCP."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
         config_pack.internet_config_ip_index = None
         config_pack.wan_config_profile_id = None
         config_pack.tr069_olt_profile_id = None
 
-        spec = create_batched_mgmt_spec_from_config_pack(
-            config_pack,
-            fsp="0/1/0",
-            ont_id_on_olt=10,
-            mgmt_gem_index=2,
-            allocated_ip="10.0.0.100",  # Only IP, no mask/gateway
-        )
-
-        assert spec.ip_mode == "dhcp"
+        with pytest.raises(ValueError, match="missing subnet_mask, gateway"):
+            create_batched_mgmt_spec_from_config_pack(
+                config_pack,
+                fsp="0/1/0",
+                ont_id_on_olt=10,
+                mgmt_gem_index=2,
+                allocated_ip="10.0.0.100",  # Only IP, no mask/gateway
+            )
 
     def test_zero_wan_config_profile(self):
         """Should preserve wan_config_profile_id=0 as valid profile."""

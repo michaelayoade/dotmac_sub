@@ -109,9 +109,16 @@ class RouterConfigService:
         return list(db.execute(query).scalars().all())
 
     @staticmethod
-    def get_snapshot(db: Session, snapshot_id: uuid.UUID) -> RouterConfigSnapshot:
+    def get_snapshot(
+        db: Session,
+        snapshot_id: uuid.UUID,
+        router_id: uuid.UUID | None = None,
+    ) -> RouterConfigSnapshot:
         snap = db.get(RouterConfigSnapshot, snapshot_id)
-        if not snap:
+        # When a router scope is supplied, a snapshot belonging to a different
+        # router must read as "not found" — otherwise any snapshot id is
+        # fetchable under any router URL.
+        if not snap or (router_id is not None and snap.router_id != router_id):
             raise HTTPException(status_code=404, detail="Snapshot not found")
         return snap
 
