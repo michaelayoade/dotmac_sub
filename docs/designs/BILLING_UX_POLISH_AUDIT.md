@@ -61,6 +61,8 @@ settings/integrity/reconcilers.
   per-case failures are visible instead of looking like full success.
 - Payment import results now report total, shown, and omitted error counts so the
   first 10-row error sample cannot hide additional failures.
+- Invoice batch run and preview failures now return stable operator-safe copy
+  while preserving exception detail in server logs.
 
 ### Partially resolved
 
@@ -125,6 +127,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/web_billing_payments.py tests/test_billing_payment_import_options.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_payment_import_options.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/web_billing_invoice_batch.py tests/test_billing_invoice_batch_web.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_invoice_batch_web.py -q`
   - Result: passed
 
 ## What this audit is
