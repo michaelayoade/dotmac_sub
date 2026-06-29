@@ -102,6 +102,8 @@ settings/integrity/reconcilers.
   disabled state tied to the preview confirmation checkbox.
 - Billing reporting AR-aging helper now excludes draft invoices from unpaid
   receivables, matching the admin AR-aging overview behavior.
+- Billing account list rows no longer expose dead Deactivate/Delete actions;
+  row actions are limited to real View/Edit/Create Invoice routes.
 
 ### Partially resolved
 
@@ -252,6 +254,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/billing/reporting.py tests/test_billing_submodules.py`
   - Result: passed
 - `poetry run python -c "...BillingReporting.get_ar_aging_buckets unpaid statuses..."`
+  - Result: passed
+- `poetry run ruff check tests/test_billing_accounts_list.py`
+  - Result: passed
+- `poetry run python -c "...accounts.html no dead deactivate/delete actions..."`
   - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
@@ -434,7 +440,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (Low) `app/services/collections/_core.py:696` — suspension-notification idempotency 24h hardcoded → setting (default 24h) [resolved in draft]
 
 ### Accounts / deposits / prepaid / consolidated / reseller
-- [POLISH] (High) `templates/admin/billing/accounts.html:168-182` — Deactivate (hx-post) + Delete (hx-delete) hit routes that don't exist (only GET); 404/405 silent → add routes (confirm + audit) or remove buttons [recommend]
+- [POLISH] (High) `templates/admin/billing/accounts.html:168-182` — Deactivate (hx-post) + Delete (hx-delete) hit routes that don't exist (only GET); 404/405 silent → add routes (confirm + audit) or remove buttons [resolved in draft]
 - [POLISH] (High) `app/web/admin/billing_consolidated.py:86-106` — bulk "Record & distribute" no confirm + no try/except; `Decimal(amount)` raises on bad input → 500; no success feedback → confirm + try/except + flash [resolved in draft]
 - [POLISH] (High) `app/web/admin/billing_invoice_batch.py:28-43` — "Run Batch" response is bare unstyled `<div>` (no layout/nav) after highest-stakes action → redirect back to `/invoices/batch?note=...` [resolved in draft]
 - [POLISH] (Med) `accounts.html:58-99` — Search/Status/Balance filters submit via hx-get but `accounts_list` only accepts customer_ref/reseller_id; ignored + injects full page into table → wire params or remove [resolved in draft]

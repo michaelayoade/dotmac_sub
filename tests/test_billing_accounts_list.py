@@ -46,3 +46,12 @@ def test_billing_accounts_template_uses_normal_get_filters():
     assert "hx-target=\"#accounts-table\"" not in template
     assert 'name="balance_filter"' not in template
     assert "status_filter" in template
+
+
+def test_billing_accounts_template_has_no_dead_deactivate_or_delete_actions():
+    template = Path("templates/admin/billing/accounts.html").read_text()
+
+    assert 'hx-post="/admin/billing/accounts/' not in template
+    assert 'hx-delete="/admin/billing/accounts/' not in template
+    assert "/deactivate" not in template
+    assert "Delete Account" not in template
