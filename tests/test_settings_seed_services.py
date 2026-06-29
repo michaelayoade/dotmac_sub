@@ -389,6 +389,7 @@ class TestSeedBillingNotificationSettings:
                         "service_extension_max_days",
                         "topup_reconciliation_stale_minutes",
                         "topup_reconciliation_max_age_days",
+                        "payment_gateway_timeout_seconds",
                     ]
                 ),
             )
@@ -409,6 +410,7 @@ class TestSeedBillingNotificationSettings:
         assert settings["service_extension_max_days"] == "30"
         assert settings["topup_reconciliation_stale_minutes"] == "15"
         assert settings["topup_reconciliation_max_age_days"] == "7"
+        assert settings["payment_gateway_timeout_seconds"] == "30"
 
 
 # =============================================================================

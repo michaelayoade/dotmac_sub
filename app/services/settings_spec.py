@@ -1681,6 +1681,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="payment_gateway_timeout_seconds",
+        env_var="BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=120,
+        label="Payment Gateway Timeout Seconds",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="proration_enabled",
         env_var="BILLING_PRORATION_ENABLED",
         value_type=SettingValueType.boolean,

@@ -1607,6 +1607,12 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_MAX_AGE_DAYS", "7"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="payment_gateway_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS", "30"),
+    )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
         db,
