@@ -2023,6 +2023,35 @@ class TestReportingHelpers:
         assert "61_90" in result["buckets"]
         assert "90_plus" in result["buckets"]
 
+    def test_ar_aging_excludes_draft_invoices(self, db_session, subscriber):
+        draft = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.draft,
+        )
+        draft.due_at = datetime.now(UTC) - timedelta(days=45)
+        issued = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("50.00"),
+            status=InvoiceStatus.issued,
+        )
+        issued.due_at = datetime.now(UTC) - timedelta(days=45)
+        db_session.commit()
+
+        result = BillingReporting.get_ar_aging_buckets(db_session)
+        all_bucketed_invoices = [
+            invoice for invoices in result["buckets"].values() for invoice in invoices
+        ]
+
+        assert draft not in all_bucketed_invoices
+        assert issued in all_bucketed_invoices
+
     def test_ar_aging_uses_configured_bucket_days(self, db_session, subscriber):
         spec = get_spec(SettingDomain.billing, "ar_aging_bucket_days")
         assert spec is not None

@@ -288,9 +288,9 @@ class BillingReporting:
         """
         today = datetime.now(UTC).date()
 
-        # Only fetch unpaid invoices — paid/void are excluded
+        # Only issued receivables are AR. Drafts are pre-issue work and should
+        # not inflate customer debt or aging totals.
         unpaid_statuses = [
-            InvoiceStatus.draft,
             InvoiceStatus.issued,
             InvoiceStatus.overdue,
             InvoiceStatus.partially_paid,

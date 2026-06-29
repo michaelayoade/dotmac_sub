@@ -100,14 +100,17 @@ settings/integrity/reconcilers.
   stored currency value, matching the service-level no-currency-change guard.
 - Invoice batch Run Batch now has a submit guard, submitting spinner/text, and
   disabled state tied to the preview confirmation checkbox.
+- Billing reporting AR-aging helper now excludes draft invoices from unpaid
+  receivables, matching the admin AR-aging overview behavior.
 
 ### Partially resolved
 
 - Currency display is improved across the touched admin/customer billing surfaces,
   but this audit's broader `default_currency`/provider/settings cleanup remains
   open for forms, adapters, Flutterwave, integrity SQL, and other untouched paths.
-- AR-aging is fixed for the admin UI builder; the older reporting helper should be
-  reviewed before marking the entire reporting-layer finding closed.
+- AR-aging is fixed for the admin UI builder and the older reporting helper; the
+  remaining deferred AR-aging notes are period-selector breadth and timezone
+  edge-case polish.
 
 ### Still open
 
@@ -246,6 +249,10 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run python -c "...invoice_batch.html submit guard markup..."`
   - Result: passed
+- `poetry run ruff check app/services/billing/reporting.py tests/test_billing_submodules.py`
+  - Result: passed
+- `poetry run python -c "...BillingReporting.get_ar_aging_buckets unpaid statuses..."`
+  - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -371,7 +378,7 @@ paperless/email-invoice opt-in.
 
 | Tier | Items |
 |------|-------|
-| **P0** | Reconciliation **GET route that writes+commits** dup rows (`app/services/web_billing_reconciliation.py:88`); **AR-aging counts drafts** → overstates receivables (`app/services/billing/reporting.py:271`); fix/remove **dead buttons + dead filters + fake stat cards + batch bare-fragment** (P-B); add **confirms on irreversible money actions** (P-A); **centralize billable-status set** (C-1) |
+| **P0** | Remaining dead billing-account Deactivate/Delete controls; remaining irreversible money-action server idempotency; customer saved-card/gateway decline states |
 | **P1** | Customer **post-payment-return states** (P-E); **partial-success + run observability** incl. autopay admin panel + health/integrity admin page (P-C); **currency/tz/status display** (P-D); **settings validation + settings_spec hygiene** (P-F, C-3); **thresholds → settings** (C-2) |
 | **P2** | currency-from-setting seeding (C-4), partial-pay + paperless (C-5), TTLs |
 
@@ -388,7 +395,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 
 ### Invoices / ledger / credit-notes / tax / AR-aging
 - [POLISH] (High) `templates/admin/billing/invoice_detail.html:167-171,268` (also `invoices.html:98,230,252`; `ledger.html:117-126`; `ar_aging.html:61,227`) — money hard-rendered `₦{{...}}` while `Invoice.currency` supports NGN/USD/EUR/GBP and `credits.html` honors currency → render entry currency [recommend]
-- [POLISH] (High) `app/services/billing/reporting.py:271-276` — `get_ar_aging_buckets` includes `draft` in unpaid; pre-issue drafts counted as AR, overstating receivables → drop draft [recommend]
+- [POLISH] (High) `app/services/billing/reporting.py:271-276` — `get_ar_aging_buckets` includes `draft` in unpaid; pre-issue drafts counted as AR, overstating receivables → drop draft [resolved in draft]
 - [CONTROL] (Med) `app/services/billing/reporting.py:300-307` — aging thresholds 30/60/90 hardcoded → bucket-edges setting (default 30/60/90) [resolved in draft]
 - [POLISH] (Med) `app/web/admin/billing_invoice_bulk.py:97` — bulk mark-paid no skipped count though ineligible rows dropped (bulk void already reports) → report skipped consistently [resolved in draft]
 - [POLISH] (Med) `invoice_detail.html:19-29` — status badge styles only paid/pending/sent/overdue; issued/partially_paid/void/written_off fall through to draft-grey → extend map to all statuses [resolved in draft]
