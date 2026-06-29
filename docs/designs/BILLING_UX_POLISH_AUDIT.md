@@ -36,6 +36,9 @@ settings/integrity/reconcilers.
 - Dunning pause/resume/close, bulk pause/resume, payment-arrangement approval,
   payment-channel deactivation, and collection-account deactivation actions now
   prompt before changing money-collection state.
+- Billing account search/status filters are now applied server-side with normal
+  GET navigation, and the unsupported balance filter/dead HTMX table injection was
+  removed.
 
 ### Partially resolved
 
@@ -50,8 +53,7 @@ settings/integrity/reconcilers.
 - Remaining irreversible money-action server-side idempotency and untouched
   high-risk actions such as consolidated record/distribute and fleet-wide billing
   settings save.
-- Dead/broken account deactivate/delete actions, dunning detail route, ignored
-  account filters, and invoice batch bare-fragment behavior.
+- Dunning detail route and invoice batch bare-fragment behavior.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Customer post-payment-return states.
@@ -65,6 +67,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check tests/test_billing_money_action_templates.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_money_action_templates.py -q`
+  - Result: `2 passed`
+- `poetry run ruff check app/services/web_billing_accounts.py app/web/admin/billing_accounts.py tests/test_billing_accounts_list.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_accounts_list.py -q`
   - Result: `2 passed`
 
 ## What this audit is

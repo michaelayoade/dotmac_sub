@@ -6,8 +6,15 @@ import logging
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import not_, or_
+
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
+from app.models.subscriber import (
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
 from app.services import settings_spec
@@ -35,42 +42,50 @@ def build_accounts_list_data(
     per_page: int,
     customer_ref: str | None,
     reseller_id: str | None = None,
+    search: str | None = None,
+    status: str | None = None,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
-    accounts = []
-    total = 0
-    summary_accounts = []
+    base_query = db.query(Subscriber).filter(Subscriber.user_type != UserType.system_user)
+    base_query = base_query.filter(not_(subscriber_service.splynx_deleted_import_clause()))
     if customer_ref:
         subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(
             db, customer_ref
         )
         if subscriber_ids:
-            base_query = db.query(Subscriber).filter(Subscriber.id.in_(subscriber_ids))
-            total = base_query.count()
-            summary_accounts = base_query.all()
-            accounts = (
-                base_query.order_by(Subscriber.created_at.desc())
-                .offset(offset)
-                .limit(per_page)
-                .all()
+            base_query = base_query.filter(Subscriber.id.in_(subscriber_ids))
+        else:
+            base_query = base_query.filter(False)
+    if reseller_id:
+        base_query = base_query.filter(Subscriber.reseller_id == UUID(reseller_id))
+    if status:
+        try:
+            base_query = base_query.filter(Subscriber.status == SubscriberStatus(status))
+        except ValueError:
+            base_query = base_query.filter(False)
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        base_query = base_query.filter(
+            or_(
+                Subscriber.first_name.ilike(like),
+                Subscriber.last_name.ilike(like),
+                Subscriber.display_name.ilike(like),
+                Subscriber.company_name.ilike(like),
+                Subscriber.email.ilike(like),
+                Subscriber.phone.ilike(like),
+                Subscriber.subscriber_number.ilike(like),
+                Subscriber.account_number.ilike(like),
             )
-    else:
-        accounts = subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=reseller_id,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
         )
-        total_query = db.query(Subscriber)
-        if reseller_id:
-            total_query = total_query.filter(
-                Subscriber.reseller_id == UUID(reseller_id)
-            )
-        total = total_query.count()
-        summary_accounts = total_query.all()
+
+    total = base_query.count()
+    summary_accounts = base_query.all()
+    accounts = (
+        base_query.order_by(Subscriber.created_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
     total_pages = (total + per_page - 1) // per_page
     default_currency = _default_currency(db)
     total_balance = sum(
@@ -95,6 +110,8 @@ def build_accounts_list_data(
         "total_pages": total_pages,
         "customer_ref": customer_ref,
         "reseller_id": reseller_id,
+        "search": search or "",
+        "status_filter": status or "",
         "default_currency": default_currency,
         "total_balance": float(total_balance),
         "total_balance_display": _format_money(total_balance, default_currency),

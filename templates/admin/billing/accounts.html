@@ -54,7 +54,7 @@
 
     {# ── Filters ── #}
     <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
-        <form hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="submit, change from:select" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+        <form method="get" action="/admin/billing/accounts" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Search</label>
                 <div class="relative">
@@ -62,7 +62,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                     </svg>
                     <input type="text" name="search" placeholder="Search accounts..."
-                           hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="keyup changed delay:300ms"
+                           value="{{ search or '' }}"
                            class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                 </div>
             </div>
@@ -72,30 +72,22 @@
                     <input type="text" data-typeahead-input
                            placeholder="Search customers..."
                            class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
-                    <input type="hidden" name="customer_ref" data-typeahead-hidden
-                           hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="change" hx-include="closest form"
-                           value="{{ customer_ref or '' }}">
+                    <input type="hidden" name="customer_ref" data-typeahead-hidden value="{{ customer_ref or '' }}">
                     <div data-typeahead-results></div>
                 </div>
             </div>
             <div class="w-full sm:w-48">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Status</label>
                 <select name="status" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">All Status</option>
-                    <option value="active">Active</option>
-                    <option value="suspended">Blocked</option>
-                    <option value="closed">Closed</option>
+                    <option value="" {% if not status_filter %}selected{% endif %}>All Status</option>
+                    <option value="active" {% if status_filter == "active" %}selected{% endif %}>Active</option>
+                    <option value="blocked" {% if status_filter == "blocked" %}selected{% endif %}>Blocked</option>
+                    <option value="suspended" {% if status_filter == "suspended" %}selected{% endif %}>Suspended</option>
+                    <option value="disabled" {% if status_filter == "disabled" %}selected{% endif %}>Disabled</option>
+                    <option value="canceled" {% if status_filter == "canceled" %}selected{% endif %}>Canceled</option>
                 </select>
             </div>
-            <div class="w-full sm:w-48">
-                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Balance</label>
-                <select name="balance_filter" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">Any Balance</option>
-                    <option value="positive">Has Balance Due</option>
-                    <option value="zero">Zero Balance</option>
-                    <option value="credit">Credit Balance</option>
-                </select>
-            </div>
+            <button type="submit" class="inline-flex justify-center rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-700">Apply</button>
         </form>
     </div>
 
