@@ -43,6 +43,9 @@ settings/integrity/reconcilers.
   status, account context, action controls, and action history.
 - Invoice batch generation now redirects back to the full batch page with a
   user-visible note instead of returning a layout-less fragment.
+- Billing automation and billing-health checks now import one canonical billable
+  subscriber status set instead of carrying duplicated "keep in sync" constants
+  and raw SQL literals.
 
 ### Partially resolved
 
@@ -61,7 +64,7 @@ settings/integrity/reconcilers.
   and raw exception copy cleanup.
 - Customer post-payment-return states.
 - Money-field validation and billing settings/spec hygiene.
-- Canonical billable-status set and remaining policy thresholds/settings work.
+- Remaining policy thresholds/settings work.
 
 ### Verification
 
@@ -85,6 +88,10 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run pytest tests/test_billing_invoice_batch_web.py -q`
   - Result: `8 passed`
+- `poetry run ruff check app/services/billing_statuses.py app/services/billing_automation.py app/services/billing_health.py tests/test_billing_statuses.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_statuses.py tests/test_billing_health.py tests/test_billing_automation_services.py -q`
+  - Result: passed
 
 ## What this audit is
 

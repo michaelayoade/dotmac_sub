@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -40,23 +40,13 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Subscriber
 from app.services import settings_spec
-from app.services.job_heartbeat import get_last_success
-
-# Subscriber (account) states whose ACTIVE subscriptions are still billed by
-# run_invoice_cycle — network/enforcement blocks don't suppress invoicing, so a
-# non-payment ``blocked`` (or suspended/delinquent) account is scanned. The
-# scan-coverage denominator MUST mirror this eligibility set, otherwise blocked
-# subs are scanned but not counted as eligible, inflating the ratio and hiding a
-# real cohort drop (false negative). Keep in sync with
-# app/services/billing_automation.run_invoice_cycle's billable_account_statuses.
-_BILLABLE_SUBSCRIBER_STATUSES = (
-    SubscriberStatus.active,
-    SubscriberStatus.blocked,
-    SubscriberStatus.suspended,
-    SubscriberStatus.delinquent,
+from app.services.billing_statuses import (
+    BILLABLE_SUBSCRIBER_STATUS_VALUES,
+    BILLABLE_SUBSCRIBER_STATUSES,
 )
+from app.services.job_heartbeat import get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -157,7 +147,7 @@ def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
             select(func.count(Subscription.id))
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .where(Subscription.status == SubscriptionStatus.active)
-            .where(Subscriber.status.in_(_BILLABLE_SUBSCRIBER_STATUSES))
+            .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
             .where(Subscription.billing_mode != BillingMode.prepaid)
         ).scalar()
         or 0
@@ -302,8 +292,8 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
     ``active_subs_on_terminal_account`` is an active sub whose account is
     non-billable, so the cycle never touches it (lifecycle drift, low volume).
     """
-    # Static SQL — the status set is a fixed constant (the billable-account
-    # statuses), never user input, so this is not an injection surface.
+    # Static SQL — the status set is a fixed constant from billing_statuses,
+    # never user input, so this is not an injection surface.
     terminal = (
         db.execute(
             text(
@@ -311,9 +301,10 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
             WHERE sub.status = 'active'
-              AND s.status NOT IN ('active', 'blocked', 'suspended', 'delinquent')
+              AND s.status NOT IN :billable_statuses
             """
-            )
+            ).bindparams(bindparam("billable_statuses", expanding=True)),
+            {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
         ).scalar()
         or 0
     )
@@ -324,7 +315,7 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
             JOIN subscribers s ON s.id = sub.subscriber_id
             JOIN catalog_offers o ON o.id = sub.offer_id
             WHERE sub.status = 'active'
-              AND s.status IN ('active', 'blocked', 'suspended', 'delinquent')
+              AND s.status IN :billable_statuses
               AND sub.billing_mode = 'prepaid' AND o.billing_cycle <> 'monthly'
         """
     else:
@@ -332,10 +323,16 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
             WHERE sub.status = 'active'
-              AND s.status IN ('active', 'blocked', 'suspended', 'delinquent')
+              AND s.status IN :billable_statuses
               AND sub.billing_mode = 'prepaid'
         """
-    no_path = db.execute(text(no_path_sql)).scalar() or 0
+    no_path = (
+        db.execute(
+            text(no_path_sql).bindparams(bindparam("billable_statuses", expanding=True)),
+            {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
+        ).scalar()
+        or 0
+    )
     return int(no_path), int(terminal)
 
 
