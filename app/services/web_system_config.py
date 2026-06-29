@@ -542,35 +542,9 @@ def save_radius_config(db: Session, data: Mapping[str, Any]) -> None:
     _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS)
 
 
-# ---------------------------------------------------------------------------
-# 8.22 CPE Configuration
-# ---------------------------------------------------------------------------
-CPE_KEYS = [
-    "kb_base",
-    "api_debug",
-    "api_timeout",
-    "api_attempts",
-    "qos_reverse",
-    "qos_download_queue_type",
-    "qos_upload_queue_type",
-    "blocking_enabled",
-    "redirect_ip",
-    "redirect_port",
-    "dhcp_enabled",
-    "dhcp_server_name",
-    "dhcp_interface",
-    "dhcp_lease_time",
-    "dhcp_dns_servers",
-    "wlan_management",
-]
-
-
-def get_cpe_config_context(db: Session) -> dict:
-    return {"cpe": _read_settings(db, SettingDomain.network, CPE_KEYS)}
-
-
-def save_cpe_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, CPE_KEYS)
+# 8.22 CPE Configuration — REMOVED. These QoS/blocking/DHCP/WLAN defaults had
+# no runtime consumers. Real CPE inventory, TR-069, and device API controls live
+# under Network > CPEs and on the CPE forms/details.
 
 
 # ---------------------------------------------------------------------------

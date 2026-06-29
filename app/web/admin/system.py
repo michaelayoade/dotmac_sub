@@ -271,15 +271,6 @@ def _radius_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
         return []
 
 
-def _cpe_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
-    try:
-        return build_audit_activities(db, "cpe_config", "cpe", limit=limit)
-    except Exception:
-        logger.exception("Unable to load CPE config audit items")
-        db.rollback()
-        return []
-
-
 @router.get("/health", response_class=HTMLResponse)
 def system_health_page(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -4502,44 +4493,6 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
         url=f"/admin/system/config/radius?push_status={status}&push_message={message}",
         status_code=303,
     )
-
-
-# --- 8.22 CPE Configuration ---
-@router.get("/config/cpe", response_class=HTMLResponse)
-def config_cpe_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_cpe_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/cpe.html",
-        _config_context(
-            request,
-            db,
-            {
-                "active_page": "config-cpe",
-                "audit_items": _cpe_config_audit_items(db),
-                **data,
-            },
-        ),
-    )
-
-
-@router.post("/config/cpe", response_class=HTMLResponse)
-def config_cpe_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    before = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
-    web_system_config_service.save_cpe_config(db, form)
-    after = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
-    changes = _diff_audit_snapshots(before, after)
-    if changes:
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update",
-            entity_type="cpe_config",
-            entity_id="cpe",
-            actor_id=_system_actor_id(request),
-            metadata={"changes": changes},
-        )
-    return RedirectResponse(url="/admin/system/config/cpe", status_code=303)
 
 
 # --- 8.23 Monitoring ---

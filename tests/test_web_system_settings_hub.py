@@ -57,6 +57,7 @@ def test_settings_hub_does_not_include_removed_dead_config_pages(db_session):
         "/admin/system/config/data-retention",
         "/admin/system/config/subscribers",
         "/admin/system/config/ipv6",
+        "/admin/system/config/cpe",
     }
 
     assert removed_urls.isdisjoint({link["url"] for link in links})
@@ -70,6 +71,7 @@ def test_system_router_does_not_register_removed_dead_config_pages():
     assert "/config/data-retention" not in registered_paths
     assert "/config/subscribers" not in registered_paths
     assert "/config/ipv6" not in registered_paths
+    assert "/config/cpe" not in registered_paths
 
 
 def test_settings_hub_categories_can_build_query_links(db_session):

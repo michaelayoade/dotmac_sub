@@ -169,11 +169,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Reject IPs, MAC binding, debug",
             },
             {
-                "name": "CPE Management",
-                "url": "/admin/system/config/cpe",
-                "description": "QoS, blocking, DHCP defaults",
-            },
-            {
                 "name": "Monitoring",
                 "url": "/admin/system/config/monitoring",
                 "description": "Vendors, device types, alert groups",
