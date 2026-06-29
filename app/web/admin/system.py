@@ -4549,23 +4549,6 @@ def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/config/monitoring?saved=1", status_code=303)
 
 
-# --- 8.25 FUP ---
-@router.get("/config/fup", response_class=HTMLResponse)
-def config_fup_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_fup_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/fup.html",
-        _config_context(request, db, {"active_page": "config-fup", **data}),
-    )
-
-
-@router.post("/config/fup", response_class=HTMLResponse)
-def config_fup_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_fup_config(db, form)
-    return RedirectResponse(url="/admin/system/config/fup", status_code=303)
-
-
 # --- 8.26 NAS Types ---
 @router.get("/config/nas-types", response_class=HTMLResponse)
 def config_nas_types_page(request: Request, db: Session = Depends(get_db)):

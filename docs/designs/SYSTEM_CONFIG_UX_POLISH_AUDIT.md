@@ -62,6 +62,9 @@ theme.
   captive-redirect and PPPoE auto-generation keys, preserving legacy string
   behavior for older reject/debug fields while rejecting invalid spec-backed
   values with explicit save feedback.
+- The inert global System FUP config page was removed from the Settings Hub/admin
+  router because its reset/threshold/notification keys had no runtime consumers;
+  live FUP controls remain on catalog offer FUP policies.
 
 ### Still open
 
@@ -122,6 +125,10 @@ theme.
 - `poetry run pytest tests/test_system_config_pages.py tests/test_customer_portal_gaps.py tests/test_pppoe_auto_generation.py tests/test_radius_reject_services.py tests/test_admin_route_permissions.py -q`
   - Result: passed
 - `poetry run ruff check app/services/web_system_config.py app/web/admin/system.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py -q`
+  - Result: `27 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
   - Result: passed
 
 ## What this audit is

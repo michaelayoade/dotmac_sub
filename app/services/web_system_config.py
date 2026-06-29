@@ -762,25 +762,9 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# 8.25 Fair Usage Policy
-# ---------------------------------------------------------------------------
-FUP_KEYS = [
-    "fup_custom_reset_field",
-    "fup_monthly_reset_schedule",
-    "fup_weekly_reset_day",
-    "fup_send_notifications",
-    "fup_threshold_warn_pct",
-    "fup_threshold_critical_pct",
-]
-
-
-def get_fup_config_context(db: Session) -> dict:
-    return {"fup": _read_settings(db, SettingDomain.usage, FUP_KEYS)}
-
-
-def save_fup_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.usage, data, FUP_KEYS)
+# 8.25 Fair Usage Policy — REMOVED. These global reset/threshold fields were
+# not consumed by enforcement, usage metering, or notifications. Live FUP
+# controls are managed per catalog offer via the catalog FUP policy UI.
 
 
 # ---------------------------------------------------------------------------

@@ -178,11 +178,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "url": "/admin/system/config/nas-types",
                 "description": "Supported NAS vendor types",
             },
-            {
-                "name": "Fair Usage Policy",
-                "url": "/admin/system/config/fup",
-                "description": "FUP thresholds and reset schedules",
-            },
         ],
     },
     {
