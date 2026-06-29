@@ -17,6 +17,8 @@ from app.services import (
 )
 from app.services.control_registry import Layer
 
+_UNREGISTERED_LEGACY_ENV = ("USAGE_RATING_ENABLED",)
+
 
 def _set_row(db, domain, key, value: bool):
     db.add(
@@ -62,13 +64,16 @@ def _clear_control_env(monkeypatch):
     registry's highest precedence (the emergency lever), so it defeats the
     "no rows, no overrides" premise these parity/composition tests assert
     against — the suite passed on a clean checkout but failed on the prod box.
-    Strip every control's alias env so resolution starts from the bare default
+    Strip every control's alias env, plus explicit unregistered legacy envs
+    asserted by this module, so resolution starts from the bare default
     regardless of where the suite runs.
     """
     for control in control_registry.all_controls():
         for alias in getattr(control, "legacy", ()):
             if alias.env:
                 monkeypatch.delenv(alias.env, raising=False)
+    for env_name in _UNREGISTERED_LEGACY_ENV:
+        monkeypatch.delenv(env_name, raising=False)
 
 
 def test_resolver_parity_with_legacy_defaults(db_session):
