@@ -14,6 +14,7 @@ from app.services.web_billing_invoice_batch import (
     retry_batch_run,
     run_batch_with_date,
 )
+from app.web.admin import billing_invoice_batch as batch_routes
 
 
 def test_list_recent_runs_returns_structured_rows(db_session):
@@ -42,6 +43,29 @@ def test_list_recent_runs_returns_structured_rows(db_session):
     assert first["status_message"] == "Transactions have been created"
     assert first["invoices_created"] == 40
     assert first["duration_seconds"] == 60
+
+
+def test_invoice_generate_batch_redirects_back_to_full_page(db_session, monkeypatch):
+    def _fake_run_batch_with_date(db, *, billing_cycle, billing_date):
+        return "Batch run completed."
+
+    monkeypatch.setattr(
+        batch_routes.web_billing_invoice_batch_service,
+        "run_batch_with_date",
+        _fake_run_batch_with_date,
+    )
+
+    response = batch_routes.invoice_generate_batch(
+        request=None,
+        billing_cycle=None,
+        billing_date=None,
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(
+        "/admin/billing/invoices/batch?note="
+    )
 
 
 def test_preview_error_payload_includes_safe_defaults():

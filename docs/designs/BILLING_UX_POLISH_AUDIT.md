@@ -41,6 +41,8 @@ settings/integrity/reconcilers.
   removed.
 - Dunning "View Details" now lands on a real guarded detail route with case
   status, account context, action controls, and action history.
+- Invoice batch generation now redirects back to the full batch page with a
+  user-visible note instead of returning a layout-less fragment.
 
 ### Partially resolved
 
@@ -55,7 +57,6 @@ settings/integrity/reconcilers.
 - Remaining irreversible money-action server-side idempotency and untouched
   high-risk actions such as consolidated record/distribute and fleet-wide billing
   settings save.
-- Invoice batch bare-fragment behavior.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Customer post-payment-return states.
@@ -80,6 +81,10 @@ settings/integrity/reconcilers.
   - Result: `3 passed`
 - `poetry run pytest tests/test_admin_route_permissions.py -q`
   - Result: `15 passed`
+- `poetry run ruff check app/web/admin/billing_invoice_batch.py tests/test_billing_invoice_batch_web.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_invoice_batch_web.py -q`
+  - Result: `8 passed`
 
 ## What this audit is
 
