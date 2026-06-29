@@ -2,40 +2,41 @@
 
 ``EncryptedJSON`` stores a JSON dict encrypted at rest. The Python value is a
 plain ``dict`` (transparent to all ORM consumers); the database stores a single
-encryption-at-rest blob (``enc:``/``plain:`` per ``credential_crypto``) as a JSON
-string. Use it for columns that hold third-party credentials (e.g. connector
+encryption-at-rest blob (``enc:``/``plain:`` per ``credential_crypto``) as plain
+text. Use it for columns that hold third-party credentials (e.g. connector
 ``auth_config``) so a DB read / backup / replica never exposes cleartext secrets.
+
+The blob is stored in a TEXT column (not JSON) so the raw value is a plain string
+on every dialect — which lets ``credential_key_rotation`` re-encrypt it with a new
+Fernet key via straight SQL, exactly like the other at-rest credential fields.
 """
 
 from __future__ import annotations
 
 import json
 
-from sqlalchemy.types import JSON, TypeDecorator
+from sqlalchemy.types import Text, TypeDecorator
 
 
 class EncryptedJSON(TypeDecorator):
-    """A JSON column whose payload is encrypted at rest.
+    """A TEXT column holding a JSON dict, encrypted at rest.
 
     - write: ``dict`` → ``json.dumps`` → ``encrypt_credential`` → stored string.
     - read: stored string → ``decrypt_credential`` → ``json.loads`` → ``dict``.
-    - back-compat: a legacy plaintext row (stored as a JSON object, i.e. a
-      ``dict``, or ``NULL``) is returned unchanged, so existing data keeps working
-      until the one-off re-encrypt runs. The DDL is unchanged (``impl = JSON``),
-      so no migration is required.
+    - back-compat: a legacy plaintext value (a JSON object as text, or NULL) is
+      decoded transparently, so existing data keeps working until the one-off
+      re-encrypt runs.
     """
 
-    impl = JSON
+    impl = Text
     cache_ok = True
 
     def process_bind_param(self, value, dialect):  # noqa: ANN001
-        if value is None:
+        if not value:  # None or empty dict
             return None
-        # Only encrypt dict payloads; leave anything unexpected untouched.
         if not isinstance(value, dict):
-            return value
-        if not value:
-            return {}
+            # Defensive: persist unexpected values without corrupting them.
+            return value if isinstance(value, str) else json.dumps(value)
         from app.services.credential_crypto import encrypt_credential
 
         return encrypt_credential(json.dumps(value, sort_keys=True))
@@ -43,7 +44,7 @@ class EncryptedJSON(TypeDecorator):
     def process_result_value(self, value, dialect):  # noqa: ANN001
         if value is None:
             return None
-        # Legacy plaintext rows were stored as a JSON object.
+        # Legacy rows (pre-migration JSON column) may surface as a dict.
         if isinstance(value, dict):
             return value
         if isinstance(value, str):

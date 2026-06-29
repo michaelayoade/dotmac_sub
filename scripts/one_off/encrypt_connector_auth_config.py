@@ -29,13 +29,23 @@ from app.models.connector import ConnectorConfig
 
 
 def _raw_is_plaintext(db, config_id) -> bool:
-    """True when the raw stored value is a JSON object (legacy plaintext)."""
+    """True when the raw stored value is legacy plaintext (not yet wrapped).
+
+    The column is TEXT: an at-rest blob starts with ``enc:`` or ``plain:``; a
+    legacy row is its JSON text (e.g. ``{"password": "x"}``) with no such prefix.
+    A pre-migration JSON object may still surface as a ``dict``.
+    """
     raw = db.execute(
         text("SELECT auth_config FROM connector_configs WHERE id = :id"),
         {"id": str(config_id)},
     ).scalar()
-    # A legacy row decodes to a dict; an encrypted row is a JSON string blob.
-    return isinstance(raw, dict)
+    if raw is None:
+        return False
+    if isinstance(raw, dict):
+        return True
+    if isinstance(raw, str):
+        return not raw.startswith(("enc:", "plain:"))
+    return False
 
 
 def main() -> int:

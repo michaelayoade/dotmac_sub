@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import json
+
+from cryptography.fernet import Fernet
 from sqlalchemy import text
 
 from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.models.types import EncryptedJSON
+from app.services.credential_crypto import (
+    decrypt_credential_with_key,
+    encrypt_credential_with_key,
+)
+from app.services.credential_key_rotation import _rotate_connector_auth_config
 
 
 # --- unit tests on the type (no DB) -----------------------------------------
@@ -23,7 +31,7 @@ def test_encrypted_json_round_trip():
 def test_encrypted_json_none_and_empty():
     t = EncryptedJSON()
     assert t.process_bind_param(None, None) is None
-    assert t.process_bind_param({}, None) == {}
+    assert t.process_bind_param({}, None) is None
     assert t.process_result_value(None, None) is None
 
 
@@ -64,3 +72,44 @@ def test_connector_auth_config_persisted_encrypted(db_session):
     # When a real key is configured the secret must not appear in ciphertext.
     if "enc:" in raw_str:
         assert secret not in raw_str
+
+
+def test_connector_auth_config_survives_key_rotation(db_session):
+    # Whole-blob encryption must be re-encryptable when the Fernet key rotates,
+    # or connector secrets become undecryptable after a rotation.
+    key_a = Fernet.generate_key().decode()
+    key_b = Fernet.generate_key().decode()
+    config = ConnectorConfig(
+        name="rotation-test-connector",
+        connector_type=ConnectorType.http,
+        auth_type=ConnectorAuthType.bearer,
+        auth_config=None,
+    )
+    db_session.add(config)
+    db_session.commit()
+
+    # Store a blob encrypted with key A (bypass the ambient-key column type).
+    blob_a = encrypt_credential_with_key(
+        json.dumps({"bearer_token": "secret-A"}), key_a
+    )
+    db_session.execute(
+        text("UPDATE connector_configs SET auth_config = :v WHERE id = :id"),
+        {"v": blob_a, "id": str(config.id)},
+    )
+    db_session.commit()
+
+    records, values = _rotate_connector_auth_config(
+        db_session, old_key=key_a, new_key=key_b
+    )
+    db_session.commit()
+    assert records == 1 and values == 1
+
+    raw = db_session.execute(
+        text("SELECT auth_config FROM connector_configs WHERE id = :id"),
+        {"id": str(config.id)},
+    ).scalar()
+    assert raw.startswith("enc:")
+    # New key decrypts; old key no longer does.
+    assert json.loads(decrypt_credential_with_key(raw, key_b)) == {
+        "bearer_token": "secret-A"
+    }

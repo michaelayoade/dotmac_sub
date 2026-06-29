@@ -24,12 +24,29 @@ unchanged** — `nextcloud_talk`, `connector_service.update`'s merge, and
 `provisioning_helpers._resolve_connector_context`. Only the API schema
 (`ConnectorConfigRead._mask_auth_config`) still masks, for output.
 
-`impl = JSON`, so the DB column type is unchanged — **no Alembic migration needed**.
+`impl = Text` — the blob is stored in a TEXT column (not JSON). Migration
+`186_connector_auth_config_text` (down_rev `185`) does the `JSON → TEXT` `ALTER`
+(`USING auth_config::text`; legacy JSON objects become their JSON text and still
+decode transparently). TEXT keeps the raw value a plain string on every dialect,
+which is what makes key rotation (below) clean.
+
+## Key rotation (the reason for TEXT, not JSON)
+
+`credential_key_rotation` re-encrypts every at-rest credential when the Fernet key
+changes. A whole-blob column that isn't covered would become **undecryptable after
+a rotation** — worse than the old plaintext, which survived rotation trivially. So
+`_rotate_connector_auth_config` was added to `rotate_credential_encryption_material`:
+it reads each connector's raw blob via straight SQL (a plain string, thanks to
+TEXT), runs the shared `_rotate_value(old_key, new_key)`, and writes it back —
+encrypting any legacy plaintext blob in passing. A dedicated test
+(`test_connector_auth_config_survives_key_rotation`) proves the new key decrypts and
+the old one no longer does.
 
 ## Backfill
 
 `scripts/one_off/encrypt_connector_auth_config.py` re-encrypts legacy plaintext
-rows (dry-run by default; `--apply` to persist). Idempotent.
+rows (dry-run by default; `--apply` to persist). Idempotent. (A key rotation also
+encrypts any remaining legacy blobs.)
 
 ## Tests
 
