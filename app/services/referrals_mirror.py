@@ -53,6 +53,14 @@ def _to_dt(value: object) -> datetime | None:
         return None
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Coerce a possibly tz-naive datetime (SQLite returns naive) to UTC-aware
+    so comparisons against tz-aware ``now`` never raise."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 # ── mirror upserts ─────────────────────────────────────────────────────────
 
 
@@ -192,7 +200,8 @@ def read_for_subscriber(
     sub_uuid = coerce_uuid(str(subscriber_id))
     cache = db.get(ReferralProgramCache, sub_uuid)
     cutoff = datetime.now(UTC) - timedelta(seconds=max(0, refresh_ttl_seconds))
-    is_stale = cache is None or (cache.synced_at and cache.synced_at < cutoff)
+    synced = _as_utc(cache.synced_at) if cache else None
+    is_stale = cache is None or synced is None or synced < cutoff
     if is_stale:
         try:
             reconcile_subscriber(db, str(subscriber_id))
