@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.models.types import EncryptedJSON
 
 
 class ConnectorType(enum.Enum):
@@ -55,7 +56,8 @@ class ConnectorConfig(Base):
     auth_type: Mapped[ConnectorAuthType] = mapped_column(
         Enum(ConnectorAuthType), default=ConnectorAuthType.none
     )
-    auth_config: Mapped[dict | None] = mapped_column(JSON)
+    # Encrypted at rest — holds third-party credentials (basic/bearer/HMAC/api_key).
+    auth_config: Mapped[dict | None] = mapped_column(EncryptedJSON)
     headers: Mapped[dict | None] = mapped_column(JSON)
     retry_policy: Mapped[dict | None] = mapped_column(JSON)
     timeout_sec: Mapped[int | None] = mapped_column(Integer)
