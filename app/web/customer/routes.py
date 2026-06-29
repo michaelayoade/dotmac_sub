@@ -55,6 +55,15 @@ PAYMENT_VERIFICATION_ERROR_MESSAGE = (
     "retry immediately; check your billing history or contact support with this "
     "payment reference."
 )
+PAYMENT_CHARGE_ERROR_MESSAGE = (
+    "We could not charge that saved card. Please use another payment method or "
+    "try again later."
+)
+CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
+CARD_SAVE_ERROR_MESSAGE = (
+    "Payment was recorded, but we could not save this card. You can add a card "
+    "from Payment Methods."
+)
 
 
 def _payment_verification_error_response(
@@ -72,6 +81,24 @@ def _payment_verification_error_response(
         {"request": request, "message": PAYMENT_VERIFICATION_ERROR_MESSAGE},
         status_code=status_code,
     )
+
+
+def _capture_card_save_status(
+    db: Session,
+    *,
+    account_id: str,
+    reference: str,
+    provider: str | None,
+    requested: bool,
+) -> dict[str, str] | None:
+    if requested is not True:
+        return None
+    try:
+        customer_cards.capture_card_after_payment(db, account_id, reference, provider)
+    except Exception:
+        logger.warning("Customer card capture failed", exc_info=True)
+        return {"status": "failed", "message": CARD_SAVE_ERROR_MESSAGE}
+    return {"status": "saved", "message": CARD_SAVE_SUCCESS_MESSAGE}
 
 
 def _format_bps(value: float | int | None) -> str:
@@ -1659,6 +1686,9 @@ def customer_create_invoice_payment_intent(
         )
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning("Customer saved-card invoice charge failed", exc_info=True)
+        return JSONResponse({"detail": PAYMENT_CHARGE_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1691,12 +1721,13 @@ def customer_verify_payment(
         customer_portal.complete_invoice_payment_intent(
             db, reference, result.get("payment")
         )
-        if save_card is True:
-            # Best-effort, Paystack-only; never breaks the recorded payment.
-            # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+        card_save = _capture_card_save_status(
+            db,
+            account_id=str(customer.get("account_id") or ""),
+            reference=reference,
+            provider=provider,
+            requested=save_card,
+        )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1717,6 +1748,7 @@ def customer_verify_payment(
                 "already_recorded": result.get("already_recorded", False),
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
+                "card_save": card_save,
                 "active_page": "billing",
             },
         )
@@ -1935,12 +1967,13 @@ def customer_verify_topup(
         result = customer_portal.verify_and_record_topup(
             db, customer, reference, provider=provider
         )
-        if save_card is True:
-            # Best-effort, Paystack-only; never breaks the recorded payment.
-            # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+        card_save = _capture_card_save_status(
+            db,
+            account_id=str(customer.get("account_id") or ""),
+            reference=reference,
+            provider=provider,
+            requested=save_card,
+        )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1962,6 +1995,7 @@ def customer_verify_topup(
                 "policy_warnings": result["policy_warnings"],
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
+                "card_save": card_save,
                 "active_page": "billing",
             },
         )

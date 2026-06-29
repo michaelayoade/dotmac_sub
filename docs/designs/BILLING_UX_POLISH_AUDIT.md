@@ -72,6 +72,10 @@ settings/integrity/reconcilers.
   checkout stops with a clear message when no customer email is available.
 - Customer invoice payment success now uses invoice currency and shows the
   remaining invoice balance when a payment only partially settles the invoice.
+- Customer saved-card invoice/top-up charge failures now return stable friendly
+  400 copy across web and mobile API paths instead of falling through as 500s.
+- Customer invoice/top-up success now surfaces saved-card capture outcomes as
+  "Card saved" / "Card not saved" web feedback and mobile API response fields.
 - Billing settings spec/seed coverage now includes `billing_enabled_expected`,
   `blocking_period_days`, `deactivation_period_days`, and `minimum_balance`, and
   the Billing Settings page backfills the same defaults when rows are absent.
@@ -124,8 +128,6 @@ settings/integrity/reconcilers.
 - Remaining irreversible money-action server-side idempotency.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
-- Remaining customer post-payment-return states such as richer pending outcome
-  messaging and saved-card capture confirmation.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
   policy defaults.
 - Remaining policy thresholds/settings work outside autopay, payment
@@ -277,6 +279,14 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
   - Result: passed
+- `poetry run ruff check app/web/customer/routes.py app/api/billing.py app/api/me.py app/schemas/billing.py tests/test_customer_portal_billing_routes.py tests/test_api_billing_customer_payments.py tests/test_api_me_self_scoped.py`
+  - Result: passed
+- `poetry run pytest tests/test_customer_portal_billing_routes.py tests/test_api_billing_customer_payments.py tests/test_api_me_self_scoped.py`
+  - Result: interrupted locally after pytest setup produced no output for about
+    60 seconds.
+- `poetry run python -c "...customer payment/card-save endpoint assertions..."`
+  - Result: passed; import-time Redis warning and expected mocked exception logs
+    were emitted before the assertions completed.
 
 ## What this audit is
 
@@ -349,11 +359,11 @@ currency; tz-correct dates; complete status maps; reports exclude non-receivable
 **P-E. Customer-facing post-payment-return states** (weight high — customer money).
 Standard: explicit pending/settling/success/partial/decline states; never raw
 errors; never strand.
-- Verify-failure renders raw 400 + exception **even when the card may be charged** (`app/web/customer/routes.py:1701`)
-- Gateway declines escape as 500 (only `ValueError` caught) (`routes.py:1638`)
-- Blank `customer_email` strands Paystack (`templates/customer/billing/pay.html:185`)
-- Underpayment success page hides remaining balance (`pay_success.html`)
-- Silent saved-card capture failure, no confirmation
+- Verify-failure renders raw 400 + exception **even when the card may be charged** (`app/web/customer/routes.py:1701`) [resolved in draft]
+- Gateway declines escape as 500 (only `ValueError` caught) (`routes.py:1638`) [resolved in draft]
+- Blank `customer_email` strands Paystack (`templates/customer/billing/pay.html:185`) [resolved in draft]
+- Underpayment success page hides remaining balance (`pay_success.html`) [resolved in draft]
+- Silent saved-card capture failure, no confirmation [resolved in draft]
 
 **P-F. Money-field validation.** Settings form persists money/CSV fields as raw
 strings, no range/parse (`app/services/web_system_config.py:42`). Credit/consolidated
@@ -398,8 +408,8 @@ paperless/email-invoice opt-in.
 
 | Tier | Items |
 |------|-------|
-| **P0** | Remaining dead billing-account Deactivate/Delete controls; remaining irreversible money-action server idempotency; customer saved-card/gateway decline states |
-| **P1** | Customer **post-payment-return states** (P-E); **partial-success + run observability** incl. autopay admin panel + health/integrity admin page (P-C); **currency/tz/status display** (P-D); **settings validation + settings_spec hygiene** (P-F, C-3); **thresholds → settings** (C-2) |
+| **P0** | Remaining irreversible money-action server idempotency |
+| **P1** | **Partial-success + run observability** incl. autopay panel + health/integrity admin page (P-C); **currency/tz/status display** (P-D); **settings validation + settings_spec hygiene** (P-F, C-3); **thresholds → settings** (C-2) |
 | **P2** | currency-from-setting seeding (C-4), partial-pay + paperless (C-5), TTLs |
 
 ## Cross-audit observation
@@ -469,10 +479,10 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 
 ### Customer pay portal (web + mobile)
 - [POLISH] (High) `app/web/customer/routes.py:1701-1708` — payment-return verify failure renders bare `errors/400.html` + raw exception even though card may be charged → dedicated "confirming your payment" state; reserve hard-error for genuine declines [resolved in draft]
-- [POLISH] (Med) `app/web/customer/routes.py:1638-1639` + `app/api/billing.py:1174` — pay routes only `except ValueError`; `charge_authorization` raises HTTPError on decline/5xx → 500 + generic JS → catch gateway errors, friendly decline copy [recommend]
+- [POLISH] (Med) `app/web/customer/routes.py:1638-1639` + `app/api/billing.py:1174` — pay routes only `except ValueError`; `charge_authorization` raises HTTPError on decline/5xx → 500 + generic JS → catch gateway errors, friendly decline copy [resolved in draft]
 - [POLISH] (Med) `templates/customer/billing/pay.html:185`, `topup.html:374` — `email` passed to Paystack with no guard; `_resolve_customer_email` can be "" → Paystack rejects, strands customer → if blank, disable Pay + prompt to add/verify email [resolved in draft]
 - [POLISH] (Med) `templates/customer/billing/pay_success.html:24-30,57-61` — underpayment still says "applied to your invoice", hides remaining balance → add "Remaining on invoice" + soften copy [resolved in draft]
-- [POLISH] (Med) `app/web/customer/routes.py:1675` + `app/api/me.py:698` — "Save this card" best-effort, swallows failures; success page doesn't confirm save → surface "Card saved" / "couldn't save" [recommend]
+- [POLISH] (Med) `app/web/customer/routes.py:1675` + `app/api/me.py:698` — "Save this card" best-effort, swallows failures; success page doesn't confirm save → surface "Card saved" / "couldn't save" [resolved in draft]
 - [POLISH] (Low) `pay.html:138` — Pay button label from page-load amount while charge uses server intent; stale if balance changed → label off intent.amount [defer]
 - [CONTROL] (Med) `app/services/customer_portal_flow_payments.py:1113` — top-up preset chips `[1000..50000]` hardcoded (min/max already settings) → DomainSetting presets per market [resolved in draft]
 - [CONTROL] (Med) `app/services/customer_portal_flow_payments.py:775-781` — invoice Pay only charges full balance_due; partial requires Add-Funds (auto oldest-first, can't target) → optional partial-pay field, operator toggle [defer]

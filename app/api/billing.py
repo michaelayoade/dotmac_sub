@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from uuid import UUID
 
@@ -83,6 +84,16 @@ router = APIRouter()
 # real callback. Keep ONLY signature-verified provider callbacks here; anything
 # that needs an operator session stays on ``router``.
 webhook_router = APIRouter()
+logger = logging.getLogger(__name__)
+PAYMENT_CHARGE_ERROR_MESSAGE = (
+    "We could not charge that saved card. Please use another payment method or "
+    "try again later."
+)
+CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
+CARD_SAVE_ERROR_MESSAGE = (
+    "Payment was recorded, but we could not save this card. You can add a card "
+    "from Payment Methods."
+)
 
 
 # --- Dashboard ---
@@ -1173,6 +1184,12 @@ def initiate_payment(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Customer API saved-card invoice charge failed", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=PAYMENT_CHARGE_ERROR_MESSAGE,
+        ) from exc
     return PaymentInitiateResponse(
         invoice_id=payload.invoice_id,
         invoice_number=result.get("invoice_number"),
@@ -1207,14 +1224,23 @@ def verify_payment(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    card_saved: bool | None = None
+    card_save_message: str | None = None
     if payload.save_card:
         from app.services import (
             customer_portal_flow_payment_methods as customer_cards,
         )
 
-        customer_cards.capture_card_after_payment(
-            db, customer["account_id"], payload.reference, payload.provider
-        )
+        try:
+            customer_cards.capture_card_after_payment(
+                db, customer["account_id"], payload.reference, payload.provider
+            )
+            card_saved = True
+            card_save_message = CARD_SAVE_SUCCESS_MESSAGE
+        except Exception:
+            logger.warning("Customer API card capture failed", exc_info=True)
+            card_saved = False
+            card_save_message = CARD_SAVE_ERROR_MESSAGE
 
     payment = result["payment"]
     invoice = result.get("invoice")
@@ -1227,6 +1253,8 @@ def verify_payment(
         currency=getattr(payment, "currency", "NGN"),
         status=getattr(raw_status, "value", str(raw_status)),
         already_recorded=result.get("already_recorded", False),
+        card_saved=card_saved,
+        card_save_message=card_save_message,
     )
 
 
