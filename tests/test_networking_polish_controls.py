@@ -155,3 +155,19 @@ def test_destructive_actions_have_confirmations():
     assert "Regenerate keys for VPN server" in vpn
     assert "rotates the stored API credentials" in nas
     assert "Import PPPoE credentials now" in radius
+
+
+def test_freshness_labels_match_snapshot_data():
+    sessions = Path("templates/admin/network/sessions.html").read_text()
+    monitoring = Path("templates/admin/network/monitoring/index.html").read_text()
+    topology = Path("templates/admin/network/topology/index.html").read_text()
+
+    assert "Live RADIUS active sessions" not in sessions
+    assert "RADIUS active-session snapshot" in sessions
+    assert "snapshot_at.strftime" in sessions
+    assert "Current ONU Status Snapshot" in monitoring
+    assert "ONU Status Trend (24h)" not in monitoring
+    assert "Single snapshot" in monitoring
+    assert ">Links<" in topology
+    assert ">Nodes<" in topology
+    assert "Maintenance" in topology
