@@ -152,39 +152,10 @@ def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
     _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS)
 
 
-# ---------------------------------------------------------------------------
-# 8.10 Data Retention
-# ---------------------------------------------------------------------------
-RETENTION_KEYS = [
-    "admin_logs_months",
-    "api_logs_months",
-    "internal_logs_months",
-    "portal_logs_months",
-    "usage_stats_months",
-    "task_logs_months",
-    "task_results_months",
-]
-RETENTION_DEFAULTS = {
-    "admin_logs_months": "6",
-    "api_logs_months": "1",
-    "internal_logs_months": "24",
-    "portal_logs_months": "12",
-    "usage_stats_months": "36",
-    "task_logs_months": "3",
-    "task_results_months": "24",
-}
-
-
-def get_retention_context(db: Session) -> dict:
-    settings = _read_settings(db, SettingDomain.audit, RETENTION_KEYS)
-    for k, v in RETENTION_DEFAULTS.items():
-        if not settings.get(k):
-            settings[k] = v
-    return {"retention": settings, "retention_defaults": RETENTION_DEFAULTS}
-
-
-def save_retention(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.audit, data, RETENTION_KEYS)
+# 8.10 Data Retention — REMOVED. The page's retention keys were inert: no cleanup
+# task or reporting path consumed them. Real retention controls live on the
+# feature-specific pages/tasks that enforce them, such as Monitoring, Bandwidth,
+# Restore Tool, NAS Backups, and WireGuard logs.
 
 
 # 8.11 Finance Automation — REMOVED. The page's toggles (auto_invoice_enabled,

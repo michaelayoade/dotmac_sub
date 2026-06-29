@@ -36,11 +36,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Company name, address, bank details",
             },
             {
-                "name": "Data Retention",
-                "url": "/admin/system/config/data-retention",
-                "description": "Log rotation and data cleanup policies",
-            },
-            {
                 "name": "Email / SMTP",
                 "url": "/admin/system/email",
                 "description": "Outbound email transport settings",

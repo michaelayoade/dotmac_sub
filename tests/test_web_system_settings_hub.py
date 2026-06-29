@@ -1,4 +1,7 @@
+from fastapi.routing import APIRoute
+
 from app.services import web_system_settings_hub
+from app.web.admin import system as admin_system
 
 
 def test_settings_hub_includes_branding_link(db_session):
@@ -27,6 +30,27 @@ def test_settings_hub_includes_canonical_email_link(db_session):
     )
 
     assert email_link["url"] == "/admin/system/email"
+
+
+def test_settings_hub_does_not_include_removed_data_retention_page(db_session):
+    context = web_system_settings_hub.build_settings_hub_context(db_session)
+
+    system_category = next(
+        category for category in context["categories"] if category["id"] == "system"
+    )
+
+    assert all(
+        link["url"] != "/admin/system/config/data-retention"
+        for link in system_category["links"]
+    )
+
+
+def test_system_router_does_not_register_removed_data_retention_page():
+    registered_paths = {
+        route.path for route in admin_system.router.routes if isinstance(route, APIRoute)
+    }
+
+    assert "/config/data-retention" not in registered_paths
 
 
 def test_settings_hub_categories_can_build_query_links(db_session):

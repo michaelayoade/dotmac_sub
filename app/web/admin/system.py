@@ -4179,21 +4179,8 @@ def config_portal_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/config/portal", status_code=303)
 
 
-# --- 8.10 Data Retention ---
-@router.get("/config/data-retention", response_class=HTMLResponse)
-def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_retention_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/data_retention.html",
-        _config_context(request, db, {"active_page": "config-data-retention", **data}),
-    )
-
-
-@router.post("/config/data-retention", response_class=HTMLResponse)
-def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_retention(db, form)
-    return RedirectResponse(url="/admin/system/config/data-retention", status_code=303)
+# --- 8.10 Data Retention: REMOVED (inert/dead config; enforced retention lives on
+# feature-specific settings such as monitoring, bandwidth, restore, and backups) ---
 
 
 # --- 8.11 Finance Automation: REMOVED (inert/dead config; billing automation is

@@ -34,11 +34,13 @@ theme.
 - The Monitoring configuration page now reads and writes the runtime
   `server_health_*` and `network_health_*` thresholds consumed by the dashboard and
   system-health evaluator instead of orphan `cpu/mem/interface_warn_pct` keys.
+- The inert Data Retention config page was removed from the Settings Hub and admin
+  router; enforced retention remains on feature-specific settings/tasks.
 
 ### Still open
 
-- Dead config pages and toggles: Data Retention and the largely inert
-  preference/subscriber/portal/CPE/IPv6 key groups.
+- Dead config pages and toggles: the largely inert preference/subscriber/portal/CPE/IPv6
+  key groups.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
 - Broader bespoke-save validation consistency.
 
@@ -59,6 +61,10 @@ theme.
 - `poetry run pytest tests/test_network_monitoring_services.py tests/test_admin_route_permissions.py`
   - Result: `49 passed`
 - `poetry run ruff check app/services/web_system_config.py tests/test_network_monitoring_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
+  - Result: `26 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
   - Result: passed
 
 ## What this audit is
@@ -144,13 +150,13 @@ finding.
 
 | Tier | Items |
 |------|-------|
-| **P0** | Dead config pages that look load-bearing but aren't — Data Retention inert, Monitoring `*_warn_pct` orphan vs real keys, dead toggle groups (C-2); legal publish/unpublish/delete no audit (P-A) |
+| **P0** | Dead config pages/toggles that look load-bearing but aren't — remaining dead toggle groups (C-2) |
 | **P1** | Unify the two settings systems / validate-on-save (C-1); confirm before customer-visible publish (legal + whats-new) (P-A); GIS sync observability (P-B); route-guard asymmetry legal/gis — verify vs mount-registry |
 | **P2** | geocoding rate-limit + provider fallback (C-3); standardize bespoke-save validation/feedback (P-C); whats-new magic `?status=` param |
 
 ## Appendix — full findings
 - [CONTROL] (High) `app/services/web_system_config.py:42-72` — `_save_settings`/`_read_settings` persist string-typed, unvalidated, invisible to `resolve_value()`/cache → migrate to settings_spec or validate against spec on save [recommend]
-- [CONTROL] (High) `web_system_config.py:158-188` — Data Retention keys have zero consumers; page inert → wire to cleanup tasks or delete [recommend]
+- [CONTROL] (High) `web_system_config.py:158-188` — Data Retention keys had zero consumers; page inert → removed from Settings Hub/router [done]
 - [CONTROL] (High) `web_system_config.py:78,97,127,616,818` — PREFERENCE/SUBSCRIBER/PORTAL/CPE/IPV6 largely dead toggles (only force_2fa + selfcare_domain consumed) → audit each; delete inert or implement consumers [recommend]
 - [CONTROL] (High) `web_system_config.py:647-768` vs `web_admin_dashboard.py:225-247` — Monitoring page edits `*_warn_pct` (no consumer) while evaluator reads `server_health_*`/`network_health_*` spec keys; no disk/load field → collapse to spec keys [recommend]
 - [POLISH] (High) `app/services/legal.py:122-153` + `web_legal.py:225-242` — legal create/update/publish/unpublish/delete emit no audit event → emit audit on publish/unpublish/delete [recommend]
