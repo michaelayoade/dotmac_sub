@@ -38,7 +38,7 @@
             </div>
             <div>
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Secret</dt>
-                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ '****' + endpoint.secret[-4:] if endpoint.secret else 'None' }}</dd>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Configured' if endpoint.secret else 'Not configured' }}</dd>
             </div>
         </dl>
     </div>

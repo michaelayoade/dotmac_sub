@@ -21,6 +21,7 @@ from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import webhook as webhook_service
 from app.services.common import validate_enum
+from app.services.credential_crypto import encrypt_credential
 from app.services.integrations import registry as integration_registry
 from app.validators.forms import parse_uuid
 
@@ -928,7 +929,7 @@ def webhook_error_state(
             "name": name,
             "url": url,
             "connector_config_id": connector_config_id or "",
-            "secret": secret or "",
+            "secret": "",
             "event_types": event_types or [],
             "is_active": is_active,
         },
@@ -953,7 +954,7 @@ def create_webhook_endpoint(
         connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
-        secret=secret.strip() if secret else None,
+        secret=encrypt_credential(secret.strip()) if secret and secret.strip() else None,
         is_active=is_active,
     )
     endpoint = webhook_service.webhook_endpoints.create(db, payload)
