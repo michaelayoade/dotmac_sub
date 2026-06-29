@@ -65,6 +65,8 @@ settings/integrity/reconcilers.
   while preserving exception detail in server logs.
 - Invoice detail status badges now map issued, partially paid, void, and
   written-off states to explicit variants instead of falling back to draft-grey.
+- Payment arrangement list/detail/installment amounts now include the invoice
+  currency or an NGN fallback instead of rendering bare numbers.
 
 ### Partially resolved
 
@@ -137,6 +139,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check tests/test_billing_invoice_templates.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_invoice_templates.py -q`
+  - Result: passed
+- `poetry run ruff check tests/test_billing_arrangement_templates.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_arrangement_templates.py -q`
   - Result: passed
 
 ## What this audit is
