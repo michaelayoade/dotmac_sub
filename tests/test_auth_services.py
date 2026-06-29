@@ -1,6 +1,7 @@
 import hashlib
 import uuid
 from http.cookies import SimpleCookie
+from pathlib import Path
 from unittest.mock import Mock
 
 import pyotp
@@ -136,6 +137,14 @@ def _enable_force_admin_mfa(db_session):
         )
     )
     db_session.commit()
+
+
+def test_mfa_template_does_not_link_to_unimplemented_recovery_route():
+    template = Path("templates/auth/mfa.html").read_text()
+
+    assert "/auth/mfa/recovery" not in template
+    assert "Use a recovery code" not in template
+    assert "Contact an administrator to reset MFA" in template
 
 
 def test_user_credentials_soft_delete(db_session, person):

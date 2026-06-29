@@ -3,12 +3,39 @@
 **Date:** 2026-06-29
 **Method:** single-agent read-only review of auth/sessions/MFA/login/invite through a
 UX-polish + operator-control lens (**not** a full security review).
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** remediation in progress via draft PR #519. Part of the remaining-module audit series.
 
 > The agent's verdict: a **narrow security review is warranted** — specifically the
 > MFA recovery-code absence, the per-worker in-memory portal throttle, and the
 > reset-token-in-redirect-URL pattern (`web_auth.py:196`). Those are out of the
 > POLISH/CONTROL scope and listed only as a pointer.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #519 (`audit/auth-sessions-remediation`)
+
+### Resolved in current draft
+
+- The admin MFA challenge page no longer links to the unimplemented
+  `/auth/mfa/recovery` route. The dead recovery-code affordance was replaced with
+  an explicit administrator-reset fallback, and the stale Playwright page helper
+  was removed.
+
+### Still open
+
+- Real MFA recovery/backup codes still need a schema-backed design and security
+  review.
+- Admin lockout/MFA policy drift, lockout cooldown copy, forgot-password loading
+  states, password-min/remember-me copy, active sessions, and customer auth loading
+  parity remain open.
+
+### Verification
+
+- `poetry run pytest tests/test_auth_services.py -q`
+  - Result: `18 passed`
+- `poetry run ruff check tests/test_auth_services.py tests/playwright/pages/auth/mfa_page.py`
+  - Result: passed
 
 ## What this audit is
 
