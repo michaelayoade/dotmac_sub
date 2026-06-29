@@ -6,6 +6,7 @@ devices using the RouterOS API and publishes them to a Redis stream.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ from app.models.catalog import (
 )
 from app.services.credential_crypto import decrypt_credential
 from app.services.db_session_adapter import db_session_adapter
+from app.services.poller_health import POLLER_HEALTH_KEY
 from app.services.queue_mapping import queue_mapping
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,9 @@ POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "5000"))
 # enough of them exhaust the thread pool and stall polling for ALL devices. Both
 # the RouterOS socket_timeout and an asyncio.wait_for guard use this.
 DEVICE_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_DEVICE_IO_TIMEOUT_SEC", "12"))
+# Bound Redis I/O so a slow/unreachable Redis drops one poll cycle's samples
+# instead of stalling the whole poller (the publish is best-effort telemetry).
+REDIS_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_REDIS_IO_TIMEOUT_SEC", "5"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 REDIS_STREAM = os.getenv("BANDWIDTH_REDIS_STREAM", "bandwidth:samples")
 POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in (
@@ -625,6 +630,23 @@ class DevicePool:
                     continue
         return None
 
+    def health_snapshot(self) -> dict[str, int]:
+        """Per-cycle device health for telemetry: total / reachable / failing.
+
+        A device is "failing" while it has consecutive poll failures (it's in
+        backoff). Surfaces silently-broken routers that would otherwise be
+        invisible until a customer complains.
+        """
+        total = len(self._connections)
+        failing = sum(
+            1 for c in self._connections.values() if c._consecutive_failures > 0
+        )
+        return {
+            "devices_total": total,
+            "devices_ok": total - failing,
+            "devices_failing": failing,
+        }
+
     async def close(self):
         """Close all connections."""
         for conn in self._connections.values():
@@ -650,7 +672,14 @@ class BandwidthPoller:
 
     async def _get_redis(self) -> redis.Redis:
         if self._redis is None:
-            self._redis = cast(redis.Redis, redis.from_url(REDIS_URL))
+            self._redis = cast(
+                redis.Redis,
+                redis.from_url(
+                    REDIS_URL,
+                    socket_timeout=REDIS_IO_TIMEOUT_SEC,
+                    socket_connect_timeout=REDIS_IO_TIMEOUT_SEC,
+                ),
+            )
         return self._redis
 
     async def _publish_samples(self, samples: list[BandwidthSample]):
@@ -664,20 +693,51 @@ class BandwidthPoller:
             return
 
         r = await self._get_redis()
-        async with r.pipeline(transaction=False) as pipe:
-            for sample in samples:
-                data: dict[bytes | str | int | float, bytes | str | int | float] = {
-                    "subscription_id": sample.subscription_id,
-                    "nas_device_id": sample.nas_device_id,
-                    "queue_name": sample.queue_name,
-                    "rx_bps": str(sample.rx_bps),
-                    "tx_bps": str(sample.tx_bps),
-                    "sample_at": sample.sample_at.isoformat(),
-                }
-                pipe.xadd(REDIS_STREAM, data, maxlen=100000)
-            await pipe.execute()
+        try:
+            async with r.pipeline(transaction=False) as pipe:
+                for sample in samples:
+                    data: dict[bytes | str | int | float, bytes | str | int | float] = {
+                        "subscription_id": sample.subscription_id,
+                        "nas_device_id": sample.nas_device_id,
+                        "queue_name": sample.queue_name,
+                        "rx_bps": str(sample.rx_bps),
+                        "tx_bps": str(sample.tx_bps),
+                        "sample_at": sample.sample_at.isoformat(),
+                    }
+                    pipe.xadd(REDIS_STREAM, data, maxlen=100000)
+                await asyncio.wait_for(pipe.execute(), timeout=REDIS_IO_TIMEOUT_SEC)
+        except (TimeoutError, redis.RedisError) as exc:
+            # Best-effort telemetry: a slow/broken Redis must not stall polling.
+            # Drop this cycle's samples (the next cycle re-reads current rates).
+            logger.warning(
+                "bandwidth sample publish failed (%s); dropping %d samples",
+                exc,
+                len(samples),
+            )
+            return
 
         self._sample_count += len(samples)
+
+    async def _publish_health(self, cycle_seconds: float) -> None:
+        """Write a best-effort health snapshot for the web /metrics collector.
+
+        Never raises — health telemetry must never affect polling.
+        """
+        try:
+            payload = json.dumps(
+                {
+                    **self.device_pool.health_snapshot(),
+                    "cycle_seconds": round(cycle_seconds, 3),
+                    "poll_count": self._poll_count,
+                    "ts": datetime.now(UTC).isoformat(),
+                }
+            )
+            r = await self._get_redis()
+            await asyncio.wait_for(
+                r.set(POLLER_HEALTH_KEY, payload), timeout=REDIS_IO_TIMEOUT_SEC
+            )
+        except Exception:
+            pass
 
     async def _active_viewer_subscriptions(self) -> set[str]:
         """Return subscription IDs with a live SSE viewer within the TTL window."""
@@ -775,6 +835,7 @@ class BandwidthPoller:
 
                 # Calculate sleep time to maintain consistent interval
                 elapsed = time.monotonic() - start
+                await self._publish_health(elapsed)
                 sleep_time = max(0, interval_seconds - elapsed)
 
                 if sleep_time > 0:

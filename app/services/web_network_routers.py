@@ -10,6 +10,7 @@ from starlette.datastructures import FormData
 from starlette.requests import Request
 
 from app.schemas.router_management import RouterCreate, RouterUpdate
+from app.services.credential_crypto import decrypt_credential
 from app.services.router_management.config import (
     RouterConfigService,
     RouterTemplateService,
@@ -158,9 +159,11 @@ def edit_form_context(
     router_id: uuid.UUID,
 ) -> dict[str, object]:
     context = _base_context(request, db)
+    router = RouterInventory.get(db, router_id)
     context.update(
         {
-            "router": RouterInventory.get(db, router_id),
+            "router": router,
+            "rest_api_username_value": _display_rest_api_username(router),
             "jump_hosts": JumpHostInventory.list(db),
         }
     )
@@ -171,6 +174,10 @@ def edit_form_context(
 # omitted field must be read as an explicit False — otherwise these flags can
 # only ever be turned on, never cleared, from the edit form.
 _ROUTER_CHECKBOX_FIELDS = ("use_ssl", "verify_tls")
+
+
+def _display_rest_api_username(router) -> str:
+    return decrypt_credential(router.rest_api_username) or router.rest_api_username
 
 
 def _form_strings(form: FormData) -> dict[str, Any]:
