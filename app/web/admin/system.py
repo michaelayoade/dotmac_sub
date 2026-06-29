@@ -2518,6 +2518,7 @@ def api_key_create(
     request: Request,
     label: str = Form(...),
     expires_in: str = Form(None),
+    scopes: str = Form(None),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2533,6 +2534,7 @@ def api_key_create(
             subscriber_id=current_user["person_id"],
             label=label,
             expires_in=expires_in,
+            scopes=web_system_api_key_forms_service.parse_scopes(scopes),
         )
 
         # Show the raw secret exactly once, in the POST response body — NOT in a
