@@ -25,13 +25,15 @@ theme.
 - Whats-new status changes and create/edit submissions now confirm before a slide
   becomes `active` or `featured`, and invalid status updates now use a dedicated
   `status_error` flag instead of overloading the status filter.
+- GIS sync runs now persist the latest status, timing, options, result counts, and
+  error text in the GIS settings domain, and the admin GIS page surfaces that
+  latest run summary.
 
 ### Still open
 
 - Dead config pages and toggles: Data Retention, Monitoring drift, and the largely
   inert preference/subscriber/portal/CPE/IPv6 key groups.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
-- GIS sync last-run/result observability.
 - Geocoding provider/rate-limit controls and broader bespoke-save validation
   consistency.
 
@@ -41,6 +43,10 @@ theme.
   - Result: `46 passed`
 - `poetry run pytest tests/test_admin_route_permissions.py tests/test_legal_services.py tests/test_admin_whats_new.py`
   - Result: `54 passed`
+- `poetry run pytest tests/test_gis_sync_services.py tests/test_gis_route_gaps.py tests/test_admin_route_permissions.py tests/test_celery_tasks.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/gis_sync.py app/services/web_gis.py app/tasks/gis.py tests/test_gis_sync_services.py tests/test_gis_route_gaps.py`
+  - Result: passed
 
 ## What this audit is
 

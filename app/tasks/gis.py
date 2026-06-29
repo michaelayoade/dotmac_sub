@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import UTC, datetime
 
 from app.celery_app import celery_app
 from app.metrics import observe_job
@@ -16,7 +17,12 @@ SessionLocal = db_session_adapter.create_session
 @celery_app.task(name="app.tasks.gis.sync_gis_sources")
 def sync_gis_sources():
     start = time.monotonic()
+    started_at = datetime.now(UTC)
     status = "success"
+    results = {}
+    sync_pops = False
+    sync_addresses = False
+    deactivate_missing = False
     session = SessionLocal()
     try:
         sync_pops = _effective_bool(
@@ -50,6 +56,7 @@ def sync_gis_sources():
             result = gis_sync_service.geo_sync.sync_pop_sites(
                 session, deactivate_missing=deactivate_missing
             )
+            results["pop_sites"] = gis_sync_service._sync_result_payload(result)
             logger.info(
                 "GIS sync pop sites created=%s updated=%s skipped=%s",
                 result.created,
@@ -60,6 +67,7 @@ def sync_gis_sources():
             result = gis_sync_service.geo_sync.sync_addresses(
                 session, deactivate_missing=deactivate_missing
             )
+            results["addresses"] = gis_sync_service._sync_result_payload(result)
             logger.info(
                 "GIS sync addresses created=%s updated=%s skipped=%s",
                 result.created,
@@ -67,9 +75,28 @@ def sync_gis_sources():
                 result.skipped,
             )
         session.commit()
-    except Exception:
+        gis_sync_service.record_last_sync_run(
+            session,
+            status="success",
+            started_at=started_at,
+            sync_pops=sync_pops,
+            sync_addresses=sync_addresses,
+            deactivate_missing=deactivate_missing,
+            results=results,
+        )
+    except Exception as exc:
         status = "error"
         session.rollback()
+        gis_sync_service.record_last_sync_run(
+            session,
+            status="error",
+            started_at=started_at,
+            sync_pops=sync_pops,
+            sync_addresses=sync_addresses,
+            deactivate_missing=deactivate_missing,
+            results=results,
+            error=str(exc),
+        )
         logger.exception("GIS sync failed.")
         raise
     finally:

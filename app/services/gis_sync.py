@@ -3,17 +3,23 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.gis import GeoLocation, GeoLocationType
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Address
+from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
+from app.services import domain_settings as domain_settings_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+LAST_SYNC_RUN_KEY = "last_sync_run"
 
 
 @dataclass
@@ -36,6 +42,65 @@ def _address_display_name(address: Address) -> str:
     return ", ".join([part for part in parts if part])
 
 
+def _sync_result_payload(result: SyncResult) -> dict[str, int]:
+    return {
+        "created": result.created,
+        "updated": result.updated,
+        "skipped": result.skipped,
+    }
+
+
+def record_last_sync_run(
+    db: Session,
+    *,
+    status: str,
+    started_at: datetime,
+    sync_pops: bool,
+    sync_addresses: bool,
+    deactivate_missing: bool,
+    results: dict[str, object] | None = None,
+    error: str | None = None,
+    finished_at: datetime | None = None,
+) -> dict[str, Any]:
+    finished = finished_at or datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "status": status,
+        "started_at": started_at.astimezone(UTC).isoformat(),
+        "finished_at": finished.astimezone(UTC).isoformat(),
+        "duration_seconds": round((finished - started_at).total_seconds(), 3),
+        "options": {
+            "sync_pops": sync_pops,
+            "sync_addresses": sync_addresses,
+            "deactivate_missing": deactivate_missing,
+        },
+        "results": results or {},
+        "error": error,
+    }
+    domain_settings_service.gis_settings.upsert_by_key(
+        db,
+        LAST_SYNC_RUN_KEY,
+        DomainSettingUpdate(
+            value_type=SettingValueType.json,
+            value_text=None,
+            value_json=payload,
+            is_active=True,
+        ),
+    )
+    return payload
+
+
+def get_last_sync_run(db: Session) -> dict[str, Any] | None:
+    try:
+        setting = domain_settings_service.gis_settings.get_by_key(db, LAST_SYNC_RUN_KEY)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+    if isinstance(setting.value_json, dict):
+        return setting.value_json
+    return None
+
+
 class GeoSync(ListResponseMixin):
     @staticmethod
     def sync_sources(
@@ -50,7 +115,31 @@ class GeoSync(ListResponseMixin):
             return GeoSync.queue_sync(
                 background_tasks, sync_pops, sync_addresses, deactivate_missing
             )
-        return GeoSync.run_sync(db, sync_pops, sync_addresses, deactivate_missing)
+        started_at = datetime.now(UTC)
+        try:
+            results = GeoSync.run_sync(db, sync_pops, sync_addresses, deactivate_missing)
+        except Exception as exc:
+            db.rollback()
+            record_last_sync_run(
+                db,
+                status="error",
+                started_at=started_at,
+                sync_pops=sync_pops,
+                sync_addresses=sync_addresses,
+                deactivate_missing=deactivate_missing,
+                error=str(exc),
+            )
+            raise
+        record_last_sync_run(
+            db,
+            status="success",
+            started_at=started_at,
+            sync_pops=sync_pops,
+            sync_addresses=sync_addresses,
+            deactivate_missing=deactivate_missing,
+            results=results,
+        )
+        return results
 
     @staticmethod
     def run_sync(
@@ -62,18 +151,10 @@ class GeoSync(ListResponseMixin):
         results: dict[str, object] = {}
         if sync_pops:
             result = GeoSync.sync_pop_sites(db, deactivate_missing=deactivate_missing)
-            results["pop_sites"] = {
-                "created": result.created,
-                "updated": result.updated,
-                "skipped": result.skipped,
-            }
+            results["pop_sites"] = _sync_result_payload(result)
         if sync_addresses:
             result = GeoSync.sync_addresses(db, deactivate_missing=deactivate_missing)
-            results["addresses"] = {
-                "created": result.created,
-                "updated": result.updated,
-                "skipped": result.skipped,
-            }
+            results["addresses"] = _sync_result_payload(result)
         return results
 
     @staticmethod
@@ -85,16 +166,36 @@ class GeoSync(ListResponseMixin):
     ) -> dict[str, object]:
         def _run_sync() -> None:
             session = db_session_adapter.create_session()
+            started_at = datetime.now(UTC)
             try:
-                GeoSync.run_sync(
+                results = GeoSync.run_sync(
                     session,
                     sync_pops=sync_pops,
                     sync_addresses=sync_addresses,
                     deactivate_missing=deactivate_missing,
                 )
-            except Exception:
+            except Exception as exc:
                 session.rollback()
+                record_last_sync_run(
+                    session,
+                    status="error",
+                    started_at=started_at,
+                    sync_pops=sync_pops,
+                    sync_addresses=sync_addresses,
+                    deactivate_missing=deactivate_missing,
+                    error=str(exc),
+                )
                 raise
+            else:
+                record_last_sync_run(
+                    session,
+                    status="success",
+                    started_at=started_at,
+                    sync_pops=sync_pops,
+                    sync_addresses=sync_addresses,
+                    deactivate_missing=deactivate_missing,
+                    results=results,
+                )
             finally:
                 session.close()
 
