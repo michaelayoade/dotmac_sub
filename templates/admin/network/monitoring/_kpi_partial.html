@@ -5,12 +5,9 @@
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Network Snapshot</p>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Current device and ONT state for quick triage confirmation.</p>
         </div>
-        <div class="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
-            <span class="relative flex h-2 w-2">
-                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-            </span>
-            Live{% if now %} · {{ now.strftime('%H:%M:%S') }}{% endif %}
+        <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+            <span class="h-2 w-2 rounded-full bg-slate-400"></span>
+            Snapshot{% if now %} · {{ now.strftime('%H:%M:%S') }} UTC{% endif %}
         </div>
     </div>
 

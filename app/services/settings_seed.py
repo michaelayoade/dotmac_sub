@@ -1281,6 +1281,12 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("RADIUS_COA_RETRIES", "1"),
     )
+    radius_settings.ensure_by_key(
+        db,
+        key="suspended_address_list",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("RADIUS_SUSPENDED_ADDRESS_LIST", "suspended"),
+    )
     refresh_raw = os.getenv("RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE", "true")
     radius_settings.ensure_by_key(
         db,
@@ -2213,6 +2219,18 @@ def seed_network_settings(db: Session) -> None:
         key="default_mikrotik_address_list",
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_MIKROTIK_ADDRESS_LIST", ""),
+    )
+    network_settings.ensure_by_key(
+        db,
+        key="internet_service_vlans",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("NETWORK_INTERNET_SERVICE_VLANS", "203"),
+    )
+    network_settings.ensure_by_key(
+        db,
+        key="speedtest_sla_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("NETWORK_SPEEDTEST_SLA_RATIO", "0.8"),
     )
     network_settings.ensure_by_key(
         db,

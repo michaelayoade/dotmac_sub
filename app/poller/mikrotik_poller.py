@@ -157,6 +157,12 @@ class MikroTikConnection:
             # the blocking socket ops; wait_for guarantees the async loop is never
             # blocked by a hung device even if the executor thread lingers.
             loop = asyncio.get_event_loop()
+            # TLS-readiness: tag a NAS with mikrotik_api_port:8729 to poll over
+            # RouterOS API-SSL (encrypted transport) instead of plaintext 8728.
+            # No-op until a device is on 8729, so the fleet is unchanged today.
+            # ssl_verify stays off for now (encrypted but unverified) — cert
+            # verification is a later step once the routers have trusted certs.
+            use_ssl = self.port == 8729
             self._pool = await asyncio.wait_for(
                 loop.run_in_executor(
                     None,
@@ -166,6 +172,9 @@ class MikroTikConnection:
                         password=self.password,
                         port=self.port,
                         plaintext_login=True,
+                        use_ssl=use_ssl,
+                        ssl_verify=False,
+                        ssl_verify_hostname=False,
                         socket_timeout=DEVICE_IO_TIMEOUT_SEC,
                     ),
                 ),
