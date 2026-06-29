@@ -17,6 +17,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models.integration_hook import (
+    SECRET_AUTH_CONFIG_KEYS,
     IntegrationHook,
     IntegrationHookAuthType,
     IntegrationHookExecution,
@@ -31,6 +32,36 @@ from app.services.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _encrypt_auth_config(auth_config: dict | None) -> dict | None:
+    """Encrypt the secret-keyed values of a hook ``auth_config`` for storage.
+
+    Idempotent (``encrypt_credential`` leaves already-``enc:`` values untouched);
+    non-secret keys (e.g. ``username``) are kept as-is.
+    """
+    if not isinstance(auth_config, dict) or not auth_config:
+        return auth_config
+    from app.services.credential_crypto import encrypt_credential
+
+    encrypted = dict(auth_config)
+    for key in SECRET_AUTH_CONFIG_KEYS:
+        value = encrypted.get(key)
+        if value is not None and str(value):
+            encrypted[key] = encrypt_credential(str(value))
+    return encrypted
+
+
+def _decrypt_auth_secret(auth_config: object, key: str) -> str:
+    """Return a decrypted secret value from a hook ``auth_config`` (or "")."""
+    if not isinstance(auth_config, dict):
+        return ""
+    raw = auth_config.get(key)
+    if raw is None:
+        return ""
+    from app.services.credential_crypto import decrypt_credential
+
+    return str(decrypt_credential(str(raw)) or "")
 
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
@@ -147,7 +178,7 @@ def create_hook(
             IntegrationHookAuthType,
             "auth_type",
         ),
-        auth_config=auth_config,
+        auth_config=_encrypt_auth_config(auth_config),
         retry_max=max(0, retry_max),
         retry_backoff_ms=max(0, retry_backoff_ms),
         event_filters=event_filters or [],
@@ -189,7 +220,7 @@ def update_hook(
         IntegrationHookAuthType,
         "auth_type",
     )
-    hook.auth_config = auth_config
+    hook.auth_config = _encrypt_auth_config(auth_config)
     hook.retry_max = max(0, retry_max)
     hook.retry_backoff_ms = max(0, retry_backoff_ms)
     hook.event_filters = event_filters or []
@@ -408,17 +439,17 @@ def _execute_http_hook(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     auth_config = hook.auth_config if isinstance(hook.auth_config, dict) else {}
     if hook.auth_type == IntegrationHookAuthType.bearer:
-        token = str(auth_config.get("token") or "")
+        token = _decrypt_auth_secret(auth_config, "token")
         if token:
             headers["Authorization"] = f"Bearer {token}"
     elif hook.auth_type == IntegrationHookAuthType.basic:
         username = str(auth_config.get("username") or "")
-        password = str(auth_config.get("password") or "")
+        password = _decrypt_auth_secret(auth_config, "password")
         if username or password:
             token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
             headers["Authorization"] = f"Basic {token}"
     elif hook.auth_type == IntegrationHookAuthType.hmac:
-        secret = str(auth_config.get("secret") or "")
+        secret = _decrypt_auth_secret(auth_config, "secret")
         if secret:
             headers["X-Hook-Secret"] = secret
     response = httpx.request(

@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.domain_settings import DomainSetting
+from app.models.integration_hook import (
+    SECRET_AUTH_CONFIG_KEYS as _INTEGRATION_HOOK_SECRET_KEYS,
+)
 from app.models.integration_hook import IntegrationHook
 from app.models.network import OLTDevice, OntProfileWanService, OntUnit
 from app.models.network_monitoring import NetworkDevice
@@ -29,9 +32,6 @@ from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
 
-_INTEGRATION_HOOK_SECRET_KEYS = frozenset(
-    {"token", "password", "secret", "api_key", "access_token", "refresh_token"}
-)
 _CREDENTIAL_KEY_SECRET_PATH = "settings/auth"
 _CREDENTIAL_KEY_SECRET_FIELD = "credential_encryption_key"
 _LEGACY_CREDENTIAL_KEY_SECRET_PATH = "auth"
