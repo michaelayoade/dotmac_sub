@@ -29,11 +29,13 @@ path are covered in the CRM and Notifications audits.)
 - Hook auth secrets now use credential-at-rest wrapping for bearer/basic/HMAC
   values, execute with decrypted values, and no longer render stored secrets
   back into the hook edit form.
+- Integrations webhook detail pages now summarize latest delivery, latest
+  failure, and recent delivered/pending/failed outcomes above the delivery log.
 
 ### Still open
 
-- Webhook delivery retry/timeout settings, delivery observability, hook execution
-  timeout controls, confirmation polish, and the separate RBAC review remain open.
+- Webhook delivery retry/timeout settings, hook execution timeout controls,
+  confirmation polish, and the separate RBAC review remain open.
 
 ### Verification
 
@@ -45,6 +47,12 @@ path are covered in the CRM and Notifications audits.)
   - Result: `9 passed`
 - `poetry run pytest tests/test_admin_route_permissions.py -q`
   - Result: `15 passed`
+- `poetry run ruff check app/services/web_integrations.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `7 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
 - `poetry run ruff check app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py`
   - Result: passed
 - `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`

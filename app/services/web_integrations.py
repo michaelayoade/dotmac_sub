@@ -1288,10 +1288,32 @@ def build_webhook_detail_data(db, *, endpoint_id: str) -> dict[str, object]:
         limit=50,
         offset=0,
     )
+    failed_deliveries = [
+        delivery
+        for delivery in deliveries
+        if getattr(getattr(delivery, "status", None), "value", None) == "failed"
+    ]
+    delivery_summary = {
+        "latest_delivery": deliveries[0] if deliveries else None,
+        "latest_failure": failed_deliveries[0] if failed_deliveries else None,
+        "pending_count": sum(
+            1
+            for delivery in deliveries
+            if getattr(getattr(delivery, "status", None), "value", None) == "pending"
+        ),
+        "failed_count": len(failed_deliveries),
+        "delivered_count": sum(
+            1
+            for delivery in deliveries
+            if getattr(getattr(delivery, "status", None), "value", None)
+            == "delivered"
+        ),
+    }
     return {
         "endpoint": endpoint,
         "subscriptions": subscriptions,
         "deliveries": deliveries,
+        "delivery_summary": delivery_summary,
     }
 
 

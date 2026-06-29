@@ -1,7 +1,13 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from app.models.webhook import WebhookDelivery, WebhookEventType, WebhookSubscription
+from app.models.webhook import (
+    WebhookDelivery,
+    WebhookDeliveryStatus,
+    WebhookEventType,
+    WebhookSubscription,
+)
 from app.services import web_integrations
 from app.services.credential_crypto import decrypt_credential, is_encrypted
 
@@ -129,6 +135,58 @@ def test_integrations_webhook_test_delivery_queues_first_active_subscription(
     assert queued["source"] == "admin_integrations_webhook_test"
 
 
+def test_integrations_webhook_detail_includes_delivery_summary(db_session):
+    endpoint = web_integrations.create_webhook_endpoint(
+        db_session,
+        name="Partner webhook",
+        url=f"https://example.com/{uuid4()}",
+        connector_config_id=None,
+        secret=None,
+        event_types=["invoice.paid"],
+        is_active=True,
+    )
+    subscription = (
+        db_session.query(WebhookSubscription)
+        .filter(WebhookSubscription.endpoint_id == endpoint.id)
+        .one()
+    )
+    now = datetime.now(UTC)
+    delivered = WebhookDelivery(
+        subscription_id=subscription.id,
+        endpoint_id=endpoint.id,
+        event_type=WebhookEventType.invoice_paid,
+        status=WebhookDeliveryStatus.delivered,
+        attempt_count=1,
+        response_status=200,
+        delivered_at=now - timedelta(minutes=10),
+        created_at=now - timedelta(minutes=10),
+    )
+    failed = WebhookDelivery(
+        subscription_id=subscription.id,
+        endpoint_id=endpoint.id,
+        event_type=WebhookEventType.invoice_paid,
+        status=WebhookDeliveryStatus.failed,
+        attempt_count=2,
+        response_status=500,
+        error="HTTP 500: upstream failed",
+        last_attempt_at=now,
+        created_at=now,
+    )
+    db_session.add_all([delivered, failed])
+    db_session.commit()
+
+    state = web_integrations.build_webhook_detail_data(
+        db_session, endpoint_id=str(endpoint.id)
+    )
+
+    summary = state["delivery_summary"]
+    assert summary["latest_delivery"].id == failed.id
+    assert summary["latest_failure"].id == failed.id
+    assert summary["delivered_count"] == 1
+    assert summary["failed_count"] == 1
+    assert summary["pending_count"] == 0
+
+
 def test_integrations_webhook_templates_do_not_render_secret_values():
     new_template = Path("templates/admin/integrations/webhooks/new.html").read_text()
     detail_template = Path(
@@ -146,6 +204,8 @@ def test_integrations_webhook_templates_do_not_render_secret_values():
     assert "/test" in detail_template
     assert "/disable" in detail_template
     assert "/delete" in detail_template
+    assert "Latest delivery" in detail_template
+    assert "Latest failure" in detail_template
 
 
 def test_connector_detail_exposes_check_connection_action():
