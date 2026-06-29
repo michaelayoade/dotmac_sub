@@ -59,6 +59,8 @@ settings/integrity/reconcilers.
   not eligible.
 - Bulk dunning pause/resume now redirects with processed and skipped counts so
   per-case failures are visible instead of looking like full success.
+- Payment import results now report total, shown, and omitted error counts so the
+  first 10-row error sample cannot hide additional failures.
 
 ### Partially resolved
 
@@ -119,6 +121,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/web/admin/billing_dunning.py tests/test_billing_dunning_detail.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_dunning_detail.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/web_billing_payments.py tests/test_billing_payment_import_options.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_payment_import_options.py -q`
   - Result: passed
 
 ## What this audit is

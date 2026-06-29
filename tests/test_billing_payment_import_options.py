@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 from app.models.audit import AuditActorType
 from app.models.billing import Payment, PaymentMethodType
@@ -9,6 +10,7 @@ from app.schemas.billing import PaymentMethodCreate
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services.web_billing_payments import (
+    build_import_result_payload,
     import_payments,
     list_payment_import_history,
     list_payment_import_history_filtered,
@@ -55,6 +57,26 @@ def test_import_payments_respects_pair_inactive_customers_flag(db_session, subsc
     assert imported == 0
     assert len(errors) == 1
     assert "Account not found" in errors[0]
+
+
+def test_import_result_payload_reports_omitted_error_count():
+    errors = [f"Row {idx}: failed" for idx in range(12)]
+
+    payload = build_import_result_payload(imported_count=3, errors=errors)
+
+    assert payload["imported"] == 3
+    assert payload["shown_errors"] == 10
+    assert payload["total_errors"] == 12
+    assert payload["omitted_errors"] == 2
+    assert payload["errors"] == errors[:10]
+
+
+def test_payment_import_template_discloses_truncated_error_sample():
+    template = Path("templates/admin/billing/payment_import.html").read_text()
+
+    assert "Showing " in template
+    assert "omitted_errors" in template
+    assert "more not shown" in template
 
 
 def test_normalize_import_rows_maps_bank_specific_columns():
