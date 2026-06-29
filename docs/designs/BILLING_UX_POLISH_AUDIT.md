@@ -98,6 +98,8 @@ settings/integrity/reconcilers.
   instead of a hardcoded 30-day payment term.
 - Existing invoice edit forms now lock the currency selector while submitting the
   stored currency value, matching the service-level no-currency-change guard.
+- Invoice batch Run Batch now has a submit guard, submitting spinner/text, and
+  disabled state tied to the preview confirmation checkbox.
 
 ### Partially resolved
 
@@ -240,6 +242,10 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run python -c "...invoice_form.html currency lock markup..."`
   - Result: passed
+- `poetry run ruff check tests/test_billing_invoice_templates.py`
+  - Result: passed
+- `poetry run python -c "...invoice_batch.html submit guard markup..."`
+  - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -284,7 +290,7 @@ idempotency on money-generating runs.
 - Dunning **Close / Pause-All / Resume-All** (`templates/admin/billing/dunning.html`)
 - **Approve Arrangement** (`payment_arrangement_detail.html:66`)
 - **Deactivate** payment channel / collection account (`payment_channels.html:123`, `collection_accounts.html:115`)
-- **Run Batch** invoice run, no double-submit guard (`invoice_batch.html:110`)
+- **Run Batch** invoice run, no double-submit guard (`invoice_batch.html:110`) [resolved in draft]
 - Fleet-wide **Save Billing Settings** applies enforcement policy, no preview/confirm (`templates/admin/system/config/billing.html`)
 
 **P-B. Dead / broken UI** (these are bugs). Standard: every control hits a real
@@ -388,7 +394,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Med) `invoice_detail.html:19-29` — status badge styles only paid/pending/sent/overdue; issued/partially_paid/void/written_off fall through to draft-grey → extend map to all statuses [recommend]
 - [POLISH] (Med) `invoice_form.html:78-84` + `app/services/billing/invoices.py:340-343` — currency select editable on edit but service rejects change with 400 → lock currency in edit mode [resolved in draft]
 - [CONTROL/POLISH] (Med) `app/services/web_billing_invoice_forms.py:78,135` — form hardcodes paymentTermsDays=30 while `resolve_payment_due_days` is the configurable source → pass resolved value into form config [resolved in draft]
-- [POLISH] (Med) `invoice_batch.html:110` — "Run Batch" (money-generating) no double-submit guard / disable (only Preview has spinner) → disable on submit / idempotency token [recommend]
+- [POLISH] (Med) `invoice_batch.html:110` — "Run Batch" (money-generating) no double-submit guard / disable (only Preview has spinner) → disable on submit / idempotency token [resolved in draft]
 - [POLISH] (Low) `app/services/web_billing_invoice_batch.py:56,222` — returns raw exception string into the page → log + generic message [recommend]
 - [POLISH] (Low) `app/services/web_billing_invoice_batch.py:190` — batch preview truncates to [:50] silently → label "showing 50 of N" [defer]
 - [CONTROL] (Low) `ar_aging.html:24-26` — period selector offers only All-time/This-year though `_period_bounds` supports month/quarter → expose richer set [defer]
