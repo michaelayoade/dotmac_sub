@@ -548,6 +548,14 @@ class TestSaveCardOnVerify:
         assert "Add an email address to your account before paying with Paystack." in template
         assert "email: checkoutEmail" in template
 
+    def test_invoice_pay_success_template_shows_remaining_balance(self) -> None:
+        template = Path("templates/customer/billing/pay_success.html").read_text()
+
+        assert "remaining_balance = invoice.balance_due or 0" in template
+        assert "Remaining Invoice Balance" in template
+        assert "partially applied to your invoice" in template
+        assert "{{ invoice_currency }} {{" in template
+
     def test_topup_verify_saves_card_when_requested(self) -> None:
         from app.web.customer.routes import customer_verify_topup
 
