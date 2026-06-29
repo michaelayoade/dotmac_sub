@@ -2169,6 +2169,27 @@ def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_ses
     assert "ZZ-TARGET-ONT" in serials
 
 
+def test_consolidated_page_data_includes_ont_signal_data(db_session):
+    ont = OntUnit(
+        serial_number="ONT-CONSOLIDATED-STATUS",
+        is_active=True,
+        olt_status=OnuOnlineStatus.online,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="onts",
+        db=db_session,
+        search="ONT-CONSOLIDATED-STATUS",
+    )
+
+    signal_data = payload["signal_data"][str(ont.id)]
+    assert signal_data["operational"] == "up"
+    assert signal_data["operational_label"] == "Up"
+    assert signal_data["operational_reason"] == "olt_online"
+
+
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
     db_session,
 ):
