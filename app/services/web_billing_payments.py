@@ -26,6 +26,25 @@ from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
 
+
+def _currency_code(value: object | None) -> str:
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
+def _format_currency_amount(amount: object, currency: object | None) -> str:
+    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
+
+
+def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
+    if not amounts:
+        return _format_currency_amount(0, "NGN")
+    return ", ".join(
+        _format_currency_amount(amounts[currency], currency)
+        for currency in sorted(amounts)
+    )
+
+
 IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
     "base_csv": {
         "account_number": ("account_number", "account_no", "acct_no"),
@@ -459,9 +478,12 @@ def build_payments_list_data(
 ) -> dict[str, object]:
     """Build list/stat data for payments page."""
 
-    def _build_status_totals(filtered_subquery) -> dict[str, dict[str, float | int]]:  # type: ignore[no-untyped-def]
-        summary: dict[str, dict[str, float | int]] = {
-            key: {"count": 0, "amount": 0.0}
+    def _empty_status_total() -> dict[str, object]:
+        return {"count": 0, "amount": 0.0, "amounts": {}, "display": "NGN 0.00"}
+
+    def _build_status_totals(filtered_subquery) -> dict[str, dict[str, object]]:  # type: ignore[no-untyped-def]
+        summary: dict[str, dict[str, object]] = {
+            key: _empty_status_total()
             for key in (
                 "succeeded",
                 "pending",
@@ -474,23 +496,40 @@ def build_payments_list_data(
         rows = db.execute(
             select(
                 filtered_subquery.c.status,
+                filtered_subquery.c.currency,
                 func.count().label("count"),
                 func.coalesce(func.sum(filtered_subquery.c.amount), 0).label("amount"),
-            ).group_by(filtered_subquery.c.status)
+            ).group_by(filtered_subquery.c.status, filtered_subquery.c.currency)
         ).all()
-        for status_value, count_value, amount_value in rows:
+        for status_value, currency_value, count_value, amount_value in rows:
             key = (
                 status_value.value
                 if hasattr(status_value, "value")
                 else str(status_value)
             )
             if key not in summary:
-                summary[key] = {"count": 0, "amount": 0.0}
-            summary[key]["count"] = int(count_value or 0)
-            summary[key]["amount"] = float(amount_value or 0)
+                summary[key] = _empty_status_total()
+            currency = _currency_code(currency_value)
+            amount = Decimal(str(amount_value or 0))
+            amounts = cast(dict[str, Decimal], summary[key]["amounts"])
+            amounts[currency] = amounts.get(currency, Decimal("0")) + amount
+            summary[key]["count"] = int(summary[key]["count"]) + int(count_value or 0)
+            summary[key]["amount"] = float(
+                Decimal(str(summary[key]["amount"])) + amount
+            )
+        for item in summary.values():
+            item["display"] = _format_currency_groups(
+                cast(dict[str, Decimal], item["amounts"])
+            )
+        all_amounts: dict[str, Decimal] = {}
+        for item in summary.values():
+            for currency, amount in cast(dict[str, Decimal], item["amounts"]).items():
+                all_amounts[currency] = all_amounts.get(currency, Decimal("0")) + amount
         summary["all"] = {
             "count": sum(int(item["count"]) for item in summary.values()),
             "amount": sum(float(item["amount"]) for item in summary.values()),
+            "amounts": all_amounts,
+            "display": _format_currency_groups(all_amounts),
         }
         return summary
 
@@ -600,7 +639,7 @@ def build_payments_list_data(
     payments: list[Payment] = []
     total = 0
     status_totals = {
-        key: {"count": 0, "amount": 0.0}
+        key: _empty_status_total()
         for key in (
             "succeeded",
             "pending",
@@ -613,7 +652,7 @@ def build_payments_list_data(
     }
     if account_ids or not customer_filtered:
         filtered_subquery = _apply_payment_filters(
-            select(Payment.id, Payment.status, Payment.amount)
+            select(Payment.id, Payment.status, Payment.amount, Payment.currency)
         ).subquery()
         total = db.scalar(select(func.count()).select_from(filtered_subquery)) or 0
         status_totals = _build_status_totals(filtered_subquery)
@@ -747,11 +786,15 @@ def process_payment_import_payload(
     pair_inactive_customers = bool(body.get("pair_inactive_customers", True))
     row_count = len(normalized_rows)
     total_amount = Decimal("0")
+    currency_totals: dict[str, Decimal] = {}
     for row in normalized_rows:
         try:
-            total_amount += Decimal(str(row.get("amount", 0) or 0))
+            amount = Decimal(str(row.get("amount", 0) or 0))
         except (TypeError, ValueError, InvalidOperation):
             continue
+        currency = _currency_code(row.get("currency") or default_currency)
+        total_amount += amount
+        currency_totals[currency] = currency_totals.get(currency, Decimal("0")) + amount
 
     imported_count, errors = import_payments(
         db,
@@ -774,6 +817,9 @@ def process_payment_import_payload(
             "file_name": file_name,
             "row_count": row_count,
             "total_amount": float(total_amount),
+            "currency_totals": {
+                currency: float(amount) for currency, amount in currency_totals.items()
+            },
             "pair_inactive_customers": pair_inactive_customers,
             "handler": handler,
         },
@@ -833,6 +879,7 @@ def list_payment_import_history_filtered(
         offset=0,
     )
     rows: list[dict[str, object]] = []
+    default_currency = resolve_default_currency(db)
     for event in events:
         if start is not None and event.occurred_at and event.occurred_at < start:
             continue
@@ -853,6 +900,16 @@ def list_payment_import_history_filtered(
         if status in {"success", "partial", "failed"} and row_status != status:
             continue
         row_count = int(metadata.get("row_count", imported + errors) or 0)
+        total_amount = Decimal(str(metadata.get("total_amount", 0) or 0))
+        raw_currency_totals = metadata.get("currency_totals")
+        currency_totals: dict[str, Decimal] = {}
+        if isinstance(raw_currency_totals, dict):
+            for currency, amount in raw_currency_totals.items():
+                currency_totals[_currency_code(currency)] = Decimal(str(amount or 0))
+        if not currency_totals:
+            currency_totals[
+                _currency_code(metadata.get("currency") or default_currency)
+            ] = total_amount
         rows.append(
             {
                 "occurred_at": event.occurred_at,
@@ -864,7 +921,9 @@ def list_payment_import_history_filtered(
                 "row_count": row_count,
                 "matched_count": imported,
                 "unmatched_count": errors,
-                "total_amount": float(metadata.get("total_amount", 0) or 0),
+                "total_amount": float(total_amount),
+                "currency_totals": currency_totals,
+                "total_display": _format_currency_groups(currency_totals),
             }
         )
     return rows

@@ -5,13 +5,56 @@
 (~16 admin pages, ~40 services): invoices/ledger/tax, payments/gateways/proofs,
 dunning/collections/autopay, accounts/prepaid/reseller, customer pay portal,
 settings/integrity/reconcilers.
-**Status:** audit only — nothing implemented from this doc yet. Companion to
+**Status:** remediation in progress via draft PR #523. Companion to
 [NETWORKING_UX_POLISH_AUDIT.md](NETWORKING_UX_POLISH_AUDIT.md).
 
 > Note: recent money-state-machine PRs (#308 void/write-off/refund guards,
 > row-locks, `written_off`; #204 webhook settlement) already hardened the engine
 > guards. This audit is the UX / observability / configurability layer on top and
 > excludes those guard additions.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #523 (`audit/billing-remediation`)
+
+### Resolved in current draft
+
+- Reconciliation GET no longer writes/commits `BankReconciliationRun` rows by
+  default; persistence is explicit via `persist_run`.
+- Admin AR-aging now queries open receivables directly, excludes drafts and
+  zero-balance invoices, and exposes currency-grouped totals.
+- Billing account list stat cards now use computed totals/counts instead of
+  fabricated zero values.
+- Invoice, payment, ledger, AR-aging, payment import, reconciliation, and customer
+  billing views now render currency codes/totals instead of assuming a naira glyph
+  in the covered surfaces.
+- Payment import audit metadata/history now preserves and displays grouped
+  currency totals.
+
+### Partially resolved
+
+- Currency display is improved across the touched admin/customer billing surfaces,
+  but this audit's broader `default_currency`/provider/settings cleanup remains
+  open for forms, adapters, Flutterwave, integrity SQL, and other untouched paths.
+- AR-aging is fixed for the admin UI builder; the older reporting helper should be
+  reviewed before marking the entire reporting-layer finding closed.
+
+### Still open
+
+- Irreversible money-action confirms and double-submit guards.
+- Dead/broken account deactivate/delete actions, dunning detail route, ignored
+  account filters, and invoice batch bare-fragment behavior.
+- Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
+  and raw exception copy cleanup.
+- Customer post-payment-return states.
+- Money-field validation and billing settings/spec hygiene.
+- Canonical billable-status set and remaining policy thresholds/settings work.
+
+### Verification
+
+- `poetry run pytest tests/test_billing_ar_aging_overview.py tests/test_billing_finance_workflows.py tests/test_billing_invoices_overview.py tests/test_billing_ledger_overview.py tests/test_billing_payment_import_options.py tests/test_billing_payments_overview.py`
+  - Result: `45 passed`
 
 ## What this audit is
 

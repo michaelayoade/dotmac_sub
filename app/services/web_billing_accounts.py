@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from uuid import UUID
 
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
+from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
+
+
+def _default_currency(db) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
+def _format_money(amount: object, currency: str) -> str:
+    return f"{currency} {Decimal(str(amount or 0)):,.2f}"
 
 
 def build_accounts_list_data(
@@ -26,18 +39,21 @@ def build_accounts_list_data(
     offset = (page - 1) * per_page
     accounts = []
     total = 0
+    summary_accounts = []
     if customer_ref:
         subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(
             db, customer_ref
         )
         if subscriber_ids:
-            query = (
-                db.query(Subscriber)
-                .filter(Subscriber.id.in_(subscriber_ids))
-                .order_by(Subscriber.created_at.desc())
+            base_query = db.query(Subscriber).filter(Subscriber.id.in_(subscriber_ids))
+            total = base_query.count()
+            summary_accounts = base_query.all()
+            accounts = (
+                base_query.order_by(Subscriber.created_at.desc())
+                .offset(offset)
+                .limit(per_page)
+                .all()
             )
-            total = query.count()
-            accounts = query.offset(offset).limit(per_page).all()
     else:
         accounts = subscriber_service.accounts.list(
             db=db,
@@ -54,7 +70,23 @@ def build_accounts_list_data(
                 Subscriber.reseller_id == UUID(reseller_id)
             )
         total = total_query.count()
+        summary_accounts = total_query.all()
     total_pages = (total + per_page - 1) // per_page
+    default_currency = _default_currency(db)
+    total_balance = sum(
+        Decimal(str(getattr(account, "balance", 0) or 0))
+        for account in summary_accounts
+    )
+    active_count = sum(
+        1
+        for account in summary_accounts
+        if getattr(account, "status", None) == SubscriberStatus.active
+    )
+    suspended_count = sum(
+        1
+        for account in summary_accounts
+        if getattr(account, "status", None) == SubscriberStatus.suspended
+    )
     return {
         "accounts": accounts,
         "page": page,
@@ -63,6 +95,11 @@ def build_accounts_list_data(
         "total_pages": total_pages,
         "customer_ref": customer_ref,
         "reseller_id": reseller_id,
+        "default_currency": default_currency,
+        "total_balance": float(total_balance),
+        "total_balance_display": _format_money(total_balance, default_currency),
+        "active_count": active_count,
+        "suspended_count": suspended_count,
     }
 
 
@@ -361,4 +398,9 @@ def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:
         limit=50,
         offset=0,
     )
-    return {"account": account, "invoices": invoices}
+    default_currency = _default_currency(db)
+    return {
+        "account": account,
+        "invoices": invoices,
+        "default_currency": default_currency,
+    }

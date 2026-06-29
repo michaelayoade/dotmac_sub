@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.models.audit import AuditActorType
 from app.models.billing import Payment, PaymentMethodType
 from app.schemas.audit import AuditEventCreate
@@ -189,6 +191,36 @@ def test_list_payment_import_history_reads_audit_metadata(db_session):
     assert first["matched_count"] == 2
     assert first["unmatched_count"] == 1
     assert first["total_amount"] == 1250.0
+    assert first["total_display"] == "NGN 1,250.00"
+
+
+def test_list_payment_import_history_displays_currency_totals(db_session):
+    audit_service.audit_events.create(
+        db_session,
+        AuditEventCreate(
+            actor_type=AuditActorType.system,
+            action="import",
+            entity_type="payment",
+            entity_id="bulk",
+            metadata_={
+                "file_name": "mixed.csv",
+                "handler": "base_csv",
+                "imported": 2,
+                "errors": 0,
+                "total_amount": 150.0,
+                "currency_totals": {"USD": 50.0, "NGN": 100.0},
+            },
+        ),
+    )
+
+    rows = list_payment_import_history(db_session, limit=5)
+
+    assert rows[0]["file_name"] == "mixed.csv"
+    assert rows[0]["currency_totals"] == {
+        "NGN": Decimal("100.0"),
+        "USD": Decimal("50.0"),
+    }
+    assert rows[0]["total_display"] == "NGN 100.00, USD 50.00"
 
 
 def test_list_payment_import_history_filtered_by_status_and_handler(db_session):

@@ -12,6 +12,7 @@
    always matches a visible choice. #}
 {% set pay_provider_values = pay_options|map(attribute="provider_type")|list %}
 {% set default_pay_provider = provider_type if provider_type in pay_provider_values else (pay_options[0].provider_type if pay_options else "paystack") %}
+{% set invoice_currency = invoice.currency or default_currency|default('NGN') %}
 <div class="space-y-6" x-data="paymentPage()">
     <div>
         <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
@@ -40,7 +41,7 @@
             <div class="text-right">
                 <p class="text-sm font-medium text-stone-500 dark:text-stone-400">Amount Due</p>
                 <p class="mt-1 text-3xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
-                    &#8358;{{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total or 0) }}
+                    {{ invoice_currency }} {{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total or 0) }}
                 </p>
             </div>
         </div>
@@ -135,7 +136,7 @@ function paymentPage() {
             if (choice === 'provider:direct_bank_transfer') {
                 return 'Continue to bank transfer';
             }
-            return 'Pay ₦{{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total or 0) }}';
+            return 'Pay {{ invoice_currency }} {{ "{:,.2f}".format(amount or invoice.balance_due or invoice.total or 0) }}';
         },
         async startPayment() {
             this.processing = true;

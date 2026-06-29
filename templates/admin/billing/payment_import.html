@@ -273,7 +273,7 @@
                                 <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.row_count }}</td>
                                 <td class="px-4 py-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ row.matched_count }}</td>
                                 <td class="px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400">{{ row.unmatched_count }}</td>
-                                <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(row.total_amount or 0) }}</td>
+                                <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white">{{ row.total_display }}</td>
                             </tr>
                             {% endfor %}
                             {% else %}
