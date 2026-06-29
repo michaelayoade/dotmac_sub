@@ -6,9 +6,9 @@ UX-polish + operator-control lens (**not** a full security review).
 **Status:** remediation in progress via draft PR #519. Part of the remaining-module audit series.
 
 > The agent's verdict: a **narrow security review is warranted** — specifically the
-> MFA recovery-code absence, the per-worker in-memory portal throttle, and the
-> reset-token-in-redirect-URL pattern (`web_auth.py:196`). Those are out of the
-> POLISH/CONTROL scope and listed only as a pointer.
+> per-worker in-memory portal throttle and the reset-token-in-redirect-URL pattern
+> (`web_auth.py:196`). Those are out of the POLISH/CONTROL scope and listed only
+> as a pointer. The MFA recovery-code absence has been resolved in this draft PR.
 
 ## Remediation status
 
