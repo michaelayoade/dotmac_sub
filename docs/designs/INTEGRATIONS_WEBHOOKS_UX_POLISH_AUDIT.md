@@ -24,14 +24,12 @@ path are covered in the CRM and Notifications audits.)
   and detail pages show only configured/not-configured state.
 - Connector detail pages now expose the existing Check Connection probe action
   directly instead of hiding it behind the embedded view.
+- Integrations webhook endpoints now have edit, enable/disable, soft-delete,
+  rotate-secret, and test-delivery actions from the list/detail surfaces.
 
 ### Still open
 
-- Integrations webhook endpoints are still create-only and need edit/disable/
-  rotate/delete/test remediation controls.
 - Hook auth secrets still need encrypted storage and masked edit semantics.
-- Integrations webhook endpoints still need edit-time secret rotation/preserve
-  controls as part of the edit/disable/delete/test remediation surface.
 - Webhook delivery retry/timeout settings, delivery observability, hook execution
   timeout controls, confirmation polish, and the separate RBAC review remain open.
 
@@ -53,6 +51,14 @@ path are covered in the CRM and Notifications audits.)
   - Result: `12 passed`
 - `poetry run pytest tests/test_web_integrations_webhooks.py -q`
   - Result: `3 passed`
+- `poetry run ruff check app/services/web_integrations.py app/web/admin/integrations.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `6 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
 
 ## What this audit is
 

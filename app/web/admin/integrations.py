@@ -1065,6 +1065,12 @@ def webhook_new(request: Request, db: Session = Depends(get_db)):
     """New webhook endpoint form."""
     context = _base_context(request, db, active_page="webhooks")
     context.update(web_integrations_service.webhook_form_options(db))
+    context.update(
+        {
+            "action_url": "/admin/integrations/webhooks",
+            "submit_label": "Create Webhook",
+        }
+    )
     return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
 
 
@@ -1111,6 +1117,126 @@ def webhook_create(
     return RedirectResponse(
         url=f"/admin/integrations/webhooks/{endpoint.id}", status_code=303
     )
+
+
+@router.get("/webhooks/{endpoint_id}/edit", response_class=HTMLResponse)
+def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_db)):
+    """Edit webhook endpoint form."""
+    try:
+        state = web_integrations_service.build_webhook_edit_data(
+            db,
+            endpoint_id=endpoint_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        context = _base_context(request, db, active_page="webhooks")
+        context["message"] = "The webhook endpoint you are looking for does not exist."
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
+    context = _base_context(request, db, active_page="webhooks")
+    context.update(state)
+    return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
+
+
+@router.post("/webhooks/{endpoint_id}", response_class=HTMLResponse)
+def webhook_update(
+    request: Request,
+    endpoint_id: str,
+    name: str = Form(...),
+    url: str = Form(...),
+    connector_config_id: str | None = Form(None),
+    secret: str | None = Form(None),
+    event_types: list[str] | None = Form(None),
+    is_active: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    try:
+        endpoint = web_integrations_service.update_webhook_endpoint(
+            db,
+            endpoint_id=endpoint_id,
+            name=name,
+            url=url,
+            connector_config_id=connector_config_id,
+            secret=secret,
+            event_types=event_types,
+            is_active=is_active,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="webhooks")
+        context.update(
+            {
+                **web_integrations_service.webhook_error_state(
+                    db,
+                    name=name,
+                    url=url,
+                    connector_config_id=connector_config_id,
+                    secret=None,
+                    event_types=event_types,
+                    is_active=is_active,
+                ),
+                "endpoint": None,
+                "action_url": f"/admin/integrations/webhooks/{endpoint_id}",
+                "submit_label": "Save Webhook",
+                "error": str(exc),
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/integrations/webhooks/new.html", context, status_code=400
+        )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint.id}?saved=1", status_code=303
+    )
+
+
+@router.post("/webhooks/{endpoint_id}/enable")
+def webhook_enable(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.set_webhook_endpoint_active(
+        db, endpoint_id=endpoint_id, is_active=True
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?saved=1", status_code=303
+    )
+
+
+@router.post("/webhooks/{endpoint_id}/disable")
+def webhook_disable(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.set_webhook_endpoint_active(
+        db, endpoint_id=endpoint_id, is_active=False
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?saved=1", status_code=303
+    )
+
+
+@router.post("/webhooks/{endpoint_id}/rotate-secret")
+def webhook_rotate_secret(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.rotate_webhook_endpoint_secret(db, endpoint_id=endpoint_id)
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?secret=rotated",
+        status_code=303,
+    )
+
+
+@router.post("/webhooks/{endpoint_id}/test")
+def webhook_test(endpoint_id: str, db: Session = Depends(get_db)):
+    try:
+        web_integrations_service.queue_webhook_test_delivery(
+            db, endpoint_id=endpoint_id
+        )
+        query = "test=queued"
+    except Exception:
+        query = "test=failed"
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?{query}", status_code=303
+    )
+
+
+@router.post("/webhooks/{endpoint_id}/delete")
+def webhook_delete(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.delete_webhook_endpoint(db, endpoint_id=endpoint_id)
+    return RedirectResponse(url="/admin/integrations/webhooks?deleted=1", status_code=303)
 
 
 @router.get("/webhooks/{endpoint_id}", response_class=HTMLResponse)

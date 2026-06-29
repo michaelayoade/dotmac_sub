@@ -1,6 +1,6 @@
 {% extends "layouts/admin.html" %}
 
-{% block title %}Add Webhook - Integrations{% endblock %}
+{% block title %}{{ 'Edit Webhook' if endpoint is defined and endpoint else 'Add Webhook' }} - Integrations{% endblock %}
 
 {% block content %}
 <div class="space-y-6">
@@ -9,14 +9,14 @@
             <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
         </a>
         <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Add Webhook</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a new webhook endpoint</p>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Webhook' if endpoint is defined and endpoint else 'Add Webhook' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update webhook endpoint settings and subscriptions' if endpoint is defined and endpoint else 'Create a new webhook endpoint' }}</p>
         </div>
     </div>
 
     {% set selected_events = form.event_types if form is defined else [] %}
 
-    <form method="POST" action="/admin/integrations/webhooks" class="space-y-6">
+    <form method="POST" action="{{ action_url or '/admin/integrations/webhooks' }}" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -68,9 +68,9 @@
                         <input type="password" name="secret" id="secret" maxlength="255"
                             value=""
                             autocomplete="new-password"
-                            placeholder="Optional shared secret"
+                            placeholder="{{ 'Leave blank to keep current secret' if endpoint is defined and endpoint else 'Optional shared secret' }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to store without signing.</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ 'Leave blank to preserve the current signing secret.' if endpoint is defined and endpoint else 'Leave blank to store without signing.' }}</p>
                     </div>
 
                     <div class="sm:col-span-2">
@@ -117,7 +117,7 @@
             </a>
             <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                Create Webhook
+                {{ submit_label or 'Create Webhook' }}
             </button>
         </div>
     </form>
