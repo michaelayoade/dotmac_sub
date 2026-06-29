@@ -152,7 +152,7 @@ class RouterConnectionService:
         method: str,
         path: str,
         payload: dict | None = None,
-    ) -> dict:
+    ) -> dict | list | str:
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES):
@@ -164,7 +164,18 @@ class RouterConnectionService:
                         json=payload,
                     )
                     response.raise_for_status()
-                    return response.json() if response.text else {}
+                    if not response.text:
+                        return {}
+                    content_type = response.headers.get("content-type", "")
+                    if "json" in content_type.lower():
+                        try:
+                            return response.json()
+                        except ValueError:
+                            return response.text
+                    # RouterOS ``/export`` (and similar) return plain text, not
+                    # JSON — returning ``.json()`` unconditionally would raise an
+                    # uncaught JSONDecodeError on every config snapshot.
+                    return response.text
             except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
                 last_error = exc
                 if attempt < MAX_RETRIES - 1:
