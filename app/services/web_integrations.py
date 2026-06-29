@@ -929,6 +929,9 @@ def webhook_error_state(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ) -> dict[str, object]:
     return {
         **webhook_form_options(db),
@@ -939,6 +942,9 @@ def webhook_error_state(
             "secret": "",
             "event_types": event_types or [],
             "is_active": is_active,
+            "delivery_timeout_seconds": delivery_timeout_seconds or "",
+            "max_retries": max_retries or "",
+            "retry_backoff_seconds": retry_backoff_seconds or "",
         },
     }
 
@@ -955,6 +961,12 @@ def _selected_webhook_events(event_types: list[str] | None):
         seen.add(event)
         selected.append(event)
     return selected
+
+
+def _optional_int(value: str | int | None) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def _sync_webhook_subscriptions(db, endpoint, event_types: list[str] | None) -> None:
@@ -995,6 +1007,9 @@ def create_webhook_endpoint(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ):
     payload = WebhookEndpointCreate(
         name=name.strip(),
@@ -1004,6 +1019,9 @@ def create_webhook_endpoint(
         ),
         secret=encrypt_credential(secret.strip()) if secret and secret.strip() else None,
         is_active=is_active,
+        delivery_timeout_seconds=_optional_int(delivery_timeout_seconds),
+        max_retries=_optional_int(max_retries),
+        retry_backoff_seconds=_optional_int(retry_backoff_seconds),
     )
     endpoint = webhook_service.webhook_endpoints.create(db, payload)
     _sync_webhook_subscriptions(db, endpoint, event_types)
@@ -1028,6 +1046,9 @@ def build_webhook_edit_data(db, *, endpoint_id: str) -> dict[str, object]:
                 if subscription.is_active and subscription.event_type
             ],
             "is_active": endpoint.is_active,
+            "delivery_timeout_seconds": endpoint.delivery_timeout_seconds or "",
+            "max_retries": endpoint.max_retries or "",
+            "retry_backoff_seconds": endpoint.retry_backoff_seconds or "",
         },
         "action_url": f"/admin/integrations/webhooks/{endpoint.id}",
         "submit_label": "Save Webhook",
@@ -1044,6 +1065,9 @@ def update_webhook_endpoint(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ):
     data = {
         "name": name.strip(),
@@ -1052,6 +1076,9 @@ def update_webhook_endpoint(
             connector_config_id, "connector_config_id", required=False
         ),
         "is_active": is_active,
+        "delivery_timeout_seconds": _optional_int(delivery_timeout_seconds),
+        "max_retries": _optional_int(max_retries),
+        "retry_backoff_seconds": _optional_int(retry_backoff_seconds),
     }
     if secret and secret.strip():
         data["secret"] = encrypt_credential(secret.strip())

@@ -1096,6 +1096,9 @@ def webhook_create(
     connector_config_id: str | None = Form(None),
     secret: str | None = Form(None),
     event_types: list[str] | None = Form(None),
+    delivery_timeout_seconds: str | None = Form(None),
+    max_retries: str | None = Form(None),
+    retry_backoff_seconds: str | None = Form(None),
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -1107,6 +1110,9 @@ def webhook_create(
             connector_config_id=connector_config_id,
             secret=secret,
             event_types=event_types,
+            delivery_timeout_seconds=delivery_timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
             is_active=is_active,
         )
     except Exception as exc:
@@ -1120,6 +1126,9 @@ def webhook_create(
                     connector_config_id=connector_config_id,
                     secret=secret,
                     event_types=event_types,
+                    delivery_timeout_seconds=delivery_timeout_seconds,
+                    max_retries=max_retries,
+                    retry_backoff_seconds=retry_backoff_seconds,
                     is_active=is_active,
                 ),
                 "error": str(exc),
@@ -1163,6 +1172,9 @@ def webhook_update(
     connector_config_id: str | None = Form(None),
     secret: str | None = Form(None),
     event_types: list[str] | None = Form(None),
+    delivery_timeout_seconds: str | None = Form(None),
+    max_retries: str | None = Form(None),
+    retry_backoff_seconds: str | None = Form(None),
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -1175,6 +1187,9 @@ def webhook_update(
             connector_config_id=connector_config_id,
             secret=secret,
             event_types=event_types,
+            delivery_timeout_seconds=delivery_timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
             is_active=is_active,
         )
     except Exception as exc:
@@ -1188,6 +1203,9 @@ def webhook_update(
                     connector_config_id=connector_config_id,
                     secret=None,
                     event_types=event_types,
+                    delivery_timeout_seconds=delivery_timeout_seconds,
+                    max_retries=max_retries,
+                    retry_backoff_seconds=retry_backoff_seconds,
                     is_active=is_active,
                 ),
                 "endpoint": None,

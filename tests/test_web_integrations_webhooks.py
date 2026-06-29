@@ -20,10 +20,16 @@ def test_integrations_webhook_create_encrypts_secret_and_subscribes_events(db_se
         connector_config_id=None,
         secret="partner-secret",
         event_types=["subscriber.created", "invoice.paid"],
+        delivery_timeout_seconds=8,
+        max_retries=4,
+        retry_backoff_seconds=30,
         is_active=True,
     )
 
     assert endpoint.secret != "partner-secret"
+    assert endpoint.delivery_timeout_seconds == 8
+    assert endpoint.max_retries == 4
+    assert endpoint.retry_backoff_seconds == 30
     assert is_encrypted(endpoint.secret)
     assert decrypt_credential(endpoint.secret) == "partner-secret"
     subscriptions = (
@@ -57,12 +63,18 @@ def test_integrations_webhook_update_preserves_secret_and_resyncs_events(db_sess
         connector_config_id=None,
         secret="",
         event_types=["invoice.paid", "network.alert"],
+        delivery_timeout_seconds=12,
+        max_retries=2,
+        retry_backoff_seconds=90,
         is_active=False,
     )
 
     assert updated.secret == original_secret
     assert updated.is_active is False
     assert updated.name == "Partner webhook updated"
+    assert updated.delivery_timeout_seconds == 12
+    assert updated.max_retries == 2
+    assert updated.retry_backoff_seconds == 90
     subscriptions = (
         db_session.query(WebhookSubscription)
         .filter(WebhookSubscription.endpoint_id == endpoint.id)
@@ -206,6 +218,12 @@ def test_integrations_webhook_templates_do_not_render_secret_values():
     assert "/delete" in detail_template
     assert "Latest delivery" in detail_template
     assert "Latest failure" in detail_template
+    assert 'name="delivery_timeout_seconds"' in new_template
+    assert 'name="max_retries"' in new_template
+    assert 'name="retry_backoff_seconds"' in new_template
+    assert "Delivery Timeout" in detail_template
+    assert "Max Retries" in detail_template
+    assert "Retry Backoff" in detail_template
 
 
 def test_connector_detail_exposes_check_connection_action():

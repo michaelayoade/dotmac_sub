@@ -96,6 +96,18 @@
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Secret</dt>
                 <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Configured' if endpoint.secret else 'Not configured' }}</dd>
             </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Delivery Timeout</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.delivery_timeout_seconds or 30 }} sec</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Max Retries</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.max_retries if endpoint.max_retries is not none else 10 }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Retry Backoff</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.retry_backoff_seconds ~ ' sec base' if endpoint.retry_backoff_seconds else 'Legacy schedule' }}</dd>
+            </div>
         </dl>
     </div>
 

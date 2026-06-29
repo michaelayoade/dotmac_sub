@@ -37,11 +37,15 @@ path are covered in the CRM and Notifications audits.)
 - Integration hooks now have a bounded per-hook execution timeout control that
   drives both HTTP and CLI hook execution while preserving legacy defaults for
   existing rows.
+- Webhook endpoints now have bounded delivery timeout, max-retry, and retry
+  backoff controls that drive the delivery task while preserving legacy defaults
+  for existing rows.
 
 ### Still open
 
-- Webhook delivery retry/timeout settings and the separate RBAC review remain
-  open.
+- No UX-polish/control remediation items remain open in this draft. The separate
+  RBAC/security review noted below remains open and should be handled outside
+  this audit track.
 
 ### Verification
 
@@ -51,6 +55,14 @@ path are covered in the CRM and Notifications audits.)
   - Result: `3 passed`
 - `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py -q`
   - Result: `9 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
+- `poetry run ruff check app/models/webhook.py app/schemas/webhook.py app/services/web_integrations.py app/web/admin/integrations.py app/tasks/webhooks.py tests/test_web_integrations_webhooks.py tests/test_webhook_tasks.py alembic/versions/187_webhook_endpoint_delivery_controls.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py tests/test_webhook_tasks.py -q`
+  - Result: `10 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
 - `poetry run pytest tests/test_admin_route_permissions.py -q`
   - Result: `15 passed`
 - `poetry run ruff check app/services/web_integrations.py tests/test_web_integrations_webhooks.py`
