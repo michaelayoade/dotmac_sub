@@ -50,6 +50,10 @@ settings/integrity/reconcilers.
   submit button after confirmation, enforces a positive minimum amount in the UI,
   and redirects back with success/safe-error feedback instead of exposing raw
   service exceptions.
+- Fleet-wide Billing Settings save now confirms before submit, disables the
+  submit button after confirmation, re-renders validation errors, and normalizes
+  booleans, enum values, numeric ranges, decimal money fields, and CSV day lists
+  before persistence.
 
 ### Partially resolved
 
@@ -66,7 +70,8 @@ settings/integrity/reconcilers.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Customer post-payment-return states.
-- Money-field validation and billing settings/spec hygiene.
+- Remaining billing settings/spec hygiene outside the covered Billing Settings
+  form normalization.
 - Remaining policy thresholds/settings work.
 
 ### Verification
@@ -99,6 +104,10 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run pytest tests/test_billing_consolidated_web.py -q`
   - Result: passed
+- `poetry run ruff check app/services/web_system_config.py app/web/admin/system.py tests/test_billing_settings.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_settings.py -q`
+  - Result: `10 passed`
 
 ## What this audit is
 

@@ -5,7 +5,12 @@
 {{ ambient_background("emerald", "teal") }}
 <div class="relative space-y-8">
     {% call page_header(title="Billing & Invoice Settings", subtitle="Billing cycle, invoice numbering, payment terms, and blocking rules", icon=icon_credit_card(), color="emerald", color2="teal") %}{% endcall %}
-    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;" onsubmit="if (!confirm('Save fleet-wide billing settings? This can change invoice timing, collection rules, and customer enforcement behavior.')) return false; this.querySelector('button[type=submit]').disabled = true;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         {% call card("Recurring Billing", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -52,7 +57,7 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Due (days after invoice)</label>
-                <input type="number" name="payment_due_days" value="{{ billing.payment_due_days or '14' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="number" min="0" max="3650" name="payment_due_days" value="{{ billing.payment_due_days or '14' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auto-Suspend on Overdue</label>
@@ -69,36 +74,36 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Suspension Grace Period (hours)</label>
-                <input type="number" min="0" name="suspension_grace_hours" value="{{ billing.suspension_grace_hours or '48' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="number" min="0" max="3650" name="suspension_grace_hours" value="{{ billing.suspension_grace_hours or '48' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500">Send a warning before auto-suspending overdue accounts.</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Expiry Reminder Days</label>
-                <input type="number" min="0" name="expiry_reminder_days" value="{{ billing.expiry_reminder_days or '7' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="number" min="0" max="3650" name="expiry_reminder_days" value="{{ billing.expiry_reminder_days or '7' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500">Days before subscription expiry to notify the customer.</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Reminder Days</label>
-                <input type="text" name="invoice_reminder_days" value="{{ billing.invoice_reminder_days or '7,1' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="text" inputmode="numeric" name="invoice_reminder_days" value="{{ billing.invoice_reminder_days or '7,1' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500">Comma-separated days before due date, for example <span class="font-mono">7,1</span>.</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Dunning Escalation Days</label>
-                <input type="text" name="dunning_escalation_days" value="{{ billing.dunning_escalation_days or '3,7,14,30' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="text" inputmode="numeric" name="dunning_escalation_days" value="{{ billing.dunning_escalation_days or '3,7,14,30' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500">Comma-separated overdue day offsets for repeated escalation notices.</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Blocking Period (days after due)</label>
-                <input type="number" name="blocking_period_days" value="{{ billing.blocking_period_days or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="number" min="0" max="3650" name="blocking_period_days" value="{{ billing.blocking_period_days or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Deactivation Period (days)</label>
-                <input type="number" name="deactivation_period_days" value="{{ billing.deactivation_period_days or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="number" min="0" max="3650" name="deactivation_period_days" value="{{ billing.deactivation_period_days or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500">0 = disabled</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Minimum Balance</label>
-                <input type="number" step="0.01" name="minimum_balance" value="{{ billing.minimum_balance or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <input type="number" step="0.01" min="0" name="minimum_balance" value="{{ billing.minimum_balance or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Send Billing Notifications</label>
