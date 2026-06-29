@@ -1450,6 +1450,38 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(olt_backup_hours * 3600, 3600),
         )
+        # Router config backup (REST /export snapshots). Mirrors OLT backup —
+        # the keystone for DR/rollback/change-history and for reading firewall/
+        # CoA posture from stored config. The task self-gates to online routers.
+        router_backup_hours = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "router_config_backup_interval_hours",
+            24,
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_config_backup",
+            task_name="router_sync.capture_scheduled_snapshots",
+            enabled=True,
+            interval_seconds=max(router_backup_hours * 3600, 3600),
+        )
+        # NAS config backup orchestrator. The task itself honors each device's
+        # backup_enabled + backup_schedule, so this just needs to run often
+        # enough to catch due devices (hourly).
+        nas_backup_interval = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "nas_config_backup_interval_seconds",
+            3600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="nas_config_backup",
+            task_name="app.tasks.nas.run_scheduled_backups",
+            enabled=True,
+            interval_seconds=max(nas_backup_interval, 900),
+        )
         olt_profile_sync_enabled = _effective_bool(
             session,
             SettingDomain.network,
