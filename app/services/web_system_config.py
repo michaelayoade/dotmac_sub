@@ -14,7 +14,10 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
+from app.services import settings_spec
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.domain_settings import DomainSettings
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +49,40 @@ def _save_settings(
     keys: list[str],
     *,
     secret_keys: set[str] | None = None,
+    use_specs: bool = False,
 ) -> None:
     """Upsert a batch of DomainSettings."""
     secret_keys = secret_keys or set()
+    spec_updates: list[tuple[str, DomainSettingUpdate]] = []
+    if use_specs:
+        for key in keys:
+            spec = settings_spec.get_spec(domain, key)
+            if not spec:
+                continue
+            value = _coerce_spec_form_value(spec, data.get(key))
+            value_text, value_json = settings_spec.normalize_for_db(spec, value)
+            spec_updates.append(
+                (
+                    key,
+                    DomainSettingUpdate(
+                        value_type=spec.value_type,
+                        value_text=value_text,
+                        value_json=value_json,
+                        is_secret=spec.is_secret or key in secret_keys,
+                        is_active=True,
+                    ),
+                )
+            )
+
+    spec_keys = {key for key, _ in spec_updates}
+    spec_service = DomainSettings(domain) if spec_updates else None
+    if spec_service:
+        for key, payload in spec_updates:
+            spec_service.upsert_by_key(db, key, payload)
+
     for key in keys:
+        if key in spec_keys:
+            continue
         value = (data.get(key) or "").strip()
         stmt = select(DomainSetting).where(
             DomainSetting.domain == domain,
@@ -70,6 +103,35 @@ def _save_settings(
             db.add(setting)
     db.flush()
     db.commit()
+
+
+def _coerce_spec_form_value(
+    spec: settings_spec.SettingSpec, raw_value: object
+) -> object | None:
+    raw = "" if raw_value is None else str(raw_value).strip()
+    if raw == "" and spec.default is not None:
+        raw_value = spec.default
+    else:
+        raw_value = raw
+
+    value, error = settings_spec.coerce_value(spec, raw_value)
+    label = spec.label or spec.key
+    if error:
+        raise ValueError(f"{label}: {error}.")
+    if spec.required and (value is None or value == ""):
+        raise ValueError(f"{label} is required.")
+    if spec.allowed and value is not None and value not in spec.allowed:
+        allowed = ", ".join(sorted(spec.allowed))
+        raise ValueError(f"{label} must be one of: {allowed}.")
+    if spec.value_type == SettingValueType.integer and value is not None:
+        parsed = value if isinstance(value, int) else None
+        if parsed is None:
+            raise ValueError(f"{label}: Value must be an integer.")
+        if spec.min_value is not None and parsed < spec.min_value:
+            raise ValueError(f"{label} must be at least {spec.min_value}.")
+        if spec.max_value is not None and parsed > spec.max_value:
+            raise ValueError(f"{label} must be at most {spec.max_value}.")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +738,7 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "ont_signal_critical_dbm",
             "ont_signal_alert_cooldown_minutes",
         ],
+        use_specs=True,
     )
     _save_settings(
         db,
@@ -685,6 +748,7 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "interface_walk_interval_seconds",
             "interface_discovery_interval_seconds",
         ],
+        use_specs=True,
     )
     _save_settings(
         db,
@@ -694,6 +758,7 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "hot_retention_hours",
             "cleanup_interval_seconds",
         ],
+        use_specs=True,
     )
 
 

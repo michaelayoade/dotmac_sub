@@ -5,6 +5,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import (
     OLTDevice,
@@ -21,6 +23,7 @@ from app.models.network_monitoring import (
     DeviceMetric,
     MetricType,
 )
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network_monitoring import (
@@ -1029,6 +1032,80 @@ def test_save_monitoring_config_writes_runtime_health_keys(db_session):
     assert rows["network_health_warn_pct"] == "88"
     assert rows["network_health_crit_pct"] == "65"
     assert "cpu_warn_pct" not in rows
+
+
+def test_save_monitoring_config_uses_typed_settings_for_spec_keys(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+            "server_health_mem_crit_pct": "92",
+            "network_health_warn_pct": "88",
+            "network_health_crit_pct": "65",
+        },
+    )
+
+    rows = {
+        row.key: row
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .all()
+    }
+
+    assert rows["server_health_mem_warn_pct"].value_text == "75"
+    assert rows["server_health_mem_warn_pct"].value_type == SettingValueType.integer
+    assert rows["network_health_warn_pct"].value_text == "88"
+    assert rows["network_health_warn_pct"].value_type == SettingValueType.integer
+
+
+def test_save_monitoring_config_invalidates_spec_setting_cache(
+    db_session, monkeypatch
+):
+    from app.services import domain_settings as domain_settings_service
+    from app.services.web_system_config import save_monitoring_config
+
+    invalidated: list[tuple[str, str]] = []
+
+    def fake_invalidate(domain: str, key: str) -> bool:
+        invalidated.append((domain, key))
+        return True
+
+    monkeypatch.setattr(
+        domain_settings_service.SettingsCache,
+        "invalidate",
+        fake_invalidate,
+    )
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+        },
+    )
+
+    assert ("network_monitoring", "server_health_mem_warn_pct") in invalidated
+
+
+def test_save_monitoring_config_invalid_spec_value_is_rejected(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    with pytest.raises(ValueError, match="Server Health Memory Warning"):
+        save_monitoring_config(
+            db_session,
+            {
+                "server_health_mem_warn_pct": "150",
+            },
+        )
+
+    assert (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .filter(DomainSetting.key == "server_health_mem_warn_pct")
+        .first()
+        is None
+    )
 
 
 def test_monitoring_config_template_uses_runtime_health_keys():

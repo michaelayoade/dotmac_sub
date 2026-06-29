@@ -48,10 +48,14 @@ theme.
 - The inert CPE config page was removed from the Settings Hub/admin router because
   its QoS, blocking, DHCP, and WLAN defaults had no runtime consumers. Real CPE
   management remains under Network > CPEs.
+- Monitoring config saves now use the typed `settings_spec` path where specs
+  exist, rejecting invalid spec-backed values, preserving integer value types, and
+  invalidating the settings cache through the domain-settings service.
 
 ### Still open
 
-- Unifying bespoke config saves with the typed/cached `settings_spec` system.
+- Unifying the remaining bespoke config saves with the typed/cached
+  `settings_spec` system.
 - Broader bespoke-save validation consistency.
 
 ### Verification
@@ -91,6 +95,10 @@ theme.
 - `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
   - Result: `27 passed`
 - `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
+  - Result: passed
+- `poetry run pytest tests/test_network_monitoring_services.py -q`
+  - Result: `34 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_network_monitoring_services.py`
   - Result: passed
 
 ## What this audit is
