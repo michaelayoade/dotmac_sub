@@ -167,3 +167,61 @@ def test_whats_new_create_returns_form_error_for_invalid_datetime(
     assert response.status_code == 400
     assert response.context["error"] == "Start date must be a valid ISO date/time."
     assert response.context["form_values"]["starts_at"] == "not-a-date"
+
+
+def test_whats_new_index_ignores_invalid_status_filter(db_session, monkeypatch):
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/admin/system/whats-new",
+            "query_string": b"status=invalid&status_error=invalid",
+            "headers": [(b"host", b"testserver")],
+        }
+    )
+    monkeypatch.setattr(
+        system_whats_new,
+        "_base_context",
+        lambda request, db, active_page="settings-hub": {"request": request},
+    )
+
+    response = system_whats_new.whats_new_index(
+        request, status="invalid", db=db_session
+    )
+
+    assert response.context["status_filter"] == ""
+    assert response.context["status_error"] == "invalid"
+
+
+def test_whats_new_status_update_uses_error_query_for_invalid_status(
+    db_session, monkeypatch
+):
+    item = AdminWhatsNewItem(
+        title="Slide",
+        message="Slide message",
+        button_text="Open",
+        button_link="/admin/dashboard",
+        status="draft",
+    )
+    db_session.add(item)
+    db_session.commit()
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/admin/system/whats-new/{item.id}/status",
+            "headers": [(b"host", b"testserver")],
+        }
+    )
+    monkeypatch.setattr(
+        system_whats_new,
+        "parse_form_data_sync",
+        lambda request: {"status": "invalid"},
+    )
+
+    response = system_whats_new.whats_new_update_status(
+        request, str(item.id), db_session
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/system/whats-new?status_error=invalid"

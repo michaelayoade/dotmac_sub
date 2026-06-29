@@ -22,6 +22,9 @@ theme.
 - Legal Publish and Unpublish actions now require an explicit browser confirmation.
 - GIS location, area, layer, and customer-location request mutation routes now
   consistently require `gis:map:edit`.
+- Whats-new status changes and create/edit submissions now confirm before a slide
+  becomes `active` or `featured`, and invalid status updates now use a dedicated
+  `status_error` flag instead of overloading the status filter.
 
 ### Still open
 
@@ -29,7 +32,6 @@ theme.
   inert preference/subscriber/portal/CPE/IPv6 key groups.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
 - GIS sync last-run/result observability.
-- Whats-new publish confirmation and invalid-status feedback cleanup.
 - Geocoding provider/rate-limit controls and broader bespoke-save validation
   consistency.
 
@@ -37,6 +39,8 @@ theme.
 
 - `poetry run pytest tests/test_admin_route_permissions.py tests/test_legal_services.py`
   - Result: `46 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py tests/test_legal_services.py tests/test_admin_whats_new.py`
+  - Result: `54 passed`
 
 ## What this audit is
 
