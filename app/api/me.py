@@ -71,9 +71,12 @@ from app.schemas.notification import (
 )
 from app.schemas.portal import (
     MyProjectsResponse,
+    MyQuotesResponse,
     MyReferralsResponse,
     MyWorkOrdersResponse,
     PortalSessionResponse,
+    QuoteItem,
+    QuoteRequestCreate,
     ReferAFriendRequest,
     ReferAFriendResponse,
 )
@@ -132,6 +135,7 @@ from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
 from app.services import (
     projects_mirror,
+    quotes_mirror,
     referrals_mirror,
     web_support_tickets,
     work_orders_mirror,
@@ -809,6 +813,38 @@ def my_work_orders(
     status — served from the local mirror (refreshed from the CRM lazily)."""
     subscriber_id = _subscriber_id(principal)
     return work_orders_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get("/quotes", response_model=MyQuotesResponse)
+def my_quotes(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's self-serve installation quotes — feasibility, estimate,
+    deposit, status — served from the local mirror (refreshed lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return quotes_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.post("/quote-request", response_model=QuoteItem, status_code=201)
+def my_quote_request(
+    payload: QuoteRequestCreate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Request a map-pinned installation quote. The dropped pin drives the CRM's
+    feasibility check (proximity to fiber) + estimate + deposit; the result is
+    mirrored locally and returned."""
+    subscriber_id = _subscriber_id(principal)
+    return quotes_mirror.request_quote(
+        db,
+        subscriber_id,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        address=payload.address,
+        region=payload.region,
+        note=payload.note,
+    )
 
 
 @router.post("/referrals", response_model=ReferAFriendResponse, status_code=201)

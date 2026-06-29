@@ -401,6 +401,10 @@ from app.models.qualification import (  # noqa: F401
     QualificationStatus,
     ServiceQualification,
 )
+from app.models.quote_mirror import (  # noqa: F401
+    QuoteMirror,
+    QuoteSyncState,
+)
 from app.models.radius import (  # noqa: F401
     RadiusClient,
     RadiusServer,

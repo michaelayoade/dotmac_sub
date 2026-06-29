@@ -128,3 +128,64 @@ class MyWorkOrdersResponse(BaseModel):
     work_orders: list[WorkOrderItem] = Field(default_factory=list)
     total: int = 0
     upcoming: int = 0
+
+
+# ── Self-serve quotes (served from the local mirror) ─────────────────────────
+
+
+class QuoteRequestCreate(BaseModel):
+    """Request a map-pinned installation quote (the pin drives feasibility +
+    estimate + deposit, computed by the CRM)."""
+
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    address: str | None = None
+    region: str | None = None
+    note: str | None = None
+
+
+class QuoteFeasibility(BaseModel):
+    coverage: str | None = None  # covered | survey_required | out_of_area
+    feasible: bool | None = None
+    distance_meters: float | None = None
+    nearest_fap_name: str | None = None
+
+
+class QuoteLineItem(BaseModel):
+    description: str
+    quantity: str | None = None
+    unit_price: str | None = None
+    amount: str | None = None
+
+
+class QuoteItem(BaseModel):
+    id: str
+    status: str
+    currency: str = "NGN"
+    subtotal: str | None = None
+    tax_total: str | None = None
+    total: str | None = None
+    project_type: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    address: str | None = None
+    region: str | None = None
+    feasibility: QuoteFeasibility = Field(default_factory=QuoteFeasibility)
+    estimate_provisional: bool = False
+    deposit_percent: int | None = None
+    deposit_amount: str | None = None
+    deposit_paid: bool = False
+    deposit_reference: str | None = None
+    line_items: list[QuoteLineItem] = Field(default_factory=list)
+    sales_order_id: str | None = None
+    project_id: str | None = None
+    created_at: str | None = None
+    expires_at: str | None = None
+
+
+class MyQuotesResponse(BaseModel):
+    """The signed-in subscriber's self-serve installation quotes."""
+
+    quotes: list[QuoteItem] = Field(default_factory=list)
+    total: int = 0
+    open: int = 0
