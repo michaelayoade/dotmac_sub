@@ -402,7 +402,9 @@ class TestOltSshPoolInvalidate:
                 remaining=9,
                 retry_after_seconds=None,
             )
-            with patch.object(pool, "_create_connection", side_effect=create_connection):
+            with patch.object(
+                pool, "_create_connection", side_effect=create_connection
+            ):
                 acquired = pool.acquire(mock_olt)
 
         assert acquired is fresh

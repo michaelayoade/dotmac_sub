@@ -143,7 +143,10 @@ def backup_file_path(backup: OltConfigBackup) -> Path:
 def read_backup_preview(
     backup: OltConfigBackup, limit_chars: int = DEFAULT_BACKUP_PREVIEW_CHARS
 ) -> str:
-    return read_backup_preview_info(backup, limit_chars=limit_chars)["preview"]
+    preview = read_backup_preview_info(backup, limit_chars=limit_chars)["preview"]
+    if not isinstance(preview, str):
+        raise RuntimeError("Backup preview payload is invalid")
+    return preview
 
 
 def read_backup_preview_info(

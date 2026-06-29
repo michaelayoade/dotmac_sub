@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 def _validate_non_negative_int(value: object, field: str) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be a non-negative integer")
+    if not isinstance(value, int | str | bytes | bytearray):
+        raise ValueError(f"{field} must be a non-negative integer")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
