@@ -18,7 +18,6 @@
             {% for invoice in invoices %}
             {% set status = invoice.status|default('draft') %}
             {% set status_val = status.value if status is not string else status %}
-            {% set invoice_currency = invoice.currency or 'NGN' %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                 <td class="whitespace-nowrap px-6 py-4">
                     <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ invoice.invoice_number | default('Invoice') }}</a>
@@ -30,7 +29,7 @@
                         Account
                     {% endif %}
                 </td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</td>
                 <td class="whitespace-nowrap px-6 py-4">
                     {% if status_val == 'paid' %}
                     <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Paid</span>
@@ -44,8 +43,8 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">{{ invoice_currency }} {{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-right">
                     <div class="flex items-center justify-end gap-2">
                         <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-slate-400 hover:text-primary-600" title="View">

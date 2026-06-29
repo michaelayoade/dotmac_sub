@@ -42,13 +42,12 @@ def _create_payment(
     status: PaymentStatus,
     created_at: datetime,
     memo: str,
-    currency: str = "NGN",
     payment_method_id=None,
 ):
     payment = Payment(
         account_id=account_id,
         amount=Decimal(amount),
-        currency=currency,
+        currency="NGN",
         status=status,
         memo=memo,
         payment_method_id=payment_method_id,
@@ -316,44 +315,3 @@ def test_build_payments_list_data_includes_status_totals_for_filtered_set(
     assert result["status_totals"]["pending"]["count"] == 1
     assert result["status_totals"]["all"]["count"] == 2
     assert result["status_totals"]["all"]["amount"] == 30.0
-
-
-def test_build_payments_list_data_groups_status_totals_by_currency(
-    db_session, subscriber
-):
-    now = datetime.now(UTC)
-    _create_payment(
-        db_session,
-        account_id=subscriber.id,
-        amount="10",
-        status=PaymentStatus.succeeded,
-        created_at=now,
-        memo="ngn",
-        currency="NGN",
-    )
-    _create_payment(
-        db_session,
-        account_id=subscriber.id,
-        amount="20",
-        status=PaymentStatus.succeeded,
-        created_at=now,
-        memo="usd",
-        currency="USD",
-    )
-
-    result = build_payments_list_data(
-        db_session,
-        page=1,
-        per_page=25,
-        customer_ref=None,
-        partner_id=None,
-        status=None,
-        method=None,
-        search=None,
-        date_range=None,
-    )
-
-    succeeded = result["status_totals"]["succeeded"]
-    assert succeeded["count"] == 2
-    assert succeeded["amounts"] == {"NGN": Decimal("10.00"), "USD": Decimal("20.00")}
-    assert succeeded["display"] == "NGN 10.00, USD 20.00"

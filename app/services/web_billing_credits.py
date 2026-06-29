@@ -7,21 +7,13 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.models.billing import CreditNote, CreditNoteStatus
-from app.models.domain_settings import SettingDomain
 from app.schemas.billing import CreditNoteCreate
 from app.services import billing as billing_service
-from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.validators.forms import parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
-
-
-def _default_currency(db) -> str:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
 
 
 def build_credits_list_data(
@@ -126,7 +118,6 @@ def credit_form_context(db, *, account_id: str | None, error: str | None = None)
         else None,
         "account_number": selected_account.account_number if selected_account else None,
         "selected_account_id": str(selected_account.id) if selected_account else None,
-        "default_currency": _default_currency(db),
     }
     if error:
         context["error"] = error

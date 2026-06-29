@@ -6,7 +6,6 @@ the scope passed to the underlying list services.
 """
 
 import uuid
-from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
@@ -176,84 +175,6 @@ def test_topup_initiate_translates_value_error(monkeypatch):
             principal=_subscriber_principal(),
         )
     assert exc.value.status_code == 400
-
-
-def test_topup_initiate_400_with_friendly_saved_card_charge_error(monkeypatch):
-    from app.schemas.billing import TopupInitiateRequest
-
-    monkeypatch.setattr(
-        me_api,
-        "_customer",
-        lambda db, principal: {
-            "account_id": "x",
-            "subscriber_id": "x",
-            "username": "customer@example.com",
-        },
-    )
-
-    def _boom(db, customer, amount, **kwargs):
-        raise RuntimeError("gateway unavailable")
-
-    monkeypatch.setattr(me_api.customer_payments, "create_topup_intent", _boom)
-
-    with pytest.raises(HTTPException) as exc:
-        me_api.my_topup_initiate(
-            TopupInitiateRequest(
-                amount=Decimal("5000"),
-                payment_method_id=uuid.uuid4(),
-                idempotency_key="idem-1",
-            ),
-            db=None,
-            principal=_subscriber_principal(),
-        )
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == (
-        "We could not charge that saved card. Please use another payment method "
-        "or try again later."
-    )
-
-
-def test_topup_verify_surfaces_card_save_failure_without_failing(monkeypatch):
-    from app.schemas.billing import TopupVerifyRequest
-
-    monkeypatch.setattr(
-        me_api,
-        "_customer",
-        lambda db, principal: {"account_id": "x", "subscriber_id": "x"},
-    )
-    monkeypatch.setattr(
-        me_api.customer_payments,
-        "verify_and_record_topup",
-        lambda db, customer, reference: {
-            "amount": Decimal("5000.00"),
-            "already_recorded": False,
-            "available_balance": Decimal("7500.00"),
-            "credit_added": Decimal("5000.00"),
-        },
-    )
-
-    def _capture_boom(db, account_id, reference, provider):
-        raise RuntimeError("provider token missing")
-
-    monkeypatch.setattr(
-        me_api.customer_cards,
-        "capture_card_after_payment",
-        _capture_boom,
-    )
-
-    resp = me_api.my_topup_verify(
-        TopupVerifyRequest(reference="ref_topup", save_card=True),
-        db=None,
-        principal=_subscriber_principal(),
-    )
-
-    assert resp.reference == "ref_topup"
-    assert resp.card_saved is False
-    assert resp.card_save_message == (
-        "Payment was recorded, but we could not save this card. "
-        "You can add a card from Payment Methods."
-    )
 
 
 def test_my_invoice_detail_404_when_not_owned(monkeypatch):

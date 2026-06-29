@@ -9,7 +9,6 @@ from typing import cast
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
 from app.models.payment_arrangement import (
     ArrangementStatus,
     InstallmentStatus,
@@ -17,65 +16,10 @@ from app.models.payment_arrangement import (
     PaymentArrangementInstallment,
     PaymentFrequency,
 )
-from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MIN_INSTALLMENTS = 2
-DEFAULT_MAX_INSTALLMENTS = 24
-DEFAULT_OVERDUE_DEFAULT_THRESHOLD = 2
-MIN_ALLOWED_INSTALLMENTS = 2
-MAX_ALLOWED_INSTALLMENTS = 60
-MAX_ALLOWED_OVERDUE_DEFAULT_THRESHOLD = 5
-
-
-def _resolve_int_setting(
-    db: Session,
-    key: str,
-    default: int,
-    *,
-    minimum: int,
-    maximum: int | None = None,
-) -> int:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    parsed = max(minimum, parsed)
-    if maximum is not None:
-        parsed = min(maximum, parsed)
-    return parsed
-
-
-def _arrangement_installment_bounds(db: Session) -> tuple[int, int]:
-    minimum = _resolve_int_setting(
-        db,
-        "arrangement_min_installments",
-        DEFAULT_MIN_INSTALLMENTS,
-        minimum=MIN_ALLOWED_INSTALLMENTS,
-        maximum=MAX_ALLOWED_INSTALLMENTS,
-    )
-    maximum = _resolve_int_setting(
-        db,
-        "arrangement_max_installments",
-        DEFAULT_MAX_INSTALLMENTS,
-        minimum=minimum,
-        maximum=MAX_ALLOWED_INSTALLMENTS,
-    )
-    return minimum, max(minimum, maximum)
-
-
-def _arrangement_default_overdue_threshold(db: Session) -> int:
-    return _resolve_int_setting(
-        db,
-        "arrangement_default_overdue_installments",
-        DEFAULT_OVERDUE_DEFAULT_THRESHOLD,
-        minimum=1,
-        maximum=MAX_ALLOWED_OVERDUE_DEFAULT_THRESHOLD,
-    )
 
 
 def _add_month_clamped(current_date: date, anchor_day: int | None = None) -> date:
@@ -200,16 +144,13 @@ class PaymentArrangements(ListResponseMixin):
                 )
 
         # Validate installments
-        min_installments, max_installments = _arrangement_installment_bounds(db)
-        if installments < min_installments:
+        if installments < 2:
             raise HTTPException(
-                status_code=400,
-                detail=f"Minimum {min_installments} installments required",
+                status_code=400, detail="Minimum 2 installments required"
             )
-        if installments > max_installments:
+        if installments > 24:
             raise HTTPException(
-                status_code=400,
-                detail=f"Maximum {max_installments} installments allowed",
+                status_code=400, detail="Maximum 24 installments allowed"
             )
         if total_amount <= 0:
             raise HTTPException(
@@ -592,9 +533,8 @@ class PaymentArrangements(ListResponseMixin):
             # change visible to the count query below.
             db.flush()
 
-            # Arrangement defaults once the configured count is overdue.
+            # Arrangement defaults once 2+ installments are overdue
             arrangement = installment.arrangement
-            default_threshold = _arrangement_default_overdue_threshold(db)
             overdue_count = (
                 db.query(PaymentArrangementInstallment)
                 .filter(PaymentArrangementInstallment.arrangement_id == arrangement.id)
@@ -603,10 +543,7 @@ class PaymentArrangements(ListResponseMixin):
                 )
                 .count()
             )
-            if (
-                overdue_count >= default_threshold
-                and arrangement.status == ArrangementStatus.active
-            ):
+            if overdue_count >= 2 and arrangement.status == ArrangementStatus.active:
                 arrangement.status = ArrangementStatus.defaulted
                 defaulted.append(arrangement)
                 logger.warning(f"Payment arrangement {arrangement.id} defaulted")

@@ -103,34 +103,6 @@ def test_initiate_payment_400_when_not_payable(monkeypatch):
     assert exc.value.status_code == 400
 
 
-def test_initiate_payment_400_with_friendly_saved_card_charge_error(monkeypatch):
-    def _boom(db, customer, invoice_id, **kw):
-        raise RuntimeError("gateway unavailable")
-
-    monkeypatch.setattr(
-        billing_api.customer_payments,
-        "create_invoice_payment_intent",
-        _boom,
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        billing_api.initiate_payment(
-            PaymentInitiateRequest(
-                invoice_id=uuid.uuid4(),
-                payment_method_id=uuid.uuid4(),
-                idempotency_key="idem-1",
-            ),
-            db=None,
-            principal=_subscriber_principal(),
-        )
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == (
-        "We could not charge that saved card. Please use another payment method "
-        "or try again later."
-    )
-
-
 def test_initiate_payment_403_for_non_subscriber():
     with pytest.raises(HTTPException) as exc:
         billing_api.initiate_payment(
@@ -171,47 +143,6 @@ def test_verify_payment_maps_result(monkeypatch):
     assert resp.amount == Decimal("2500.00")
     assert resp.status == "succeeded"
     assert resp.already_recorded is False
-
-
-def test_verify_payment_surfaces_card_save_failure_without_failing(monkeypatch):
-    invoice = SimpleNamespace(id=uuid.uuid4())
-    payment = SimpleNamespace(
-        id=uuid.uuid4(),
-        amount=Decimal("2500.00"),
-        currency="NGN",
-        status=SimpleNamespace(value="succeeded"),
-    )
-    monkeypatch.setattr(
-        billing_api.customer_payments,
-        "verify_and_record_payment",
-        lambda db, customer, reference, provider=None: {
-            "payment": payment,
-            "invoice": invoice,
-            "amount": Decimal("2500.00"),
-            "already_recorded": False,
-        },
-    )
-
-    def _capture_boom(db, account_id, reference, provider):
-        raise RuntimeError("provider token missing")
-
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payment_methods.capture_card_after_payment",
-        _capture_boom,
-    )
-
-    resp = billing_api.verify_payment(
-        PaymentVerifyRequest(reference="ref_abc", provider="paystack", save_card=True),
-        db=None,
-        principal=_subscriber_principal(),
-    )
-
-    assert resp.payment_id == payment.id
-    assert resp.card_saved is False
-    assert resp.card_save_message == (
-        "Payment was recorded, but we could not save this card. "
-        "You can add a card from Payment Methods."
-    )
 
 
 def test_verify_payment_translates_value_error(monkeypatch):

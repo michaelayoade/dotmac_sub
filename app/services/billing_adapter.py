@@ -11,7 +11,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus, PaymentStatus
-from app.models.domain_settings import SettingDomain
 from app.schemas.billing import (
     InvoiceCreate,
     InvoiceLineCreate,
@@ -19,7 +18,6 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentProviderEventIngest,
 )
-from app.services import settings_spec
 from app.services.adapters import adapter_registry
 
 
@@ -27,7 +25,7 @@ from app.services.adapters import adapter_registry
 class InvoiceIntent:
     account_id: UUID
     invoice_number: str | None = None
-    currency: str | None = None
+    currency: str = "NGN"
     total: Decimal = Decimal("0.00")
     memo: str | None = None
     status: InvoiceStatus = InvoiceStatus.draft
@@ -47,7 +45,7 @@ class InvoiceLineIntent:
 class PaymentIntent:
     account_id: UUID
     amount: Decimal
-    currency: str | None = None
+    currency: str = "NGN"
     provider_id: UUID | None = None
     external_id: str | None = None
     memo: str | None = None
@@ -71,25 +69,13 @@ class BillingAdapter:
 
         return billing_service
 
-    def _default_currency(self, db: Session | None) -> str:
-        if db is not None:
-            value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-            code = str(value or "NGN").strip().upper()
-            if code:
-                return code
-        return "NGN"
-
-    def _currency(self, db: Session | None, currency: str | None) -> str:
-        code = str(currency or "").strip().upper()
-        return code or self._default_currency(db)
-
     def create_invoice(self, db: Session, intent: InvoiceIntent):
         billing_service = self._service()
 
         payload = InvoiceCreate(
             account_id=intent.account_id,
             invoice_number=intent.invoice_number,
-            currency=self._currency(db, intent.currency),
+            currency=intent.currency,
             subtotal=intent.total,
             total=intent.total,
             balance_due=intent.total,
@@ -129,7 +115,7 @@ class BillingAdapter:
             account_id=intent.account_id,
             provider_id=intent.provider_id,
             amount=intent.amount,
-            currency=self._currency(db, intent.currency),
+            currency=intent.currency,
             external_id=intent.external_id,
             status=intent.status,
             memo=intent.memo,

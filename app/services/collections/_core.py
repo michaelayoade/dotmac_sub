@@ -49,34 +49,6 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
-def _resolve_positive_int_setting(
-    db: Session,
-    domain: SettingDomain,
-    key: str,
-    default: int,
-    *,
-    minimum: int,
-    maximum: int,
-) -> int:
-    value = settings_spec.resolve_value(db, domain, key)
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, min(maximum, parsed))
-
-
-def _suspension_notification_dedupe_hours(db: Session) -> int:
-    return _resolve_positive_int_setting(
-        db,
-        SettingDomain.collections,
-        "suspension_notification_dedupe_hours",
-        24,
-        minimum=1,
-        maximum=168,
-    )
-
-
 def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
     """Authoritative prepaid available balance from the local ledger.
 
@@ -720,11 +692,8 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
         )
         return
 
-    # Idempotency check: don't create duplicate suspension notification within the
-    # configured suppression window.
-    recent_threshold = datetime.now(UTC) - timedelta(
-        hours=_suspension_notification_dedupe_hours(db)
-    )
+    # Idempotency check: don't create duplicate suspension notification within 24 hours
+    recent_threshold = datetime.now(UTC) - timedelta(hours=24)
     existing = (
         db.query(Notification)
         .filter(Notification.recipient == email)

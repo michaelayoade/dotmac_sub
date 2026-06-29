@@ -4,13 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.models.audit import AuditActorType
-from app.models.billing import (
-    BankReconciliationRun,
-    Invoice,
-    InvoiceStatus,
-    Payment,
-    PaymentStatus,
-)
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
 from app.services.web_billing_invoice_batch import (
@@ -89,7 +83,6 @@ def test_reconciliation_builds_unmatched_and_duplicate_views(db_session, subscri
     payment_a = Payment(
         account_id=subscriber.id,
         amount=Decimal("100.00"),
-        currency="NGN",
         status=PaymentStatus.succeeded,
         external_id="TRX-1",
         created_at=datetime.now(UTC),
@@ -97,20 +90,11 @@ def test_reconciliation_builds_unmatched_and_duplicate_views(db_session, subscri
     payment_b = Payment(
         account_id=subscriber.id,
         amount=Decimal("120.00"),
-        currency="NGN",
         status=PaymentStatus.succeeded,
         external_id="TRX-1",
         created_at=datetime.now(UTC),
     )
-    payment_c = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("5.00"),
-        currency="USD",
-        status=PaymentStatus.succeeded,
-        external_id="TRX-2",
-        created_at=datetime.now(UTC),
-    )
-    db_session.add_all([payment_a, payment_b, payment_c])
+    db_session.add_all([payment_a, payment_b])
     db_session.commit()
 
     audit_service.audit_events.create(
@@ -134,8 +118,5 @@ def test_reconciliation_builds_unmatched_and_duplicate_views(db_session, subscri
     state = build_reconciliation_data(db_session, date_range=None, handler="base_csv")
 
     assert state["summary"]["unmatched_rows"] == 2
-    assert state["summary"]["payment_display"] == "NGN 220.00, USD 5.00"
     assert len(state["duplicate_candidates"]) == 1
     assert state["duplicate_candidates"][0]["external_id"] == "TRX-1"
-    assert state["duplicate_candidates"][0]["total_display"] == "NGN 220.00"
-    assert db_session.query(BankReconciliationRun).count() == 0

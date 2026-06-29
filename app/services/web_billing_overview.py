@@ -16,53 +16,11 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 
 from app.models.billing import Invoice, InvoiceStatus, PaymentAllocation
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, Subscriber, UserType
-from app.services import settings_spec
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
-
-
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
-
-
-def _empty_invoice_total() -> dict[str, object]:
-    return {
-        "count": 0,
-        "amount": 0.0,
-        "due_total": 0.0,
-        "received_total": 0.0,
-        "amounts": {},
-        "due_amounts": {},
-        "received_amounts": {},
-        "display": "NGN 0.00",
-        "due_display": "NGN 0.00",
-        "received_display": "NGN 0.00",
-    }
-
-
-def _finalize_invoice_total(item: dict[str, object]) -> None:
-    item["display"] = _format_currency_groups(item["amounts"])  # type: ignore[arg-type]
-    item["due_display"] = _format_currency_groups(item["due_amounts"])  # type: ignore[arg-type]
-    item["received_display"] = _format_currency_groups(item["received_amounts"])  # type: ignore[arg-type]
-
 
 _BUCKET_SEQUENCE = ("current", "1_30", "31_60", "61_90", "90_plus")
 _BUCKET_LABELS = {
@@ -88,7 +46,7 @@ _UNPAID_INVOICE_STATUSES = (
 # is excluded — not yet billed/owed). Aging must query THESE directly: loading
 # all invoices ordered oldest-first and capping (the previous approach) hid all
 # current debt behind years of historical/paid invoices, so every bucket read
-# zero despite live arrears.
+# ₦0 despite live arrears.
 _AR_OPEN_STATUSES = (
     InvoiceStatus.issued,
     InvoiceStatus.partially_paid,
@@ -198,21 +156,6 @@ def build_overview_data(
         _store_cached_overview(cache_key, result)
     result["selected_partner_id"] = cache_key[0]
     result["selected_location"] = (location or "").strip() or None
-    default_currency = _currency_code(
-        settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    )
-    result["default_currency"] = default_currency
-    stats = result.get("stats")
-    if isinstance(stats, dict):
-        stats["payments_amount_display"] = _format_currency_amount(
-            stats.get("payments_amount", 0), default_currency
-        )
-        stats["total_revenue_display"] = _format_currency_amount(
-            stats.get("total_revenue", 0), default_currency
-        )
-        stats["unpaid_invoices_amount_display"] = _format_currency_amount(
-            stats.get("unpaid_invoices_amount", 0), default_currency
-        )
 
     from app.models.subscriber import Reseller
 
@@ -290,11 +233,13 @@ def build_invoices_list_data(
             scoped = scoped.filter(Invoice.created_at >= start)
         return scoped
 
-    def _build_status_totals(items: list[Invoice]) -> dict[str, dict[str, object]]:
-        summary: dict[str, dict[str, object]] = {
-            key: _empty_invoice_total()
+    def _build_status_totals(items: list[Invoice]) -> dict[str, dict[str, float | int]]:
+        summary: dict[str, dict[str, float | int]] = {
+            key: {"count": 0, "amount": 0.0}
             for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
         }
+        due_total = 0.0
+        received_total = 0.0
         for invoice in items:
             raw_status = getattr(invoice, "status", InvoiceStatus.draft)
             status_key = (
@@ -303,69 +248,24 @@ def build_invoices_list_data(
                 else str(raw_status)
             )
             if status_key not in summary:
-                summary[status_key] = _empty_invoice_total()
-            currency = _currency_code(getattr(invoice, "currency", None))
-            amount = Decimal(str(getattr(invoice, "total", 0) or 0))
-            due = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
-            received = max(amount - due, Decimal("0"))
-            amounts = summary[status_key]["amounts"]
-            due_amounts = summary[status_key]["due_amounts"]
-            received_amounts = summary[status_key]["received_amounts"]
-            assert isinstance(amounts, dict)
-            assert isinstance(due_amounts, dict)
-            assert isinstance(received_amounts, dict)
-            amounts[currency] = amounts.get(currency, Decimal("0")) + amount
-            due_amounts[currency] = due_amounts.get(currency, Decimal("0")) + due
-            received_amounts[currency] = (
-                received_amounts.get(currency, Decimal("0")) + received
-            )
+                summary[status_key] = {"count": 0, "amount": 0.0}
+            amount = float(getattr(invoice, "total", 0) or 0)
+            due = float(getattr(invoice, "balance_due", 0) or 0)
+            received = max(amount - due, 0.0)
             summary[status_key]["count"] = int(summary[status_key]["count"]) + 1
-            summary[status_key]["amount"] = float(
-                Decimal(str(summary[status_key]["amount"])) + amount
+            summary[status_key]["amount"] = (
+                float(summary[status_key]["amount"]) + amount
             )
-            summary[status_key]["due_total"] = float(
-                Decimal(str(summary[status_key]["due_total"])) + due
-            )
-            summary[status_key]["received_total"] = float(
-                Decimal(str(summary[status_key]["received_total"])) + received
-            )
+            due_total += due
+            received_total += received
 
-        all_amounts: dict[str, Decimal] = {}
-        all_due_amounts: dict[str, Decimal] = {}
-        all_received_amounts: dict[str, Decimal] = {}
-        for item in summary.values():
-            _finalize_invoice_total(item)
-            amounts = item["amounts"]
-            due_amounts = item["due_amounts"]
-            received_amounts = item["received_amounts"]
-            assert isinstance(amounts, dict)
-            assert isinstance(due_amounts, dict)
-            assert isinstance(received_amounts, dict)
-            for currency, amount in amounts.items():
-                all_amounts[currency] = all_amounts.get(currency, Decimal("0")) + amount
-            for currency, amount in due_amounts.items():
-                all_due_amounts[currency] = (
-                    all_due_amounts.get(currency, Decimal("0")) + amount
-                )
-            for currency, amount in received_amounts.items():
-                all_received_amounts[currency] = (
-                    all_received_amounts.get(currency, Decimal("0")) + amount
-                )
         summary["all"] = {
             "count": len(items),
             "amount": sum(
                 float(getattr(invoice, "total", 0) or 0) for invoice in items
             ),
-            "due_total": sum(float(amount) for amount in all_due_amounts.values()),
-            "received_total": sum(
-                float(amount) for amount in all_received_amounts.values()
-            ),
-            "amounts": all_amounts,
-            "due_amounts": all_due_amounts,
-            "received_amounts": all_received_amounts,
-            "display": _format_currency_groups(all_amounts),
-            "due_display": _format_currency_groups(all_due_amounts),
-            "received_display": _format_currency_groups(all_received_amounts),
+            "due_total": due_total,
+            "received_total": received_total,
         }
         return summary
 
@@ -401,83 +301,41 @@ def build_invoices_list_data(
         status_summary_query = _apply_filters(
             db.query(
                 Invoice.status,
-                Invoice.currency,
                 func.count(Invoice.id),
                 func.coalesce(func.sum(Invoice.total), 0),
                 func.coalesce(func.sum(Invoice.balance_due), 0),
             ),
             include_status=True,
-        ).group_by(Invoice.status, Invoice.currency)
+        ).group_by(Invoice.status)
         status_rows = status_summary_query.all()
 
-        summary: dict[str, dict[str, object]] = {
-            key: _empty_invoice_total()
+        summary: dict[str, dict[str, float | int]] = {
+            key: {"count": 0, "amount": 0.0}
             for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
         }
+        due_total = 0.0
+        received_total = 0.0
         all_count = 0
-        all_amounts: dict[str, Decimal] = {}
-        all_due_amounts: dict[str, Decimal] = {}
-        all_received_amounts: dict[str, Decimal] = {}
-        for status_val, currency_value, cnt, amount, due in status_rows:
+        all_amount = 0.0
+        for status_val, cnt, amount, due in status_rows:
             key = (
                 status_val.value
                 if isinstance(status_val, InvoiceStatus)
                 else str(status_val)
             )
             if key not in summary:
-                summary[key] = _empty_invoice_total()
-            currency = _currency_code(currency_value)
-            amount_decimal = Decimal(str(amount or 0))
-            due_decimal = Decimal(str(due or 0))
-            received_decimal = max(amount_decimal - due_decimal, Decimal("0"))
-            amounts = summary[key]["amounts"]
-            due_amounts = summary[key]["due_amounts"]
-            received_amounts = summary[key]["received_amounts"]
-            assert isinstance(amounts, dict)
-            assert isinstance(due_amounts, dict)
-            assert isinstance(received_amounts, dict)
-            amounts[currency] = amounts.get(currency, Decimal("0")) + amount_decimal
-            due_amounts[currency] = (
-                due_amounts.get(currency, Decimal("0")) + due_decimal
-            )
-            received_amounts[currency] = (
-                received_amounts.get(currency, Decimal("0")) + received_decimal
-            )
-            summary[key]["count"] = int(summary[key]["count"]) + int(cnt or 0)
-            summary[key]["amount"] = float(
-                Decimal(str(summary[key]["amount"])) + amount_decimal
-            )
-            summary[key]["due_total"] = float(
-                Decimal(str(summary[key]["due_total"])) + due_decimal
-            )
-            summary[key]["received_total"] = float(
-                Decimal(str(summary[key]["received_total"])) + received_decimal
-            )
-            all_amounts[currency] = (
-                all_amounts.get(currency, Decimal("0")) + amount_decimal
-            )
-            all_due_amounts[currency] = (
-                all_due_amounts.get(currency, Decimal("0")) + due_decimal
-            )
-            all_received_amounts[currency] = (
-                all_received_amounts.get(currency, Decimal("0")) + received_decimal
-            )
+                summary[key] = {"count": 0, "amount": 0.0}
+            summary[key]["count"] = cnt
+            summary[key]["amount"] = float(amount)
+            due_total += float(due)
+            received_total += max(float(amount) - float(due), 0.0)
             all_count += cnt
-        for item in summary.values():
-            _finalize_invoice_total(item)
+            all_amount += float(amount)
         summary["all"] = {
             "count": all_count,
-            "amount": sum(float(amount) for amount in all_amounts.values()),
-            "due_total": sum(float(amount) for amount in all_due_amounts.values()),
-            "received_total": sum(
-                float(amount) for amount in all_received_amounts.values()
-            ),
-            "amounts": all_amounts,
-            "due_amounts": all_due_amounts,
-            "received_amounts": all_received_amounts,
-            "display": _format_currency_groups(all_amounts),
-            "due_display": _format_currency_groups(all_due_amounts),
-            "received_display": _format_currency_groups(all_received_amounts),
+            "amount": all_amount,
+            "due_total": due_total,
+            "received_total": received_total,
         }
         status_totals = summary
 
@@ -730,14 +588,6 @@ def build_ar_aging_data(
         key: sum(float(getattr(inv, "balance_due", 0) or 0) for inv in items)
         for key, items in buckets.items()
     }
-    totals_by_currency: dict[str, dict[str, Decimal]] = {}
-    for key, items in buckets.items():
-        amounts: dict[str, Decimal] = {}
-        for invoice in items:
-            currency = _currency_code(getattr(invoice, "currency", None))
-            amount = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
-            amounts[currency] = amounts.get(currency, Decimal("0")) + amount
-        totals_by_currency[key] = amounts
     counts = {key: len(items) for key, items in buckets.items()}
 
     bucket_rows: dict[str, list[dict[str, object]]] = {}
@@ -780,17 +630,14 @@ def build_ar_aging_data(
     )
 
     debtor_totals: dict[UUID, float] = {}
-    debtor_amounts: dict[UUID, dict[str, Decimal]] = {}
     debtor_names: dict[UUID, str] = {}
     for invoice in debtor_source_invoices:
         if not _debtor_period_match(invoice):
             continue
         account_id = invoice.account_id
-        amount = Decimal(str(invoice.balance_due or 0))
-        currency = _currency_code(getattr(invoice, "currency", None))
-        debtor_totals[account_id] = debtor_totals.get(account_id, 0.0) + float(amount)
-        account_amounts = debtor_amounts.setdefault(account_id, {})
-        account_amounts[currency] = account_amounts.get(currency, Decimal("0")) + amount
+        debtor_totals[account_id] = debtor_totals.get(account_id, 0.0) + float(
+            invoice.balance_due or 0
+        )
         debtor_names.setdefault(account_id, _account_label(invoice))
 
     top_debtors = [
@@ -798,8 +645,6 @@ def build_ar_aging_data(
             "account_id": str(account_id),
             "account_label": debtor_names.get(account_id, "Account"),
             "amount": amount,
-            "amounts": debtor_amounts.get(account_id, {}),
-            "display": _format_currency_groups(debtor_amounts.get(account_id, {})),
         }
         for account_id, amount in sorted(
             debtor_totals.items(), key=lambda item: item[1], reverse=True
@@ -811,8 +656,6 @@ def build_ar_aging_data(
             "key": key,
             "label": _BUCKET_LABELS[key],
             "amount": totals[key],
-            "amounts": totals_by_currency[key],
-            "display": _format_currency_groups(totals_by_currency[key]),
             "count": counts[key],
             "is_selected": selected_bucket == key,
         }
@@ -852,7 +695,6 @@ def build_ar_aging_data(
     return {
         "buckets": buckets,
         "totals": totals,
-        "totals_by_currency": totals_by_currency,
         "counts": counts,
         "bucket_rows": bucket_rows,
         "bucket_invoice_ids": bucket_invoice_ids,

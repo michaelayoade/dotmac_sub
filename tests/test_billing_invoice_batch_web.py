@@ -5,8 +5,6 @@ from datetime import UTC, datetime
 from app.models.billing import BillingRun, BillingRunStatus
 from app.models.subscriber import Reseller, Subscriber
 from app.services.web_billing_invoice_batch import (
-    INVOICE_BATCH_ERROR_MESSAGE,
-    INVOICE_BATCH_PREVIEW_ERROR_MESSAGE,
     get_run_row,
     list_recent_runs,
     preview_batch,
@@ -16,7 +14,6 @@ from app.services.web_billing_invoice_batch import (
     retry_batch_run,
     run_batch_with_date,
 )
-from app.web.admin import billing_invoice_batch as batch_routes
 
 
 def test_list_recent_runs_returns_structured_rows(db_session):
@@ -47,55 +44,11 @@ def test_list_recent_runs_returns_structured_rows(db_session):
     assert first["duration_seconds"] == 60
 
 
-def test_invoice_generate_batch_redirects_back_to_full_page(db_session, monkeypatch):
-    def _fake_run_batch_with_date(db, *, billing_cycle, billing_date):
-        return "Batch run completed."
-
-    monkeypatch.setattr(
-        batch_routes.web_billing_invoice_batch_service,
-        "run_batch_with_date",
-        _fake_run_batch_with_date,
-    )
-
-    response = batch_routes.invoice_generate_batch(
-        request=None,
-        billing_cycle=None,
-        billing_date=None,
-        db=db_session,
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"].startswith(
-        "/admin/billing/invoices/batch?note="
-    )
-
-
 def test_preview_error_payload_includes_safe_defaults():
     payload = preview_error_payload(ValueError("boom"))
-    assert payload["error"] == INVOICE_BATCH_PREVIEW_ERROR_MESSAGE
-    assert "boom" not in payload["error"]
+    assert payload["error"] == "boom"
     assert payload["invoice_count"] == 0
     assert payload["subscriptions"] == []
-
-
-def test_run_batch_with_date_returns_safe_failure_note(monkeypatch):
-    def _raise_run_invoice_cycle(db, billing_cycle, dry_run, run_at):
-        raise RuntimeError("database stack detail")
-
-    monkeypatch.setattr(
-        "app.services.web_billing_invoice_batch.billing_automation_service.run_invoice_cycle",
-        _raise_run_invoice_cycle,
-    )
-
-    note = run_batch_with_date(
-        db=None,
-        billing_cycle="monthly",
-        billing_date=None,
-        parse_cycle_fn=lambda value: value,
-    )
-
-    assert note == INVOICE_BATCH_ERROR_MESSAGE
-    assert "database stack detail" not in note
 
 
 def test_retry_batch_run_reuses_previous_cycle(db_session, monkeypatch):

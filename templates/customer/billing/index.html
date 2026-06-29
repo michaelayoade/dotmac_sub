@@ -4,7 +4,6 @@
 
 {% block content %}
 {% set stats = namespace(total=0, overdue=0, unpaid=0) %}
-{% set currency_label = default_currency|default('NGN') %}
 {% for invoice in invoices %}
     {% set amount = invoice.total_amount or invoice.total or 0 %}
     {% set bal_due = invoice.balance_due if invoice.balance_due is defined and invoice.balance_due is not none else amount %}
@@ -48,7 +47,7 @@
                 <p class="mt-3 text-3xl font-display font-bold text-emerald-700 dark:text-emerald-400">
                     {{ "{:,.0f}".format(prepaid_balance) }}
                     <span class="text-lg font-medium text-emerald-500">.{{ "{:.2f}".format(prepaid_balance).split('.')[1] if '.' in "{:.2f}".format(prepaid_balance) else '00' }}</span>
-                    <span class="text-base font-medium text-emerald-500">{{ currency_label }}</span>
+                    <span class="text-base font-medium text-emerald-500">NGN</span>
                 </p>
                 <p class="mt-2 text-sm text-emerald-600/80 dark:text-emerald-400/70">Available on your account</p>
                 {% else %}
@@ -66,7 +65,7 @@
                 <p class="mt-3 text-3xl font-display font-bold text-stone-900 dark:text-white">
                     {{ "{:,.0f}".format(stats.total) }}
                     <span class="text-lg font-medium text-stone-400">.{{ "{:.2f}".format(stats.total).split('.')[1] if '.' in "{:.2f}".format(stats.total) else '00' }}</span>
-                    <span class="text-base font-medium text-stone-400">{{ currency_label }}</span>
+                    <span class="text-base font-medium text-stone-400">NGN</span>
                 </p>
                 <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">All time</p>
             </div>
@@ -89,7 +88,7 @@
                 <p class="mt-3 text-3xl font-display font-bold text-amber-700 dark:text-amber-400">
                     {{ "{:,.0f}".format(stats.unpaid) }}
                     <span class="text-lg font-medium text-amber-500">.{{ "{:.2f}".format(stats.unpaid).split('.')[1] if '.' in "{:.2f}".format(stats.unpaid) else '00' }}</span>
-                    <span class="text-base font-medium text-amber-500">{{ currency_label }}</span>
+                    <span class="text-base font-medium text-amber-500">NGN</span>
                 </p>
                 <p class="mt-2 text-sm text-amber-600/80 dark:text-amber-400/70">Awaiting payment</p>
             </div>
@@ -111,7 +110,7 @@
                 <p class="mt-3 text-3xl font-display font-bold text-red-700 dark:text-red-400">
                     {{ "{:,.0f}".format(stats.overdue) }}
                     <span class="text-lg font-medium text-red-500">.{{ "{:.2f}".format(stats.overdue).split('.')[1] if '.' in "{:.2f}".format(stats.overdue) else '00' }}</span>
-                    <span class="text-base font-medium text-red-500">{{ currency_label }}</span>
+                    <span class="text-base font-medium text-red-500">NGN</span>
                 </p>
                 {% if stats.overdue > 0 %}
                 <a href="#" class="mt-2 inline-flex items-center gap-1 text-sm font-medium text-red-600 hover:text-red-700 dark:text-red-400">
@@ -183,13 +182,12 @@
                     {% for invoice in invoices %}
                     {% set status = invoice.status | default('pending') %}
                     {% set status_val = status.value if status is not string else status %}
-                    {% set invoice_currency = invoice.currency or currency_label %}
                     <tr class="group hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors">
                         <td class="px-6 py-4">
                             <p class="text-sm font-semibold text-stone-900 dark:text-white">INV-{{ invoice.id | string | truncate(8, True, '') | upper }}</p>
                         </td>
                         <td class="px-6 py-4">
-                            <p class="text-sm font-semibold tabular-nums text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total_amount or invoice.total or 0) }}</p>
+                            <p class="text-sm font-semibold tabular-nums text-stone-900 dark:text-white">{{ "{:,.2f}".format(invoice.total_amount or invoice.total or 0) }} <span class="text-stone-400 font-normal">NGN</span></p>
                         </td>
                         <td class="px-6 py-4">
                             {% if status_val == 'paid' %}

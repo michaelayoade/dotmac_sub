@@ -10,7 +10,6 @@
 
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
-{% set account_currency = account.currency if account.currency is defined else default_currency|default('NGN') %}
 
 <div class="relative space-y-8">
     {# ── Page Header ── #}
@@ -47,7 +46,7 @@
         {# Balance Card #}
         {{ stats_card(
             "Balance",
-            account_currency ~ " " ~ "{:,.2f}".format(balance),
+            "₦" ~ "{:,.2f}".format(balance),
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
             color="amber" if balance > 0 else ("emerald" if balance < 0 else "slate"),
             color2="orange" if balance > 0 else ("green" if balance < 0 else "slate")
@@ -116,15 +115,15 @@
             <div class="grid gap-3 sm:grid-cols-3">
                 <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                     <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Opening Balance</p>
-                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ account_currency }} {{ '{:,.2f}'.format(statement.opening_balance or 0) }}</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(statement.opening_balance or 0) }}</p>
                 </div>
                 <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                     <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Net Change</p>
-                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ account_currency }} {{ '{:,.2f}'.format(statement.period_delta or 0) }}</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(statement.period_delta or 0) }}</p>
                 </div>
                 <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                     <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Closing Balance</p>
-                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">{{ account_currency }} {{ '{:,.2f}'.format(statement.closing_balance or 0) }}</p>
+                    <p class="mt-1 font-mono text-lg font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(statement.closing_balance or 0) }}</p>
                 </div>
             </div>
 
@@ -143,13 +142,12 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
                         {% if statement.rows %}
                         {% for row in statement.rows %}
-                        {% set row_currency = row.entry.currency or account_currency %}
                         <tr class="bg-white dark:bg-slate-900/30">
                             <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry.created_at.strftime('%Y-%m-%d') if row.entry.created_at else '-' }}</td>
                             <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry.entry_type.value | title }}</td>
                             <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ row.entry.source.value | replace('_', ' ') | title if row.entry.source else '-' }}</td>
-                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{{ row_currency }} {{ '{:,.2f}'.format(row.signed_amount) }}</td>
-                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{{ account_currency }} {{ '{:,.2f}'.format(row.running_balance) }}</td>
+                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(row.signed_amount) }}</td>
+                            <td class="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(row.running_balance) }}</td>
                             <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ row.entry.memo or '-' }}</td>
                         </tr>
                         {% endfor %}
@@ -179,7 +177,6 @@
                     {% if invoices %}
                     {% for invoice in invoices %}
                     {% set inv_status = invoice.status.value if invoice.status else 'draft' %}
-                    {% set invoice_currency = invoice.currency or account_currency %}
                     {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
                             <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 transition-colors">
@@ -197,7 +194,7 @@
                             {{ status_badge(inv_status | title, variant="default") }}
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</td>
                         {% call row_actions() %}
                             {{ row_action(href="/admin/billing/invoices/" ~ invoice.id, icon=icon_view(), title="View", color="amber") }}
