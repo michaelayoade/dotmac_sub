@@ -56,11 +56,18 @@ is an `enc:`/`plain:` blob (and ciphertext omits the secret when a key is set). 
 existing connector/integration/provisioning suites (~75 tests) pass unchanged,
 confirming consumer transparency.
 
-## Deferred (separate follow-ups)
+## Header / metadata masking (security-review #12) — DONE
 
-- **`IntegrationHook.auth_config`** (security-review #6) is also plaintext, but it
-  interacts with `credential_key_rotation.py`'s per-*value* encryption model — it
-  needs its own change, not the whole-blob `EncryptedJSON` approach.
-- **Masking `headers`/`metadata_` on render** (#12) — pasted tokens in `headers`
-  are still echoed by the connector detail/edit views; masking the read-only view
-  is safe, the edit form is a usability trade-off. Small follow-up.
+`headers`/`metadata_` are not encrypted (mostly non-secret, used directly), but
+secret-keyed values (Authorization / token / api-key / password / cookie / …) were
+echoed back verbatim by the connector edit form on every load. The detail view now
+masks those values with a sentinel (`mask_secret_values` in
+`app/services/web_integrations.py`), and the update path restores them
+(`_unmask_secret_values`) unless the operator types a new value over the mask —
+the same "leave-blank-to-keep" pattern, so editing non-secret fields no longer
+re-exposes the secret ones. Covered by `tests/test_connector_header_masking.py`.
+
+## Completed siblings
+
+- **`IntegrationHook.auth_config`** (security-review #6) — encrypted at rest
+  per-value (rotation-compatible); see `INTEGRATION_HOOK_SECRET_ENCRYPTION.md`.
