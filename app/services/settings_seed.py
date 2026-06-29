@@ -1595,6 +1595,18 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_SERVICE_EXTENSION_MAX_DAYS", "30"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_reconciliation_stale_minutes",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_STALE_MINUTES", "15"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_reconciliation_max_age_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_MAX_AGE_DAYS", "7"),
+    )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
         db,

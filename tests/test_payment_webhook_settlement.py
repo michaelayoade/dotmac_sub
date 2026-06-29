@@ -26,6 +26,8 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate, PaymentCreate
 from app.services import billing as billing_service
 from app.services.api_billing_webhooks import (
@@ -33,6 +35,8 @@ from app.services.api_billing_webhooks import (
     process_paystack_webhook,
 )
 from app.services.payment_reconciliation import reconcile_pending_topups
+from app.services.settings_cache import SettingsCache
+from app.services.settings_spec import get_spec
 
 
 def _make_provider(db, provider_type=PaymentProviderType.paystack, name="Paystack"):
@@ -445,6 +449,55 @@ def test_reconciliation_skips_fresh_pending_intent(db_session, subscriber):
     verify_mock.assert_not_called()
     db_session.refresh(intent)
     assert intent.status == "pending"
+
+
+def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
+    specs = {
+        "topup_reconciliation_stale_minutes": (15, 1, 1440),
+        "topup_reconciliation_max_age_days": (7, 1, 30),
+    }
+    for key, (default, min_value, max_value) in specs.items():
+        spec = get_spec(SettingDomain.billing, key)
+        assert spec is not None
+        assert spec.default == default
+        assert spec.min_value == min_value
+        assert spec.max_value == max_value
+
+    _make_provider(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="topup_reconciliation_stale_minutes",
+            value_type=SettingValueType.integer,
+            value_text="120",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="topup_reconciliation_max_age_days",
+            value_type=SettingValueType.integer,
+            value_text="2",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    SettingsCache.invalidate(
+        SettingDomain.billing.value, "topup_reconciliation_stale_minutes"
+    )
+    SettingsCache.invalidate(
+        SettingDomain.billing.value, "topup_reconciliation_max_age_days"
+    )
+    _stale_intent(db_session, subscriber, reference="DMAC-RECON-CFG", minutes_old=60)
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.verify"
+    ) as verify_mock:
+        result = reconcile_pending_topups(db_session)
+
+    assert result["checked"] == 0
+    verify_mock.assert_not_called()
 
 
 def _http_error(status_code: int, reference: str) -> httpx.HTTPStatusError:

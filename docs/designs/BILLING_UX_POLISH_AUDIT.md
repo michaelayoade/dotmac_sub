@@ -81,6 +81,8 @@ settings/integrity/reconcilers.
   resolve from billing settings with existing defaults of 2, 24, and 2.
 - Service-extension maximum days now resolves from billing settings with the
   existing default of 30 and a 1-365 range.
+- Top-up reconciliation stale and max-age sweep windows now resolve from billing
+  settings with existing defaults of 15 minutes and 7 days.
 
 ### Partially resolved
 
@@ -100,7 +102,7 @@ settings/integrity/reconcilers.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
   policy defaults.
 - Remaining policy thresholds/settings work outside autopay, payment
-  arrangements, and service extensions.
+  arrangements, service extensions, and top-up reconciliation sweep windows.
 
 ### Verification
 
@@ -179,6 +181,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/service_extensions.py app/services/settings_spec.py app/services/settings_seed.py tests/test_service_extensions.py tests/test_settings_seed_services.py`
   - Result: passed
 - `poetry run pytest tests/test_service_extensions.py tests/test_settings_seed_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/payment_reconciliation.py app/services/settings_spec.py app/services/settings_seed.py tests/test_payment_webhook_settlement.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_payment_webhook_settlement.py tests/test_settings_seed_services.py -q`
   - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
@@ -280,7 +286,7 @@ comments (`app/services/billing_health.py:314,54`; `billing_settings.py:14`;
 - `MAX_EXTENSION_DAYS=30` (`app/services/service_extensions.py:31`)
 - AR-aging buckets `30/60/90` (`app/services/billing/reporting.py:300`)
 - billing-health alert thresholds (`SCAN_MIN_RATIO 0.5` etc.; "tune via ops" but needs deploy) (`billing_health.py:62`)
-- reconcile sweep windows `15min/7d` not configurable — abandoned-redirect >1wk never recovered (`app/services/payment_reconciliation.py:110`)
+- reconcile sweep windows `15min/7d` not configurable — abandoned-redirect >1wk never recovered (`app/services/payment_reconciliation.py:110`) [resolved in draft]
 - gateway HTTP `timeout=30` across Paystack/Flutterwave
 
 **C-3. Settings-system hygiene.** Policy defaults live in the context builder, not
