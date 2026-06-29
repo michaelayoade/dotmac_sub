@@ -64,6 +64,22 @@ def billing_dunning(
     )
 
 
+@router.get(
+    "/dunning/{case_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:dunning:read"))],
+)
+def dunning_detail(request: Request, case_id: str, db: Session = Depends(get_db)):
+    state = web_billing_dunning_service.build_detail_data(db, case_id=case_id)
+    return templates.TemplateResponse(
+        "admin/billing/dunning_detail.html",
+        {
+            **_base_context(request, db, "dunning"),
+            **state,
+        },
+    )
+
+
 @router.post(
     "/dunning/{case_id}/pause",
     dependencies=[Depends(require_permission("billing:dunning:write"))],

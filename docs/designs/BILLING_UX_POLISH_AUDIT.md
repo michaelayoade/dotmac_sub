@@ -39,6 +39,8 @@ settings/integrity/reconcilers.
 - Billing account search/status filters are now applied server-side with normal
   GET navigation, and the unsupported balance filter/dead HTMX table injection was
   removed.
+- Dunning "View Details" now lands on a real guarded detail route with case
+  status, account context, action controls, and action history.
 
 ### Partially resolved
 
@@ -53,7 +55,7 @@ settings/integrity/reconcilers.
 - Remaining irreversible money-action server-side idempotency and untouched
   high-risk actions such as consolidated record/distribute and fleet-wide billing
   settings save.
-- Dunning detail route and invoice batch bare-fragment behavior.
+- Invoice batch bare-fragment behavior.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Customer post-payment-return states.
@@ -72,6 +74,12 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run pytest tests/test_billing_accounts_list.py -q`
   - Result: `2 passed`
+- `poetry run ruff check app/services/web_billing_dunning.py app/web/admin/billing_dunning.py tests/test_billing_dunning_detail.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_dunning_detail.py -q`
+  - Result: `3 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
 
 ## What this audit is
 
