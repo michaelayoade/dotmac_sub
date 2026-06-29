@@ -358,6 +358,13 @@ class PaymentRead(PaymentBase):
 
 class PaymentInitiateRequest(BaseModel):
     invoice_id: UUID
+    # Which online gateway to checkout with for a new card; ignored for saved
+    # cards. Defaults to the configured provider when omitted.
+    provider: str | None = None
+    # Charge this saved card server-side (one-tap); idempotency_key makes that
+    # charge safe against a double-submit.
+    payment_method_id: UUID | None = None
+    idempotency_key: str | None = None
 
 
 class PaymentInitiateResponse(BaseModel):
@@ -369,6 +376,10 @@ class PaymentInitiateResponse(BaseModel):
     provider_public_key: str | None = None
     payment_reference: str
     customer_email: str | None = None
+    # True when a saved card was charged server-side — skip the gateway webview
+    # and go straight to verify (mirrors the top-up flow).
+    charged: bool = False
+    checkout_url: str | None = None
 
 
 class PaymentVerifyRequest(BaseModel):
@@ -385,6 +396,8 @@ class PaymentVerifyResponse(BaseModel):
     currency: str = "NGN"
     status: str
     already_recorded: bool = False
+    card_saved: bool | None = None
+    card_save_message: str | None = None
 
 
 # --- Prepaid account top-up (hosted checkout) -----------------------------
@@ -466,6 +479,8 @@ class TopupVerifyResponse(BaseModel):
     already_recorded: bool = False
     available_balance: Decimal | None = None
     credit_added: Decimal | None = None
+    card_saved: bool | None = None
+    card_save_message: str | None = None
 
 
 class PaymentAllocationBase(BaseModel):
@@ -617,7 +632,7 @@ class LedgerEntryRead(LedgerEntryBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    # Real-world date of the entry (invoice issue / payment / Splynx txn date).
+    # Real-world date of the entry (invoice issue / payment / imported txn date).
     # NULL for native and unbackfilled rows; clients should prefer it over
     # created_at (the import instant) and fall back to created_at when NULL.
     effective_date: datetime | None = None

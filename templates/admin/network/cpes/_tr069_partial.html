@@ -8,18 +8,29 @@
     <div class="flex flex-wrap items-center justify-end gap-2">
         <button hx-post="/admin/network/cpes/{{ tr069.cpe_id }}/refresh"
                 hx-swap="none"
+                hx-disabled-elt="this"
                 class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
             Refresh
         </button>
         <button hx-post="/admin/network/cpes/{{ tr069.cpe_id }}/connection-request"
                 hx-swap="none"
+                hx-disabled-elt="this"
                 class="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
             Connection Request
         </button>
         <button hx-post="/admin/network/cpes/{{ tr069.cpe_id }}/reboot"
                 hx-swap="none"
+                hx-disabled-elt="this"
+                hx-confirm="Reboot CPE {{ tr069.serial_number or tr069.cpe_id }}? Service may be interrupted."
                 class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
             Reboot
+        </button>
+        <button hx-post="/admin/network/cpes/{{ tr069.cpe_id }}/factory-reset"
+                hx-swap="none"
+                hx-disabled-elt="this"
+                hx-confirm="Factory reset CPE {{ tr069.serial_number or tr069.cpe_id }}? This erases customer device configuration."
+                class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+            Factory Reset
         </button>
     </div>
 

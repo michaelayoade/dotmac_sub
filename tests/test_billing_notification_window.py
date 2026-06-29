@@ -97,3 +97,41 @@ def test_run_billing_notifications_emits_inside_window(monkeypatch):
         "skipped_outside_window": False,
     }
     db.commit.assert_called_once()
+
+
+def test_daily_invoice_cycle_fallback_uses_window_gated_notifications(
+    db_session, monkeypatch
+):
+    calls = []
+
+    monkeypatch.setattr(
+        billing_automation,
+        "_hourly_notifications_enabled",
+        lambda db: False,
+    )
+    monkeypatch.setattr(
+        billing_automation,
+        "_emit_invoice_reminders",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("raw emit")),
+    )
+
+    def fake_run_notifications(db, run_at):
+        calls.append(run_at)
+        return {
+            "invoice_reminders_sent": 0,
+            "dunning_escalations_sent": 0,
+            "skipped_outside_window": True,
+        }
+
+    monkeypatch.setattr(
+        billing_automation,
+        "run_billing_notifications",
+        fake_run_notifications,
+    )
+
+    run_at = datetime(2026, 1, 5, 3, tzinfo=UTC)
+    summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+    assert calls == [run_at]
+    assert summary["invoice_reminders_sent"] == 0
+    assert summary["dunning_escalations_sent"] == 0

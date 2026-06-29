@@ -4,16 +4,14 @@
 Background
 ----------
 Until #301, ``run_invoice_cycle`` had no ``billing_mode`` filter and generated
-postpaid-style, balance-due invoices for PREPAID accounts (which are billed by
-deposit drawdown and must never be invoiced). The generation bug is fixed, but
-the bad invoice rows still exist and inflate ledger balances / AR. This one-off
-voids them.
+postpaid-style, balance-due invoices for PREPAID accounts before the monthly
+prepaid invoicing cutover. The generation bug is fixed, but the bad invoice rows
+still exist and inflate ledger balances / AR. This one-off voids them.
 
 It targets ONLY runner-generated prepaid phantoms — and reuses the canonical
 ``Invoices.void`` so each void also posts compensating credit ledger entries
-(restoring the account balance). The prepaid drawdown ledger entries
-(``invoice_id IS NULL``, memo "Prepaid charge ...") are NOT touched by void, so
-legitimate drawdown is preserved.
+(restoring the account balance). Historical prepaid debit ledger entries
+(``invoice_id IS NULL``, memo "Prepaid charge ...") are NOT touched by void.
 
 Targeting (a candidate must match ALL):
   * the invoice's account (Subscriber) is ``billing_mode == prepaid``
@@ -27,9 +25,9 @@ Targeting (a candidate must match ALL):
 Classification:
   * paid / partially_paid  -> MANUAL REVIEW only (never auto-mutated; voiding a
     paid invoice would strand the payment)
-  * unpaid (draft/issued/overdue) on an account that ALSO has a prepaid drawdown
-    entry -> DRAWDOWN-OVERLAP: void invoice, drawdown preserved
-  * unpaid, no drawdown overlap -> VOID candidate
+  * unpaid (draft/issued/overdue) on an account that ALSO has a historical
+    prepaid debit entry -> LEGACY-DEBIT-OVERLAP: void invoice, debit preserved
+  * unpaid, no legacy debit overlap -> VOID candidate
 
 Safe by default: prints a summary and writes CSV artifacts for every class.
 Pass ``--apply`` to void the two unpaid classes. Never deletes rows.
@@ -56,9 +54,9 @@ from app.models.billing import Invoice, InvoiceStatus, LedgerEntry  # noqa: E402
 from app.models.catalog import BillingMode  # noqa: E402
 from app.models.subscriber import Subscriber  # noqa: E402
 from app.services.billing.invoices import Invoices  # noqa: E402
-from app.services.prepaid_billing import PREPAID_CHARGE_MEMO_PREFIX  # noqa: E402
 
 VOID_REASON = "prepaid_phantom_invoice_cleanup"
+PREPAID_CHARGE_MEMO_PREFIX = "Prepaid charge"
 
 # Unpaid statuses we will auto-void; everything else (paid/partially_paid) is
 # manual review only.
@@ -91,8 +89,8 @@ def candidates(db) -> list[Invoice]:
     return [inv for inv in rows if not _has_credit_marker(inv)]
 
 
-def _drawdown_accounts(db, account_ids) -> set:
-    """Accounts that have an active prepaid drawdown ledger entry (preserve it)."""
+def _legacy_prepaid_debit_accounts(db, account_ids) -> set:
+    """Accounts that have a historical prepaid debit ledger entry."""
     if not account_ids:
         return set()
     rows = (
@@ -108,17 +106,17 @@ def _drawdown_accounts(db, account_ids) -> set:
 
 def classify(db) -> dict[str, list[Invoice]]:
     invs = candidates(db)
-    overlap = _drawdown_accounts(db, {i.account_id for i in invs})
+    overlap = _legacy_prepaid_debit_accounts(db, {i.account_id for i in invs})
     out: dict[str, list[Invoice]] = {
         "void_candidate": [],
-        "drawdown_overlap": [],
+        "legacy_debit_overlap": [],
         "manual_review": [],
     }
     for inv in invs:
         if inv.status not in VOIDABLE:
             out["manual_review"].append(inv)
         elif inv.account_id in overlap:
-            out["drawdown_overlap"].append(inv)
+            out["legacy_debit_overlap"].append(inv)
         else:
             out["void_candidate"].append(inv)
     return out
@@ -194,7 +192,7 @@ def main() -> None:
                 f"-> {out}/prepaid_phantom_{name}.csv"
             )
 
-        to_void = groups["void_candidate"] + groups["drawdown_overlap"]
+        to_void = groups["void_candidate"] + groups["legacy_debit_overlap"]
         print(
             f"\nmanual_review ({len(groups['manual_review'])}): NOT mutated — paid/partial/completed, review by hand."
         )
@@ -214,7 +212,7 @@ def main() -> None:
                 print(f"  ERROR voiding {inv.invoice_number}: {exc!r}")
         print(
             f"\nAPPLIED: voided {voided}/{len(to_void)} invoice(s) "
-            f"(reversing ledger credits posted; drawdown entries preserved)."
+            f"(reversing ledger credits posted; historical prepaid debits preserved)."
         )
     finally:
         db.close()

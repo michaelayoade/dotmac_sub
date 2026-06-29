@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.domain_settings import SettingDomain
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionEntry,
@@ -23,15 +24,18 @@ from app.models.service_extension import (
     ServiceExtensionStatus,
 )
 from app.models.subscriber import Subscriber
+from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.customer_identity_resolution import resolve_customer_identity
 
 logger = logging.getLogger(__name__)
 
-MAX_EXTENSION_DAYS = 30
+DEFAULT_MAX_EXTENSION_DAYS = 30
+MIN_EXTENSION_DAYS = 1
+MAX_ALLOWED_EXTENSION_DAYS = 365
 PREVIEW_SAMPLE_LIMIT = 50
 APPLY_BATCH_SIZE = 500
-# Postgres int4 ceiling: digit strings above this aren't splynx_customer_ids
+# Postgres int4 ceiling: digit strings above this are not legacy customer IDs.
 # (e.g. phone numbers) and would overflow the column comparison.
 _MAX_INT4 = 2_147_483_647
 
@@ -41,6 +45,17 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return uuid.UUID(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def _max_extension_days(db: Session) -> int:
+    value = settings_spec.resolve_value(
+        db, SettingDomain.billing, "service_extension_max_days"
+    )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_EXTENSION_DAYS
+    return max(MIN_EXTENSION_DAYS, min(MAX_ALLOWED_EXTENSION_DAYS, parsed))
 
 
 def _unique_subscribers(rows: list[Subscriber]) -> list[Subscriber]:
@@ -82,7 +97,7 @@ def _find_subscriber_by_identifier(db: Session, raw_identifier: str) -> Subscrib
             db.scalars(select(Subscriber).where(func.lower(column) == lowered)).all()
         )
 
-    # 3. Splynx customer id — int4-bounded so a longer digit string (e.g. an
+    # 3. Imported customer id — int4-bounded so a longer digit string (e.g. an
     #    11-digit phone number) doesn't overflow the int4 column on Postgres.
     if identifier.isdigit() and int(identifier) <= _MAX_INT4:
         matches.extend(
@@ -156,6 +171,43 @@ def _coerce_resolved_subscriber_ids(
     return resolved
 
 
+def _validate_resolved_subscriber_ids(
+    db: Session, subscriber_ids: Sequence[str | uuid.UUID] | None
+) -> list[uuid.UUID]:
+    resolved = _coerce_resolved_subscriber_ids(subscriber_ids)
+    if not resolved:
+        return []
+    existing = set(
+        db.scalars(select(Subscriber.id).where(Subscriber.id.in_(resolved))).all()
+    )
+    missing = [
+        str(subscriber_id)
+        for subscriber_id in resolved
+        if subscriber_id not in existing
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not find customer: {missing[0]}",
+        )
+    return resolved
+
+
+def _subscriber_scope_rows(
+    db: Session, subscriber_ids: Sequence[str | uuid.UUID] | None
+) -> list[Subscriber]:
+    resolved = _coerce_resolved_subscriber_ids(subscriber_ids)
+    if not resolved:
+        return []
+    rows = {
+        row.id: row
+        for row in db.scalars(
+            select(Subscriber).where(Subscriber.id.in_(resolved))
+        ).all()
+    }
+    return [rows[subscriber_id] for subscriber_id in resolved if subscriber_id in rows]
+
+
 def _scope_filters(
     db: Session,
     scope_type: ServiceExtensionScope,
@@ -181,7 +233,9 @@ def _scope_filters(
         ids = (
             _coerce_resolved_subscriber_ids(subscriber_ids)
             if subscriber_ids_resolved
-            else resolve_subscriber_identifiers(db, list(subscriber_ids or []))
+            else resolve_subscriber_identifiers(
+                db, [str(s) for s in (subscriber_ids or [])]
+            )
         )
         if not ids:
             raise HTTPException(
@@ -308,11 +362,12 @@ def _iter_scope_subscriptions(
         offset += len(ids)
 
 
-def _validated_days(days: int) -> int:
-    if not 1 <= int(days) <= MAX_EXTENSION_DAYS:
+def _validated_days(db: Session, days: int) -> int:
+    max_days = _max_extension_days(db)
+    if not MIN_EXTENSION_DAYS <= int(days) <= max_days:
         raise HTTPException(
             status_code=400,
-            detail=f"Days must be between 1 and {MAX_EXTENSION_DAYS}",
+            detail=f"Days must be between {MIN_EXTENSION_DAYS} and {max_days}",
         )
     return int(days)
 
@@ -327,6 +382,7 @@ def create_extension(
     scope_type: ServiceExtensionScope,
     scope_id: str | None = None,
     subscriber_ids: list[str] | None = None,
+    subscriber_ids_resolved: bool = False,
     created_by: str | None = None,
 ) -> ServiceExtension:
     """Create a pending extension. Scope is validated but not applied yet."""
@@ -336,12 +392,15 @@ def create_extension(
         raise HTTPException(
             status_code=400, detail="Outage end must be after its start"
         )
-    days = _validated_days(days)
-    resolved_subscriber_ids = (
-        [str(item) for item in resolve_subscriber_identifiers(db, subscriber_ids)]
-        if scope_type == ServiceExtensionScope.subscribers
-        else None
-    )
+    days = _validated_days(db, days)
+    resolved_subscriber_ids = None
+    if scope_type == ServiceExtensionScope.subscribers:
+        resolver = (
+            _validate_resolved_subscriber_ids
+            if subscriber_ids_resolved
+            else resolve_subscriber_identifiers
+        )
+        resolved_subscriber_ids = [str(item) for item in resolver(db, subscriber_ids)]
     # Validates scope inputs (raises on missing scope_id / empty list) without
     # materializing every active subscription for network-wide extensions.
     _scope_subscription_counts(
@@ -398,6 +457,11 @@ def preview_extension(db: Session, extension: ServiceExtension) -> dict:
     return {
         "subscriptions": sample,
         "sample": sample,
+        "selected_subscribers": (
+            _subscriber_scope_rows(db, extension.scope_subscriber_ids)
+            if extension.scope_type == ServiceExtensionScope.subscribers
+            else []
+        ),
         "total_count": total_count,
         "extendable_count": extendable_count,
         "skipped_count": total_count - extendable_count,
@@ -522,7 +586,7 @@ def scope_options(db: Session) -> dict:
             db.scalars(select(NasDevice).order_by(NasDevice.name)).all()
         ),
         "scope_types": [item.value for item in ServiceExtensionScope],
-        "max_days": MAX_EXTENSION_DAYS,
+        "max_days": _max_extension_days(db),
     }
 
 

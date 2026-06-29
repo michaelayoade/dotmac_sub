@@ -115,7 +115,7 @@ def _dump_dir_for_olt(olt, dump_root: str | None) -> Path | None:
 @router.api_route(
     "/olts/{olt_id}/tr069-profiles",
     methods=["GET", "POST"],
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_tr069_profiles_ssh(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -140,7 +140,7 @@ def olt_tr069_profiles_ssh(
 
 @router.post(
     "/olts/{olt_id}/tr069-profiles/create",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_tr069_profile_create(
     request: Request,
@@ -171,7 +171,7 @@ def olt_tr069_profile_create(
 
 @router.post(
     "/olts/{olt_id}/tr069-profiles/rebind",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_tr069_rebind(
     request: Request,
@@ -234,7 +234,7 @@ def olt_tr069_rebind(
 
 @router.post(
     "/olts/{olt_id}/init-tr069",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_init_tr069(
     request: Request,
@@ -254,7 +254,7 @@ def olt_init_tr069(
 
 @router.post(
     "/olts/{olt_id}/propagate-acs",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_propagate_acs(
     request: Request,
@@ -270,7 +270,7 @@ def olt_propagate_acs(
 
 @router.post(
     "/olts/{olt_id}/enforce-provisioning",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_enforce_provisioning(
     request: Request,
@@ -287,7 +287,7 @@ def olt_enforce_provisioning(
 @router.get(
     "/profile-sync-tasks",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_profile_sync_tasks(
     request: Request,
@@ -325,7 +325,7 @@ def olt_profile_sync_tasks(
 
 @router.post(
     "/profile-sync-tasks/{task_id}/approve",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_profile_sync_task_approve(
     request: Request,
@@ -350,7 +350,7 @@ def olt_profile_sync_task_approve(
 
 @router.post(
     "/profile-sync-tasks/{task_id}/cancel",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_profile_sync_task_cancel(
     request: Request,
@@ -375,7 +375,7 @@ def olt_profile_sync_task_cancel(
 
 @router.post(
     "/profile-sync-tasks/{task_id}/execute",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_profile_sync_task_execute(
     request: Request,
@@ -396,7 +396,7 @@ def olt_profile_sync_task_execute(
 
 @router.post(
     "/profile-sync-tasks/execute-due",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_profile_sync_tasks_execute_due(
     request: Request,
@@ -417,7 +417,7 @@ def olt_profile_sync_tasks_execute_due(
 
 @router.post(
     "/profile-sync-tasks/{task_id}/retry",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_profile_sync_task_retry(
     request: Request,
@@ -442,7 +442,7 @@ def olt_profile_sync_task_retry(
 
 @router.post(
     "/profile-sync-tasks/drift-check",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_profile_sync_drift_check(
     request: Request,
@@ -467,7 +467,7 @@ def olt_profile_sync_drift_check(
 
 @router.post(
     "/olts/{olt_id}/backfill-pon-ports",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_backfill_pon_ports(
     request: Request,
@@ -483,7 +483,7 @@ def olt_backfill_pon_ports(
 
 @router.post(
     "/olts/{olt_id}/import-state",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_import_state(
     request: Request,
@@ -539,7 +539,7 @@ def olt_import_state(
 @router.get(
     "/olts/{olt_id}/profiles/line",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_line_profiles(
     request: Request,
@@ -556,7 +556,7 @@ def olt_line_profiles(
 @router.get(
     "/olts/{olt_id}/profiles/imported",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_imported_profiles(
     request: Request,
@@ -576,7 +576,7 @@ def olt_imported_profiles(
 @router.post(
     "/olts/{olt_id}/profiles/imported/audit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_imported_profile_dependency_audit(
     request: Request,
@@ -597,7 +597,7 @@ def olt_imported_profile_dependency_audit(
 @router.post(
     "/olts/{olt_id}/profiles/offer-sync/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_offer_profile_sync_preview(
     request: Request,
@@ -625,7 +625,7 @@ def olt_offer_profile_sync_preview(
 @router.post(
     "/olts/{olt_id}/profiles/offer-sync/save",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_offer_profile_sync_save(
     request: Request,
@@ -655,7 +655,7 @@ def olt_offer_profile_sync_save(
 @router.post(
     "/olts/{olt_id}/profiles/bundles/{bundle_id}/apply",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_saved_profile_bundle_apply(
     request: Request,
@@ -683,7 +683,7 @@ def olt_saved_profile_bundle_apply(
 
 @router.post(
     "/olts/{olt_id}/profiles/imported/mappings",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_imported_profile_mapping_save(
     olt_id: str,
@@ -733,7 +733,7 @@ def olt_imported_profile_mapping_save(
 
 @router.post(
     "/olts/{olt_id}/profiles/imported/mappings/{mapping_id}/delete",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_imported_profile_mapping_delete(
     olt_id: str,
@@ -761,7 +761,7 @@ def olt_imported_profile_mapping_delete(
 @router.get(
     "/olts/{olt_id}/profiles/tr069",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_tr069_profiles(
     request: Request,
@@ -777,7 +777,7 @@ def olt_tr069_profiles(
 
 @router.post(
     "/olts/{olt_id}/firmware-upgrade",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_firmware_upgrade(
     request: Request,
@@ -806,7 +806,7 @@ def olt_firmware_upgrade(
 @router.get(
     "/olts/{olt_id}/backups",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_backups_list(
     request: Request,
@@ -839,9 +839,12 @@ def olt_backups_list(
             "end_at": end_at,
             "test_status": test_status,
             "test_message": test_message,
+            "storage_status": olt_operations_service.olt_backup_storage_status(),
         }
     )
-    return templates.TemplateResponse("admin/network/olts/backups.html", context)
+    return templates.TemplateResponse(
+        request, "admin/network/olts/backups.html", context
+    )
 
 
 # NOTE: this static route must be registered BEFORE /olts/backups/{backup_id};
@@ -849,7 +852,7 @@ def olt_backups_list(
 @router.get(
     "/olts/backups/compare",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_backup_compare(
     request: Request,
@@ -883,10 +886,14 @@ def olt_backup_compare(
 @router.get(
     "/olts/backups/{backup_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_backup_detail(
-    request: Request, backup_id: str, db: Session = Depends(get_db)
+    request: Request,
+    backup_id: str,
+    test_status: str | None = None,
+    test_message: str | None = None,
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
     backup = olt_operations_service.get_olt_backup_or_none(db, backup_id)
     if not backup:
@@ -902,13 +909,25 @@ def olt_backup_detail(
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-    preview = olt_operations_service.read_backup_preview(backup)
+    try:
+        preview_info = olt_operations_service.read_backup_preview_info(backup)
+    except HTTPException as exc:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": str(exc.detail)},
+            status_code=exc.status_code,
+        )
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
             "olt": olt,
             "backup": backup,
-            "preview": preview,
+            "preview": preview_info["preview"],
+            "preview_truncated": preview_info["truncated"],
+            "preview_limit_chars": preview_info["limit_chars"],
+            "storage_status": olt_operations_service.olt_backup_storage_status(),
+            "test_status": test_status,
+            "test_message": test_message,
         }
     )
     return templates.TemplateResponse("admin/network/olts/backup_detail.html", context)
@@ -916,7 +935,7 @@ def olt_backup_detail(
 
 @router.get(
     "/olts/backups/{backup_id}/download",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_backup_download(backup_id: str, db: Session = Depends(get_db)) -> FileResponse:
     backup = olt_operations_service.get_olt_backup_or_none(db, backup_id)
@@ -929,7 +948,7 @@ def olt_backup_download(backup_id: str, db: Session = Depends(get_db)) -> FileRe
 
 @router.post(
     "/olts/{olt_id}/backups/test-connection",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_backup_test_connection(
     olt_id: str, db: Session = Depends(get_db)
@@ -944,7 +963,7 @@ def olt_backup_test_connection(
 
 @router.post(
     "/olts/{olt_id}/backups/test-backup",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_backup_test_backup(
     olt_id: str, db: Session = Depends(get_db)
@@ -959,7 +978,7 @@ def olt_backup_test_backup(
 
 @router.post(
     "/olts/{olt_id}/backups/ssh-backup",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     """Fetch full running config via SSH and save as backup."""
@@ -973,11 +992,26 @@ def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectRespon
 
 @router.post(
     "/olts/{olt_id}/backups/{backup_id}/restore",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_backup_restore(
-    olt_id: str, backup_id: str, db: Session = Depends(get_db)
+    olt_id: str,
+    backup_id: str,
+    confirm_olt_name: str | None = Form(None),
+    db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return RedirectResponse(
+            "/admin/network/olts?test_status=error&test_message=OLT+not+found",
+            status_code=303,
+        )
+    if (confirm_olt_name or "").strip() != olt.name:
+        message = "Type the exact OLT name to confirm restore"
+        return RedirectResponse(
+            f"/admin/network/olts/backups/{backup_id}?test_status=error&test_message={quote_plus(message)}",
+            status_code=303,
+        )
     ok, message = olt_operations_service.restore_from_backup(db, olt_id, backup_id)
     status = "success" if ok else "error"
     return RedirectResponse(

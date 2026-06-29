@@ -45,14 +45,13 @@ class Settings:
     )
     avatar_url_prefix: str = os.getenv("AVATAR_URL_PREFIX", "/static/avatars")
 
-    # Splynx MySQL sync settings (for incremental sync from remote Splynx DB)
-    mysql_host: str = os.getenv("SPLYNX_MYSQL_HOST", "127.0.0.1")
-    mysql_port: int = int(os.getenv("SPLYNX_MYSQL_PORT", "3306"))
-    mysql_user: str = os.getenv("SPLYNX_MYSQL_USER", "splynx")
-    mysql_password: str = os.getenv(
-        "SPLYNX_MYSQL_PASSWORD", os.getenv("SPLYNX_MYSQL_PASS", "")
-    )
-    mysql_database: str = os.getenv("SPLYNX_MYSQL_DATABASE", "splynx")
+    # Splynx is decommissioned (2026-06-16; local ledger is the sole source of
+    # truth). The incremental-sync machinery and its sync-state tables are gone
+    # (migration 169). The remote-MySQL connection settings that fed that sync
+    # have been removed — nothing read them. Remove SPLYNX_MYSQL_* from .env too;
+    # rotate any value that was a live credential. Historical Splynx data
+    # (splynx_billing_transactions, id mappings, archives, splynx_* id columns)
+    # is retained READ-ONLY for audit/reconciliation only.
 
     # Cookie security
     secure_cookies: bool = os.getenv("SECURE_COOKIES", "true").lower() in (
@@ -81,6 +80,24 @@ class Settings:
     # This is intentionally separate from CRM_WEBHOOK_SECRET, which protects
     # inbound HMAC-signed webhook deliveries.
     selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
+
+    # Live chat (bridges to the CRM chat_widget channel). Default OFF: the
+    # broker endpoints return 503 until a deploy flips this on deliberately.
+    chat_live_enabled: bool = os.getenv("CHAT_LIVE_ENABLED", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    # ChatWidgetConfig id in the CRM that customer + reseller sessions attach to
+    # (general support pool; same config for both surfaces).
+    crm_chat_config_id: str = os.getenv("CRM_CHAT_CONFIG_ID", "")
+    # Distinct from crm_webhook_secret: protects the inbound chat message_new
+    # webhook that drives mobile push.
+    crm_chat_webhook_secret: str = os.getenv("CRM_CHAT_WEBHOOK_SECRET", "")
+    # Visitor WebSocket URL handed to clients. Derived from crm_base_url
+    # (https→wss) + /ws/widget when left blank.
+    crm_chat_ws_url: str = os.getenv("CRM_CHAT_WS_URL", "")
 
     # Mono lookup API
     mono_secret_key: str = os.getenv("MONO_SECRET_KEY", "")
@@ -130,6 +147,26 @@ class Settings:
     reseller_user_principal_enabled: bool = os.getenv(
         "RESELLER_USER_PRINCIPAL_ENABLED", "false"
     ).lower() in ("true", "1", "yes")
+
+    # Infrastructure SLA: when ON, the live-status warmer records device
+    # availability transitions as uptime Alert intervals (down->open,
+    # recovered->resolve). This is what populates the SLA/uptime report —
+    # without it, no uptime alerts exist in prod and every uptime % reads 100%
+    # (see INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 0 / R1). Default OFF: the
+    # warmer is a hot deployed task, so the bridge is inert until a deploy flips
+    # this on deliberately. Additive-only — never changes live_status behaviour.
+    sla_availability_log_enabled: bool = os.getenv(
+        "SLA_AVAILABILITY_LOG_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+
+    # Global infrastructure-SLA uptime target (%). Network elements have no
+    # per-element SLA profile (SlaProfile binds to catalog offers, not devices),
+    # so the performance dashboard's PASS/BREACH badge compares every element's
+    # measured uptime % against this single target. Per-tier overrides are a
+    # later refinement.
+    infra_sla_target_percent: float = float(
+        os.getenv("INFRA_SLA_TARGET_PERCENT", "99.5")
+    )
 
 
 settings = Settings()

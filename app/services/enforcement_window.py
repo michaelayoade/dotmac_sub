@@ -1,9 +1,8 @@
 """Shared time-of-day gating for billing/dunning enforcement and notifications.
 
-Generalizes the wall-clock window already used by ``PrepaidEnforcement.run``
-(``app/services/collections/_core.py``) so the same logic can gate other
-customer-impacting paths (postpaid suspension, dunning comms) without each
-re-implementing timezone math.
+Shared wall-clock decision helper for customer-impacting billing actions
+(suspension, throttling, dunning comms) without each path re-implementing
+timezone math.
 
 Pure decision helper (``window_block_reason``) + thin settings resolvers. The
 celery cadence must fire often enough (hourly) for a window to be effective — a

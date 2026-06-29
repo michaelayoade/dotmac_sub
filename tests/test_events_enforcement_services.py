@@ -367,15 +367,12 @@ class TestEnforcementHandler:
             **kwargs,
         )
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_suspended_disconnects_and_blocks(
-        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_cleanup, db_session
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
@@ -386,23 +383,16 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
 
-        mock_disconnect.assert_called_once_with(
-            db_session, str(sub_id), reason="suspended"
-        )
-        mock_block.assert_called_once_with(db_session, str(sub_id))
+        mock_cleanup.assert_called_once_with(str(sub_id), reason="suspended")
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_block_sets_subscriber_status_suspended(
         self,
         mock_reject_ip,
-        mock_disconnect,
-        mock_block,
+        mock_cleanup,
         db_session,
         subscription,
         subscriber,
@@ -422,15 +412,12 @@ class TestEnforcementHandler:
 
         assert subscriber.status == AccountStatus.suspended
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_canceled_disconnects_and_blocks(
-        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_cleanup, db_session
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
@@ -441,20 +428,14 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
 
-        mock_disconnect.assert_called_once_with(
-            db_session, str(sub_id), reason="canceled"
-        )
-        mock_block.assert_called_once_with(db_session, str(sub_id))
+        mock_cleanup.assert_called_once_with(str(sub_id), reason="canceled")
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_block_uses_payload_fallback(
-        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_cleanup, db_session
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
@@ -464,19 +445,14 @@ class TestEnforcementHandler:
             payload={"subscription_id": str(sub_id)},
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(
-            db_session, str(sub_id), reason="suspended"
-        )
+        mock_cleanup.assert_called_once_with(str(sub_id), reason="suspended")
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_block_uses_negative_reject_reason_for_dunning(
-        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_cleanup, db_session
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
@@ -491,15 +467,12 @@ class TestEnforcementHandler:
             db_session, str(sub_id), reject_reason="negative"
         )
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_block_defaults_reject_reason_to_blocked(
-        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_cleanup, db_session
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
@@ -514,18 +487,12 @@ class TestEnforcementHandler:
             db_session, str(sub_id), reject_reason="blocked"
         )
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    def test_subscription_block_skips_without_id(
-        self, mock_disconnect, mock_block, db_session
-    ):
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
+    def test_subscription_block_skips_without_id(self, mock_cleanup, db_session):
         handler = EnforcementHandler()
         event = self._make_event(EventType.subscription_suspended)
         handler.handle(db_session, event)
-        mock_disconnect.assert_not_called()
-        mock_block.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch(
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
@@ -664,13 +631,10 @@ class TestEnforcementHandler:
         handler.handle(db_session, event)
         mock_disconnect.assert_not_called()
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_usage_exhausted_block_action_opted_in_applies_captive(
-        self, mock_settings, mock_disconnect, mock_block, db_session, subscription
+        self, mock_settings, mock_cleanup, db_session, subscription
     ):
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -692,18 +656,12 @@ class TestEnforcementHandler:
             account_id=subscription.subscriber_id,
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(
-            db_session, str(subscription.id), reason="fup_block"
-        )
-        mock_block.assert_called_once_with(db_session, str(subscription.id))
+        mock_cleanup.assert_called_once_with(str(subscription.id), reason="fup_block")
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_usage_exhausted_block_action_not_opted_in_hard_blocks(
-        self, mock_settings, mock_disconnect, mock_block, db_session, subscription
+        self, mock_settings, mock_cleanup, db_session, subscription
     ):
         """Not opted into captive → the FUP 'block' action falls through to a
         hard suspend; no captive address-list is applied (opt-in, not every
@@ -731,6 +689,31 @@ class TestEnforcementHandler:
         # Distinguisher: the hard path changes lifecycle status to suspended
         # (→ Auth-Type := Reject via populate). The captive path would leave the
         # status untouched. _persist_fup_state notes are "FUP suspension applied".
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
+
+    @patch("app.services.events.handlers.enforcement.settings_spec")
+    def test_usage_exhausted_payload_block_overrides_global_throttle(
+        self, mock_settings, db_session, subscription
+    ):
+        def settings_side_effect(db, domain, key):
+            if key == "fup_action":
+                return "throttle"
+            return None
+
+        mock_settings.resolve_value.side_effect = settings_side_effect
+        subscription.status = SubscriptionStatus.active
+        db_session.flush()
+
+        handler = EnforcementHandler()
+        event = self._make_event(
+            EventType.usage_exhausted,
+            payload={"action": "block"},
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+        handler.handle(db_session, event)
+
         db_session.refresh(subscription)
         assert subscription.status == SubscriptionStatus.suspended
 
@@ -813,6 +796,44 @@ class TestEnforcementHandler:
         acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
+            subscription_id=sub_id,
+            account_id=acc_id,
+        )
+        handler.handle(db_session, event)
+
+        mock_apply_profile.assert_called_once_with(
+            db_session, str(acc_id), str(throttle_profile_id)
+        )
+        mock_disconnect.assert_called_once_with(
+            db_session, str(acc_id), reason="fup_throttle"
+        )
+
+    @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
+    @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
+    @patch("app.services.events.handlers.enforcement.settings_spec")
+    def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
+        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+    ):
+        throttle_profile_id = uuid.uuid4()
+
+        def settings_side_effect(db, domain, key):
+            if key == "fup_action":
+                return "block"
+            if key == "fup_throttle_radius_profile_id":
+                return str(throttle_profile_id)
+            if key == "refresh_sessions_on_profile_change":
+                return "true"
+            return None
+
+        mock_settings.resolve_value.side_effect = settings_side_effect
+        mock_apply_profile.return_value = 1
+
+        handler = EnforcementHandler()
+        sub_id = uuid.uuid4()
+        acc_id = uuid.uuid4()
+        event = self._make_event(
+            EventType.usage_exhausted,
+            payload={"action": "reduce_speed"},
             subscription_id=sub_id,
             account_id=acc_id,
         )
@@ -1450,6 +1471,27 @@ class TestPaymentReceivedRestoreGuard:
         )
 
     @patch("app.services.collections.restore_account_services")
+    def test_payment_event_recomputes_stale_blocked_account_without_lock(
+        self, mock_restore, db_session, subscriber, subscription
+    ):
+        from app.models.catalog import BillingMode
+
+        mock_restore.return_value = 0
+        subscriber.status = AccountStatus.blocked
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        db_session.commit()
+
+        handler = EnforcementHandler()
+        handler.handle(db_session, self._payment_event(subscriber.id))
+
+        mock_restore.assert_called_once_with(
+            db_session, str(subscriber.id), invoice_id=None
+        )
+        db_session.refresh(subscriber)
+        assert subscriber.status == AccountStatus.active
+
+    @patch("app.services.collections.restore_account_services")
     def test_payment_event_without_account_is_ignored(self, mock_restore, db_session):
         handler = EnforcementHandler()
         handler.handle(
@@ -1543,18 +1585,14 @@ class TestInvoiceOverdueSuspensionShields:
         db_session.commit()
         return proof
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_active_arrangement_shields_from_suspension(
         self,
         mock_reject_ip,
-        mock_disconnect,
-        mock_block,
+        mock_cleanup,
         db_session,
         subscriber,
         subscription,
@@ -1571,21 +1609,16 @@ class TestInvoiceOverdueSuspensionShields:
         db_session.refresh(subscription)
 
         assert subscription.status == SubscriptionStatus.active
-        mock_disconnect.assert_not_called()
-        mock_block.assert_not_called()
+        mock_cleanup.assert_not_called()
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_defaulted_arrangement_does_not_shield(
         self,
         mock_reject_ip,
-        mock_disconnect,
-        mock_block,
+        mock_cleanup,
         db_session,
         subscriber,
         subscription,
@@ -1603,18 +1636,14 @@ class TestInvoiceOverdueSuspensionShields:
 
         assert subscription.status == SubscriptionStatus.suspended
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_pending_payment_proof_shields_from_suspension(
         self,
         mock_reject_ip,
-        mock_disconnect,
-        mock_block,
+        mock_cleanup,
         db_session,
         subscriber,
         subscription,
@@ -1631,21 +1660,16 @@ class TestInvoiceOverdueSuspensionShields:
         db_session.refresh(subscription)
 
         assert subscription.status == SubscriptionStatus.active
-        mock_disconnect.assert_not_called()
-        mock_block.assert_not_called()
+        mock_cleanup.assert_not_called()
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_rejected_proof_does_not_shield(
         self,
         mock_reject_ip,
-        mock_disconnect,
-        mock_block,
+        mock_cleanup,
         db_session,
         subscriber,
         subscription,
@@ -1663,18 +1687,14 @@ class TestInvoiceOverdueSuspensionShields:
 
         assert subscription.status == SubscriptionStatus.suspended
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_no_shield_suspends_past_grace(
         self,
         mock_reject_ip,
-        mock_disconnect,
-        mock_block,
+        mock_cleanup,
         db_session,
         subscriber,
         subscription,

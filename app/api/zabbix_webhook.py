@@ -28,6 +28,7 @@ from app.models.network_monitoring import (
 )
 from app.services.zabbix import get_zabbix_webhook_token
 from app.services.zabbix_webhook import (
+    find_network_device_id_by_zabbix_host_id,
     find_open_zabbix_alert,
     get_or_create_zabbix_alert_rule,
 )
@@ -164,18 +165,56 @@ def _map_zabbix_severity(zabbix_severity: str) -> AlertSeverity:
 
 
 def _parse_item_value(item_value: str | None) -> float:
-    """Parse item value to float, returning 0.0 on failure."""
+    """Parse an item value to float, returning 0.0 on failure.
+
+    ``measured_value`` is a non-nullable column, so an unparseable value still
+    falls back to 0.0 — but the raw string is preserved verbatim in ``notes``
+    and a parse failure is logged, so a real-but-unparseable value is no longer
+    silently indistinguishable from a true zero.
+    """
     if not item_value:
         return 0.0
+    value = item_value.strip()
+    # Only the SI suffixes Zabbix actually emits for bandwidth/throughput. 'e'
+    # is deliberately excluded: it's the float exponent marker, so treating a
+    # trailing 'e' as a multiplier would misparse scientific notation.
+    multipliers = {"k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12}
     try:
-        # Handle common suffixes (K, M, G, etc.)
-        value = item_value.strip()
-        multipliers = {"k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12}
         if value and value[-1].lower() in multipliers:
             return float(value[:-1]) * multipliers[value[-1].lower()]
         return float(value)
     except (ValueError, TypeError):
+        logger.info(
+            "zabbix_item_value_unparseable",
+            extra={"event": "zabbix_item_value_unparseable", "raw": value[:64]},
+        )
         return 0.0
+
+
+def _event_triggered_at(payload: ZabbixAlertPayload) -> datetime:
+    """Best-effort Zabbix event time for ``triggered_at``.
+
+    Zabbix sends ``eventDate`` (``yyyy.mm.dd``) + ``eventTime`` (``hh:mm:ss``).
+    We parse them so the recorded trigger time reflects when Zabbix saw the
+    problem rather than when we received the webhook (which drifts under retry/
+    backlog). Zabbix omits a timezone; we assume the server runs UTC (the common
+    case) and fall back to receipt time if the fields are absent/malformed.
+    """
+    if payload.event_date and payload.event_time:
+        try:
+            return datetime.strptime(
+                f"{payload.event_date} {payload.event_time}", "%Y.%m.%d %H:%M:%S"
+            ).replace(tzinfo=UTC)
+        except (ValueError, TypeError):
+            logger.info(
+                "zabbix_event_time_unparseable",
+                extra={
+                    "event": "zabbix_event_time_unparseable",
+                    "date": payload.event_date,
+                    "time": payload.event_time,
+                },
+            )
+    return datetime.now(UTC)
 
 
 def _response(
@@ -238,7 +277,75 @@ async def receive_zabbix_alert(
 def _persist_zabbix_alert(
     db: Session, payload: ZabbixAlertPayload
 ) -> ZabbixWebhookResponse:
-    """Convert a validated Zabbix alert into Alert/AlertEvent records."""
+    """Classify + write the alert, then commit (or roll back on failure).
+
+    The request session (``get_db``) does not commit on its own, so without this
+    the flushed Alert/AlertEvent rows would be discarded when the session
+    closes — the table would stay empty in production.
+    """
+    try:
+        response, emit_resolved = _write_zabbix_alert(db, payload)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    # Emit only AFTER the alert is durably committed. _emit_network_alert fans
+    # out a webhook on its own session; emitting before commit would deliver a
+    # phantom "problem"/"resolved" for an alert that a failed commit rolled back.
+    if emit_resolved is not None:
+        _emit_network_alert(payload, resolved=emit_resolved)
+    return response
+
+
+def _emit_network_alert(payload: ZabbixAlertPayload, *, resolved: bool) -> None:
+    """Surface a Zabbix trigger as a network_alert event (webhook fan-out).
+
+    Without this the alert only becomes a DB row that nothing reads. Emitting
+    routes it through the same event pipeline as other network alerts. Uses its
+    own short-lived session (like the auth-failure alert) so it can never poison
+    the alert transaction, and swallows failures — the Alert row is the source
+    of truth and must persist regardless.
+    """
+    try:
+        from app.services.db_session_adapter import db_session_adapter
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        db = db_session_adapter.create_session()
+        try:
+            emit_event(
+                db,
+                EventType.network_alert,
+                {
+                    "alert_type": "zabbix_trigger",
+                    "integration": "zabbix",
+                    "status": "resolved" if resolved else "problem",
+                    "zabbix_severity": payload.trigger_severity,
+                    "trigger_id": payload.trigger_id,
+                    "trigger_name": payload.trigger_name,
+                    "host_id": payload.host_id,
+                    "host_name": payload.host_name,
+                    "item_name": payload.item_name,
+                    "item_value": payload.item_value,
+                },
+                actor="zabbix",
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("zabbix_alert_event_emit_failed")
+
+
+def _write_zabbix_alert(
+    db: Session, payload: ZabbixAlertPayload
+) -> tuple[ZabbixWebhookResponse, bool | None]:
+    """Convert a validated Zabbix alert into Alert/AlertEvent records.
+
+    Returns ``(response, emit_resolved)`` where ``emit_resolved`` is ``None``
+    (no event to emit — update or no-op), ``False`` (newly opened problem), or
+    ``True`` (recovery). The caller emits the network_alert event after commit.
+    """
     logger.info(
         "zabbix_webhook_received",
         extra={
@@ -257,8 +364,15 @@ def _persist_zabbix_alert(
     # Parse item value if available
     measured_value = _parse_item_value(payload.item_value)
 
-    # Determine if this is a new alert, update, or resolution
-    is_problem = payload.trigger_status.upper() == "PROBLEM"
+    # Determine if this is a new alert, update, or resolution. Prefer the
+    # authoritative Zabbix event_value macro (1=PROBLEM, 0=OK/recovery); fall
+    # back to the free-text trigger_status only when it's absent. Keying off the
+    # status string alone would treat a suppressed/localized status (anything
+    # not exactly "PROBLEM") as a recovery and wrongly resolve a live alert.
+    if payload.event_value is not None and payload.event_value != "":
+        is_problem = payload.event_value == "1"
+    else:
+        is_problem = payload.trigger_status.upper() == "PROBLEM"
 
     # Build unique identifier for deduplication
     zabbix_event_key = f"zabbix:{payload.trigger_id}:{payload.host_id}"
@@ -290,9 +404,12 @@ def _persist_zabbix_alert(
                 extra={"alert_id": str(existing_alert.id)},
             )
 
-            return _response(
-                alert_id=str(existing_alert.id),
-                message="Alert updated",
+            return (
+                _response(
+                    alert_id=str(existing_alert.id),
+                    message="Alert updated",
+                ),
+                None,
             )
         else:
             # Create new alert
@@ -308,11 +425,12 @@ def _persist_zabbix_alert(
 
             alert = Alert(
                 rule_id=rule.id,
+                device_id=find_network_device_id_by_zabbix_host_id(db, payload.host_id),
                 metric_type=MetricType.custom,
                 measured_value=measured_value,
                 severity=severity,
                 status=AlertStatus.open,
-                triggered_at=datetime.now(UTC),
+                triggered_at=_event_triggered_at(payload),
                 notes=notes,
             )
             db.add(alert)
@@ -332,9 +450,12 @@ def _persist_zabbix_alert(
                 extra={"alert_id": str(alert.id)},
             )
 
-            return _response(
-                alert_id=str(alert.id),
-                message="Alert created",
+            return (
+                _response(
+                    alert_id=str(alert.id),
+                    message="Alert created",
+                ),
+                False,
             )
     else:
         # This is a recovery (OK/RESOLVED)
@@ -356,16 +477,19 @@ def _persist_zabbix_alert(
                 extra={"alert_id": str(existing_alert.id)},
             )
 
-            return _response(
-                alert_id=str(existing_alert.id),
-                message="Alert resolved",
+            return (
+                _response(
+                    alert_id=str(existing_alert.id),
+                    message="Alert resolved",
+                ),
+                True,
             )
         else:
             logger.info(
                 "zabbix_alert_resolve_no_match",
                 extra={"trigger_id": payload.trigger_id},
             )
-            return _response(message="No matching alert to resolve")
+            return (_response(message="No matching alert to resolve"), None)
 
 
 @router.post("/webhook/sync", response_model=dict[str, Any])

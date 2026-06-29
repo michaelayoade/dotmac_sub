@@ -36,10 +36,13 @@ def _stub_subscriber(*, captive=False):
 
 
 class TestShadowWriteFeatureFlagGate:
-    def test_flag_off_short_circuits_no_set_call(self):
+    def test_flag_off_updates_local_state_without_external_set_call(self):
         handler = EnforcementHandler()
         db = MagicMock()
-        sub_id = str(uuid4())
+        sub = _stub_subscription(status=SubscriptionStatus.suspended)
+        sub.access_state = None
+        subscriber = _stub_subscriber(captive=False)
+        db.get.side_effect = [sub, subscriber]
 
         with (
             patch(
@@ -50,11 +53,11 @@ class TestShadowWriteFeatureFlagGate:
                 "app.services.events.handlers.enforcement.set_subscription_access_state"
             ) as mock_set,
         ):
-            handler._shadow_write_access_state(db, sub_id)
+            handler._shadow_write_access_state(db, str(sub.id))
 
         mock_set.assert_not_called()
-        # When the flag is off, we should not even read the subscription.
-        db.get.assert_not_called()
+        assert sub.access_state == AccessState.suspended.value
+        db.flush.assert_called_once()
 
     def test_flag_on_calls_set_with_derived_state(self):
         handler = EnforcementHandler()
@@ -153,18 +156,14 @@ class TestBlockHandlerInvokesShadowWrite:
     """Confirms _enforce_subscription_block calls _shadow_write_access_state
     once at the end of its sequence."""
 
-    @patch(
-        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
-    )
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch("app.services.events.handlers.enforcement.radius_service")
     @patch("app.services.events.handlers.enforcement.radius_reject_service")
     def test_block_path_calls_shadow_write(
         self,
         _mock_reject,
         _mock_radius,
-        _mock_disconnect,
-        _mock_address_list,
+        _mock_cleanup,
     ):
         handler = EnforcementHandler()
         db = MagicMock()

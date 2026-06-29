@@ -1,4 +1,4 @@
-"""One-time push of native (non-Splynx) subscribers into the CRM.
+"""One-time push of native subscribers into the CRM.
 
 Creates each native subscriber in the CRM via the generic sync webhook
 (external_system=dotmac, external_id=<local subscriber UUID>) and stores the

@@ -50,7 +50,7 @@ def _service_ports_partial_response(
 @router.get(
     "/onts/{ont_id}/service-ports",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_service_ports(
     request: Request,
@@ -69,7 +69,7 @@ def ont_service_ports(
 @router.post(
     "/onts/{ont_id}/service-ports/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_service_port_create(
     request: Request,
@@ -113,7 +113,7 @@ def ont_service_port_create(
 @router.post(
     "/onts/{ont_id}/service-ports/{index}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_service_port_delete(
     request: Request,
@@ -135,7 +135,7 @@ def ont_service_port_delete(
 @router.post(
     "/onts/{ont_id}/service-ports/clone",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_service_port_clone(
     request: Request,
@@ -157,7 +157,7 @@ def ont_service_port_clone(
 @router.get(
     "/onts/{ont_id}/service-ports/diagnose",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_service_port_diagnose(
     request: Request,

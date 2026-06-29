@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import NasDevice, NasVendor, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
-from app.models.network import IpPool, IPVersion
+from app.models.network import IPAssignment, IpPool, IPVersion
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
@@ -112,6 +112,13 @@ class NetworkEquipmentImportRow(BaseModel):
     is_active: bool = True
 
 
+class Ipv4AssignmentImportRow(BaseModel):
+    pool_id: uuid.UUID
+    ip_address: str
+    subscriber_id: uuid.UUID
+    subscription_id: uuid.UUID | None = None
+
+
 ENTITY_CONFIG: dict[str, dict[str, Any]] = {
     "subscribers": {
         "label": "Subscribers",
@@ -183,6 +190,11 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
             "is_active",
         ],
     },
+    "ipv4_assignments": {
+        "label": "IPv4 Address Assignments",
+        "model": Ipv4AssignmentImportRow,
+        "headers": ["pool_id", "ip_address", "subscriber_id", "subscription_id"],
+    },
 }
 
 ENTITY_MODEL_MAP: dict[str, type] = {
@@ -193,6 +205,7 @@ ENTITY_MODEL_MAP: dict[str, type] = {
     "nas_devices": NasDevice,
     "ip_pools": IpPool,
     "network_equipment": NetworkDevice,
+    "ipv4_assignments": IPAssignment,
 }
 
 
@@ -477,6 +490,18 @@ def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
         )
         db.add(obj)
         return obj
+    if module == "ipv4_assignments":
+        from app.services.web_network_ip import assign_ipv4_for_import
+
+        return assign_ipv4_for_import(
+            db,
+            pool_id=str(parsed_row.pool_id),
+            ip_address=parsed_row.ip_address,
+            subscriber_id=str(parsed_row.subscriber_id),
+            subscription_id=(
+                str(parsed_row.subscription_id) if parsed_row.subscription_id else None
+            ),
+        )
     raise ValueError("Unsupported import module")
 
 
@@ -819,6 +844,7 @@ def rollback_import(
             is_secret=False,
         ),
     )
+    db.flush()
     db.expire_all()
     return {
         "import_id": import_id,

@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
+import '../auth/biometric_enrollment_prompt.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
@@ -66,17 +68,52 @@ class DashboardScreen extends ConsumerWidget {
     // Defined-window total (today) instead of summing the latest 50 sessions.
     final todaySummary = ref.watch(usageSummaryProvider('today')).asData?.value;
     final fup = todaySummary?.fup;
-    // Data the current service has consumed this billing cycle — the headline
-    // data figure on Home: meaningful for capped AND unlimited plans, unlike
-    // "data left" which reads as 0/empty on an unlimited plan. Falls back to
-    // today's total when the cycle aggregate isn't populated yet, so the card
-    // is never a misleading empty 0.
-    final dataUsedCycle =
-        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    // Two separate at-a-glance usage figures: today, and the whole billing/
+    // subscription period (cycle) — the latter meaningful for capped AND
+    // unlimited plans, unlike "data left" which reads as 0 on unlimited.
+    final cycleSummary = ref.watch(usageSummaryProvider('cycle')).asData?.value;
     final dataToday = todaySummary?.totalBytes;
-    final dataUsed = (dataUsedCycle != null && dataUsedCycle > 0)
-        ? dataUsedCycle
-        : dataToday;
+    // Total data used this subscription period = RADIUS session octets over the
+    // cycle window (server-authoritative). Until that's deployed, fall back to
+    // summing the loaded sessions started in the window, then the (retention-
+    // limited) throughput series, then today — so it's never a false 0 and never
+    // the under-counted series when session data is available.
+    int? dataPeriod;
+    if (cycleSummary != null) {
+      final cycleStart = cycleSummary.start;
+      final sessionSum = (sessItems ?? const <AccountingSession>[])
+          .where((s) =>
+              s.sessionStart != null && !s.sessionStart!.isBefore(cycleStart))
+          .fold<int>(0, (a, s) => a + s.totalOctets);
+      final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
+      dataPeriod = cycleSummary.totalBytes > 0
+          ? cycleSummary.totalBytes
+          : (sessionSum > 0
+              ? sessionSum
+              : (seriesSum > 0 ? seriesSum : (dataToday ?? 0)));
+    }
+    // Wallet (account credit) balance for its own at-a-glance card. Uses the
+    // always-available credit balance (/me/balance), not the feature-gated VAS
+    // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
+    final balance = ref.watch(balanceProvider).asData?.value;
+    // Peak throughput for the "Peak" tile — shown per direction (↓ download,
+    // ↑ upload), subscriber perspective. Prefer the exact billing-cycle peak
+    // from the cycle summary; fall back to the ~30d stats window.
+    final peak30 = ref.watch(peakBandwidthProvider).asData?.value;
+    final peakDownBps =
+        cycleSummary?.peakDownloadBps ?? peak30?.peakDownloadBps;
+    final peakUpBps = cycleSummary?.peakUploadBps ?? peak30?.peakUploadBps;
+    final peakLoaded = cycleSummary != null || peak30 != null;
+    String mbps(double? b) => (b == null || b <= 0)
+        ? '—'
+        : (b / 1e6).toStringAsFixed(b >= 1e7 ? 0 : 1);
+    final peakHasData = (peakDownBps != null && peakDownBps > 0) ||
+        (peakUpBps != null && peakUpBps > 0);
+    final peakValue = !peakLoaded
+        ? null // still loading
+        : (!peakHasData
+            ? '—'
+            : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -92,6 +129,18 @@ class DashboardScreen extends ConsumerWidget {
           currentQuota = b;
         }
       }
+    }
+
+    // Quota / fair-use headroom, for plans where it applies. Capped plans show
+    // remaining allowance; unlimited-with-FUP plans show GB left at full speed.
+    // Null (card hidden) for truly unlimited plans with no fair-use policy.
+    String? quotaLeftValue;
+    var quotaLeftLabel = 'Data left';
+    if (currentQuota != null && currentQuota.remainingGb != null) {
+      quotaLeftValue = Fmt.gb(currentQuota.remainingGb!);
+    } else if (fup?.gbUntilThrottle != null && (fup?.thresholdGb ?? 0) > 0) {
+      quotaLeftValue = Fmt.gb(fup!.gbUntilThrottle!);
+      quotaLeftLabel = 'Full-speed';
     }
 
     // Expiry urgency: lift a renew prompt to the banner area when the current
@@ -176,6 +225,7 @@ class DashboardScreen extends ConsumerWidget {
           ref.invalidate(usageSummaryProvider('today'));
           ref.invalidate(quotaBucketsProvider);
           ref.invalidate(liveBandwidthProvider);
+          ref.invalidate(peakBandwidthProvider);
           await Future.wait([
             ref.read(subscriptionsProvider.future),
             ref.read(invoicesProvider.future),
@@ -184,15 +234,13 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const BiometricEnrollmentPrompt(),
             const OfflineBanner(),
             _ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
               serviceActive: currentService?.isActive ?? false,
               ipAddress: currentService?.ipv4Address,
-              live: activeSession != null
-                  ? ref.watch(liveBandwidthProvider).asData?.value
-                  : null,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
@@ -240,50 +288,72 @@ class DashboardScreen extends ConsumerWidget {
             }),
             const SizedBox(height: 16),
 
-            // --- At-a-glance summary ---
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.account_balance_wallet_outlined,
-                    // Say "Amount due" in words when owing, so the state isn't
-                    // conveyed by the red colour alone (accessibility).
-                    label: (outstanding ?? 0) > 0 ? 'Amount due' : 'Balance',
-                    value: outstanding == null
-                        ? null
-                        : Fmt.moneyCompact(outstanding, currency),
-                    highlight: (outstanding ?? 0) > 0,
-                    onTap: () => context.go('/billing'),
-                  ),
+            // --- At-a-glance summary (rows of 3; grid pads the last row) ---
+            _StatGrid(
+              tiles: [
+                _StatCard(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: 'Wallet',
+                  value: balance == null
+                      ? null
+                      : Fmt.moneyCompact(
+                          balance.creditBalance, balance.currency),
+                  onTap: () => context.push('/wallet'),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.data_usage_outlined,
-                    // Data used on the current service this billing cycle —
-                    // meaningful for capped and unlimited plans alike (replaces
-                    // the old "data left", which read as 0 on unlimited plans).
-                    label: 'Data used',
-                    value: dataUsed == null ? null : Fmt.bytes(dataUsed),
+                _StatCard(
+                  icon: Icons.receipt_long_outlined,
+                  label: 'Amount due',
+                  value: outstanding == null
+                      ? null
+                      : Fmt.moneyCompact(outstanding, currency),
+                  // Label already says "Amount due"; highlight when > 0.
+                  highlight: (outstanding ?? 0) > 0,
+                  onTap: () => context.go('/billing'),
+                ),
+                _StatCard(
+                  icon: Icons.today_outlined,
+                  label: 'Today',
+                  value: dataToday == null ? null : Fmt.bytes(dataToday),
+                  onTap: () => context.go('/usage'),
+                ),
+                _StatCard(
+                  icon: Icons.data_usage_outlined,
+                  // Total data used this billing/subscription period.
+                  label: 'This period',
+                  value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
+                  highlight: (fup?.isApproaching ?? false) ||
+                      (fup?.needsAttention ?? false),
+                  onTap: () => context.go('/usage'),
+                ),
+                // Quota / fair-use remaining — only for plans where it applies.
+                if (quotaLeftValue != null)
+                  _StatCard(
+                    icon: Icons.data_saver_off_outlined,
+                    label: quotaLeftLabel,
+                    value: quotaLeftValue,
                     highlight: (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
                     onTap: () => context.go('/usage'),
                   ),
+                _StatCard(
+                  icon: Icons.speed_outlined,
+                  // Peak download throughput over the billing period (cycle
+                  // peak; ~30d stats as fallback). Labelled so customers know
+                  // the window — matches the "This period" usage tile.
+                  label: 'Peak this period',
+                  value: peakValue,
+                  onTap: () => context.go('/usage'),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _StatCard(
-                    icon: Icons.hourglass_bottom_outlined,
-                    label: expiryStatLabel,
-                    value: expiryStatValue,
-                    // Urgent when expiring within 3 days or genuinely expired
-                    // (never for an active service with a stale billing date).
-                    highlight: (currentService?.expiresSoon ?? false) ||
-                        (currentService?.isExpired ?? false),
-                    onTap: () => context.go('/billing'),
-                  ),
+                _StatCard(
+                  icon: Icons.event_outlined,
+                  label: expiryStatLabel,
+                  value: expiryStatValue,
+                  // Urgent when expiring within 3 days or genuinely expired.
+                  highlight: (currentService?.expiresSoon ?? false) ||
+                      (currentService?.isExpired ?? false),
+                  onTap: () => context.go('/billing'),
                 ),
               ],
             ),
@@ -418,7 +488,6 @@ class _ConnectionBanner extends StatelessWidget {
     required this.known,
     this.serviceActive = false,
     this.ipAddress,
-    this.live,
   });
 
   /// Whether the displayed subscription is active. An active account that is
@@ -435,9 +504,6 @@ class _ConnectionBanner extends StatelessWidget {
   /// Fallback IP when the live session carries no framed address
   /// (statically-assigned plans).
   final String? ipAddress;
-
-  /// Current throughput, when the bandwidth poller has a recent sample.
-  final LiveBandwidth? live;
 
   @override
   Widget build(BuildContext context) {
@@ -464,8 +530,6 @@ class _ConnectionBanner extends StatelessWidget {
         'Connected',
         if (start != null) 'up ${Fmt.uptime(start)}',
         if (ip != null && ip.isNotEmpty) ip,
-        if (live?.hasSignal ?? false)
-          '↓ ${Fmt.bps(live!.downloadBps)} ↑ ${Fmt.bps(live!.uploadBps)}',
       ].join(' · ');
     } else if (serviceActive) {
       bg = scheme.surfaceContainerHighest;
@@ -692,13 +756,44 @@ class _ServiceSwitcher extends StatelessWidget {
             avatar: Icon(
               s.isActive ? Icons.circle : Icons.pause_circle_outline,
               size: 14,
-              color: s.isActive ? Colors.green.shade600 : null,
+              color: s.isActive ? context.semantic.success : null,
             ),
             onSelected: (_) => onSelect(s.id),
           );
         },
       ),
     );
+  }
+}
+
+/// Lays out at-a-glance stat tiles in rows of three, padding the final row so
+/// every tile keeps an equal width regardless of count (5, 6 or 7 tiles).
+class _StatGrid extends StatelessWidget {
+  const _StatGrid({required this.tiles});
+  final List<Widget> tiles;
+
+  @override
+  Widget build(BuildContext context) {
+    const perRow = 3;
+    const gap = 10.0;
+    final rows = <Widget>[];
+    for (var i = 0; i < tiles.length; i += perRow) {
+      final cells = <Widget>[];
+      for (var j = 0; j < perRow; j++) {
+        if (j > 0) cells.add(const SizedBox(width: gap));
+        final idx = i + j;
+        cells.add(Expanded(
+          child: idx < tiles.length ? tiles[idx] : const SizedBox(),
+        ));
+      }
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
+      rows.add(IntrinsicHeight(
+          child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: cells,
+      )));
+    }
+    return Column(children: rows);
   }
 }
 
@@ -849,11 +944,11 @@ class _CurrentServiceCard extends StatelessWidget {
             // expired — show nothing rather than alarm next to the IP.
             < 0 => (theme.colorScheme.outline, null, null),
             <= 3 => (
-                Colors.orange.shade800,
+                context.semantic.warning,
                 'Validity',
                 '$days day${days == 1 ? '' : 's'} left'
               ),
-            _ => (Colors.green.shade700, 'Validity', '$days days left'),
+            _ => (context.semantic.success, 'Validity', '$days days left'),
           };
 
     return Card(

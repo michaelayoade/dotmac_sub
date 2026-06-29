@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess  # nosec
+import time
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any
@@ -86,8 +87,22 @@ def monitoring_page_data(
 
 
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """No-op: data is now fetched directly from Zabbix on demand."""
-    pass
+    """Enqueue a cache warm so the page's ``?refresh=1`` actually refreshes.
+
+    The dashboard reads warmed caches (it no longer fans out to Zabbix on the
+    request thread), so a manual refresh means asking the warmer to re-populate
+    them now rather than fetching inline. Best-effort: a broker hiccup must not
+    break the page render.
+    """
+    try:
+        from app.tasks.monitoring_warm import warm_monitoring_caches
+
+        warm_monitoring_caches.delay()
+    except Exception:
+        logger.warning(
+            "monitoring_refresh_dispatch_failed",
+            extra={"event": "monitoring_refresh_dispatch_failed"},
+        )
 
 
 def monitoring_index_context(
@@ -112,6 +127,34 @@ def monitoring_index_context(
         limit=5,
     )
     return data
+
+
+_BANDWIDTH_CTX_CACHE: dict[str, Any] = {"value": None, "expires_at": 0.0}
+_BANDWIDTH_CTX_TTL_SECONDS = 10.0
+
+
+def monitoring_bandwidth_context(db: Session) -> dict[str, object]:
+    """Build context for the auto-refreshing live bandwidth partial.
+
+    Mirrors the bandwidth/nas_throughput slice of ``monitoring_page_data`` so
+    the network-wide throughput panel can poll independently of the full page.
+
+    The result is the same network-wide aggregate for every viewer, so it is
+    cached ~10s and shared process-wide: the 15s HTMX poll then issues the
+    VictoriaMetrics fan-out (5 blocking instant queries) at most once per
+    window regardless of how many NOC tabs are open, instead of once per tab.
+    """
+    now = time.monotonic()
+    cached = _BANDWIDTH_CTX_CACHE
+    if cached["value"] is not None and now < cached["expires_at"]:
+        return cached["value"]
+    value: dict[str, object] = {
+        "bandwidth": _get_bandwidth_summary(),
+        "nas_throughput": _get_nas_throughput_summary(db),
+    }
+    cached["value"] = value
+    cached["expires_at"] = now + _BANDWIDTH_CTX_TTL_SECONDS
+    return value
 
 
 def monitoring_kpi_context(
@@ -375,8 +418,8 @@ def _get_bandwidth_summary() -> dict[str, Any]:
     and has_data boolean.  Gracefully returns zeros when VM has no data.
     """
     # Total aggregate throughput
-    rx_results = _vm_instant_query("sum(bandwidth_rx_bps)")
-    tx_results = _vm_instant_query("sum(bandwidth_tx_bps)")
+    rx_results = _vm_instant_query("sum(bandwidth_rx_bps_avg)")
+    tx_results = _vm_instant_query("sum(bandwidth_tx_bps_avg)")
 
     total_rx = 0.0
     total_tx = 0.0
@@ -391,7 +434,8 @@ def _get_bandwidth_summary() -> dict[str, Any]:
     top_users: list[dict[str, Any]] = []
     if has_data:
         top_query = (
-            "topk(5, sum by (subscription_id) (bandwidth_rx_bps + bandwidth_tx_bps))"
+            "topk(5, sum by (subscription_id) "
+            "(bandwidth_rx_bps_avg + bandwidth_tx_bps_avg))"
         )
         top_results = _vm_instant_query(top_query)
         for r in top_results:
@@ -425,8 +469,8 @@ def _get_nas_throughput_summary(db: Session) -> dict[str, Any]:
     from app.models.catalog import NasDevice
 
     # Per-NAS aggregate
-    rx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_rx_bps)")
-    tx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_tx_bps)")
+    rx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_rx_bps_avg)")
+    tx_results = _vm_instant_query("sum by (nas_device_id) (bandwidth_tx_bps_avg)")
 
     has_data = bool(rx_results) or bool(tx_results)
 

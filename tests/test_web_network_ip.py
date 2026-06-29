@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
+
+from starlette.requests import Request
 
 from app.models.network import (
     IPAssignment,
@@ -13,6 +16,7 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice
 from app.services import web_network_ip
+from app.web.admin import network_ip_management
 
 
 class FakeQuery:
@@ -39,6 +43,59 @@ class FakeSession:
 
     def commit(self):
         self.commits += 1
+
+
+def _request(path: str = "/admin/network/ip-management") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
+
+
+def test_ip_management_search_keeps_addresses_tab(monkeypatch):
+    monkeypatch.setattr(
+        network_ip_management.web_network_ip_service,
+        "build_ip_management_data",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        network_ip_management.web_network_ip_actions_service,
+        "activity_for_types",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        network_ip_management,
+        "_base_context",
+        lambda request, db, active_page, active_menu="network": {"request": request},
+    )
+    monkeypatch.setattr(
+        network_ip_management.templates,
+        "TemplateResponse",
+        lambda template, context: {"template": template, "context": context},
+    )
+
+    response = network_ip_management.ip_management(
+        _request(),
+        db=object(),
+        search="102.220.189.16",
+    )
+
+    assert response["template"] == "admin/network/ip-management/index.html"
+    assert response["context"]["tab"] == "addresses"
+
+
+def test_ip_management_address_controls_preserve_addresses_tab():
+    template = Path("templates/admin/network/ip-management/index.html").read_text()
+
+    assert 'name="tab" value="addresses"' in template
+    assert 'href="/admin/network/ip-management?tab=addresses"' in template
 
 
 def test_pool_utilization_counts_only_active_assignments(monkeypatch):
@@ -494,3 +551,65 @@ def test_ipv4_block_detail_marks_network_device_management_ip(monkeypatch):
     assert rows["10.20.32.1"]["device"] == "Aggregation Switch"
     assert rows["10.20.32.1"]["notes"] == "Network device"
     assert state["stats"]["assigned"] == 1
+
+
+def test_validate_ip_pool_values_rejects_malformed_cidr_and_mismatches():
+    base = {"name": "P", "ip_version": "ipv4"}
+    # valid passes
+    assert (
+        web_network_ip.validate_ip_pool_values({**base, "cidr": "10.0.0.0/24"}) is None
+    )
+    # garbage / out-of-range prefix rejected
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "garbage"})
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "10.0.0.0/99"})
+    # version mismatch rejected
+    assert web_network_ip.validate_ip_pool_values({**base, "cidr": "2001:db8::/64"})
+    # bad gateway / DNS rejected; valid ones pass
+    assert web_network_ip.validate_ip_pool_values(
+        {**base, "cidr": "10.0.0.0/24", "gateway": "not-an-ip"}
+    )
+    assert (
+        web_network_ip.validate_ip_pool_values(
+            {
+                **base,
+                "cidr": "10.0.0.0/24",
+                "gateway": "10.0.0.1",
+                "dns_primary": "8.8.8.8",
+            }
+        )
+        is None
+    )
+
+
+def test_range_detail_stats_count_assignments_beyond_display_window():
+    """Detail stats must reflect the whole CIDR, not just the first `limit` rows.
+
+    An assignment on .14 of a /28 must count even when only 2 rows are displayed.
+    """
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Big Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.30.0.0/28",
+        is_active=True,
+    )
+    high = IPv4Address(
+        id=uuid.uuid4(), address="10.30.0.14", pool_id=pool.id, is_reserved=False
+    )
+    high.assignment = IPAssignment(
+        id=uuid.uuid4(),
+        subscriber_id=uuid.uuid4(),
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=high.id,
+        is_active=True,
+    )
+
+    db = FakeSession({IPv4Address: [high]})
+    result = web_network_ip._build_ipv4_range_rows(
+        db, pool=pool, cidr="10.30.0.0/28", limit=2
+    )
+
+    assert result is not None
+    assert result["row_count"] == 2  # display window unchanged
+    assert result["stats"]["assigned"] == 1  # but the off-window assignment counts
+    assert result["stats"]["total_usable"] == 14

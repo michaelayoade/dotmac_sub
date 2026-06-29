@@ -63,7 +63,7 @@ def _action_response(result: ActionResult) -> OntActionResponse:
 @router.post(
     "/ont-units/{ont_id}/reboot",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def reboot_ont(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
     result = ont_actions.reboot(db, ont_id)
@@ -73,7 +73,7 @@ def reboot_ont(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
 @router.post(
     "/ont-units/{ont_id}/factory-reset",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def factory_reset_ont(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
     result = ont_actions.factory_reset(db, ont_id)
@@ -83,7 +83,7 @@ def factory_reset_ont(ont_id: str, db: Session = Depends(get_db)) -> OntActionRe
 @router.post(
     "/ont-units/{ont_id}/refresh-status",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def refresh_ont_status(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
     result = ont_actions.refresh_status(db, ont_id)
@@ -93,7 +93,7 @@ def refresh_ont_status(ont_id: str, db: Session = Depends(get_db)) -> OntActionR
 @router.post(
     "/ont-units/{ont_id}/running-config",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_running_config(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
     result = ont_actions.get_running_config(db, ont_id)
@@ -103,7 +103,7 @@ def get_running_config(ont_id: str, db: Session = Depends(get_db)) -> OntActionR
 @router.post(
     "/ont-units/{ont_id}/wifi/ssid",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_wifi_ssid(
     ont_id: str, payload: OntWifiSsidRequest, db: Session = Depends(get_db)
@@ -119,7 +119,7 @@ def set_wifi_ssid(
 @router.post(
     "/ont-units/{ont_id}/wifi/password",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_wifi_password(
     ont_id: str, payload: OntWifiPasswordRequest, db: Session = Depends(get_db)
@@ -135,7 +135,7 @@ def set_wifi_password(
 @router.post(
     "/ont-units/{ont_id}/lan-ports/{port}/toggle",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def toggle_lan_port(
     ont_id: str,
@@ -150,7 +150,7 @@ def toggle_lan_port(
 @router.post(
     "/ont-units/{ont_id}/connection-request",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def send_connection_request(
     ont_id: str, db: Session = Depends(get_db)
@@ -162,7 +162,7 @@ def send_connection_request(
 @router.post(
     "/ont-units/{ont_id}/connection-request-credentials",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_connection_request_credentials(
     ont_id: str, payload: OntConnectionRequestCredentials, db: Session = Depends(get_db)
@@ -180,7 +180,7 @@ def set_connection_request_credentials(
 @router.post(
     "/ont-units/{ont_id}/diagnostics/ping",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def run_ping_diagnostic(
     ont_id: str, payload: OntPingRequest, db: Session = Depends(get_db)
@@ -192,7 +192,7 @@ def run_ping_diagnostic(
 @router.post(
     "/ont-units/{ont_id}/diagnostics/traceroute",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def run_traceroute_diagnostic(
     ont_id: str, payload: OntTracerouteRequest, db: Session = Depends(get_db)
@@ -204,7 +204,7 @@ def run_traceroute_diagnostic(
 @router.post(
     "/ont-units/{ont_id}/firmware-upgrade",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def firmware_upgrade(
     ont_id: str, payload: OntFirmwareRequest, db: Session = Depends(get_db)
@@ -219,7 +219,7 @@ def firmware_upgrade(
 @router.get(
     "/ont-units/{ont_id}/enriched",
     response_model=OntEnrichedRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_enriched_ont(
     ont_id: str,
@@ -233,7 +233,7 @@ def get_enriched_ont(
 
 @router.get(
     "/ont-units/{ont_id}/capabilities",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_capabilities(ont_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
     from app.services.network.ont_read import ont_read
@@ -243,7 +243,7 @@ def get_ont_capabilities(ont_id: str, db: Session = Depends(get_db)) -> dict[str
 
 @router.get(
     "/ont-units/{ont_id}/tr069-summary",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_tr069_summary(ont_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services.network.ont_read import ont_read
@@ -253,7 +253,7 @@ def get_ont_tr069_summary(ont_id: str, db: Session = Depends(get_db)) -> dict[st
 
 @router.get(
     "/ont-units/{ont_id}/lan-hosts",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_lan_hosts(
     ont_id: str, db: Session = Depends(get_db)
@@ -265,7 +265,7 @@ def get_ont_lan_hosts(
 
 @router.get(
     "/ont-units/{ont_id}/ethernet-ports",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_ethernet_ports(
     ont_id: str, db: Session = Depends(get_db)
@@ -277,7 +277,7 @@ def get_ont_ethernet_ports(
 
 @router.get(
     "/ont-units/{ont_id}/vlan-chain",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_ont_vlan_chain(ont_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.services.network.ont_read import ont_read
@@ -291,7 +291,7 @@ def get_ont_vlan_chain(ont_id: str, db: Session = Depends(get_db)) -> dict[str, 
 @router.put(
     "/ont-units/{ont_id}/speed-profile",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_speed_profile(
     ont_id: str, payload: OntSpeedProfileUpdate, db: Session = Depends(get_db)
@@ -310,7 +310,7 @@ def update_ont_speed_profile(
 @router.put(
     "/ont-units/{ont_id}/management-ip",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_management_ip(
     ont_id: str, payload: OntMgmtIpUpdate, db: Session = Depends(get_db)
@@ -331,7 +331,7 @@ def update_ont_management_ip(
 @router.post(
     "/ont-units/{ont_id}/service-port",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_service_port(
     ont_id: str, payload: OntServicePortUpdate, db: Session = Depends(get_db)
@@ -352,7 +352,7 @@ def update_ont_service_port(
 @router.post(
     "/ont-units/{ont_id}/move",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def move_ont(
     ont_id: str, payload: OntMoveRequest, db: Session = Depends(get_db)
@@ -368,7 +368,7 @@ def move_ont(
 @router.patch(
     "/ont-units/{ont_id}/external-id",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_external_id(
     ont_id: str, payload: OntExternalIdUpdate, db: Session = Depends(get_db)
@@ -385,7 +385,7 @@ def update_ont_external_id(
 @router.post(
     "/ont-units/{ont_id}/features/wifi",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_ont_wifi_config(
     ont_id: str, payload: OntWifiConfigRequest, db: Session = Depends(get_db)
@@ -406,7 +406,7 @@ def set_ont_wifi_config(
 @router.post(
     "/ont-units/{ont_id}/features/voip",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def toggle_ont_voip(
     ont_id: str, payload: OntFeatureToggleRequest, db: Session = Depends(get_db)
@@ -420,7 +420,7 @@ def toggle_ont_voip(
 @router.post(
     "/ont-units/{ont_id}/features/catv",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def toggle_ont_catv(
     ont_id: str, payload: OntFeatureToggleRequest, db: Session = Depends(get_db)
@@ -434,7 +434,7 @@ def toggle_ont_catv(
 @router.post(
     "/ont-units/{ont_id}/features/iptv",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def toggle_ont_iptv(
     ont_id: str, payload: OntFeatureToggleRequest, db: Session = Depends(get_db)
@@ -448,7 +448,7 @@ def toggle_ont_iptv(
 @router.post(
     "/ont-units/{ont_id}/features/wan-remote-access",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def toggle_ont_wan_remote_access(
     ont_id: str, payload: OntFeatureToggleRequest, db: Session = Depends(get_db)
@@ -462,7 +462,7 @@ def toggle_ont_wan_remote_access(
 @router.post(
     "/ont-units/{ont_id}/features/lan-port/{port}",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def toggle_ont_lan_port_feature(
     ont_id: str,
@@ -481,7 +481,7 @@ def toggle_ont_lan_port_feature(
 @router.post(
     "/ont-units/{ont_id}/features/dhcp-snooping",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def configure_ont_dhcp_snooping(
     ont_id: str, payload: OntFeatureToggleRequest, db: Session = Depends(get_db)
@@ -495,7 +495,7 @@ def configure_ont_dhcp_snooping(
 @router.post(
     "/ont-units/{ont_id}/features/max-mac-learn",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_ont_max_mac_learn(
     ont_id: str, payload: OntMaxMacLearnRequest, db: Session = Depends(get_db)
@@ -509,7 +509,7 @@ def set_ont_max_mac_learn(
 @router.post(
     "/ont-units/{ont_id}/features/web-credentials",
     response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def update_ont_web_credentials(
     ont_id: str, payload: OntWebCredentialsRequest, db: Session = Depends(get_db)
@@ -539,7 +539,7 @@ ALLOWED_BULK_ACTIONS = {
 @router.post(
     "/ont-units/bulk-action",
     response_model=OntBulkActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def submit_bulk_action(
     payload: OntBulkActionRequest,
@@ -597,7 +597,7 @@ def submit_bulk_action(
 @router.get(
     "/ont-units/bulk-action/{task_id}",
     response_model=OntBulkActionStatus,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_bulk_action_status(task_id: str) -> OntBulkActionStatus:
     result = AsyncResult(task_id)
@@ -613,7 +613,7 @@ def get_bulk_action_status(task_id: str) -> OntBulkActionStatus:
 @router.get(
     "/ont-units/bulk-provisioning/{run_id}",
     response_model=BulkProvisioningRunRead,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def get_bulk_provisioning_run(
     run_id: str,

@@ -36,7 +36,7 @@ def _base_context(
 @router.get(
     "/fiber-plant",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_plant_consolidated(
     request: Request,
@@ -53,7 +53,7 @@ def fiber_plant_consolidated(
 @router.get(
     "/fiber-map",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_plant_map(request: Request, db: Session = Depends(get_db)):
     """Interactive fiber plant map."""
@@ -66,7 +66,7 @@ def fiber_plant_map(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/fiber-change-requests",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_change_requests(request: Request, db: Session = Depends(get_db)):
     """Review pending vendor fiber change requests."""
@@ -87,7 +87,7 @@ def fiber_change_requests(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/fiber-change-requests/{request_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_change_request_detail(
     request: Request, request_id: str, db: Session = Depends(get_db)
@@ -109,7 +109,7 @@ def fiber_change_request_detail(
 
 @router.post(
     "/fiber-change-requests/{request_id}/approve",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fiber_change_request_approve(
     request: Request, request_id: str, db: Session = Depends(get_db)
@@ -127,7 +127,7 @@ def fiber_change_request_approve(
 
 @router.post(
     "/fiber-change-requests/{request_id}/reject",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fiber_change_request_reject(
     request: Request, request_id: str, db: Session = Depends(get_db)
@@ -145,7 +145,7 @@ def fiber_change_request_reject(
 
 @router.post(
     "/fiber-change-requests/bulk-approve",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fiber_change_requests_bulk_approve(request: Request, db: Session = Depends(get_db)):
     redirect_url = (
@@ -161,7 +161,7 @@ def fiber_change_requests_bulk_approve(request: Request, db: Session = Depends(g
 
 @router.post(
     "/fiber-map/update-position",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def update_asset_position(request: Request, db: Session = Depends(get_db)):
     """Update position of FDH cabinet or splice closure via drag-and-drop."""
@@ -174,7 +174,7 @@ def update_asset_position(request: Request, db: Session = Depends(get_db)):
 
 @router.get(
     "/fiber-map/nearest-cabinet",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def find_nearest_cabinet(
     request: Request, lat: float, lng: float, db: Session = Depends(get_db)
@@ -190,7 +190,7 @@ def find_nearest_cabinet(
 
 @router.get(
     "/fiber-map/plan-options",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def plan_options(
     request: Request, lat: float, lng: float, db: Session = Depends(get_db)
@@ -205,7 +205,7 @@ def plan_options(
 
 
 @router.get(
-    "/fiber-map/route", dependencies=[Depends(require_permission("network:read"))]
+    "/fiber-map/route", dependencies=[Depends(require_permission("network:fiber:read"))]
 )
 def plan_route(
     request: Request,
@@ -227,7 +227,7 @@ def plan_route(
 @router.get(
     "/fiber-reports",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_reports(
     request: Request, db: Session = Depends(get_db), map_limit: int | None = None
@@ -244,7 +244,7 @@ def fiber_reports(
 @router.get(
     "/fdh-cabinets",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fdh_cabinets_list(request: Request, db: Session = Depends(get_db)):
     """List FDH cabinets."""
@@ -259,7 +259,7 @@ def fdh_cabinets_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/fdh-cabinets/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fdh_cabinet_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_network_fdh_service.build_form_context(
@@ -280,7 +280,7 @@ def fdh_cabinet_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/fdh-cabinets",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fdh_cabinet_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_fiber_plant_actions_service.create_cabinet_from_form(
@@ -307,7 +307,7 @@ def fdh_cabinet_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/fdh-cabinets/{cabinet_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fdh_cabinet_edit(request: Request, cabinet_id: str, db: Session = Depends(get_db)):
     cabinet = web_network_fdh_service.get_cabinet(db, cabinet_id)
@@ -335,7 +335,7 @@ def fdh_cabinet_edit(request: Request, cabinet_id: str, db: Session = Depends(ge
 @router.post(
     "/fdh-cabinets/{cabinet_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fdh_cabinet_update(
     request: Request, cabinet_id: str, db: Session = Depends(get_db)
@@ -369,7 +369,7 @@ def fdh_cabinet_update(
 @router.get(
     "/fdh-cabinets/{cabinet_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fdh_cabinet_detail(
     request: Request, cabinet_id: str, db: Session = Depends(get_db)
@@ -397,7 +397,7 @@ def fdh_cabinet_detail(
 @router.get(
     "/splitters",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splitters_list(request: Request, db: Session = Depends(get_db)):
     page_data = web_network_fdh_service.list_splitters_page_data(db)
@@ -409,7 +409,7 @@ def splitters_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/splitters/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splitter_new(
     request: Request, fdh_id: str | None = None, db: Session = Depends(get_db)
@@ -428,7 +428,7 @@ def splitter_new(
 @router.post(
     "/splitters",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splitter_create(request: Request, db: Session = Depends(get_db)):
     result = web_network_fiber_plant_actions_service.create_splitter_from_form(
@@ -455,7 +455,7 @@ def splitter_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/splitters/{splitter_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splitter_edit(request: Request, splitter_id: str, db: Session = Depends(get_db)):
     splitter = web_network_fdh_service.get_splitter(db, splitter_id)
@@ -480,7 +480,7 @@ def splitter_edit(request: Request, splitter_id: str, db: Session = Depends(get_
 @router.post(
     "/splitters/{splitter_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splitter_update(request: Request, splitter_id: str, db: Session = Depends(get_db)):
     result = web_network_fiber_plant_actions_service.update_splitter_from_form(
@@ -512,7 +512,7 @@ def splitter_update(request: Request, splitter_id: str, db: Session = Depends(ge
 @router.get(
     "/splitters/{splitter_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splitter_detail(request: Request, splitter_id: str, db: Session = Depends(get_db)):
     page_data = web_network_fdh_service.splitter_detail_page_data(db, splitter_id)

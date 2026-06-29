@@ -35,6 +35,7 @@ from app.logging import configure_logging
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
+from app.request_meta import client_ip
 from app.services import audit as audit_service
 from app.services.db_session_adapter import db_session_adapter
 from app.telemetry import setup_otel
@@ -118,7 +119,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.imports", "router", "api", "perm:system:settings"),
     ("app.api.audit", "router", "api", "none"),
     ("app.api.gis", "router", "api", "admin"),
-    ("app.api.geocoding", "router", "api", "readperm:network:read"),
+    ("app.api.geocoding", "router", "api", "readperm:gis:serviceability:check"),
     ("app.api.qualification", "router", "api", "perm:provisioning"),
     ("app.api.settings", "router", "api", "perm:system:settings"),
     ("app.api.webhooks", "router", "api", "admin"),
@@ -1105,12 +1106,7 @@ _LOGIN_RATE_LIMIT_PATHS = frozenset(
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
-    return request.client.host if request.client else "unknown"
+    return client_ip(request)
 
 
 def _request_is_https(request: Request) -> bool:

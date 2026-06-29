@@ -147,7 +147,7 @@ Unchecked items: 64
 - [ ] **Data cap plan type**: Enhance `CatalogOffer` to explicitly support capped data plans (e.g., "20GB data") with a `data_cap_gb` field, distinct from unlimited plans that have no cap but may have speed tiers
   - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Capped vs Unlimited Plan Support`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:34`
-- [ ] **Plan naming convention enforcement**: Add admin guidance or validation suggesting consistent plan naming (e.g., "{Speed} Mbps Fiber", "Unlimited {Tier}") to prevent the inconsistency visible in Splynx (e.g., "unlimited 1.5" vs "Unlimited Basic")
+- [ ] **Plan naming convention enforcement**: Add admin guidance or validation suggesting consistent plan naming (e.g., "{Speed} Mbps Fiber", "Unlimited {Tier}") to prevent the inconsistency visible in legacy BSS (e.g., "unlimited 1.5" vs "Unlimited Basic")
   - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Capped vs Unlimited Plan Support`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:35`
 - [ ] **Separate recurring charges view**: Create a dedicated "Recurring Charges" sub-tab under Catalog that lists non-internet recurring services (static IP blocks, leased lines, device rentals, last-mile charges) separately from internet plans
@@ -162,7 +162,7 @@ Unchecked items: 64
 - [ ] **Device replacement as recurring service**: Allow "device rental" or "device replacement" to be configured as a recurring charge add-on that auto-bills monthly, separate from one-time installation fees
   - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:58`
-- [ ] **Add-on subscriber count**: Show the count of active subscribers using each add-on/recurring charge in the catalog list, matching the visibility Splynx provides
+- [ ] **Add-on subscriber count**: Show the count of active subscribers using each add-on/recurring charge in the catalog list, matching the visibility legacy BSS provides
   - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:59`
 - [ ] **Dedicated one-time fees view**: Create a "One-Time Fees" sub-tab under Catalog listing all non-recurring charges (installation, support calls, relocations, device replacements) with enabled/disabled toggle
@@ -320,896 +320,896 @@ Unchecked items: 64
 Unchecked items: 73
 
 - [ ] **Add Comments/To-Dos widget to subscriber detail page** -- Implement an inline notes/to-do panel on the right side of the subscriber detail view. Each comment should capture author, timestamp, and support a simple to-do checkbox. Use HTMX for add/toggle without full page reload. Model: `SubscriberNote` with fields `id`, `subscriber_id`, `author_id`, `content`, `is_todo`, `is_completed`, `created_at`.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:24`
 - [ ] **Add persistent account balance header bar** -- Display a sticky/persistent info bar at the top of all subscriber detail tabs showing subscriber name, account number, current balance, and status badge. This gives support staff immediate financial context regardless of which tab they are viewing.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:25`
 - [ ] **Add "Login as Customer" impersonation action** -- Implement admin ability to impersonate a subscriber's portal session for troubleshooting. Requires: session token generation scoped to subscriber, audit log entry on impersonation start/end, visual banner in the customer portal indicating impersonation mode.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:26`
 - [ ] **Add "Send Welcome Message" action** -- Allow re-sending the welcome/onboarding email from the subscriber detail page. Pull template from notification templates, pre-fill with subscriber data.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:27`
 - [ ] **Add "Send Message" quick action** -- Enable sending ad-hoc email/SMS to the subscriber directly from their detail page without navigating to a separate communication module.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:28`
-- [ ] **Add integrated ticket summary on subscriber detail** -- Show ticket counts (open/closed) and quick-create link directly on the subscriber detail page header area, similar to the Splynx Tickets dropdown.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+- [ ] **Add integrated ticket summary on subscriber detail** -- Show ticket counts (open/closed) and quick-create link directly on the subscriber detail page header area, similar to the legacy BSS Tickets dropdown.
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:29`
 - [ ] **Add labels/tags system for subscribers** -- Implement a tagging system with typeahead search. Model: `SubscriberLabel` (many-to-many). Tags should be filterable on the subscriber list page. Use cases: VIP, corporate, problematic, referral-source, etc.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:30`
 - [ ] **Add separate billing email field** -- Allow subscribers to have a distinct billing email address separate from their primary contact email. This is common for corporate accounts where invoices go to accounts@company.com but service notifications go to IT staff.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:31`
 - [ ] **Add subscriber category field** -- Add a Business/Residential/Government/NGO category enum to the subscriber model. This enables segmentation in reports and different billing/dunning rules per category.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:32`
 - [ ] **Add coverage notes field** -- Add a free-text field for recording signal coverage information, site survey notes, or installation constraints for the subscriber's location.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:33`
 - [ ] **Add base station / PON port reference** -- Display the network infrastructure reference (OLT port, base station, PON port) directly on the subscriber information panel for quick network troubleshooting context.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:34`
 - [ ] **Add GPS coordinates and embedded map to subscriber detail** -- Display an embedded map (Leaflet/OpenStreetMap) on the subscriber information tab showing the subscriber's location pin. Store latitude/longitude on the subscriber model. Consider integration with the existing GIS module.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:35`
 - [ ] **Add recent activity feed to subscriber detail** -- Show a timeline of recent events (payments received, invoices generated, status changes, service orders) at the bottom of the subscriber detail page. Source from the existing audit/event system. Limit to last 10-20 items with pagination.
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:36`
 - [ ] **Add prev/next subscriber navigation** -- Implement previous/next arrows on the subscriber detail page header to allow cycling through subscribers in the current list context (preserving filters/sort order).
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:37`
 - [ ] **Add multiple phone numbers support** -- Allow storing multiple phone numbers (comma-separated or as a JSON array) with labels (primary, secondary, WhatsApp, etc.).
-  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:38`
 - [ ] **Add real-time service online/offline status indicator** -- Query RADIUS accounting or session data to show whether the subscriber's service is currently online. Display as a green/red badge on the services table. Consider polling via HTMX every 30-60 seconds or using the existing RADIUS sync task data.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:55`
 - [ ] **Add "Invoiced Until" column to subscriptions list** -- Show the date through which the subscriber has been invoiced for each subscription. This is critical for billing staff to see at a glance whether the subscriber is paid ahead or due for invoicing.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:56`
 - [ ] **Add service login (RADIUS username) column** -- Display the RADIUS login/username associated with each subscription directly in the services table for quick network troubleshooting.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:57`
 - [ ] **Add IPv4 address column to subscriptions list** -- Show the assigned IP address for each active service directly in the table. Source from RADIUS accounting or static IP assignment records.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:58`
 - [ ] **Add bandwidth rule indicator** -- Show whether a bandwidth shaping/FUP rule is applied to the service. Display as a badge (e.g., "No rule", "FUP Active", "Throttled").
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:59`
 - [ ] **Add "Add Bundle" capability** -- Allow creating service bundles that combine multiple service types (internet + voice, internet + IPTV) as a single billable item with a combined price.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:60`
 - [ ] **Add "Add Recurring Service" for non-internet charges** -- Support adding generic recurring charges (equipment rental, static IP fee, premium support) as separate line items on the subscriber's account, distinct from internet service subscriptions.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:61`
 - [ ] **Add inline service action icons** -- Expand the actions column on the subscriptions table to include quick-action icons: edit, view sessions, view traffic, view usage stats, schedule change, disable/enable, delete. Use HTMX modals or slide-out panels to avoid full page navigation.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:62`
 - [ ] **Add service view filter (Active/Disabled/All)** -- Add a dropdown filter above the subscriptions table to toggle between active, disabled/suspended, and all services for the subscriber.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:63`
 - [ ] **Add quick service creation modal** -- Implement a modal dialog for adding a new service directly from the subscriber's Services tab. Start with plan selection, then dynamically reveal additional fields (description, custom price, start date, IP assignment) based on the selected plan.
-  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:64`
 - [ ] **Add per-subscriber billing configuration panel** -- Implement a billing config section on the subscriber detail that allows overriding organization-level defaults: billing day, payment due days, blocking period, deactivation period, minimum balance, auto-create invoices toggle, send billing notifications toggle. Store as per-subscriber overrides that fall back to organization defaults.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:105`
 - [ ] **Add "Next Block" / future actions preview** -- Show a panel on the billing tab indicating when the subscriber will be blocked/suspended based on current balance and billing rules. Display as a badge: "In the next billing cycle" or specific date.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:106`
 - [ ] **Add per-subscriber reminder settings** -- Allow overriding organization-level reminder settings per subscriber: enable/disable reminders, message type (email/SMS/both), and configurable reminder day offsets (e.g., 5 days before, 2 days before, on due date).
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:107`
 - [ ] **Add proforma invoice support** -- Implement proforma invoices as a separate document type with its own numbering sequence. Support auto-generation based on configurable schedule. Allow conversion of proforma to final invoice.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:108`
 - [ ] **Add credit note with invoice linking** -- Enhance credit note creation to allow linking against specific invoices. Show a searchable table of the subscriber's invoices (with paid/unpaid status) when creating a credit note.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:109`
 - [ ] **Add "Future Items" capability** -- Allow adding line items that will automatically appear on the next recurring invoice. Use cases: one-time installation fees, equipment charges, prorated adjustments.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:110`
 - [ ] **Add payment creation with invoice linking** -- When recording a payment, allow linking it to one or more specific invoices. Include fields for receipt number, transaction ID, TIN, and separate internal comment vs. customer-visible note.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:111`
 - [ ] **Add statement generation** -- Implement account statement generation with configurable date range, opening/closing balance, transaction listing, and "Send to customer" action (email/download).
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:112`
 - [ ] **Add separate billing address** -- Allow subscribers to have a distinct billing address (name, street, ZIP, city) separate from their service/installation address.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:113`
 - [ ] **Add document type badges with color coding** -- On the finance documents table, display document type as color-coded badges: Recurring Invoice (blue), One-time Invoice (indigo), Proforma (violet), Credit Note (amber), Payment (emerald).
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:114`
 - [ ] **Add per-subscriber payment method assignment** -- Allow assigning a default payment method per subscriber from the organization's configured payment providers. Display the assigned method prominently in the billing tab header.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:115`
 - [ ] **Add partner/reseller commission percentage** -- Store a commission percentage per subscriber for reseller/partner billing. This enables automatic commission calculation on the subscriber's revenue.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:116`
 - [ ] **Add blocking and deactivation period controls** -- Implement configurable grace periods: blocking period (service suspension after payment due) and deactivation period (full service termination after blocking). These cascade: due date -> blocking -> deactivation.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:117`
 - [ ] **Add transaction ledger with column customization** -- Implement a transactions sub-tab showing all debits and credits with configurable columns. Allow users to show/hide columns (date, description, debit, credit, balance, category, customer ID, type) via a modal column picker.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:118`
 - [ ] **Add one-time invoice creation from subscriber context** -- Allow creating ad-hoc one-time invoices directly from the subscriber's billing tab with line items, VAT calculation, and auto-generated invoice numbers.
-  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:119`
 - [ ] **Add subscriber statistics tab with live bandwidth graph** -- Implement a Statistics tab on the subscriber detail page showing a real-time bandwidth usage chart. Query RADIUS accounting or VictoriaMetrics for per-subscriber traffic data. Display upload/download as a time-series line chart with configurable time intervals (1 min, 5 min, 15 min).
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:138`
 - [ ] **Add online sessions panel** -- Show currently active RADIUS sessions for the subscriber: login, data transferred (in/out), session start time, duration, IP address, MAC address, NAS device. Source from RADIUS accounting tables.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:139`
 - [ ] **Add period summary statistics card** -- Display aggregate statistics for a selectable period: total sessions, total errors, total online time, total download (GB), total upload (GB). Use RADIUS accounting data aggregated by the existing bandwidth tasks.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:140`
 - [ ] **Add daily usage chart** -- Implement a stacked bar chart showing daily download and upload usage over the selected period. Include chart/table toggle to view the same data in tabular format.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:141`
 - [ ] **Add daily average bandwidth graph** -- Show a time-series chart of average bandwidth speeds with Max, Average, and Last speed statistics. Support Daily/Hourly/Weekly graph type selection.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:142`
 - [ ] **Add FUP (Fair Usage Policy) statistics panel** -- If FUP/data cap policies are configured on the subscriber's plan, show current usage against allowance: traffic consumed vs. bonus/allowance, broken down by day/week/month.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:143`
 - [ ] **Add session history table** -- Display a paginated, sortable table of all RADIUS sessions for the subscriber with connect/disconnect times, duration, data transferred, IP, MAC, and NAS device. Include date range filter.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:144`
 - [ ] **Add per-service statistics filtering** -- When a subscriber has multiple services, allow filtering statistics by specific service or viewing aggregated data for all services.
-  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:145`
 - [ ] **Add Documents tab to subscriber detail page** -- Implement a dedicated Documents tab showing all files associated with the subscriber. Model: use existing `StoredFile` model with `entity_type=subscriber` and `entity_id=subscriber.id`. Display in a sortable table with columns: ID, uploaded by, status, source, title, date, description, actions.
-  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:161`
 - [ ] **Add document upload from subscriber context** -- Allow uploading files (contracts, ID copies, site photos, agreements) directly from the subscriber's Documents tab. Validate file type and size per the existing file upload rules.
-  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:162`
 - [ ] **Add document generation from templates** -- Implement contract/document generation using configurable templates. Templates should support variable substitution (subscriber name, address, plan details, pricing). Generate as PDF using the existing PDF export infrastructure.
-  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:163`
 - [ ] **Add CRM interaction logging** -- Allow recording customer interaction notes (phone calls, site visits, complaints) as document entries on the subscriber. Fields: type (call/visit/email/complaint), title, description, date, author. This provides a chronological customer relationship history.
-  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:164`
 - [ ] **Add document type filtering** -- Add a Type dropdown filter on the documents table to filter by document category: All, Contracts, CRM Calls, Uploaded Files, Generated Documents.
-  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:165`
 - [ ] **Add document send-to-customer action** -- Allow sending a document to the subscriber via email directly from the documents table action buttons.
-  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:166`
 - [ ] **Add CPE management tab to subscriber detail** -- Implement a CPE tab showing all customer premises equipment associated with the subscriber. Display existing CPE devices in a card/table layout with status indicators.
-  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:188`
 - [ ] **Add CPE device registration form** -- Allow adding CPE devices with fields: title, IP/host, API login, API password (encrypted using credential_crypto), API port, device type (MikroTik/Ubiquiti/Generic), QoS shaping toggle, QoS target subnet, linked service ID.
-  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:189`
 - [ ] **Add CPE device type support** -- Define a `CPEDeviceType` enum supporting common ISP CPE types: MikroTik, Ubiquiti, TP-Link, Huawei, Generic. The type selection should determine available management features.
-  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:190`
 - [ ] **Add QoS/shaping configuration per CPE** -- Allow configuring bandwidth shaping parameters on the CPE device record: enable/disable toggle, target subnet, and link to the subscriber's service plan speed limits.
-  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:191`
 - [ ] **Add CPE-to-service linking** -- Allow associating a CPE device with a specific subscriber service. This enables per-service QoS enforcement and helps track which equipment serves which subscription.
-  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:192`
 - [ ] **Store CPE credentials encrypted** -- Use the existing `credential_crypto` module to encrypt CPE API passwords at rest. Display with show/hide toggle in the UI.
-  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:193`
 - [ ] **Add Communication tab to subscriber detail** -- Implement a Communication tab showing the full history of all messages sent to/from the subscriber. Sub-tabs: Email, SMS, In-App Notifications.
-  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:206`
 - [ ] **Add email communication history** -- Display all emails sent to the subscriber in a chronological list: sender, recipient, subject, date/time, delivery status, and expandable preview. Source from the existing notification delivery records.
-  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:207`
 - [ ] **Add SMS communication history** -- Display all SMS messages sent to the subscriber with delivery status tracking.
-  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:208`
 - [ ] **Add messaging integration placeholder** -- Add a Messengers sub-tab as a future integration point for WhatsApp Business API, Telegram bot, and other messaging platforms. Show a configuration notice when no integrations are active.
-  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:209`
 - [ ] **Add SMTP configuration warning** -- Display a prominent warning banner on the Communication tab when the organization's SMTP settings are not configured, with a link to system settings.
-  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:210`
 - [ ] **Add DNS Security tab (future consideration)** -- Plan for a DNS security integration tab that could support DNS-based content filtering and threat protection services per subscriber. This is lower priority but represents a value-added service opportunity for ISPs.
-  - context: `Section 3: Splynx Customer Module | 3.8 Customer Detail - DNS Security Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.8 Customer Detail - DNS Security Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:222`
 - [ ] **Implement graceful integration error states** -- When integration tabs are shown but not configured, display a clear, user-friendly error message with a link to the configuration page rather than a raw error or blank page.
-  - context: `Section 3: Splynx Customer Module | 3.8 Customer Detail - DNS Security Tab | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.8 Customer Detail - DNS Security Tab | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:223`
 - [ ] **Implement tabbed subscriber detail layout** -- Reorganize the subscriber detail page into a tabbed interface with these tabs: Information, Services, Billing, Statistics, Documents, CPE, Communication. Use HTMX for tab switching without full page reload. Preserve the current URL with tab query parameter for bookmarkability.
-  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:239`
 - [ ] **Add persistent subscriber header across all tabs** -- Implement a fixed header bar that persists across all subscriber detail tabs showing: subscriber name, account number, status badge, current balance. This provides constant context for support staff.
-  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:240`
 - [ ] **Add dynamic column configuration for all data tables** -- Implement a column show/hide modal (similar to the existing `dynamic-table-config.js`) across all major data tables on the subscriber detail page. Persist user preferences per table.
-  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:241`
 - [ ] **Add table-level search for all sub-tables** -- Ensure all data tables within subscriber detail tabs have inline search/filter capability using HTMX with debounce.
-  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:242`
 - [ ] **Add entries-per-page control on all tables** -- Add a "Show N entries" dropdown (25, 50, 100) on all paginated tables within the subscriber detail view.
-  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:243`
 - [ ] **Add row-level bulk actions on data tables** -- Implement checkbox selection on table rows with bulk action toolbar (e.g., bulk send invoices, bulk mark as paid, bulk delete documents).
-  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - context: `Section 3: legacy BSS Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:244`
 
 ## 04_administration.md
 Unchecked items: 221
 
 - [ ] Add a unified Administration hub page at `/admin/system` that groups all system functions into categorized sections (Core, Logs, Information, Reports) with icon-labeled links
-  - context: `Section 4: Splynx Administration | 4.1 Administration Dashboard`
+  - context: `Section 4: legacy BSS Administration | 4.1 Administration Dashboard`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:17`
 - [ ] Add a search/filter input on the administration hub to quickly locate admin functions by keyword
-  - context: `Section 4: Splynx Administration | 4.1 Administration Dashboard`
+  - context: `Section 4: legacy BSS Administration | 4.1 Administration Dashboard`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:18`
 - [ ] Ensure every log viewer, report, and configuration tool is accessible from this single hub page rather than requiring sidebar navigation alone
-  - context: `Section 4: Splynx Administration | 4.1 Administration Dashboard`
+  - context: `Section 4: legacy BSS Administration | 4.1 Administration Dashboard`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:19`
 - [ ] Add avatar/photo upload support for admin user profiles displayed in the user list table
-  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - context: `Section 4: legacy BSS Administration | 4.2 Administrators Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:31`
 - [ ] Add a "Partner" or "Organization" filter dropdown on the users list page to scope by reseller/partner affiliation
-  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - context: `Section 4: legacy BSS Administration | 4.2 Administrators Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:32`
 - [ ] Display phone number column in the admin users table
-  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - context: `Section 4: legacy BSS Administration | 4.2 Administrators Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:33`
 - [ ] Add an "Impersonate" action button per admin user allowing super-admins to log in as another user for troubleshooting
-  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - context: `Section 4: legacy BSS Administration | 4.2 Administrators Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:34`
 - [ ] Support configurable page size (25/50/100) on the users list table
-  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - context: `Section 4: legacy BSS Administration | 4.2 Administrators Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:35`
 - [ ] Add ISP-specific predefined role templates: engineer, noc, frontdesk, operations-support, procurement, project, sales, technical-support, and technician
-  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - context: `Section 4: legacy BSS Administration | 4.3 Roles Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:47`
 - [ ] Add a "View members" action on each role to quickly see which users are assigned to it
-  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - context: `Section 4: legacy BSS Administration | 4.3 Roles Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:48`
 - [ ] Distinguish between system-protected roles (edit only) and custom roles (edit + delete) in the UI
-  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - context: `Section 4: legacy BSS Administration | 4.3 Roles Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:49`
 - [ ] Add a display Title field separate from the role Name/slug for user-friendly labeling
-  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - context: `Section 4: legacy BSS Administration | 4.3 Roles Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:50`
 - [ ] Add a "customer-creator" role with limited permissions scoped to subscriber creation only
-  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - context: `Section 4: legacy BSS Administration | 4.3 Roles Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:51`
 - [ ] Add real-time "Customers online" count to the resellers list page showing currently-connected subscriber sessions per partner
-  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - context: `Section 4: legacy BSS Administration | 4.4 Partners Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:63`
 - [ ] Add clickable customer count on the resellers table that navigates to the filtered subscribers list for that partner
-  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - context: `Section 4: legacy BSS Administration | 4.4 Partners Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:64`
 - [ ] Display per-partner summary statistics (total customers, online customers) as sortable columns on the reseller index page
-  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - context: `Section 4: legacy BSS Administration | 4.4 Partners Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:65`
 - [ ] Add a partner/reseller dashboard card showing distribution of subscribers across all partners
-  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - context: `Section 4: legacy BSS Administration | 4.4 Partners Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:66`
 - [ ] Add a sales agent/commission tracking module with per-agent revenue attribution
-  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - context: `Section 4: legacy BSS Administration | 4.5 Agents Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:78`
 - [ ] Create a consolidated agent commission report with period filtering (date range selector)
-  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - context: `Section 4: legacy BSS Administration | 4.5 Agents Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:79`
 - [ ] Add an "Agent report" sub-view showing per-agent detail with commissioned transactions and unpaid totals
-  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - context: `Section 4: legacy BSS Administration | 4.5 Agents Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:80`
 - [ ] Add a "Customer report" sub-view showing which customers were acquired by which agent
-  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - context: `Section 4: legacy BSS Administration | 4.5 Agents Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:81`
 - [ ] Include a totals summary row in commission reports (total commissioned transactions, unpaid total, commission)
-  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - context: `Section 4: legacy BSS Administration | 4.5 Agents Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:82`
 - [ ] Support commission calculation rules (percentage-based, flat-rate, tiered) configurable per agent
-  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - context: `Section 4: legacy BSS Administration | 4.5 Agents Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:83`
 - [ ] Add a Locations management page that defines geographical service regions with customer counts and real-time online counts
-  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - context: `Section 4: legacy BSS Administration | 4.6 Locations Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:95`
 - [ ] Link tax rules/rates to specific locations for location-based tax calculation on invoices
-  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - context: `Section 4: legacy BSS Administration | 4.6 Locations Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:96`
 - [ ] Display location-scoped subscriber statistics (total count, online count) on the locations management page
-  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - context: `Section 4: legacy BSS Administration | 4.6 Locations Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:97`
 - [ ] Allow filtering subscribers, services, and billing reports by location
-  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - context: `Section 4: legacy BSS Administration | 4.6 Locations Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:98`
 - [ ] Add a dedicated API Keys management page at `/admin/system/api-keys` for creating and managing API access tokens
-  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - context: `Section 4: legacy BSS Administration | 4.7 API Keys Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:110`
 - [ ] Support named API keys with descriptive labels (e.g., "Paystack Integration", "Mobile App", "Monitoring System")
-  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - context: `Section 4: legacy BSS Administration | 4.7 API Keys Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:111`
 - [ ] Scope API keys to specific partner/organization for multi-tenant API access control
-  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - context: `Section 4: legacy BSS Administration | 4.7 API Keys Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:112`
 - [ ] Add API key usage tracking (last used timestamp, request count) visible in the keys table
-  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - context: `Section 4: legacy BSS Administration | 4.7 API Keys Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:113`
 - [ ] Support API key rotation with graceful deprecation period for old keys
-  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - context: `Section 4: legacy BSS Administration | 4.7 API Keys Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:114`
 - [ ] Add ability to restrict API key permissions to specific endpoints/operations
-  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - context: `Section 4: legacy BSS Administration | 4.7 API Keys Management`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:115`
 - [ ] Add an API request audit log page at `/admin/system/audit/api` showing all API calls with timestamp, key used, operation, and result
-  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - context: `Section 4: legacy BSS Administration | 4.8 API Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:127`
 - [ ] Add filter controls: customer ID lookup, date range, API key selector, and operation type dropdown
-  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - context: `Section 4: legacy BSS Administration | 4.8 API Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:128`
 - [ ] Log API request/response details viewable from an expand/detail action
-  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - context: `Section 4: legacy BSS Administration | 4.8 API Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:129`
 - [ ] Add rate limiting visibility -- show which API keys are approaching or exceeding rate limits
-  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - context: `Section 4: legacy BSS Administration | 4.8 API Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:130`
 - [ ] Support CSV/JSON export of API audit logs for compliance
-  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - context: `Section 4: legacy BSS Administration | 4.8 API Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:131`
 - [ ] Enhance the existing audit log to capture all admin operations including view, edit, create, and delete actions across all modules
-  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - context: `Section 4: legacy BSS Administration | 4.9 Operations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:143`
 - [ ] Add an "Administrator" column/filter to see actions by specific admin users
-  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - context: `Section 4: legacy BSS Administration | 4.9 Operations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:144`
 - [ ] Add an "Operation type" filter (view, edit, create, delete, login, export) for targeted auditing
-  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - context: `Section 4: legacy BSS Administration | 4.9 Operations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:145`
 - [ ] Log "View" operations for sensitive data access (customer PII, financial data) to comply with data protection regulations
-  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - context: `Section 4: legacy BSS Administration | 4.9 Operations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:146`
 - [ ] Add Customer ID cross-reference filter to see all admin operations related to a specific subscriber
-  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - context: `Section 4: legacy BSS Administration | 4.9 Operations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:147`
 - [ ] Add an internal/system operations log that captures automated batch processing events (Celery task operations, scheduled jobs, system-triggered status changes)
-  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - context: `Section 4: legacy BSS Administration | 4.10 Internal System Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:159`
 - [ ] Display sub-second timestamps for internal operations to support debugging of batch processing sequences
-  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - context: `Section 4: legacy BSS Administration | 4.10 Internal System Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:160`
 - [ ] Separate internal/automated operations from human-initiated operations in the audit log for clearer analysis
-  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - context: `Section 4: legacy BSS Administration | 4.10 Internal System Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:161`
 - [ ] Add batch operation grouping to collapse rapid-fire sequential operations into summarized entries
-  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - context: `Section 4: legacy BSS Administration | 4.10 Internal System Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:162`
 - [ ] Add a customer portal activity log at `/admin/system/audit/portal` tracking all subscriber portal login/logout and self-service actions
-  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - context: `Section 4: legacy BSS Administration | 4.11 Portal Activity Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:174`
 - [ ] Track login timestamps, session duration (derived from login-to-logout), and IP addresses for security monitoring
-  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - context: `Section 4: legacy BSS Administration | 4.11 Portal Activity Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:175`
 - [ ] Add failed login attempt tracking for subscriber accounts with alert thresholds
-  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - context: `Section 4: legacy BSS Administration | 4.11 Portal Activity Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:176`
 - [ ] Generate portal usage statistics (daily active users, peak login times, average session duration)
-  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - context: `Section 4: legacy BSS Administration | 4.11 Portal Activity Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:177`
 - [ ] Add geographic/IP-based anomaly detection for subscriber portal logins
-  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - context: `Section 4: legacy BSS Administration | 4.11 Portal Activity Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:178`
 - [ ] Add a RADIUS session search tool at `/admin/network/sessions` allowing lookup by IP, IPv6, MAC address, and username
-  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - context: `Section 4: legacy BSS Administration | 4.12 Session Search`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:190`
 - [ ] Support date range filtering for historical session searches
-  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - context: `Section 4: legacy BSS Administration | 4.12 Session Search`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:191`
 - [ ] Add a "Search scope" selector to search across customer statistics, accounting records, or active sessions
-  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - context: `Section 4: legacy BSS Administration | 4.12 Session Search`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:192`
 - [ ] Display session results with connection duration, data usage, NAS device, and assigned IP information
-  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - context: `Section 4: legacy BSS Administration | 4.12 Session Search`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:193`
 - [ ] Add a "currently online" quick filter to see all active sessions in real time
-  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - context: `Section 4: legacy BSS Administration | 4.12 Session Search`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:194`
 - [ ] Add a system log file viewer at `/admin/system/logs` showing Celery task execution logs, cron job outputs, and error logs
-  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - context: `Section 4: legacy BSS Administration | 4.13 File/Cron Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:206`
 - [ ] Display log file sizes and last-modified timestamps for quick health assessment
-  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - context: `Section 4: legacy BSS Administration | 4.13 File/Cron Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:207`
 - [ ] Add a log viewer with syntax highlighting, search, and tail-follow capability for real-time monitoring
-  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - context: `Section 4: legacy BSS Administration | 4.13 File/Cron Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:208`
 - [ ] Organize logs by category (API errors, billing tasks, backup operations, daily maintenance tasks)
-  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - context: `Section 4: legacy BSS Administration | 4.13 File/Cron Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:209`
 - [ ] Add log rotation and retention policy configuration from the admin UI
-  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - context: `Section 4: legacy BSS Administration | 4.13 File/Cron Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:210`
 - [ ] Show backup operation logs (critical backup, full backup, RADIUS failover backup) with success/failure status
-  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - context: `Section 4: legacy BSS Administration | 4.13 File/Cron Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:211`
 - [ ] Add an email delivery log at `/admin/notifications/email-log` showing all outbound emails with recipient, subject, type, status, and timestamp
-  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - context: `Section 4: legacy BSS Administration | 4.14 Email Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:223`
 - [ ] Track email delivery status (queued, sent, delivered, bounced, failed) per message
-  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - context: `Section 4: legacy BSS Administration | 4.14 Email Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:224`
 - [ ] Add email resend capability from the log for failed deliveries
-  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - context: `Section 4: legacy BSS Administration | 4.14 Email Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:225`
 - [ ] Support filtering by recipient email, date range, status, and email type/template
-  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - context: `Section 4: legacy BSS Administration | 4.14 Email Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:226`
 - [ ] Link email log entries to the subscriber they relate to for cross-reference from subscriber detail pages
-  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - context: `Section 4: legacy BSS Administration | 4.14 Email Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:227`
 - [ ] Add an SMS delivery log at `/admin/notifications/sms-log` tracking all outbound SMS messages
-  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - context: `Section 4: legacy BSS Administration | 4.15 SMS Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:239`
 - [ ] Display SMS delivery status with clear success/error indicators and error detail messages
-  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - context: `Section 4: legacy BSS Administration | 4.15 SMS Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:240`
 - [ ] Track SMS cost per message for provider billing reconciliation
-  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - context: `Section 4: legacy BSS Administration | 4.15 SMS Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:241`
 - [ ] Add SMS retry capability for failed deliveries from the log view
-  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - context: `Section 4: legacy BSS Administration | 4.15 SMS Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:242`
 - [ ] Add SMS delivery rate statistics (success rate, failure rate, average delivery time) as summary cards above the log table
-  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - context: `Section 4: legacy BSS Administration | 4.15 SMS Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:243`
 - [ ] Add a "Scheduled Changes" dashboard at `/admin/provisioning/scheduled` showing all future-dated status transitions and service changes
-  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - context: `Section 4: legacy BSS Administration | 4.16 Planned Customer Status and Service Changes`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:255`
 - [ ] Support scheduling customer status changes (active to inactive, suspended to active) for a future date
-  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - context: `Section 4: legacy BSS Administration | 4.16 Planned Customer Status and Service Changes`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:256`
 - [ ] Support scheduling service/plan changes (upgrades, downgrades) for a future date with price preview
-  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - context: `Section 4: legacy BSS Administration | 4.16 Planned Customer Status and Service Changes`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:257`
 - [ ] Show separate sections for planned status changes and planned service changes
-  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - context: `Section 4: legacy BSS Administration | 4.16 Planned Customer Status and Service Changes`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:258`
 - [ ] Add calendar view option for visualizing scheduled changes across dates
-  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - context: `Section 4: legacy BSS Administration | 4.16 Planned Customer Status and Service Changes`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:259`
 - [ ] Send notification reminders before scheduled changes take effect
-  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - context: `Section 4: legacy BSS Administration | 4.16 Planned Customer Status and Service Changes`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:260`
 - [ ] Add a subscriber status change history log showing all status transitions with who/what initiated them
-  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.17 Customer Status and Service Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:272`
 - [ ] Distinguish between manual admin actions (show admin name/email) and automated system actions (show "[SYSTEM]")
-  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.17 Customer Status and Service Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:273`
 - [ ] Add status transition arrow display format (e.g., "active -> blocked") for clear visual representation
-  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.17 Customer Status and Service Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:274`
 - [ ] Track bulk automated operations (e.g., dunning/collections blocking) with timestamp patterns for operational analysis
-  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.17 Customer Status and Service Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:275`
 - [ ] Add a "reverse" or "undo" action for recent manual status changes
-  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.17 Customer Status and Service Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:276`
 - [ ] Add a subscription/service status change log showing status transitions and plan migrations together
-  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.18 Service Status Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:288`
 - [ ] Track both service status changes (Active -> Paused -> Disabled) and plan changes (Basic -> Compact) in the same log
-  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.18 Service Status Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:289`
 - [ ] Show the service/plan name as a clickable link to the subscription detail page
-  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.18 Service Status Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:290`
 - [ ] Filter service changes by administrator to track who is making operational changes
-  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.18 Service Status Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:291`
 - [ ] Add plan change impact analysis showing price difference when a plan migration is logged
-  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - context: `Section 4: legacy BSS Administration | 4.18 Service Status Changes Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:292`
 - [ ] Add an accounting integration sync log at `/admin/integrations/accounting` with tabs for Customers, Invoices, Credit Notes, and Payments
-  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - context: `Section 4: legacy BSS Administration | 4.19 Accounting Integrations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:304`
 - [ ] Track sync status per entity (Ok, Error, Pending) with external accounting system reference IDs
-  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - context: `Section 4: legacy BSS Administration | 4.19 Accounting Integrations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:305`
 - [ ] Display detailed sync error messages for failed synchronizations
-  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - context: `Section 4: legacy BSS Administration | 4.19 Accounting Integrations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:306`
 - [ ] Add "Modified" flag to identify records that have changed since last sync
-  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - context: `Section 4: legacy BSS Administration | 4.19 Accounting Integrations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:307`
 - [ ] Support re-sync/retry for failed individual records from the log view
-  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - context: `Section 4: legacy BSS Administration | 4.19 Accounting Integrations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:308`
 - [ ] Add bulk re-sync capability for all errored records
-  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - context: `Section 4: legacy BSS Administration | 4.19 Accounting Integrations Log`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:309`
 - [ ] Add per-provider email delivery logs for each configured email service (Mailjet, SendGrid, SES, etc.)
-  - context: `Section 4: Splynx Administration | 4.20 Mailjet Logs`
+  - context: `Section 4: legacy BSS Administration | 4.20 Mailjet Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:321`
 - [ ] Show provider-specific delivery metrics (open rate, click rate, bounce rate) when the provider API supports it
-  - context: `Section 4: Splynx Administration | 4.20 Mailjet Logs`
+  - context: `Section 4: legacy BSS Administration | 4.20 Mailjet Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:322`
 - [ ] Display graceful empty/inactive state when a provider integration is not configured, rather than error messages
-  - context: `Section 4: Splynx Administration | 4.20 Mailjet Logs`
+  - context: `Section 4: legacy BSS Administration | 4.20 Mailjet Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:323`
 - [ ] Add a payment gateway transaction log at `/admin/billing/payment-logs` showing all payment provider events
-  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - context: `Section 4: legacy BSS Administration | 4.21 Paystack Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:335`
 - [ ] Display payment transaction status with color-coded badges (success=green, error=red, pending=amber)
-  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - context: `Section 4: legacy BSS Administration | 4.21 Paystack Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:336`
 - [ ] Log detailed error messages for failed transactions (authentication failures, insufficient funds, expired tokens)
-  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - context: `Section 4: legacy BSS Administration | 4.21 Paystack Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:337`
 - [ ] Show payment reference IDs and provider-specific transaction identifiers for reconciliation
-  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - context: `Section 4: legacy BSS Administration | 4.21 Paystack Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:338`
 - [ ] Add payment event timeline per transaction (initiated -> processing -> success/failure)
-  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - context: `Section 4: legacy BSS Administration | 4.21 Paystack Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:339`
 - [ ] Support filtering by payment status, provider, date range, and customer
-  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - context: `Section 4: legacy BSS Administration | 4.21 Paystack Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:340`
 - [ ] Add a system information page at `/admin/system/about` showing application version, build date, and environment details
-  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - context: `Section 4: legacy BSS Administration | 4.22 License Information`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:352`
 - [ ] Display current subscriber count against any configured limits for capacity planning
-  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - context: `Section 4: legacy BSS Administration | 4.22 License Information`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:353`
 - [ ] Show database size, active connections, and system resource utilization
-  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - context: `Section 4: legacy BSS Administration | 4.22 License Information`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:354`
 - [ ] Add version update check capability to notify admins of available updates
-  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - context: `Section 4: legacy BSS Administration | 4.22 License Information`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:355`
 - [ ] Display deployment environment metadata (Python version, FastAPI version, PostgreSQL version, Redis version)
-  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - context: `Section 4: legacy BSS Administration | 4.22 License Information`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:356`
 - [ ] Add an in-app help/documentation link from the admin sidebar that opens contextual help for the current page
-  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - context: `Section 4: legacy BSS Administration | 4.23 Documentation / Knowledge Base`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:368`
 - [ ] Create a searchable knowledge base or help center integrated into the admin UI
-  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - context: `Section 4: legacy BSS Administration | 4.23 Documentation / Knowledge Base`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:369`
 - [ ] Add "Getting Started" guided setup wizard for new deployments
-  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - context: `Section 4: legacy BSS Administration | 4.23 Documentation / Knowledge Base`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:370`
 - [ ] Include FAQ section accessible from the admin help menu
-  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - context: `Section 4: legacy BSS Administration | 4.23 Documentation / Knowledge Base`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:371`
 - [ ] Add contextual help tooltips on complex form fields referencing relevant documentation
-  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - context: `Section 4: legacy BSS Administration | 4.23 Documentation / Knowledge Base`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:372`
 - [ ] Add a reseller commission report at `/admin/reports/reseller-commissions` with period filtering
-  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - context: `Section 4: legacy BSS Administration | 4.24 Resellers Commission Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:384`
 - [ ] Create three sub-views: consolidated (all resellers), per-reseller detail, and per-customer attribution
-  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - context: `Section 4: legacy BSS Administration | 4.24 Resellers Commission Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:385`
 - [ ] Track commissioned transactions, unpaid totals, and earned commissions per reseller
-  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - context: `Section 4: legacy BSS Administration | 4.24 Resellers Commission Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:386`
 - [ ] Support configurable commission structures per reseller (percentage, flat, tiered)
-  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - context: `Section 4: legacy BSS Administration | 4.24 Resellers Commission Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:387`
 - [ ] Add commission payout tracking and export for accounting
-  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - context: `Section 4: legacy BSS Administration | 4.24 Resellers Commission Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:388`
 - [ ] Add a subscriber growth/status chart to the admin dashboard showing daily subscriber counts by status over time
-  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - context: `Section 4: legacy BSS Administration | 4.25 Customers Chart`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:400`
 - [ ] Display time-series lines for: New, Active, Suspended/Blocked, Inactive/Canceled, and Total subscribers
-  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - context: `Section 4: legacy BSS Administration | 4.25 Customers Chart`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:401`
 - [ ] Add date range picker for customizable reporting periods (7d, 30d, 90d, 1y, custom)
-  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - context: `Section 4: legacy BSS Administration | 4.25 Customers Chart`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:402`
 - [ ] Highlight inflection points and anomalies (sudden drops or spikes) with annotations
-  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - context: `Section 4: legacy BSS Administration | 4.25 Customers Chart`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:403`
 - [ ] Calculate and display growth rate metrics (daily, weekly, monthly net subscriber change)
-  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - context: `Section 4: legacy BSS Administration | 4.25 Customers Chart`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:404`
 - [ ] Add chart export capability (PNG, PDF) for management reporting
-  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - context: `Section 4: legacy BSS Administration | 4.25 Customers Chart`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:405`
 - [ ] Add a bandwidth usage report per plan at `/admin/reports/usage-by-plan` showing aggregate download/upload totals per tariff plan
-  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.26 Internet Plan Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:417`
 - [ ] Display service count per plan alongside usage data for per-subscriber average calculation
-  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.26 Internet Plan Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:418`
 - [ ] Filter by partner/reseller and location for scoped usage analysis
-  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.26 Internet Plan Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:419`
 - [ ] Support "By counters" and "By sessions" calculation types for different RADIUS accounting methods
-  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.26 Internet Plan Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:420`
 - [ ] Add usage trend visualization (chart) showing per-plan consumption growth over time
-  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.26 Internet Plan Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:421`
 - [ ] Add a per-subscriber bandwidth usage report at `/admin/reports/customer-usage` showing individual data consumption
-  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.27 Customer Internet Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:433`
 - [ ] Include subscriber details (name, plan, IP, phone) alongside download/upload totals for context
-  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.27 Customer Internet Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:434`
 - [ ] Support custom field columns (building type, service area) in the usage report
-  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.27 Customer Internet Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:435`
 - [ ] Add data export (CSV/Excel) for the per-customer usage report
-  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.27 Customer Internet Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:436`
 - [ ] Flag heavy users (top percentile consumers) for network capacity planning
-  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - context: `Section 4: legacy BSS Administration | 4.27 Customer Internet Usage Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:437`
 - [ ] Add a "Future charges" preview at `/admin/billing/upcoming-charges` showing pending scheduled billing events before execution
-  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - context: `Section 4: legacy BSS Administration | 4.28 Finance Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:449`
 - [ ] Add a "Daily receipt" report showing all financial transactions processed on a given day
-  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - context: `Section 4: legacy BSS Administration | 4.28 Finance Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:450`
 - [ ] Add a "Charge history" log showing historical billing execution results
-  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - context: `Section 4: legacy BSS Administration | 4.28 Finance Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:451`
 - [ ] Include account balance alongside charge amount to identify subscribers who will go negative
-  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - context: `Section 4: legacy BSS Administration | 4.28 Finance Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:452`
 - [ ] Add a "Generate/Process" action to manually trigger pending charge processing
-  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - context: `Section 4: legacy BSS Administration | 4.28 Finance Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:453`
 - [ ] Filter by partner and location for scoped financial operations
-  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - context: `Section 4: legacy BSS Administration | 4.28 Finance Logs`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:454`
 - [ ] Add a revenue-per-plan report at `/admin/reports/revenue-per-plan` with period-over-period comparison
-  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - context: `Section 4: legacy BSS Administration | 4.29 Financial Report Per Plan`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:466`
 - [ ] Include a bar chart visualization showing top plans by revenue with main period vs. comparison period
-  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - context: `Section 4: legacy BSS Administration | 4.29 Financial Report Per Plan`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:467`
 - [ ] Display plan price, transaction count, invoiced amount, discounts applied, and net charge totals in a detail table
-  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - context: `Section 4: legacy BSS Administration | 4.29 Financial Report Per Plan`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:468`
 - [ ] Support period-over-period comparison (e.g., this month vs. last month) with difference calculation
-  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - context: `Section 4: legacy BSS Administration | 4.29 Financial Report Per Plan`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:469`
 - [ ] Filter by plan, partner/reseller, and location for segmented analysis
-  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - context: `Section 4: legacy BSS Administration | 4.29 Financial Report Per Plan`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:470`
 - [ ] Show currency-formatted values appropriate to the organization's locale
-  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - context: `Section 4: legacy BSS Administration | 4.29 Financial Report Per Plan`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:471`
 - [ ] Enhance the existing invoices report to include VAT/tax breakdown columns (VAT amount, net amount, total)
-  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - context: `Section 4: legacy BSS Administration | 4.30 Invoice Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:483`
 - [ ] Add color-coded payment status badges (Paid=green, Unpaid=rose, Partial=amber, Overdue=red)
-  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - context: `Section 4: legacy BSS Administration | 4.30 Invoice Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:484`
 - [ ] Support custom field columns in the invoice report (building type, service area, etc.)
-  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - context: `Section 4: legacy BSS Administration | 4.30 Invoice Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:485`
 - [ ] Add invoice number formatting with configurable prefix/pattern (e.g., date-based sequences)
-  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - context: `Section 4: legacy BSS Administration | 4.30 Invoice Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:486`
 - [ ] Add bulk invoice export (PDF batch, CSV summary) from the report view
-  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - context: `Section 4: legacy BSS Administration | 4.30 Invoice Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:487`
 - [ ] Add a customer statements report at `/admin/billing/statements` showing per-customer financial summaries with opening and closing balances
-  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - context: `Section 4: legacy BSS Administration | 4.31 Statements Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:499`
 - [ ] Add a "Finance customers report" sub-tab summarizing financial status per customer
-  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - context: `Section 4: legacy BSS Administration | 4.31 Statements Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:500`
 - [ ] Add a "Receivables aging report" sub-tab showing outstanding balances bucketed by age (30/60/90/120+ days)
-  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - context: `Section 4: legacy BSS Administration | 4.31 Statements Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:501`
 - [ ] Support bulk PDF statement generation for all customers or a filtered subset
-  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - context: `Section 4: legacy BSS Administration | 4.31 Statements Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:502`
 - [ ] Add "Send to customers" bulk action to email statements to all subscribers
-  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - context: `Section 4: legacy BSS Administration | 4.31 Statements Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:503`
 - [ ] Include transaction type filtering (invoices only, payments only, all transactions)
-  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - context: `Section 4: legacy BSS Administration | 4.31 Statements Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:504`
 - [ ] Add a tax report at `/admin/reports/tax` showing per-invoice tax details with VAT rate, net amount, and tax amount
-  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - context: `Section 4: legacy BSS Administration | 4.32 Tax Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:516`
 - [ ] Add a "Tax totals" summary sub-tab aggregating total tax collected by rate/category
-  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - context: `Section 4: legacy BSS Administration | 4.32 Tax Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:517`
 - [ ] Include document number, customer reference, and transaction description for audit-ready reporting
-  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - context: `Section 4: legacy BSS Administration | 4.32 Tax Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:518`
 - [ ] Support multi-rate tax reporting (different VAT rates for different service types)
-  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - context: `Section 4: legacy BSS Administration | 4.32 Tax Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:519`
 - [ ] Add tax report export in formats required by local tax authorities
-  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - context: `Section 4: legacy BSS Administration | 4.32 Tax Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:520`
 - [ ] Add a custom prices and discounts report at `/admin/reports/custom-pricing` listing all non-standard pricing overrides and active discounts
-  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - context: `Section 4: legacy BSS Administration | 4.33 Custom Prices and Discounts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:532`
 - [ ] Show the difference between standard tariff price and custom unit price for each subscriber
-  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - context: `Section 4: legacy BSS Administration | 4.33 Custom Prices and Discounts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:533`
 - [ ] Display discount type (percentage, fixed amount), value, and validity period
-  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - context: `Section 4: legacy BSS Administration | 4.33 Custom Prices and Discounts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:534`
 - [ ] Filter by partner, location, plan, and discount type
-  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - context: `Section 4: legacy BSS Administration | 4.33 Custom Prices and Discounts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:535`
 - [ ] Add alerts for expiring discounts (discounts ending within 30 days)
-  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - context: `Section 4: legacy BSS Administration | 4.33 Custom Prices and Discounts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:536`
 - [ ] Support bulk discount expiration/renewal from the report view
-  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - context: `Section 4: legacy BSS Administration | 4.33 Custom Prices and Discounts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:537`
 - [ ] Add a revenue by category report at `/admin/reports/revenue-categories` showing income breakdown by service/transaction type
-  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - context: `Section 4: legacy BSS Administration | 4.34 Transactions Categories Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:549`
 - [ ] Calculate and display ARPU (Average Revenue Per User/Service) per category
-  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - context: `Section 4: legacy BSS Administration | 4.34 Transactions Categories Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:550`
 - [ ] Show invoice count, transaction count, gross income, tax, and net income per category
-  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - context: `Section 4: legacy BSS Administration | 4.34 Transactions Categories Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:551`
 - [ ] Track data top-up revenue separately from subscription revenue
-  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - context: `Section 4: legacy BSS Administration | 4.34 Transactions Categories Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:552`
 - [ ] Support period filtering and partner scoping for multi-tenant revenue analysis
-  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - context: `Section 4: legacy BSS Administration | 4.34 Transactions Categories Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:553`
 - [ ] Add a customer contracts management module at `/admin/legal/contracts` with lifecycle tracking
-  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - context: `Section 4: legacy BSS Administration | 4.35 Customer Contracts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:565`
 - [ ] Create three contract views: Pending Signature, Expiring Soon (within configurable window), and Signed/Active
-  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - context: `Section 4: legacy BSS Administration | 4.35 Customer Contracts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:566`
 - [ ] Support digital contract signing workflow (generate -> send -> track -> archive)
-  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - context: `Section 4: legacy BSS Administration | 4.35 Customer Contracts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:567`
 - [ ] Add contract expiration alerting for contracts expiring within 30/60/90 days
-  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - context: `Section 4: legacy BSS Administration | 4.35 Customer Contracts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:568`
 - [ ] Link contracts to subscriber records and display contract status on subscriber detail page
-  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - context: `Section 4: legacy BSS Administration | 4.35 Customer Contracts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:569`
 - [ ] Support contract template management for standardized service agreements
-  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - context: `Section 4: legacy BSS Administration | 4.35 Customer Contracts Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:570`
 - [ ] Add an MRR (Monthly Recurring Revenue) net change report at `/admin/reports/mrr` showing month-over-month subscriber and revenue movement
-  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - context: `Section 4: legacy BSS Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:582`
 - [ ] Track new service activations, cancellations/churn, and net change per month
-  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - context: `Section 4: legacy BSS Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:583`
 - [ ] Display month-start and month-end subscriber counts for cohort tracking
-  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - context: `Section 4: legacy BSS Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:584`
 - [ ] Filter by year, partner, and location for segmented analysis
-  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - context: `Section 4: legacy BSS Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:585`
 - [ ] Add MRR trend chart visualization with trendline projection
-  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - context: `Section 4: legacy BSS Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:586`
 - [ ] Calculate MRR expansion (upgrades) and contraction (downgrades) separately from new/churn
-  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - context: `Section 4: legacy BSS Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:587`
 - [ ] Add a new services/activations report at `/admin/reports/new-services` listing all newly provisioned services with activation details
-  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - context: `Section 4: legacy BSS Administration | 4.37 New Services Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:599`
 - [ ] Include customer name, plan, price, activation date, status, and physical address
-  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - context: `Section 4: legacy BSS Administration | 4.37 New Services Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:600`
 - [ ] Add status filtering (Active, Blocked, Disabled) to see activation success rates
-  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - context: `Section 4: legacy BSS Administration | 4.37 New Services Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:601`
 - [ ] Show connection identifiers (PPPoE username, IP address) for technical cross-reference
-  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - context: `Section 4: legacy BSS Administration | 4.37 New Services Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:602`
 - [ ] Calculate activation metrics: average time-to-activate, activation success rate, revenue from new services
-  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - context: `Section 4: legacy BSS Administration | 4.37 New Services Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:603`
 - [ ] Add a configurable data export tool at `/admin/system/export` supporting multiple entity types (subscribers, services, invoices, payments)
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:615`
 - [ ] Allow column/attribute selection for custom export schemas
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:616`
 - [ ] Support multiple delimiters (comma, tab, semicolon) and file formats (CSV, Excel, JSON)
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:617`
 - [ ] Add "First row contains column names" toggle for header inclusion
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:618`
 - [ ] Support status and partner filtering before export
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:619`
 - [ ] Save export configurations as templates for recurring exports
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:620`
 - [ ] Add scheduled/automated export capability (e.g., weekly subscriber export to SFTP)
-  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - context: `Section 4: legacy BSS Administration | 4.38 Service Export`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:621`
 - [ ] Add a support ticket reporting module at `/admin/reports/tickets` (if/when ticketing is added to DotMac Sub)
-  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - context: `Section 4: legacy BSS Administration | 4.39 Ticket Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:633`
 - [ ] Include SLA compliance reporting (response time vs. target, resolution time vs. target)
-  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - context: `Section 4: legacy BSS Administration | 4.39 Ticket Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:634`
 - [ ] Add agent performance metrics (tickets resolved, average resolution time, customer satisfaction score)
-  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - context: `Section 4: legacy BSS Administration | 4.39 Ticket Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:635`
 - [ ] Track ticket lifecycle stages with timing metrics per stage
-  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - context: `Section 4: legacy BSS Administration | 4.39 Ticket Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:636`
 - [ ] Add "Cost of support" analysis calculating support cost per subscriber
-  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - context: `Section 4: legacy BSS Administration | 4.39 Ticket Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:637`
 - [ ] Include customer feedback/satisfaction scoring for closed tickets
-  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - context: `Section 4: legacy BSS Administration | 4.39 Ticket Reports`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:638`
 - [ ] Add a customer referral program module with referrer/referee tracking
-  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - context: `Section 4: legacy BSS Administration | 4.40 Referral System Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:650`
 - [ ] Create a referral report at `/admin/reports/referrals` showing referral chains with bonus amounts
-  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - context: `Section 4: legacy BSS Administration | 4.40 Referral System Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:651`
 - [ ] Track referral lifecycle: invitation sent -> account created -> service activated -> bonus credited
-  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - context: `Section 4: legacy BSS Administration | 4.40 Referral System Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:652`
 - [ ] Support configurable referral bonuses (credit note, discount, cash) for both referrer and referee
-  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - context: `Section 4: legacy BSS Administration | 4.40 Referral System Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:653`
 - [ ] Auto-generate credit notes when referred customers activate service
-  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - context: `Section 4: legacy BSS Administration | 4.40 Referral System Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:654`
 - [ ] Add referral link/code generation for subscribers to share via portal
-  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - context: `Section 4: legacy BSS Administration | 4.40 Referral System Report`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:655`
 - [ ] Add a prepaid voucher/refill card management module for ISPs that offer prepaid internet plans
-  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - context: `Section 4: legacy BSS Administration | 4.41 Refill Cards Statistics`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:667`
 - [ ] Track voucher batches (series) with inventory counts: active, used, expired, disabled
-  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - context: `Section 4: legacy BSS Administration | 4.41 Refill Cards Statistics`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:668`
 - [ ] Display monetary totals per batch (amount used, amount active, amount expired)
-  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - context: `Section 4: legacy BSS Administration | 4.41 Refill Cards Statistics`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:669`
 - [ ] Support voucher generation in bulk batches with configurable denominations
-  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - context: `Section 4: legacy BSS Administration | 4.41 Refill Cards Statistics`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:670`
 - [ ] Add voucher redemption tracking linked to subscriber accounts
-  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - context: `Section 4: legacy BSS Administration | 4.41 Refill Cards Statistics`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:671`
 - [ ] Filter voucher statistics by partner for reseller-scoped prepaid operations
-  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - context: `Section 4: legacy BSS Administration | 4.41 Refill Cards Statistics`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:672`
 - [ ] Add DNS-based threat intelligence integration support for ISP network security
-  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - context: `Section 4: legacy BSS Administration | 4.42 DNS Threats Archive`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:684`
 - [ ] Create a DNS threats dashboard showing blocked domains, threat categories, and affected subscribers
-  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - context: `Section 4: legacy BSS Administration | 4.42 DNS Threats Archive`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:685`
 - [ ] Support integration with DNS threat intelligence providers (Whalebone, Cisco Umbrella, etc.)
-  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - context: `Section 4: legacy BSS Administration | 4.42 DNS Threats Archive`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:686`
 - [ ] Archive DNS threat events with subscriber attribution for security incident investigation
-  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - context: `Section 4: legacy BSS Administration | 4.42 DNS Threats Archive`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:687`
 - [ ] Add threat statistics reporting (threats blocked per day, top threat categories, most-targeted subscribers)
-  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - context: `Section 4: legacy BSS Administration | 4.42 DNS Threats Archive`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:688`
 
 ## 07_maps_speedtest_dns.md
 Unchecked items: 87
 
-- [ ] **Toggleable layer filter panel**: Add a collapsible right-side panel (like Splynx) with checkboxes to show/hide: Subscribers (Online), Subscribers (Offline), OLTs, ONTs, CPEs, Pop Sites, FDH Cabinets, Splice Closures, Fiber Routes, NAS Devices, Leads/Prospects
+- [ ] **Toggleable layer filter panel**: Add a collapsible right-side panel (like legacy BSS) with checkboxes to show/hide: Subscribers (Online), Subscribers (Offline), OLTs, ONTs, CPEs, Pop Sites, FDH Cabinets, Splice Closures, Fiber Routes, NAS Devices, Leads/Prospects
   - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Layer Controls`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:33`
 - [ ] **Apply/refresh button for filters**: Allow users to select multiple layers and apply them in a batch rather than individual toggles, reducing map re-renders

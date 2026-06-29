@@ -4,6 +4,8 @@
 .pub-cache/
 .pub/
 build/
+.flutter/
+.flutter-home/
 .flutter-plugins
 .flutter-plugins-dependencies
 pubspec.lock

@@ -1,15 +1,15 @@
 # Section 11: Integrations & Admin Tools
 
-## Source: Splynx ISP Management Platform
+## Source: legacy BSS ISP Management Platform
 
-This document catalogs feature improvements for DotMac Sub based on a comprehensive review of 23 screenshots from the Splynx ISP management platform's Integrations and Tools sections. Each screenshot was analyzed for its feature capabilities and a corresponding improvement is proposed for DotMac Sub.
+This document catalogs feature improvements for DotMac Sub based on a comprehensive review of 23 screenshots from the legacy BSS ISP management platform's Integrations and Tools sections. Each screenshot was analyzed for its feature capabilities and a corresponding improvement is proposed for DotMac Sub.
 
 ---
 
 ## 11.1 Integration Module Management
 
 ### Screenshot: Main Modules Toggle Dashboard
-**Splynx Feature:** A centralized "Main Modules" configuration page under Config > Integrations that lets administrators enable or disable entire functional areas of the platform using toggle switches. Categories include Finance (Dashboard, Invoices, Credit notes, Transactions, Payments, Proforma invoices, History & Preview, Payment statements, Refill cards, Costs), Tariff Plans (Internet, FUP, CAP, Recurring, One-time, Bundles), Customers (Services, Additional discounts, Vouchers), Networking (Network sites, View, Customer services, Hardware, Routers, CPE/MikroTik, TR-069/ACS, Hardware, IPv4 networks, IPv6 networks), and additional top-level toggles for Inventory, Tickets, Scheduling, Voice, and Leads.
+**legacy BSS Feature:** A centralized "Main Modules" configuration page under Config > Integrations that lets administrators enable or disable entire functional areas of the platform using toggle switches. Categories include Finance (Dashboard, Invoices, Credit notes, Transactions, Payments, Proforma invoices, History & Preview, Payment statements, Refill cards, Costs), Tariff Plans (Internet, FUP, CAP, Recurring, One-time, Bundles), Customers (Services, Additional discounts, Vouchers), Networking (Network sites, View, Customer services, Hardware, Routers, CPE/MikroTik, TR-069/ACS, Hardware, IPv4 networks, IPv6 networks), and additional top-level toggles for Inventory, Tickets, Scheduling, Voice, and Leads.
 
 **DotMac Sub Improvements:**
 
@@ -24,7 +24,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [x] Create a service `app/services/module_manager.py` that caches module states in Redis and provides `is_module_enabled(module_name)` helper used by route guards and template context
 
 ### Screenshot: Add-ons Marketplace (Page 1 & 2)
-**Splynx Feature:** An "Add-ons" marketplace listing installable extensions with columns for Name, Version, Description, and file size. Extensions include: splynx-3cx (SIP Framework), splynx-agent (Agents add-on), splynx-ai (AI add-on), splynx-azure-sso (Azure SSO), splynx-billing-config (Billing Config), splynx-cashdesk (Cashdesk add-on), splynx-genieacs (GenieACS), splynx-google-maps-v3, splynx-mailjet, splynx-mikrotik-discoverer-and-export (MikroTik discovery), splynx-moneris (payment), splynx-netcube, splynx-paymentexpress, splynx-paypal (PayPal), splynx-paystack (Paystack), splynx-portal (Self-care portal), splynx-portalino, splynx-powercode (PowerCode), splynx-quickbooks (QuickBooks), splynx-raisecom, splynx-realms, splynx-remita (Remita), splynx-resellers (Resellers), splynx-sagepay (SagePay), splynx-speedtest, splynx-ssh-terminal, splynx-stripe (Stripe), splynx-ticket-feedback, splynx-whatsapp (WhatsApp), splynx-xero (Xero), splynx-zoho-books (Zoho Books). Each has Install/Update/Enable/Disable status badges.
+**legacy BSS Feature:** An "Add-ons" marketplace listing installable extensions with columns for Name, Version, Description, and file size. Extensions include: legacy-bss-3cx (SIP Framework), legacy-bss-agent (Agents add-on), legacy-bss-ai (AI add-on), legacy-bss-azure-sso (Azure SSO), legacy-bss-billing-config (Billing Config), legacy-bss-cashdesk (Cashdesk add-on), legacy-bss-genieacs (GenieACS), legacy-bss-google-maps-v3, legacy-bss-mailjet, legacy-bss-mikrotik-discoverer-and-export (MikroTik discovery), legacy-bss-moneris (payment), legacy-bss-netcube, legacy-bss-paymentexpress, legacy-bss-paypal (PayPal), legacy-bss-paystack (Paystack), legacy-bss-portal (Self-care portal), legacy-bss-portalino, legacy-bss-powercode (PowerCode), legacy-bss-quickbooks (QuickBooks), legacy-bss-raisecom, legacy-bss-realms, legacy-bss-remita (Remita), legacy-bss-resellers (Resellers), legacy-bss-sagepay (SagePay), legacy-bss-speedtest, legacy-bss-ssh-terminal, legacy-bss-stripe (Stripe), legacy-bss-ticket-feedback, legacy-bss-whatsapp (WhatsApp), legacy-bss-xero (Xero), legacy-bss-zoho-books (Zoho Books). Each has Install/Update/Enable/Disable status badges.
 
 **DotMac Sub Improvements:**
 
@@ -34,7 +34,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [x] Add version tracking and update-available indicators for each connector, with a "Check for updates" action button
 
 ### Screenshot: Install Module Form
-**Splynx Feature:** A custom module installation form under Integrations > Install module, with fields for Module name, Title, Type (Simple dropdown), and a Config section with Root (dropdown for where the module appears in navigation) and Icon (Font Awesome icon code). After installation, users are redirected to an "Additional fields" page to define module properties.
+**legacy BSS Feature:** A custom module installation form under Integrations > Install module, with fields for Module name, Title, Type (Simple dropdown), and a Config section with Root (dropdown for where the module appears in navigation) and Icon (Font Awesome icon code). After installation, users are redirected to an "Additional fields" page to define module properties.
 
 **DotMac Sub Improvements:**
 
@@ -43,7 +43,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [x] Support a "Simple" integration type that embeds an external URL in an iframe within the admin panel, and a "Webhook" type that sends/receives HTTP callbacks
 
 ### Screenshot: Modules List (Installed)
-**Splynx Feature:** A "Modules list" table showing 20 installed modules with columns: Name (e.g., huawei_supported_boards, splynx_huawei_module, splynx_admin_agents, splynx_admin_mailjet, splynx_cashdesk, splynx_customer_cpe_reset, splynx_olt_autodiscover, splynx_portal_social_registration, splynx_trust_agents, splynx_network_weathermap, splynx_paystack_addon, splynx_moneris_addon, splynx_referral_system, splynx_speedtest, splynx_ssh_terminal), Title, Root location, Type (Simple/Add-on), a "Relay portal status for portal" indicator, and Actions (edit/delete with color-coded enable/disable buttons in green and red).
+**legacy BSS Feature:** A "Modules list" table showing 20 installed modules with columns: Name (e.g., huawei_supported_boards, legacy_bss_huawei_module, legacy_bss_admin_agents, legacy_bss_admin_mailjet, legacy_bss_cashdesk, legacy_bss_customer_cpe_reset, legacy_bss_olt_autodiscover, legacy_bss_portal_social_registration, legacy_bss_trust_agents, legacy_bss_network_weathermap, legacy_bss_paystack_addon, legacy_bss_moneris_addon, legacy_bss_referral_system, legacy_bss_speedtest, legacy_bss_ssh_terminal), Title, Root location, Type (Simple/Add-on), a "Relay portal status for portal" indicator, and Actions (edit/delete with color-coded enable/disable buttons in green and red).
 
 **DotMac Sub Improvements:**
 
@@ -57,7 +57,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.2 Webhooks & Event Hooks
 
 ### Screenshot: Hooks Configuration
-**Splynx Feature:** A "Hooks" management table under Config > Integrations showing 11 configured webhook/event hooks with columns: ID, Title, Type (CLI or Web), Enabled (Yes/No badge), and Actions (edit, duplicate, delete). Configured hooks include: Splynx Huawei OLT (CLI), Zoho (Web), Base Station Update (Web), tickets (Web, disabled), Splynx Referral system (CLI), WhatsApp (CLI), Splynx AI (CLI), n8n (Web), Splynx Add-on Mailjet (CLI), erpnext finance integration (Web), and Notifications (Web). Each can be individually enabled/disabled.
+**legacy BSS Feature:** A "Hooks" management table under Config > Integrations showing 11 configured webhook/event hooks with columns: ID, Title, Type (CLI or Web), Enabled (Yes/No badge), and Actions (edit, duplicate, delete). Configured hooks include: legacy BSS Huawei OLT (CLI), Zoho (Web), Base Station Update (Web), tickets (Web, disabled), legacy BSS Referral system (CLI), WhatsApp (CLI), legacy BSS AI (CLI), n8n (Web), legacy BSS Add-on Mailjet (CLI), erpnext finance integration (Web), and Notifications (Web). Each can be individually enabled/disabled.
 
 **DotMac Sub Improvements:**
 
@@ -75,7 +75,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.3 Third-Party Platform Integrations
 
 ### Screenshot: 3CX Integration (VoIP/PBX)
-**Splynx Feature:** A 3CX VoIP/PBX integration page under Config > Integrations showing an embedded iframe for the 3CX configuration interface. The page has Reload and "Open in new window" action buttons. (Currently showing a 403 Forbidden error, indicating the integration is installed but the 3CX server is not accessible.)
+**legacy BSS Feature:** A 3CX VoIP/PBX integration page under Config > Integrations showing an embedded iframe for the 3CX configuration interface. The page has Reload and "Open in new window" action buttons. (Currently showing a 403 Forbidden error, indicating the integration is installed but the 3CX server is not accessible.)
 
 **DotMac Sub Improvements:**
 
@@ -84,7 +84,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [ ] Implement connection health monitoring for embedded integrations that shows a clear error state (with troubleshooting guidance) when the external service is unreachable
 
 ### Screenshot: QuickBooks Accounting Integration
-**Splynx Feature:** A QuickBooks Accounting integration page under Config > Integrations with an embedded iframe for the QuickBooks connector configuration. Has Reload and "Open in new window" buttons. (Currently showing 403 Forbidden, indicating the connector is installed but not fully configured.)
+**legacy BSS Feature:** A QuickBooks Accounting integration page under Config > Integrations with an embedded iframe for the QuickBooks connector configuration. Has Reload and "Open in new window" buttons. (Currently showing 403 Forbidden, indicating the connector is installed but not fully configured.)
 
 **DotMac Sub Improvements:**
 
@@ -96,7 +96,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [x] Implement field mapping configuration allowing admins to map DotMac fields to accounting platform fields (e.g., DotMac invoice number -> QuickBooks reference number)
 
 ### Screenshot: WhatsApp Config Integration
-**Splynx Feature:** A WhatsApp Config integration page under Config > Integrations. The page shows "File not found" indicating the WhatsApp add-on is installed but the configuration file is missing. Has Reload and "Open in new window" buttons.
+**legacy BSS Feature:** A WhatsApp Config integration page under Config > Integrations. The page shows "File not found" indicating the WhatsApp add-on is installed but the configuration file is missing. Has Reload and "Open in new window" buttons.
 
 **DotMac Sub Improvements:**
 
@@ -110,7 +110,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.4 Payment Gateway Integrations
 
 ### Screenshots: Add-ons Marketplace (payment providers visible)
-**Splynx Feature:** The add-ons marketplace lists multiple payment gateway integrations: PayPal, Paystack, Moneris, PaymentExpress, SagePay, Stripe, and Remita. Each is a separately installable add-on with version tracking.
+**legacy BSS Feature:** The add-ons marketplace lists multiple payment gateway integrations: PayPal, Paystack, Moneris, PaymentExpress, SagePay, Stripe, and Remita. Each is a separately installable add-on with version tracking.
 
 **DotMac Sub Improvements:**
 
@@ -129,7 +129,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.5 Data Import Tools
 
 ### Screenshot: Import History
-**Splynx Feature:** A "Config > Tools > Import" page showing an import history table with columns: ID, Module (which data type was imported), Date & Time, File (uploaded CSV/Excel), Handler (import processor used), Status (success/failed/partial), and Actions. Has a "New Import" button. Currently empty (0 entries).
+**legacy BSS Feature:** A "Config > Tools > Import" page showing an import history table with columns: ID, Module (which data type was imported), Date & Time, File (uploaded CSV/Excel), Handler (import processor used), Status (success/failed/partial), and Actions. Has a "New Import" button. Currently empty (0 entries).
 
 **DotMac Sub Improvements:**
 
@@ -143,7 +143,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [x] Process large imports as Celery background tasks with progress tracking and email notification on completion
 
 ### Screenshot: Export Tool
-**Splynx Feature:** A "Config > Tools > Export" page with a simple form containing: Module dropdown (currently set to "Partners"), Fields dropdown (set to "All selected" with multi-select capability), Delimiter dropdown (set to "Tabulator" with options for comma, semicolon, tab), a "First row contains column titles" toggle, and an Export button.
+**legacy BSS Feature:** A "Config > Tools > Export" page with a simple form containing: Module dropdown (currently set to "Partners"), Fields dropdown (set to "All selected" with multi-select capability), Delimiter dropdown (set to "Tabulator" with options for comma, semicolon, tab), a "First row contains column titles" toggle, and an Export button.
 
 **DotMac Sub Improvements:**
 
@@ -159,7 +159,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.6 Bulk Service Activation
 
 ### Screenshot: Activate Services Tool
-**Splynx Feature:** A "Config > Tools > Activate services" page with three tabs: "Activate internet services", "Activate recurring services", and "Activate bundle services". The active tab shows a Customers filter section (Partner: Any, Status: Active, Skip active service check toggle, Ignore without IP/Additional IP toggle) and a Fields pairing section that maps source fields to target values: Plan (Plan -> 1 Mbps Fiber), Activation date (Manual input -> 24/02/2026), Router (ID -> Not selected), IPv4 assignment (None/Router will assign IP -> None), MAC (MAC(s) -> Not selected), Additional network, Login prefix (Customer login -> Login), Login suffix (Manual input), Service password (Manual input). Plus an "Other" section with "Set customers as Active on Submit" toggle.
+**legacy BSS Feature:** A "Config > Tools > Activate services" page with three tabs: "Activate internet services", "Activate recurring services", and "Activate bundle services". The active tab shows a Customers filter section (Partner: Any, Status: Active, Skip active service check toggle, Ignore without IP/Additional IP toggle) and a Fields pairing section that maps source fields to target values: Plan (Plan -> 1 Mbps Fiber), Activation date (Manual input -> 24/02/2026), Router (ID -> Not selected), IPv4 assignment (None/Router will assign IP -> None), MAC (MAC(s) -> Not selected), Additional network, Login prefix (Customer login -> Login), Login suffix (Manual input), Service password (Manual input). Plus an "Other" section with "Set customers as Active on Submit" toggle.
 
 **DotMac Sub Improvements:**
 
@@ -176,7 +176,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.7 VPN Management Tools
 
 ### Screenshot: VPN Management (WireGuard & OpenVPN)
-**Splynx Feature:** A "Config > Tools > VPN" page with two tabs: "Wireguard" and "OpenVPN". The WireGuard tab shows action buttons (Refresh, Restart, Configuration, Status, Add Wireguard client) and a connections table with columns: ID, Connection name, Public Key, IP, Status, and Actions. Currently empty. This tool manages VPN tunnels between the Splynx server and remote network sites/routers.
+**legacy BSS Feature:** A "Config > Tools > VPN" page with two tabs: "Wireguard" and "OpenVPN". The WireGuard tab shows action buttons (Refresh, Restart, Configuration, Status, Add Wireguard client) and a connections table with columns: ID, Connection name, Public Key, IP, Status, and Actions. Currently empty. This tool manages VPN tunnels between the legacy BSS server and remote network sites/routers.
 
 **DotMac Sub Improvements:**
 
@@ -192,7 +192,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.8 Invoice Cache Management
 
 ### Screenshot: Invoices Cache
-**Splynx Feature:** A "Config > Tools > Invoices cache" page showing a simple status message: "There are 0 cached invoices." This is a cache management tool for pre-rendered invoice PDFs, allowing admins to view and clear cached invoices.
+**legacy BSS Feature:** A "Config > Tools > Invoices cache" page showing a simple status message: "There are 0 cached invoices." This is a cache management tool for pre-rendered invoice PDFs, allowing admins to view and clear cached invoices.
 
 **DotMac Sub Improvements:**
 
@@ -206,7 +206,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.9 GPS Coordinate Management
 
 ### Screenshot: Update GPS Coordinates Tool
-**Splynx Feature:** A "Config > Tools > Update GPS" page with filter controls (Period date range, Customer status dropdown set to "All selected", Rewrite existing coordinates toggle set to "No") and an "Update GPS Coordinates" action button. Below is a log table with columns: ID, Customer, Address, Status, Date created. This tool batch-geocodes customer addresses to GPS coordinates using an address-to-coordinates service.
+**legacy BSS Feature:** A "Config > Tools > Update GPS" page with filter controls (Period date range, Customer status dropdown set to "All selected", Rewrite existing coordinates toggle set to "No") and an "Update GPS Coordinates" action button. Below is a log table with columns: ID, Customer, Address, Status, Date created. This tool batch-geocodes customer addresses to GPS coordinates using an address-to-coordinates service.
 
 **DotMac Sub Improvements:**
 
@@ -223,7 +223,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.10 Customer Data Recovery
 
 ### Screenshot: Restore Deleted Customers
-**Splynx Feature:** A "Config > Tools > Restore deleted customers" page with the description "Restore customers with all related data" and a search field accepting: ID, login, name, email, or phone number. A "Find" button initiates the search. This tool allows administrators to recover accidentally deleted customer records and all their associated data (services, invoices, payments, etc.).
+**legacy BSS Feature:** A "Config > Tools > Restore deleted customers" page with the description "Restore customers with all related data" and a search field accepting: ID, login, name, email, or phone number. A "Find" button initiates the search. This tool allows administrators to recover accidentally deleted customer records and all their associated data (services, invoices, payments, etc.).
 
 **DotMac Sub Improvements:**
 
@@ -240,7 +240,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.11 Service Migration Tools
 
 ### Screenshots: Migrate Services (Empty + Populated)
-**Splynx Feature:** A "Config > Tools > Migrate services" page with filter controls (Partner, Location, Status dropdowns) and a table showing subscribers with their current service assignments: Status (color-coded badges: Active in green, Inactive in yellow, Blocked in red), ID, Portal login, Full name, Phone number, Internet plan, IPs, Routers, MAC addresses, Base Station/OLT port. An Actions column allows migrating individual subscribers. The populated view shows ~600 subscribers with their current service details, enabling administrators to bulk-migrate services from one plan/router/base-station to another.
+**legacy BSS Feature:** A "Config > Tools > Migrate services" page with filter controls (Partner, Location, Status dropdowns) and a table showing subscribers with their current service assignments: Status (color-coded badges: Active in green, Inactive in yellow, Blocked in red), ID, Portal login, Full name, Phone number, Internet plan, IPs, Routers, MAC addresses, Base Station/OLT port. An Actions column allows migrating individual subscribers. The populated view shows ~600 subscribers with their current service details, enabling administrators to bulk-migrate services from one plan/router/base-station to another.
 
 **DotMac Sub Improvements:**
 
@@ -257,7 +257,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.12 Database Administration
 
 ### Screenshot: Adminer Database Tool
-**Splynx Feature:** An embedded Adminer (database administration tool) accessible from Config > Tools, gated behind a password confirmation with a warning: "By using the Adminer tool you hereby give notice that you do so at your own risk. Splynx is not responsible for any changes made to the database." Has Password field, "Go to dashboard" and "Confirm" buttons.
+**legacy BSS Feature:** An embedded Adminer (database administration tool) accessible from Config > Tools, gated behind a password confirmation with a warning: "By using the Adminer tool you hereby give notice that you do so at your own risk. legacy BSS is not responsible for any changes made to the database." Has Password field, "Go to dashboard" and "Confirm" buttons.
 
 **DotMac Sub Improvements:**
 
@@ -274,7 +274,7 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 ## 11.13 Speed Test Integration
 
 ### Screenshot: Speedtest Empty History
-**Splynx Feature:** A "Config > Tools > Speedtest empty history" page (appears to be a Speedtest add-on configuration page showing "File not found" -- the add-on is installed but not fully configured). This feature provides an integrated speed test tool that subscribers can use to test their connection, with results logged and visible to both the subscriber and the ISP admin.
+**legacy BSS Feature:** A "Config > Tools > Speedtest empty history" page (appears to be a Speedtest add-on configuration page showing "File not found" -- the add-on is installed but not fully configured). This feature provides an integrated speed test tool that subscribers can use to test their connection, with results logged and visible to both the subscriber and the ISP admin.
 
 **DotMac Sub Improvements:**
 
@@ -342,5 +342,5 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 ---
 
-*Document generated from analysis of 23 Splynx screenshots (10 integration + 13 tools) on 2026-02-24.*
+*Document generated from analysis of 23 legacy BSS screenshots (10 integration + 13 tools) on 2026-02-24.*
 *Target system: DotMac Sub ISP Management Platform (FastAPI/HTMX/Tailwind CSS v4).*

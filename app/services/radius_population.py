@@ -35,13 +35,17 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
 )
+from app.services.radius_address_lists import (
+    DEFAULT_SUSPENDED_ADDRESS_LIST,
+    suspended_address_list,
+)
 from app.services.radius_dsn import radius_dsn_libpq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
-SUSPENDED_ADDRESS_LIST = "suspended"  # MikroTik address-list for blocked customers
+SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
 def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
@@ -63,6 +67,7 @@ def _radreply_attrs(
     framed_ipv4: str | None = None,
     framed_ipv6: str | None = None,
     delegated_ipv6: str | None = None,
+    suspended_list_name: str = SUSPENDED_ADDRESS_LIST,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -132,7 +137,7 @@ def _radreply_attrs(
         SubscriptionStatus.suspended,
     )
     if is_blocked and captive_redirect_enabled:
-        attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
+        attrs.append(("Mikrotik-Address-List", ":=", suspended_list_name))
     elif additional_routes and not is_blocked:
         # Additional routed IP blocks -> one Framed-Route each (+= so multiple
         # coexist; gateway 0.0.0.0 = via this session, since primaries are CGNAT).
@@ -169,6 +174,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     enc_key = get_encryption_key()
     db = SessionLocal()
     try:
+        suspended_list_name = suspended_address_list(db)
         # Active, blocked, or suspended subs with a login — blocked/suspended
         # subs get a walled-garden radreply so suspension actually takes
         # effect at the BNG (hard-deleting their rows would fail-closed but
@@ -334,6 +340,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 additional_routes=routes_by_subscriber.get(sub.subscriber_id),
                 framed_ipv4=eff_ipv4,
                 delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
+                suspended_list_name=suspended_list_name,
             )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,

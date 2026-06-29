@@ -415,6 +415,10 @@ class OfferSummary(BaseModel):
     service_type: ServiceType
     access_type: AccessType
     status: OfferStatus
+    # Provisioned line rate, so the app can show what the plan actually
+    # delivers (e.g. "Unlimited Platinum Plus — 100/50 Mbps").
+    speed_download_mbps: int | None = None
+    speed_upload_mbps: int | None = None
 
 
 class SubscriptionAddOnRead(BaseModel):

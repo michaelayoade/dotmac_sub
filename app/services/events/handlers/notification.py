@@ -32,6 +32,39 @@ CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
     NotificationChannel.webhook: "webhook",
 }
 
+# Channel -> (setting key, env key) for the per-channel enable flag. A channel
+# listed here is created in the fan-out only when its flag is truthy; channels
+# NOT listed (e.g. email) are never suppressed at creation. We key off the
+# explicit enable flag rather than provider `is_available()` because the latter
+# is an unreliable signal (it false-negatives for email even while email
+# delivers), so gating creation on it would drop every notification.
+_CHANNEL_ENABLE_FLAG: dict[NotificationChannel, tuple[str, str]] = {
+    NotificationChannel.sms: ("sms_enabled", "SMS_ENABLED"),
+}
+
+_DISABLED_VALUES = {"false", "0", "no", "off", "disabled"}
+
+
+def _channel_disabled_in_config(db: Session, channel: NotificationChannel) -> bool:
+    """True only if ``channel`` is explicitly disabled by its enable flag.
+
+    Fail-open: any channel without a configured enable flag returns False (never
+    suppressed). Reads the same setting the provider uses, on the caller's
+    session, so it reflects live config without opening a new transaction.
+    """
+    flag = _CHANNEL_ENABLE_FLAG.get(channel)
+    if not flag:
+        return False
+    try:
+        from app.services.sms import _get_setting
+
+        value = _get_setting(db, flag[0], flag[1], "true")
+    except Exception:
+        # Never suppress on a lookup error — better a row that may fail at
+        # dispatch than a silently dropped notification.
+        return False
+    return str(value or "true").strip().lower() in _DISABLED_VALUES
+
 
 @dataclass(frozen=True)
 class EventNotificationSpec:
@@ -471,8 +504,23 @@ class NotificationHandler:
             (template.channel or NotificationChannel.email): template
             for template in templates
         }
-
         for channel in spec.channels:
+            # Skip channels explicitly disabled in config, so we don't create a
+            # row per spec channel that can only fail at dispatch (e.g. SMS with
+            # sms_enabled=false / no provider — the source of the failed-SMS
+            # backlog). This checks the channel ENABLE FLAG (deterministic
+            # config intent), NOT provider reachability: `is_available()` is an
+            # unreliable signal here — it false-negatives for email even while
+            # email is delivering, so gating creation on it would suppress every
+            # notification. Fail-open: channels with no enable flag are never
+            # skipped here; transient send failures stay the dispatcher's job.
+            if _channel_disabled_in_config(db, channel):
+                logger.debug(
+                    "Skipping event %s on %s: channel disabled in config",
+                    event.event_type.value,
+                    channel.value,
+                )
+                continue
             recipient = self._resolve_recipient(db, event, channel)
             if not recipient:
                 logger.debug(

@@ -1,6 +1,6 @@
 """Un-mangle ``localpart+NNNN@domain`` contact emails back to the real address.
 
-During the Splynx import / pre-decoupling era, customer contact emails were
+During the legacy import / pre-decoupling era, customer contact emails were
 artificially suffixed (``wanserverng+8265@gmail.com``, ``+8266``, ``+8267``, …)
 purely to satisfy the old global ``UNIQUE(subscribers.email)`` constraint when
 many customers under one reseller legitimately shared a contact address. Those

@@ -46,7 +46,7 @@ WHERE status = 'active' AND COALESCE(end_at, next_billing_at) < now();
 
 \echo '== D. billing_day vs next_billing_at day-of-month mismatch (anchor drift) =='
 -- Near-universal mismatch => the configured billing_day is decorative and
--- next_billing_at follows legacy Splynx anchors. Decide the single source of
+-- next_billing_at follows legacy billing anchors. Decide the single source of
 -- truth for the billing anniversary, then re-derive next_billing_at from it.
 SELECT sub.billing_mode,
        count(*) AS active_subs_with_next_billing,

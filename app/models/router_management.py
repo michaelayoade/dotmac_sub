@@ -107,7 +107,7 @@ class Router(Base):
     hostname: Mapped[str] = mapped_column(String(255), nullable=False)
     management_ip: Mapped[str] = mapped_column(String(255), nullable=False)
     rest_api_port: Mapped[int] = mapped_column(Integer, default=443)
-    rest_api_username: Mapped[str] = mapped_column(String(255), nullable=False)
+    rest_api_username: Mapped[str] = mapped_column(String(512), nullable=False)
     rest_api_password: Mapped[str] = mapped_column(String(512), nullable=False)
     use_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)

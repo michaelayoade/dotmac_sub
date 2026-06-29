@@ -25,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
+from app.services import chat_session as chat_session_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
@@ -49,6 +50,55 @@ router = APIRouter(prefix="/portal", tags=["web-customer"])
 
 logger = logging.getLogger(__name__)
 _emit_customer_event = emit_customer_event
+PAYMENT_VERIFICATION_ERROR_MESSAGE = (
+    "We could not confirm this payment yet. If you were charged, please do not "
+    "retry immediately; check your billing history or contact support with this "
+    "payment reference."
+)
+PAYMENT_CHARGE_ERROR_MESSAGE = (
+    "We could not charge that saved card. Please use another payment method or "
+    "try again later."
+)
+CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
+CARD_SAVE_ERROR_MESSAGE = (
+    "Payment was recorded, but we could not save this card. You can add a card "
+    "from Payment Methods."
+)
+
+
+def _payment_verification_error_response(
+    request: Request,
+    exc: Exception,
+    *,
+    status_code: int = 400,
+) -> Response:
+    logger.info(
+        "Customer payment verification failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return templates.TemplateResponse(
+        "customer/errors/400.html",
+        {"request": request, "message": PAYMENT_VERIFICATION_ERROR_MESSAGE},
+        status_code=status_code,
+    )
+
+
+def _capture_card_save_status(
+    db: Session,
+    *,
+    account_id: str,
+    reference: str,
+    provider: str | None,
+    requested: bool,
+) -> dict[str, str] | None:
+    if requested is not True:
+        return None
+    try:
+        customer_cards.capture_card_after_payment(db, account_id, reference, provider)
+    except Exception:
+        logger.warning("Customer card capture failed", exc_info=True)
+        return {"status": "failed", "message": CARD_SAVE_ERROR_MESSAGE}
+    return {"status": "saved", "message": CARD_SAVE_SUCCESS_MESSAGE}
 
 
 def _format_bps(value: float | int | None) -> str:
@@ -169,6 +219,24 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
             url="/portal/auth/login?next=/portal/dashboard", status_code=303
         )
     return _render_dashboard(request, db, customer, "/portal/dashboard")
+
+
+@router.post("/chat/session")
+def customer_portal_chat_session(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Open a CRM live-chat session for a browser-authenticated portal user."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
+        "subscriber_id"
+    )
+    if not subscriber_id:
+        raise HTTPException(status_code=409, detail="Customer account is incomplete")
+    return chat_session_service.broker_customer_session(db, str(subscriber_id))
 
 
 @router.get("/support", response_class=HTMLResponse)
@@ -507,6 +575,7 @@ def customer_usage(
     usage_data = customer_portal.get_usage_page(
         db, customer, period=period, page=page, per_page=per_page
     )
+    usage_history = customer_portal.get_usage_history(db, customer, months=12)
 
     return templates.TemplateResponse(
         "customer/usage/index.html",
@@ -514,12 +583,16 @@ def customer_usage(
             "request": request,
             "customer": customer,
             **usage_data,
+            "usage_history": usage_history,
             "usage_chart_records": usage_data.get("chart_records", []),
             "active_page": "usage",
             "bandwidth_chart_initial_stats": _load_initial_bandwidth_stats(
                 db,
                 subscription.id if subscription else None,
             ),
+            # Stream live throughput from /portal/bandwidth/my/live (SSE) when the
+            # customer has a subscription to read against.
+            "bandwidth_chart_live_stream": bool(usage_data.get("has_subscription")),
             "usage_enable_records_chart": True,
             "usage_records_default_view": "chart",
             "usage_records_chart_id": "portal-usage-records-chart",
@@ -1613,6 +1686,9 @@ def customer_create_invoice_payment_intent(
         )
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning("Customer saved-card invoice charge failed", exc_info=True)
+        return JSONResponse({"detail": PAYMENT_CHARGE_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1645,12 +1721,13 @@ def customer_verify_payment(
         customer_portal.complete_invoice_payment_intent(
             db, reference, result.get("payment")
         )
-        if save_card is True:
-            # Best-effort, Paystack-only; never breaks the recorded payment.
-            # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+        card_save = _capture_card_save_status(
+            db,
+            account_id=str(customer.get("account_id") or ""),
+            reference=reference,
+            provider=provider,
+            requested=save_card,
+        )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1671,17 +1748,17 @@ def customer_verify_payment(
                 "already_recorded": result.get("already_recorded", False),
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
+                "card_save": card_save,
                 "active_page": "billing",
             },
         )
-    except (ValueError, HTTPException) as exc:
-        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
-        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(message)},
-            status_code=status_code,
+    except HTTPException as exc:
+        status_code = exc.status_code if exc.status_code < 500 else 400
+        return _payment_verification_error_response(
+            request, exc, status_code=status_code
         )
+    except Exception as exc:
+        return _payment_verification_error_response(request, exc)
 
 
 @router.get("/billing/topup", response_class=HTMLResponse)
@@ -1890,12 +1967,13 @@ def customer_verify_topup(
         result = customer_portal.verify_and_record_topup(
             db, customer, reference, provider=provider
         )
-        if save_card is True:
-            # Best-effort, Paystack-only; never breaks the recorded payment.
-            # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+        card_save = _capture_card_save_status(
+            db,
+            account_id=str(customer.get("account_id") or ""),
+            reference=reference,
+            provider=provider,
+            requested=save_card,
+        )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1917,15 +1995,12 @@ def customer_verify_topup(
                 "policy_warnings": result["policy_warnings"],
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
+                "card_save": card_save,
                 "active_page": "billing",
             },
         )
-    except ValueError as exc:
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(exc)},
-            status_code=400,
-        )
+    except Exception as exc:
+        return _payment_verification_error_response(request, exc)
 
 
 @router.post("/billing/autopay/enable")

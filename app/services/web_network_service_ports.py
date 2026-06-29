@@ -27,6 +27,7 @@ from app.services.network.ont_olt_context import resolve_ont_olt_write_context
 from app.services.network.provisioning_events import (
     current_provisioning_correlation_key,
 )
+from app.services.network.service_classification import service_type_for_vlan
 from app.services.network.service_port_allocator import (
     AllocationError,
     build_service_port_correlation_key,
@@ -465,7 +466,7 @@ def handle_create(
             olt_ont_id=olt_ont_id,
             vlan_id=vlan_id,
             gem_index=gem_index,
-            service_type="internet" if vlan_id in (203,) else "management",
+            service_type=service_type_for_vlan(db, vlan_id),
             user_vlan=user_vlan,
             tag_transform=tag_transform,
         )
@@ -619,7 +620,7 @@ def handle_clone(
             vlan_id=ref_port.vlan_id,
             user_vlan=user_vlan,
             tag_transform=tag_transform,
-            service_type="internet" if ref_port.vlan_id in (203,) else "management",
+            service_type=service_type_for_vlan(db, ref_port.vlan_id),
         )
         if not ok:
             return False, message

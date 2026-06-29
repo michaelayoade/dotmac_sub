@@ -2261,7 +2261,7 @@ app/services/
 ├── connector.py              → ConnectorConfigs
 ├── network_monitoring.py     → Alerts, AlertRules, DeviceMetrics
 ├── usage.py                  → UsageRecords, QuotaBuckets, UsageCharges
-├── collections/              → Dunning, PrepaidEnforcement
+├── collections/              → Dunning, billing enforcement
 ├── wireguard.py              → WireGuardServers, Peers
 ├── gis.py                    → GeoLocations, GeoAreas, GeoLayers
 ├── reports.py                → ReportingService (all report types)

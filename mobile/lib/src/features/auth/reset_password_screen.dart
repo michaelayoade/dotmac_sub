@@ -105,6 +105,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
                         helperText: 'At least 8 characters',
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
+                          tooltip: _obscure ? 'Show password' : 'Hide password',
                           icon: Icon(_obscure
                               ? Icons.visibility_outlined
                               : Icons.visibility_off_outlined),

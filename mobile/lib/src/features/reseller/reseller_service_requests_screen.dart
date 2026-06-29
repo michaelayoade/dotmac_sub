@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/reseller.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -86,7 +87,7 @@ class _RequestTile extends StatelessWidget {
     final r = request;
     final theme = Theme.of(context);
     final statusColor = switch (r.status) {
-      'completed' => Colors.green.shade700,
+      'completed' => context.semantic.success,
       'rejected' => theme.colorScheme.error,
       'scheduled' => theme.colorScheme.primary,
       _ => theme.colorScheme.outline,
@@ -284,8 +285,9 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
                             point: _pin!,
                             width: 36,
                             height: 36,
-                            child: const Icon(Icons.location_on,
-                                color: Colors.red, size: 32),
+                            child: Icon(Icons.location_on,
+                                color: Theme.of(context).colorScheme.error,
+                                size: 32),
                           ),
                         ]),
                     ],

@@ -26,6 +26,7 @@ from app.models.network_monitoring import (
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber
+from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_whats_new as admin_whats_new_service
 from app.services import app_cache
 from app.services import (
@@ -631,6 +632,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
     # --- Attention items (things needing action) ---
     attention_items: list[dict] = []
+    network_attention_items: list[dict] = []
     total_alarms = (
         net_stats["alarms_critical"]
         + net_stats["alarms_major"]
@@ -638,29 +640,29 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         + net_stats["alarms_warning"]
     )
     if net_stats["alarms_critical"] > 0:
-        attention_items.append(
-            {
-                "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
-                "href": "/admin/network/alarms",
-                "severity": "critical",
-            }
-        )
+        item = {
+            "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
+            "href": "/admin/network/alarms",
+            "severity": "critical",
+        }
+        attention_items.append(item)
+        network_attention_items.append(item)
     if net_stats["alarms_major"] > 0:
-        attention_items.append(
-            {
-                "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
-                "href": "/admin/network/alarms",
-                "severity": "major",
-            }
-        )
+        item = {
+            "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
+            "href": "/admin/network/alarms",
+            "severity": "major",
+        }
+        attention_items.append(item)
+        network_attention_items.append(item)
     if net_stats.get("offline_count", 0) > 0:
-        attention_items.append(
-            {
-                "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
-                "href": "/admin/network/monitoring",
-                "severity": "warning",
-            }
-        )
+        item = {
+            "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
+            "href": "/admin/network/monitoring",
+            "severity": "warning",
+        }
+        attention_items.append(item)
+        network_attention_items.append(item)
     if overdue_amount > 0:
         attention_items.append(
             {
@@ -690,30 +692,30 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     ont_low_signal = ont_service_summary.get("low_signal", 0)
     ont_offline = ont_service_summary.get("offline", 0)
     if ont_low_signal > 0:
-        attention_items.append(
-            {
-                "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
-                "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
-                "severity": "warning",
-            }
-        )
+        item = {
+            "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
+            "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
+            "severity": "warning",
+        }
+        attention_items.append(item)
+        network_attention_items.append(item)
     if ont_offline > 5:
         # Only show if significant number of offline ONTs
-        attention_items.append(
-            {
-                "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
-                "href": "/admin/network/onts?view=list&olt_status=offline",
-                "severity": "warning",
-            }
-        )
+        item = {
+            "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
+            "href": "/admin/network/onts?view=list&olt_status=offline",
+            "severity": "warning",
+        }
+        attention_items.append(item)
+        network_attention_items.append(item)
     if unconfigured_ont_count > 0:
-        attention_items.append(
-            {
-                "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
-                "href": "/admin/network/onts?view=unconfigured",
-                "severity": "info",
-            }
-        )
+        item = {
+            "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
+            "href": "/admin/network/onts?view=unconfigured",
+            "severity": "info",
+        }
+        attention_items.append(item)
+        network_attention_items.append(item)
 
     try:
         pending_location_requests = web_admin_service._count_pending_location_requests(
@@ -740,6 +742,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     whats_new_items = admin_whats_new_service.serialize_for_dashboard(
         admin_whats_new_service.get_visible_items(db, limit=4)
     )
+    admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
 
     return {
         "stats": stats,
@@ -757,6 +760,8 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "recent_subscribers": sub_stats["recent_subscribers"],
         "active_alarms": net_stats["active_alarms"],
         "attention_items": attention_items,
+        "network_attention_items": network_attention_items,
+        "admin_alert_summary": admin_alert_summary,
         "pending_orders": pending_orders,
         "total_alarms": total_alarms,
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
@@ -818,9 +823,15 @@ def _resolve_dashboard_permissions(
             return has_permission(auth, db, perm)
 
         return (
-            _has("billing:read"),
-            _has("network:read") or _has("monitoring:read"),
-            _has("subscriber:read"),
+            _has("billing:invoice:read")
+            or _has("billing:payment:read")
+            or _has("reports:billing"),
+            _has("network:device:read")
+            or _has("network:olt:read")
+            or _has("network:ont:read")
+            or _has("monitoring:read")
+            or _has("reports:network"),
+            _has("customer:read"),
         )
     if user:
         try:

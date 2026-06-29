@@ -1,0 +1,81 @@
+name: Version Bump PR
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main, dev]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: version-bump-${{ github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Open version bump PR
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Resolve version bump
+        id: impact
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          labels = {
+              label["name"]
+              for label in json.loads(os.environ["LABELS_JSON"])
+              if isinstance(label, dict) and isinstance(label.get("name"), str)
+          }
+          impacts = sorted(labels & {"version:major", "version:minor", "version:patch", "version:none"})
+
+          if len(impacts) > 1:
+              raise SystemExit(f"Expected one version impact label, found: {', '.join(impacts)}")
+
+          impact = impacts[0] if impacts else "version:none"
+          bump = impact.split(":", 1)[1]
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"impact={impact}\n")
+              output.write(f"bump={bump}\n")
+          PY
+
+      - name: Apply version bump
+        if: steps.impact.outputs.bump != 'none'
+        run: python3 scripts/bump_version.py ${{ steps.impact.outputs.bump }}
+
+      - name: Read bumped version
+        if: steps.impact.outputs.bump != 'none'
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create version bump PR
+        if: steps.impact.outputs.bump != 'none'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.VERSION_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          base: ${{ github.event.pull_request.base.ref }}
+          branch: automation/version-bump-${{ github.event.pull_request.base.ref }}-${{ github.event.pull_request.number }}
+          delete-branch: true
+          commit-message: "chore: bump version to ${{ steps.version.outputs.version }}"
+          title: "chore: bump version to ${{ steps.version.outputs.version }}"
+          body: |
+            Version impact: none because this PR only applies the generated version bump for #${{ github.event.pull_request.number }}.
+
+            Source PR: #${{ github.event.pull_request.number }}
+            Source impact: ${{ steps.impact.outputs.impact }}
+            New version: ${{ steps.version.outputs.version }}
+          labels: "version:none"

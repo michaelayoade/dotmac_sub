@@ -31,6 +31,10 @@ services:
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: ${REDIS_URL}
       SESSION_REDIS_URL: ${SESSION_REDIS_URL}
+      # GenieACS runs network_mode: host, so it has no bridge IP/DNS name.
+      # Reach its NBI via the dotmac_sub_default gateway (= host) on the
+      # pinned 172.20.255.0/24 subnet rather than the unresolvable "genieacs".
+      GENIEACS_NBI_URL: ${GENIEACS_NBI_URL:-http://172.20.255.1:7557}
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
@@ -38,8 +42,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_URL: ${APP_URL:-}
@@ -111,9 +113,15 @@ services:
     - -c
     - max_replication_slots=5
     - -c
-    - archive_mode=on
+    # Cap WAL a replication slot can pin on the primary, so a disconnected /
+    # lagging standby can't grow pg_wal unbounded and fill the disk. Beyond
+    # this the slot is invalidated (standby needs re-seed) but the primary
+    # stays safe.
+    - max_slot_wal_keep_size=50GB
     - -c
-    - "archive_command=test ! -f /var/lib/postgresql/data/wal_archive/%f && cp %p /var/lib/postgresql/data/wal_archive/%f"
+    - archive_mode=off
+    - -c
+    - "archive_command=/bin/true"
     - -c
     - archive_timeout=300
     volumes:
@@ -154,8 +162,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
@@ -171,7 +177,7 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    # 3 processes: the default queue mixes long jobs (Splynx sync) with
+    # 3 processes: the default queue mixes long jobs with
     # short periodic ones; at 2, one long job halves throughput and the
     # queue grows faster than it drains.
     - --concurrency=3
@@ -200,13 +206,15 @@ services:
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: ${REDIS_URL}
+      # GenieACS runs network_mode: host, so it has no bridge IP/DNS name.
+      # Reach its NBI via the dotmac_sub_default gateway (= host) on the
+      # pinned 172.20.255.0/24 subnet rather than the unresolvable "genieacs".
+      GENIEACS_NBI_URL: ${GENIEACS_NBI_URL:-http://172.20.255.1:7557}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
@@ -269,7 +277,7 @@ services:
     - -Q
     - bandwidth,ingestion
 
-  # Consumer for the `billing` queue (daily invoice cycle, prepaid drawdown,
+  # Consumer for the `billing` queue (daily invoice cycle,
   # dunning, autopay, payment-topup reconciliation, usage/FUP, expiry,
   # suspension audit, billing-switch guard). Isolated from the default worker
   # so a long billing run never starves periodic tasks. Money-moving tasks are
@@ -330,8 +338,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
-      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}

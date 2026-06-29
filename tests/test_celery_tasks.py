@@ -1,5 +1,6 @@
 """Tests for Celery tasks."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,24 +16,47 @@ class TestBillingTask:
     def test_run_invoice_cycle_success(self):
         """Test successful invoice cycle run."""
         mock_session = MagicMock()
+        mock_session.close = MagicMock()
         mock_idempotency_session = MagicMock()
         # Mock scalars().first() to return None (no existing execution)
         mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.services.task_idempotency.SessionLocal",
-                return_value=mock_idempotency_session,
-            ):
+            with patch("app.tasks.billing.billing_enabled", return_value=True):
                 with patch(
-                    "app.tasks.billing.billing_automation_service.run_invoice_cycle"
-                ) as mock_run:
-                    from app.tasks.billing import run_invoice_cycle
+                    "app.services.task_idempotency.SessionLocal",
+                    return_value=mock_idempotency_session,
+                ):
+                    with patch(
+                        "app.tasks.billing.billing_automation_service.run_invoice_cycle"
+                    ) as mock_run:
+                        from app.tasks.billing import run_invoice_cycle
 
-                    run_invoice_cycle()
+                        run_invoice_cycle()
 
-                    mock_run.assert_called_once_with(mock_session)
-                    mock_session.close.assert_called_once()
+                        mock_run.assert_called_once()
+                        mock_session.close.assert_called()
+
+    def test_run_invoice_cycle_disabled_does_not_touch_idempotency(self):
+        """Disabled billing must not cache a succeeded daily idempotency result."""
+        mock_session = MagicMock()
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.billing.billing_enabled", return_value=False):
+                with patch(
+                    "app.services.task_idempotency.SessionLocal"
+                ) as mock_idempotency_session:
+                    with patch(
+                        "app.tasks.billing.billing_automation_service.run_invoice_cycle"
+                    ) as mock_run:
+                        from app.tasks.billing import run_invoice_cycle
+
+                        result = run_invoice_cycle()
+
+        assert result == {"skipped": "billing_disabled"}
+        mock_run.assert_not_called()
+        mock_idempotency_session.assert_not_called()
+        mock_session.close.assert_called_once()
 
     def test_run_invoice_cycle_exception_rollback(self):
         """Test exception triggers rollback."""
@@ -41,21 +65,154 @@ class TestBillingTask:
         mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.billing.billing_enabled", return_value=True):
+                with patch(
+                    "app.services.task_idempotency.SessionLocal",
+                    return_value=mock_idempotency_session,
+                ):
+                    with patch(
+                        "app.tasks.billing.billing_automation_service.run_invoice_cycle",
+                        side_effect=Exception("Billing error"),
+                    ):
+                        from app.tasks.billing import run_invoice_cycle
+
+                        with pytest.raises(Exception, match="Billing error"):
+                            run_invoice_cycle()
+
+                        mock_session.rollback.assert_called_once()
+                        mock_session.close.assert_called()
+
+    def test_check_billing_switch_task_reports_enforcement_health(self):
+        """Hourly billing guard includes payment/enforcement health state."""
+        mock_session = MagicMock()
+        enforcement = MagicMock(
+            ok=False,
+            reasons=["recent_payment_volume_below_floor"],
+            details={"payment_recent_successes": 0},
+        )
+        notification = MagicMock(
+            ok=True,
+            reasons=[],
+            details={"recent_failed": 0},
+        )
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
             with patch(
-                "app.services.task_idempotency.SessionLocal",
-                return_value=mock_idempotency_session,
+                "app.tasks.billing.check_billing_switch",
+                return_value={"ok": True, "expected": True, "actual": True},
             ):
                 with patch(
-                    "app.tasks.billing.billing_automation_service.run_invoice_cycle",
-                    side_effect=Exception("Billing error"),
+                    "app.tasks.billing.billing_enforcement_health",
+                    return_value=enforcement,
                 ):
-                    from app.tasks.billing import run_invoice_cycle
+                    with (
+                        patch(
+                            "app.tasks.billing.notification_delivery_health",
+                            return_value=notification,
+                        ),
+                        patch(
+                            "app.services.billing_health.billing_health_snapshot",
+                            return_value=MagicMock(anomalies=[]),
+                        ),
+                    ):
+                        from app.tasks.billing import check_billing_switch_task
 
-                    with pytest.raises(Exception, match="Billing error"):
-                        run_invoice_cycle()
+                        result = check_billing_switch_task()
 
-                    mock_session.rollback.assert_called_once()
-                    mock_session.close.assert_called_once()
+        assert result["ok"] is False
+        assert result["billing_switch"]["ok"] is True
+        assert result["billing_enforcement_health"]["ok"] is False
+        assert result["billing_enforcement_health"]["reasons"] == [
+            "recent_payment_volume_below_floor"
+        ]
+        assert result["notification_delivery_health"]["ok"] is True
+        mock_session.close.assert_called_once()
+
+    def test_check_billing_switch_task_alerts_notification_delivery_health(
+        self, caplog
+    ):
+        """Notification failures alert operators without gating billing by default."""
+        mock_session = MagicMock()
+        enforcement = MagicMock(ok=True, reasons=[], details={})
+        notification = MagicMock(
+            ok=False,
+            reasons=["critical_notifications_failed"],
+            details={"recent_failed": 10},
+        )
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch(
+                "app.tasks.billing.check_billing_switch",
+                return_value={"ok": True, "expected": True, "actual": True},
+            ):
+                with patch(
+                    "app.tasks.billing.billing_enforcement_health",
+                    return_value=enforcement,
+                ):
+                    with (
+                        patch(
+                            "app.tasks.billing.notification_delivery_health",
+                            return_value=notification,
+                        ),
+                        patch(
+                            "app.services.billing_health.billing_health_snapshot",
+                            return_value=MagicMock(anomalies=[]),
+                        ),
+                    ):
+                        from app.tasks.billing import check_billing_switch_task
+
+                        with caplog.at_level(logging.ERROR, logger="app.tasks.billing"):
+                            result = check_billing_switch_task()
+
+        assert result["ok"] is True
+        assert result["notification_delivery_health"]["ok"] is False
+        assert "billing_notification_delivery_unhealthy" in caplog.text
+        assert "critical_notifications_failed" in caplog.text
+        mock_session.close.assert_called_once()
+
+    def test_check_billing_switch_task_survives_snapshot_failure(self, caplog):
+        """A monitoring snapshot error must NOT crash the hourly billing guard
+        nor mask the config/enforcement/notification alerts."""
+        mock_session = MagicMock()
+        enforcement = MagicMock(ok=True, reasons=[], details={})
+        notification = MagicMock(
+            ok=False,
+            reasons=["critical_notifications_failed"],
+            details={"recent_failed": 10},
+        )
+
+        with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
+            with patch(
+                "app.tasks.billing.check_billing_switch",
+                return_value={"ok": True, "expected": True, "actual": True},
+            ):
+                with patch(
+                    "app.tasks.billing.billing_enforcement_health",
+                    return_value=enforcement,
+                ):
+                    with (
+                        patch(
+                            "app.tasks.billing.notification_delivery_health",
+                            return_value=notification,
+                        ),
+                        patch(
+                            "app.services.billing_health.billing_health_snapshot",
+                            side_effect=ValueError("snapshot boom"),
+                        ),
+                    ):
+                        from app.tasks.billing import check_billing_switch_task
+
+                        with caplog.at_level(logging.ERROR, logger="app.tasks.billing"):
+                            result = check_billing_switch_task()
+
+        # Task completed despite the snapshot failure.
+        assert result["ok"] is True
+        # Monitoring block was skipped (no billing_health key), but the existing
+        # notification alert still fired.
+        assert "billing_health" not in result
+        assert "billing_notification_delivery_unhealthy" in caplog.text
+        assert "billing_health_snapshot_failed" in caplog.text
+        mock_session.close.assert_called_once()
 
 
 # =============================================================================
@@ -136,31 +293,36 @@ class TestOltProfileSyncTask:
 
 
 class TestCollectionsTask:
-    """Tests for collections.run_dunning task."""
+    """Tests for collections billing-enforcement tasks."""
 
-    def test_run_dunning_success(self):
-        """Test successful dunning run returns the real run metrics."""
+    def test_run_billing_enforcement_success(self):
+        """Unified enforcement run returns the real run metrics."""
         from datetime import UTC, datetime
 
-        from app.schemas.collections import DunningRunResponse
+        from app.schemas.collections import BillingEnforcementRunResponse
 
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
             with patch("app.tasks.collections.billing_enabled", return_value=True):
                 with patch(
-                    "app.tasks.collections.collections_service.dunning_workflow.run"
+                    "app.tasks.collections.collections_service."
+                    "billing_enforcement_reconciler.run"
                 ) as mock_run:
-                    mock_run.return_value = DunningRunResponse(
+                    mock_run.return_value = BillingEnforcementRunResponse(
                         run_at=datetime.now(UTC),
                         accounts_scanned=7,
                         cases_created=3,
                         actions_created=2,
                         skipped=1,
+                        dunning_accounts_scanned=7,
+                        dunning_cases_created=3,
+                        dunning_actions_created=2,
+                        dunning_skipped=1,
                     )
-                    from app.tasks.collections import run_dunning
+                    from app.tasks.collections import run_billing_enforcement
 
-                    result = run_dunning()
+                    result = run_billing_enforcement()
 
                     mock_run.assert_called_once()
                     args = mock_run.call_args
@@ -171,71 +333,68 @@ class TestCollectionsTask:
                         "cases_created": 3,
                         "actions_created": 2,
                         "skipped": 1,
+                        "credit_accounts_scanned": 0,
+                        "credit_accounts_settled": 0,
+                        "credit_invoices_touched": 0,
+                        "credit_settlement_errors": 0,
+                        "credit_applied": "0.00",
                     }
 
-    def test_run_dunning_exception_closes_session(self):
+    def test_run_dunning_alias_uses_unified_enforcer(self):
+        """Legacy task name remains an alias for the unified enforcer."""
+        from datetime import UTC, datetime
+
+        from app.schemas.collections import BillingEnforcementRunResponse
+
+        mock_session = MagicMock()
+
+        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
+            with patch("app.tasks.collections.billing_enabled", return_value=True):
+                with patch(
+                    "app.tasks.collections.collections_service."
+                    "billing_enforcement_reconciler.run"
+                ) as mock_run:
+                    mock_run.return_value = BillingEnforcementRunResponse(
+                        run_at=datetime.now(UTC),
+                        accounts_scanned=1,
+                        cases_created=0,
+                        actions_created=0,
+                        skipped=0,
+                        dunning_accounts_scanned=1,
+                        dunning_cases_created=0,
+                        dunning_actions_created=0,
+                        dunning_skipped=0,
+                    )
+                    from app.tasks.collections import run_dunning
+
+                    result = run_dunning()
+
+                    mock_run.assert_called_once()
+                    assert result["accounts_scanned"] == 1
+
+    def test_run_billing_enforcement_exception_closes_session(self):
         """Test exception still closes session."""
         mock_session = MagicMock()
 
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
             with patch("app.tasks.collections.billing_enabled", return_value=True):
                 with patch(
-                    "app.tasks.collections.collections_service.dunning_workflow.run",
+                    "app.tasks.collections.collections_service."
+                    "billing_enforcement_reconciler.run",
                     side_effect=Exception("Dunning error"),
                 ):
-                    from app.tasks.collections import run_dunning
+                    from app.tasks.collections import run_billing_enforcement
 
                     with pytest.raises(Exception, match="Dunning error"):
-                        run_dunning()
+                        run_billing_enforcement()
 
                     mock_session.close.assert_called_once()
-
-    def test_run_prepaid_enforcement_is_retired_noop(self):
-        """Prepaid enforcement is retired: the task never suspends and never
-        invokes the enforcement service — due-date dunning is the sole enforcer."""
-        with patch(
-            "app.tasks.collections.collections_service.prepaid_enforcement.run"
-        ) as mock_run:
-            from app.tasks.collections import run_prepaid_enforcement
-
-            result = run_prepaid_enforcement()
-
-            mock_run.assert_not_called()
-            assert result == {"skipped": "prepaid_enforcement_retired"}
-
-    def test_run_retired_lock_reconcile(self):
-        """The reconcile task resolves retired-reason locks and returns the summary."""
-        mock_session = MagicMock()
-
-        with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
-            with patch(
-                "app.tasks.collections.collections_service."
-                "reconcile_retired_enforcement_locks",
-                return_value={
-                    "resolved": 5,
-                    "restored": 4,
-                    "still_locked": 1,
-                    "errors": 0,
-                },
-            ) as mock_reconcile:
-                from app.tasks.collections import run_retired_lock_reconcile
-
-                result = run_retired_lock_reconcile()
-
-                mock_reconcile.assert_called_once_with(mock_session)
-                mock_session.close.assert_called_once()
-                assert result == {
-                    "resolved": 5,
-                    "restored": 4,
-                    "still_locked": 1,
-                    "errors": 0,
-                }
 
 
 class TestBillingMasterSwitchGates:
     """Customer-impacting billing tasks must no-op while billing_enabled is off.
 
-    The upstream biller (Splynx) stays authoritative until cutover; these tasks
+    The upstream biller stays authoritative until cutover; these tasks
     must never charge, dun, suspend, or expire an account before billing_enabled
     is flipped on, even though the queue consumes them and they are scheduled.
     """
@@ -245,7 +404,8 @@ class TestBillingMasterSwitchGates:
         with patch("app.tasks.collections.SessionLocal", return_value=mock_session):
             with patch("app.tasks.collections.billing_enabled", return_value=False):
                 with patch(
-                    "app.tasks.collections.collections_service.dunning_workflow.run"
+                    "app.tasks.collections.collections_service."
+                    "billing_enforcement_reconciler.run"
                 ) as mock_run:
                     from app.tasks.collections import run_dunning
 
@@ -253,9 +413,6 @@ class TestBillingMasterSwitchGates:
 
                     mock_run.assert_not_called()
                     assert result == {"skipped": "billing_disabled"}
-
-    # NOTE: prepaid enforcement is retired (always a no-op), so it is no longer
-    # gated by the billing master switch — see test_run_prepaid_enforcement_is_retired_noop.
 
     def test_autopay_skipped_when_billing_disabled(self):
         mock_session = MagicMock()
@@ -548,13 +705,22 @@ class TestUsageTask:
 class TestDailyRunnerQueueRouting:
     """Daily business runners must not share the (backlogged) default queue."""
 
+    def test_radacct_ghost_reaper_routes_to_ingestion_queue(self):
+        from app.celery_app import celery_app
+
+        assert celery_app.conf.task_routes["app.tasks.radius.reap_radacct_ghosts"] == {
+            "queue": "ingestion"
+        }
+
     def test_daily_runners_route_to_billing_queue(self):
         from app.celery_app import celery_app
 
         for task in (
             "app.tasks.billing.run_invoice_cycle",
+            "app.tasks.collections.run_billing_enforcement",
             "app.tasks.collections.run_dunning",
             "app.tasks.catalog.expire_subscriptions",
+            "app.tasks.enforcement.cleanup_subscription_block_sessions",
             "app.tasks.usage.run_usage_rating",
             "app.tasks.usage.evaluate_fup_rules",
         ):
@@ -571,6 +737,98 @@ class TestDailyRunnerQueueRouting:
         annotations = get_celery_config()["task_annotations"]
         for task in (
             "app.tasks.billing.run_invoice_cycle",
+            "app.tasks.collections.run_billing_enforcement",
             "app.tasks.collections.run_dunning",
         ):
             assert annotations[task]["time_limit"] >= 1800, task
+
+
+class TestUsageMeteringTask:
+    def test_radius_accounting_import_skips_when_locked(self):
+        lock_session = MagicMock()
+        lock_session.bind.dialect.name = "postgresql"
+        lock_session.execute.return_value.scalar.return_value = False
+
+        with patch("app.tasks.usage.SessionLocal", return_value=lock_session):
+            from app.tasks.usage import import_radius_accounting
+
+            result = import_radius_accounting()
+
+        assert result["skipped_locked"] == 1
+        assert result["processed"] == 0
+        lock_session.commit.assert_called_once()
+        lock_session.close.assert_called_once()
+
+    def test_radius_accounting_import_runs_under_lock(self):
+        lock_session = MagicMock()
+        lock_session.bind.dialect.name = "sqlite"
+        work_session = MagicMock()
+
+        with (
+            patch(
+                "app.tasks.usage.SessionLocal",
+                side_effect=[lock_session, work_session],
+            ),
+            patch(
+                "app.services.usage.import_radius_accounting",
+                return_value={
+                    "ok": True,
+                    "processed": 2,
+                    "created_or_updated": 1,
+                    "cursor": 123,
+                },
+            ) as mock_import,
+        ):
+            from app.tasks.usage import import_radius_accounting
+
+            result = import_radius_accounting()
+
+        assert result["processed"] == 2
+        mock_import.assert_called_once_with(work_session)
+        work_session.commit.assert_called_once()
+        work_session.close.assert_called_once()
+        lock_session.close.assert_called_once()
+
+    def test_meter_usage_queues_targeted_fup_for_changed_subscriptions(self):
+        mock_session = MagicMock()
+        changed = ["11111111-1111-1111-1111-111111111111"]
+
+        with (
+            patch("app.tasks.usage.SessionLocal", return_value=mock_session),
+            patch(
+                "app.services.usage.meter_usage_into_quota",
+                return_value={
+                    "metered": 1,
+                    "changed_subscription_ids": changed,
+                },
+            ),
+        ):
+            from app.tasks.usage import evaluate_fup_rules, meter_usage_into_quota
+
+            with patch.object(evaluate_fup_rules, "apply_async") as mock_apply:
+                result = meter_usage_into_quota()
+
+        assert result["changed_subscription_ids"] == changed
+        mock_session.commit.assert_called_once()
+        mock_apply.assert_called_once_with(
+            kwargs={"subscription_ids": changed, "source": "usage_metering"},
+            queue="billing",
+        )
+
+    def test_meter_usage_does_not_queue_fup_when_usage_unchanged(self):
+        mock_session = MagicMock()
+
+        with (
+            patch("app.tasks.usage.SessionLocal", return_value=mock_session),
+            patch(
+                "app.services.usage.meter_usage_into_quota",
+                return_value={"metered": 1, "changed_subscription_ids": []},
+            ),
+        ):
+            from app.tasks.usage import evaluate_fup_rules, meter_usage_into_quota
+
+            with patch.object(evaluate_fup_rules, "apply_async") as mock_apply:
+                meter_usage_into_quota()
+
+        mock_session.commit.assert_called_once()
+        mock_apply.assert_not_called()

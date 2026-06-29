@@ -159,7 +159,7 @@ def _radius_sync_subscription_for_subscriber(
         .where(Subscription.status.in_(RADIUS_SYNC_ELIGIBLE_STATUSES))
         .order_by(
             # Prefer an active subscription when the subscriber has more than
-            # one eligible (Splynx duplicate-service customers carry active +
+            # one eligible (migrated duplicate-service customers carry active +
             # canceled/suspended rows). Without this, the latest-by-date pick
             # could be a canceled subscription, so RADIUS state — including
             # additional-IP Framed-Routes — gets synced from the wrong service.
@@ -1100,6 +1100,17 @@ def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
     }
 
 
+def _subscriber_captive_opted_in(db: Session, subscriber_id) -> bool:
+    """True if the subscriber opted into the soft captive walled-garden, so a
+    suspended sub gets the pay-page treatment instead of a hard reject."""
+    if not subscriber_id:
+        return False
+    from app.models.subscriber import Subscriber
+
+    subscriber = db.get(Subscriber, subscriber_id)
+    return bool(getattr(subscriber, "captive_redirect_enabled", False))
+
+
 def _external_sync_users(
     db: Session,
     config: dict,
@@ -1164,6 +1175,68 @@ def _external_sync_users(
                             radusergroup_table.c.username == username
                         )
                     )
+                captive = (
+                    subscription.status == SubscriptionStatus.suspended
+                    and _subscriber_captive_opted_in(db, subscription.subscriber_id)
+                )
+                if captive:
+                    # Opted-in suspended customer: walled-garden, not hard-reject —
+                    # a usable password plus a captive radreply (Address-List, no
+                    # routes), mirroring the authoritative sweep's captive treatment
+                    # so the two writers agree instead of flapping the customer
+                    # between the pay-page and fully-offline.
+                    password_row = _external_password_row(
+                        credential,
+                        default_attribute=password_attr,
+                        default_op=password_op,
+                    )
+                    if password_row:
+                        conn.execute(
+                            insert(radcheck_table).values(
+                                username=username,
+                                attribute=password_row[0],
+                                op=password_row[1],
+                                value=password_row[2],
+                            )
+                        )
+                    cap_profile_id = (
+                        credential.radius_profile_id or subscription.radius_profile_id
+                    )
+                    cap_profile = (
+                        db.get(RadiusProfile, cap_profile_id)
+                        if cap_profile_id
+                        else None
+                    )
+                    cap_attrs = [
+                        a
+                        for a in build_radius_reply_attributes(
+                            db, subscription, profile=cap_profile
+                        )
+                        if a["attribute"] != "Framed-Route"
+                    ]
+                    cap_attrs.append(
+                        {
+                            "attribute": "Mikrotik-Address-List",
+                            "op": ":=",
+                            "value": "suspended",
+                        }
+                    )
+                    seen_cap: set[str] = set()
+                    for attr_dict in cap_attrs:
+                        key = attr_dict["attribute"].lower()
+                        if key in seen_cap and attr_dict["op"] != "+=":
+                            continue
+                        seen_cap.add(key)
+                        conn.execute(
+                            insert(radreply_table).values(
+                                username=username,
+                                attribute=attr_dict["attribute"],
+                                op=attr_dict.get("op") or default_reply_op,
+                                value=attr_dict["value"],
+                            )
+                        )
+                    created += 1
+                    continue
                 if subscription.status == SubscriptionStatus.suspended:
                     conn.execute(
                         insert(radcheck_table).values(

@@ -1,7 +1,7 @@
-"""Prepaid subscriptions must never enter invoice generation.
+"""Prepaid subscriptions must only enter invoice generation by explicit opt-in.
 
-Prepaid is billed by deposit drawdown (app/services/prepaid_billing.py); the
-postpaid invoice paths must exclude prepaid or double-billing results.
+Production prepaid is monthly invoice-in-advance. Generic postpaid invoice paths
+still exclude prepaid unless they pass ``allow_prepaid=True``.
 """
 
 from datetime import UTC, datetime, timedelta

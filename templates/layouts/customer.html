@@ -79,11 +79,48 @@
                        class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'dashboard' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                         Dashboard
                     </a>
-                    {% if show_portal_services %}
-                    <a href="/portal/services"
-                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'services' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
-                        Services
-                    </a>
+                    {% if show_portal_services or show_portal_usage %}
+                    <div x-data="{ open: false }"
+                         x-on:mouseenter="open = true"
+                         x-on:mouseleave="open = false"
+                         class="relative z-50">
+                        <button type="button"
+                                x-on:click="open = !open"
+                                x-on:keydown.escape.window="open = false"
+                                :aria-expanded="open.toString()"
+                                aria-controls="customer-services-menu"
+                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['services', 'usage', 'speedtest'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                            Services
+                            <svg class="h-4 w-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        <div x-show="open"
+                             x-on:click.outside="open = false"
+                             x-transition:enter="transition ease-out duration-200"
+                             x-transition:enter-start="opacity-0 -translate-y-1"
+                             x-transition:enter-end="opacity-100 translate-y-0"
+                             x-transition:leave="transition ease-in duration-150"
+                             x-transition:leave-start="opacity-100 translate-y-0"
+                             x-transition:leave-end="opacity-0 -translate-y-1"
+                             x-cloak
+                             id="customer-services-menu"
+                             class="absolute left-0 mt-2 w-48 rounded-xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
+                            {% if show_portal_services %}
+                            <a href="/portal/services" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'services' else '' }}">
+                                My Services
+                            </a>
+                            {% endif %}
+                            {% if show_portal_usage %}
+                            <a href="/portal/usage" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'usage' else '' }}">
+                                Usage
+                            </a>
+                            <a href="/portal/speedtest" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'speedtest' else '' }}">
+                                Speed Test
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
                     {% endif %}
 
                     <!-- Divider -->
@@ -97,28 +134,21 @@
                         Billing
                     </a>
                     {% endif %}
-                    {% if show_portal_usage %}
-                    <a href="/portal/usage"
-                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'usage' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
-                        Usage
-                    </a>
-                    <a href="/portal/speedtest"
-                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'speedtest' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
-                        Speed Test
-                    </a>
-                    {% endif %}
                     <a href="/portal/support"
                        class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'support' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                         Support
                     </a>
-                    <a href="/portal/contacts"
-                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'contacts' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
-                        Contacts
+                    <a href="/portal/refer-and-earn"
+                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'refer-and-earn' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                        Refer &amp; Earn
                     </a>
                     <!-- More dropdown for less-used items -->
-                    <div x-data="{ open: false }" class="relative z-50">
+                    <div x-data="{ open: false }"
+                         x-on:mouseenter="open = true"
+                         x-on:mouseleave="open = false"
+                         class="relative z-50">
                         <button x-on:click="open = !open"
-                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['installations', 'service-orders', 'location'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['contacts', 'installations', 'service-orders', 'location'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                             More
                             <svg class="h-4 w-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -134,12 +164,30 @@
                              x-transition:leave-end="opacity-0 -translate-y-1"
                              x-cloak
                              class="absolute right-0 mt-2 w-48 rounded-xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
+                            <a href="/portal/contacts" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'contacts' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8zm6 2a3 3 0 100-6"/>
+                                </svg>
+                                Contacts
+                            </a>
                             {% if show_portal_provisioning %}
                             <a href="/portal/installations" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'installations' else '' }}">
                                 <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
                                 </svg>
                                 Installations
+                            </a>
+                            <a href="/portal/projects" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'projects' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                                </svg>
+                                Installation Progress
+                            </a>
+                            <a href="/portal/work-orders" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'work-orders' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/>
+                                </svg>
+                                Technician Visits
                             </a>
                             <a href="/portal/service-orders" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'service-orders' else '' }}">
                                 <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -400,6 +448,10 @@
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z"/></svg>
                     Support
                 </a>
+                <a href="/portal/refer-and-earn" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'refer-and-earn' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                    Refer &amp; Earn
+                </a>
                 <a href="/portal/contacts" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'contacts' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8zm6 2a3 3 0 100-6"/></svg>
                     Contacts
@@ -411,6 +463,14 @@
                     <a href="/portal/installations" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'installations' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         Installations
+                    </a>
+                    <a href="/portal/projects" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'projects' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                        Installation Progress
+                    </a>
+                    <a href="/portal/work-orders" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'work-orders' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>
+                        Technician Visits
                     </a>
                     <a href="/portal/service-orders" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'service-orders' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -494,4 +554,8 @@
         });
     }
 </script>
+{% if not (customer and customer.read_only) %}
+{% set chat_session_endpoint = "/portal/chat/session" %}
+{% include "components/chat_widget.html" %}
+{% endif %}
 {% endblock %}

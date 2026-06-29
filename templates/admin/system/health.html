@@ -3,6 +3,19 @@
 
 {% block title %}Server Health - Admin{% endblock %}
 
+{% macro ops_badge(status) %}
+    {% set normalized = status|default('unknown', true) %}
+    {% if normalized in ['up', 'healthy', 'ok', 'streaming'] %}
+    <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ normalized|replace('_', ' ')|title }}</span>
+    {% elif normalized in ['degraded', 'partial', 'warning'] %}
+    <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>{{ normalized|replace('_', ' ')|title }}</span>
+    {% elif normalized in ['down', 'critical', 'failed'] %}
+    <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>{{ normalized|replace('_', ' ')|title }}</span>
+    {% else %}
+    <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>{{ normalized|replace('_', ' ')|title }}</span>
+    {% endif %}
+{% endmacro %}
+
 {% block content %}
 {{ ambient_background("slate", "gray") }}
 
@@ -147,6 +160,172 @@
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Avg PDF Build</p>
                 <p class="mt-1 text-lg font-bold text-slate-900 dark:text-white tabular-nums">{{ "%.2fs"|format(invoice_cache_stats.avg_generation_seconds|default(0)) }}</p>
             </div>
+        </div>
+        {% endcall %}
+    </div>
+
+    {# Operations Health #}
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 160ms;">
+        {% call card("Worker Fleet", color="blue") %}
+        <div class="space-y-4">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <p class="text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ worker_health.worker_count|default(0) }}</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Responding worker{{ '' if worker_health.worker_count == 1 else 's' }}</p>
+                </div>
+                {{ ops_badge(worker_health.status) }}
+            </div>
+            <div class="grid gap-3 sm:grid-cols-3">
+                <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Active</p>
+                    <p class="mt-1 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ worker_health.active_tasks|default(0) }}</p>
+                </div>
+                <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Reserved</p>
+                    <p class="mt-1 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ worker_health.reserved_tasks|default(0) }}</p>
+                </div>
+                <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Scheduled</p>
+                    <p class="mt-1 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ worker_health.scheduled_tasks|default(0) }}</p>
+                </div>
+            </div>
+            {% if worker_health.queue_lengths %}
+            <div class="border-t border-slate-100 pt-3 dark:border-slate-700/50">
+                <p class="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Queue Backlog</p>
+                <div class="grid gap-2 sm:grid-cols-3">
+                    {% for queue, length in worker_health.queue_lengths.items() %}
+                    <div class="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-2 text-sm dark:bg-slate-800/60">
+                        <span class="text-slate-600 dark:text-slate-300">{{ queue }}</span>
+                        <span class="font-semibold tabular-nums text-slate-900 dark:text-white">{{ length }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% if worker_health.workers %}
+            <div class="border-t border-slate-100 pt-3 dark:border-slate-700/50">
+                <p class="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Workers</p>
+                <div class="space-y-1.5">
+                    {% for worker in worker_health.workers %}
+                    <p class="truncate rounded-md bg-slate-50 px-2.5 py-2 text-xs font-medium text-slate-700 dark:bg-slate-800/60 dark:text-slate-200" title="{{ worker }}">{{ worker }}</p>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% if worker_health.long_running_tasks %}
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+                {{ worker_health.long_running_tasks|length }} long-running task{{ '' if worker_health.long_running_tasks|length == 1 else 's' }} over 30 minutes.
+            </div>
+            {% endif %}
+        </div>
+        {% endcall %}
+
+        {% call card("Database Replication", color="emerald") %}
+        <div class="space-y-4">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <p class="text-sm text-slate-600 dark:text-slate-300">{{ replication_health.summary }}</p>
+                    {% if replication_health.error %}
+                    <p class="mt-1 text-xs text-rose-600 dark:text-rose-300">{{ replication_health.error }}</p>
+                    {% endif %}
+                </div>
+                {{ ops_badge(replication_health.status) }}
+            </div>
+            <div class="overflow-hidden rounded-lg border border-slate-100 dark:border-slate-700/50">
+                <table class="min-w-full divide-y divide-slate-100 text-sm dark:divide-slate-700/50">
+                    <thead class="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                        <tr>
+                            <th class="px-3 py-2 text-left font-semibold">Client</th>
+                            <th class="px-3 py-2 text-left font-semibold">State</th>
+                            <th class="px-3 py-2 text-right font-semibold">Behind</th>
+                            <th class="px-3 py-2 text-right font-semibold">Replay Lag</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for standby in replication_health.standbys %}
+                        <tr>
+                            <td class="px-3 py-2">
+                                <p class="font-medium text-slate-900 dark:text-white">{{ standby.client_addr }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ standby.application_name }} / {{ standby.sync_state }}</p>
+                            </td>
+                            <td class="px-3 py-2">{{ ops_badge(standby.state) }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-slate-700 dark:text-slate-200">{{ standby.bytes_behind_display }}</td>
+                            <td class="px-3 py-2 text-right tabular-nums text-slate-700 dark:text-slate-200">{{ standby.replay_lag_display }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="4" class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">No active standby connections.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if replication_health.slots %}
+            <div class="border-t border-slate-100 pt-3 dark:border-slate-700/50">
+                <p class="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Physical Slots</p>
+                <div class="space-y-2">
+                    {% for slot in replication_health.slots %}
+                    <div class="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-2.5 py-2 text-sm dark:bg-slate-800/60">
+                        <div>
+                            <p class="font-medium text-slate-900 dark:text-white">{{ slot.slot_name }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">WAL {{ slot.wal_status }} / retained {{ slot.retained_display }}</p>
+                        </div>
+                        {{ ops_badge('up' if slot.active else 'down') }}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endcall %}
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 190ms;">
+        {% call card("Infrastructure Services", color="slate") %}
+        <div class="overflow-hidden rounded-lg border border-slate-100 dark:border-slate-700/50">
+            <table class="min-w-full divide-y divide-slate-100 text-sm dark:divide-slate-700/50">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                    <tr>
+                        <th class="px-3 py-2 text-left font-semibold">Service</th>
+                        <th class="px-3 py-2 text-left font-semibold">Status</th>
+                        <th class="px-3 py-2 text-right font-semibold">Latency</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for service in infrastructure_services %}
+                    <tr>
+                        <td class="px-3 py-2">
+                            <p class="font-medium text-slate-900 dark:text-white">{{ service.name }}</p>
+                            {% if service.version %}
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ service.version }}</p>
+                            {% elif service.details.error %}
+                            <p class="max-w-xs truncate text-xs text-rose-600 dark:text-rose-300" title="{{ service.details.error }}">{{ service.details.error }}</p>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-2">{{ ops_badge(service.status) }}</td>
+                        <td class="px-3 py-2 text-right tabular-nums text-slate-700 dark:text-slate-200">{{ "%.1f ms"|format(service.response_ms|default(0)) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endcall %}
+
+        {% call card("Recent Scheduled Activity", color="indigo") %}
+        <div class="space-y-2">
+            {% for task in task_activity %}
+            <div class="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-slate-900 dark:text-white" title="{{ task.task_name }}">{{ task.name }}</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Last success: {% if task.last_success %}{{ task.age_display }} ago{% else %}never{% endif %}{% if task.interval_seconds %} / every {{ task.interval_seconds }}s{% endif %}
+                    </p>
+                </div>
+                {{ ops_badge('degraded' if task.stale else 'up') }}
+            </div>
+            {% else %}
+            <p class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-slate-700/50 dark:bg-slate-800/50 dark:text-slate-400">No enabled scheduled tasks found.</p>
+            {% endfor %}
         </div>
         {% endcall %}
     </div>

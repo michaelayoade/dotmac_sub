@@ -37,7 +37,7 @@ def _base_context(
 @router.get(
     "/cpes",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_list(
     request: Request,
@@ -66,7 +66,7 @@ def cpe_list(
 @router.get(
     "/cpes/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_new(
     request: Request,
@@ -92,7 +92,7 @@ def cpe_new(
 @router.get(
     "/cpes/subscriber-fields",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_subscriber_fields(
     request: Request,
@@ -125,7 +125,7 @@ def cpe_subscriber_fields(
 @router.post(
     "/cpes",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -160,7 +160,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/cpes/{cpe_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_edit(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -191,7 +191,7 @@ def cpe_edit(
 @router.post(
     "/cpes/{cpe_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -229,7 +229,7 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
 
 @router.post(
     "/cpes/{cpe_id}/test-api",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     try:
@@ -261,7 +261,7 @@ def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse
 @router.get(
     "/cpes/{cpe_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_detail(
     request: Request,
@@ -294,7 +294,7 @@ def cpe_detail(
 @router.get(
     "/cpes/{cpe_id}/quick-status",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_quick_status(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -340,7 +340,7 @@ def _cpe_action_response(result: object) -> JSONResponse:
 @router.get(
     "/cpes/{cpe_id}/tr069",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_tr069_tab(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -356,7 +356,7 @@ def cpe_tr069_tab(
 
 @router.post(
     "/cpes/{cpe_id}/reboot",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_reboot(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -370,7 +370,7 @@ def cpe_reboot(
 
 @router.post(
     "/cpes/{cpe_id}/factory-reset",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_factory_reset(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -384,7 +384,7 @@ def cpe_factory_reset(
 
 @router.post(
     "/cpes/{cpe_id}/refresh",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_refresh(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -398,7 +398,7 @@ def cpe_refresh(
 
 @router.post(
     "/cpes/{cpe_id}/wifi-ssid",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_wifi_ssid(
     request: Request, cpe_id: str, ssid: str = "", db: Session = Depends(get_db)
@@ -410,7 +410,7 @@ def cpe_wifi_ssid(
 
 @router.post(
     "/cpes/{cpe_id}/wifi-password",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_wifi_password(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -426,7 +426,7 @@ def cpe_wifi_password(
 
 @router.post(
     "/cpes/{cpe_id}/lan-port",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_lan_port(
     request: Request,
@@ -444,7 +444,7 @@ def cpe_lan_port(
 
 @router.post(
     "/cpes/{cpe_id}/connection-request",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_connection_request(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -458,7 +458,7 @@ def cpe_connection_request(
 
 @router.post(
     "/cpes/{cpe_id}/ping-diagnostic",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_ping_diagnostic(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -478,7 +478,7 @@ def cpe_ping_diagnostic(
 
 @router.post(
     "/cpes/{cpe_id}/traceroute-diagnostic",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_traceroute_diagnostic(
     request: Request, cpe_id: str, db: Session = Depends(get_db)

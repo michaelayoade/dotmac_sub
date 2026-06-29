@@ -3,7 +3,7 @@
 The cutover credit-settle (``settle_open_invoices_from_credit``, run both by the
 one-off backfill and the billing runner's inline step) wrote an offsetting
 unallocated DEBIT for every naira it counted as "applied". But on invoices that
-were already paid by a Splynx-synced allocation with a stale ``balance_due``,
+were already paid by an imported allocation with a stale ``balance_due``,
 ``_apply_payment_allocation`` returned the EXISTING allocation's amount as
 "applied" without creating a new allocation — so the settler debited real
 unallocated credit while settling nothing new, destroying that credit.

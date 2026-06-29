@@ -11,8 +11,10 @@ octets, no intra-session history):
   - week/cycle charts: the same throughput series from the bandwidth pipeline,
     which routes to VictoriaMetrics for >24h ranges (Postgres hot retention is
     ~24h).
-  - authoritative totals: ``QuotaBucket.used_gb`` for the billing cycle, and the
-    sum of session octets for "all". These never depend on interim accounting.
+  - authoritative totals: the sum of RADIUS session octets over the window for
+    both the billing cycle and "all" (the rated quota bucket only defines the
+    cycle window; it isn't the usage total — it's 0 on unlimited plans and lags
+    actual usage). These never depend on interim accounting.
 
 When interim accounting isn't flowing (no ``BandwidthSample`` rows / no metrics
 store), sub-day series come back empty and the total falls back to session
@@ -31,7 +33,11 @@ from sqlalchemy.orm import Session
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
-from app.models.usage import QuotaBucket, RadiusAccountingSession
+from app.models.usage import (
+    QuotaBucket,
+    RadiusAccountingSession,
+    SubscriberDailyUsage,
+)
 from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -58,6 +64,68 @@ def _subscription_ids(db: Session, subscriber_id: str) -> list:
         .filter(Subscription.subscriber_id == subscriber_id)
         .all()
     ]
+
+
+def get_daily_usage_history(
+    db: Session, subscriber_id: str, *, days: int = 365
+) -> dict:
+    """Daily upload/download volume for the caller, summed across their
+    subscriptions, from the historical daily rollup (``SubscriberDailyUsage``).
+
+    ``days`` bounds the window back from today (subscriber timezone). Days with
+    no recorded usage are simply absent from ``points`` (not zero-filled).
+    """
+    sub_ids = _subscription_ids(db, subscriber_id)
+    tz = _subscriber_tz(db, subscriber_id)
+    end = datetime.now(tz).date()
+    start = end - timedelta(days=max(days, 1))
+    empty = {
+        "start": start,
+        "end": end,
+        "total_upload_bytes": 0,
+        "total_download_bytes": 0,
+        "total_bytes": 0,
+        "points": [],
+    }
+    if not sub_ids:
+        return empty
+    rows = (
+        db.query(
+            SubscriberDailyUsage.usage_date,
+            func.sum(SubscriberDailyUsage.upload_bytes),
+            func.sum(SubscriberDailyUsage.download_bytes),
+        )
+        .filter(
+            SubscriberDailyUsage.subscription_id.in_(sub_ids),
+            SubscriberDailyUsage.usage_date >= start,
+            SubscriberDailyUsage.usage_date <= end,
+        )
+        .group_by(SubscriberDailyUsage.usage_date)
+        .order_by(SubscriberDailyUsage.usage_date)
+        .all()
+    )
+    points = []
+    tot_up = tot_down = 0
+    for d, up, down in rows:
+        up, down = int(up or 0), int(down or 0)
+        tot_up += up
+        tot_down += down
+        points.append(
+            {
+                "date": d,
+                "upload_bytes": up,
+                "download_bytes": down,
+                "total_bytes": up + down,
+            }
+        )
+    return {
+        "start": start,
+        "end": end,
+        "total_upload_bytes": tot_up,
+        "total_download_bytes": tot_down,
+        "total_bytes": tot_up + tot_down,
+        "points": points,
+    }
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -495,6 +563,49 @@ def _series_payload(buckets: dict) -> list[dict]:
     ]
 
 
+def _avg_bps(points: list[tuple[datetime, float, float]]) -> float | None:
+    """Mean throughput (rx+tx bits/s) across the window's sample points — the
+    "average speed" figure. None when the window has no samples."""
+    if not points:
+        return None
+    return sum(rx + tx for _, rx, tx in points) / len(points)
+
+
+async def _peak_directions(
+    db: Session, sub_ids: list, start: datetime, end: datetime
+) -> tuple[float | None, float | None]:
+    """Exact peak (download, upload) bits/s over ``[start, end]`` from the
+    metrics store (VictoriaMetrics ``max_over_time`` at raw resolution), maxed
+    across the subscriber's subscriptions. Best-effort: returns ``(None, None)``
+    when the metrics store is unavailable or the window has no data, so the
+    caller can simply omit the figure rather than report a misleading 0."""
+    if not sub_ids:
+        return None, None
+    try:
+        from app.services.bandwidth import to_subscriber_directions
+        from app.services.metrics_store import get_metrics_store
+
+        store = get_metrics_store()
+        down = up = 0.0
+        seen = False
+        for sub_id in sub_ids:
+            try:
+                peak = await store.get_peak_bandwidth(str(sub_id), start, end)
+            except Exception as exc:  # pragma: no cover - metrics store dependent
+                logger.debug("usage-summary peak failed for %s: %s", sub_id, exc)
+                continue
+            d, u = to_subscriber_directions(
+                peak.get("rx_peak_bps", 0), peak.get("tx_peak_bps", 0)
+            )
+            if d or u:
+                seen = True
+            down, up = max(down, d), max(up, u)
+        return (down, up) if seen else (None, None)
+    except Exception as exc:  # pragma: no cover - metrics store dependent
+        logger.debug("usage-summary peak unavailable: %s", exc)
+        return None, None
+
+
 async def get_usage_summary(
     db: Session, subscriber_id: str, period: str, now: datetime | None = None
 ) -> dict:
@@ -504,43 +615,82 @@ async def get_usage_summary(
     tz = _subscriber_tz(db, subscriber_id)
 
     if period == "all":
-        total = _session_octets(db, sub_ids, since=None)
-        first = (
+        # Lifetime total. The daily rollup (Splynx traffic_counter backfill)
+        # reaches back to 2018; per-session accounting only to ~2023. Combine the
+        # two WITHOUT double-counting their overlap: the daily rollup is
+        # authoritative up to its last recorded day; sessions cover everything
+        # after that (the live post-cutover feed).
+        daily_total = 0
+        daily_first: datetime | None = None
+        daily_last_date = None
+        if sub_ids:
+            d_sum, d_min, d_max = (
+                db.query(
+                    func.coalesce(func.sum(SubscriberDailyUsage.upload_bytes), 0)
+                    + func.coalesce(func.sum(SubscriberDailyUsage.download_bytes), 0),
+                    func.min(SubscriberDailyUsage.usage_date),
+                    func.max(SubscriberDailyUsage.usage_date),
+                )
+                .filter(SubscriberDailyUsage.subscription_id.in_(sub_ids))
+                .one()
+            )
+            daily_total = int(d_sum or 0)
+            daily_last_date = d_max
+            if d_min is not None:
+                daily_first = datetime(d_min.year, d_min.month, d_min.day, tzinfo=UTC)
+        # Sessions strictly after the daily rollup's last day (or all sessions
+        # when there is no daily history at all), so the overlap isn't counted
+        # twice.
+        since = None
+        if daily_last_date is not None:
+            since = datetime(
+                daily_last_date.year,
+                daily_last_date.month,
+                daily_last_date.day,
+                tzinfo=UTC,
+            ) + timedelta(days=1)
+        total = daily_total + _session_octets(db, sub_ids, since=since)
+        first_session = (
             db.query(func.min(RadiusAccountingSession.session_start))
             .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
             .scalar()
             if sub_ids
             else None
         )
+        starts = [d for d in (daily_first, _as_utc(first_session)) if d is not None]
         return {
             "period": period,
-            "start": (_as_utc(first) or now),
+            "start": (min(starts) if starts else now),
             "end": now,
             "total_bytes": total,
-            "total_source": "sessions",
+            "total_source": "lifetime",
             "is_authoritative": True,
             "bucket": None,
             "series": [],
+            "average_bps": None,
         }
 
     if period == "cycle":
         buckets = _current_quota(db, sub_ids, now)
         if buckets:
+            # The rated bucket defines the billing-cycle WINDOW only.
             starts = [d for b in buckets if (d := _as_utc(b.period_start)) is not None]
             ends = [d for b in buckets if (d := _as_utc(b.period_end)) is not None]
             start = min(starts) if starts else now
             end = min(min(ends), now) if ends else now
-            used_gb = sum(float(b.used_gb or 0) for b in buckets)
-            total = int(used_gb * _GB_BYTES)
-            total_source, authoritative = "quota", True
         else:
-            # No rated cycle on file — approximate a 30-day window from sessions.
+            # No rated cycle on file — approximate a 30-day window.
             start, end = now - timedelta(days=30), now
-            total = _session_octets(db, sub_ids, since=start)
-            total_source, authoritative = "sessions", False
-        series = _integrate(
-            await _vm_points(db, sub_ids, start, end), "day", tz, end=end
-        )
+        # Period usage = RADIUS session-accounting octets over the window (the
+        # authoritative byte counters), NOT the rated quota bucket: quota reads 0
+        # on unlimited plans and lags actual usage, and the throughput series
+        # under-counts due to short metrics retention (~days). Sum the exact
+        # per-session octets for sessions started in the window.
+        total = _session_octets(db, sub_ids, since=start)
+        total_source, authoritative = "sessions", True
+        points = await _vm_points(db, sub_ids, start, end)
+        series = _integrate(points, "day", tz, end=end)
+        peak_down, peak_up = await _peak_directions(db, sub_ids, start, end)
         return {
             "period": period,
             "start": start,
@@ -550,6 +700,9 @@ async def get_usage_summary(
             "is_authoritative": authoritative,
             "bucket": "day",
             "series": _series_payload(series),
+            "average_bps": _avg_bps(points),
+            "peak_download_bps": peak_down,
+            "peak_upload_bps": peak_up,
         }
 
     # Sub-day / week windows — throughput series drives both chart and total.
@@ -596,4 +749,5 @@ async def get_usage_summary(
         "is_authoritative": authoritative,
         "bucket": bucket,
         "series": _series_payload(series),
+        "average_bps": _avg_bps(points),
     }

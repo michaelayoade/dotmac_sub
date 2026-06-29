@@ -164,7 +164,7 @@ def reports_hub(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("reports:billing"))],
 )
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -274,7 +274,7 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
 @router.get(
     "/network",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("reports:network"))],
 )
 def reports_network(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats

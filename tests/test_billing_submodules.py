@@ -7,7 +7,7 @@ and billing reporting.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import patch
@@ -30,7 +30,9 @@ from app.models.billing import (
     PaymentStatus,
     TaxApplication,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
+from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import (
     CollectionAccountCreate,
     CollectionAccountUpdate,
@@ -63,6 +65,8 @@ from app.services.billing._common import (
 )
 from app.services.billing.configuration import _parse_bool, _parse_json
 from app.services.billing.reporting import BillingReporting
+from app.services.settings_cache import SettingsCache
+from app.services.settings_spec import get_spec
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1347,6 +1351,150 @@ class TestPaymentCRUD:
             billing_service.payments.delete(db_session, str(uuid.uuid4()))
         assert exc.value.status_code == 404
 
+    def test_succeeded_prepaid_payment_consumes_credit_and_advances_billing(
+        self, db_session, subscriber, subscription
+    ):
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import SubscriberStatus
+
+        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
+        next_billing = datetime(2026, 7, 1, tzinfo=UTC)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
+        subscription.next_billing_at = next_billing
+        subscriber.status = SubscriberStatus.blocked
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=paid_at,
+            ),
+        )
+
+        credit = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.payment)
+            .one()
+        )
+        debit = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.invoice)
+            .one()
+        )
+        assert credit.entry_type == LedgerEntryType.credit
+        assert credit.amount == Decimal("37625.00")
+        assert debit.entry_type == LedgerEntryType.debit
+        assert debit.amount == Decimal("37625.00")
+        db_session.refresh(subscription)
+        db_session.refresh(subscriber)
+        assert subscription.next_billing_at == datetime(2026, 8, 1)
+        assert subscriber.status == SubscriberStatus.active
+
+    def test_succeeded_prepaid_payment_preserves_credit_when_paid_coverage_exists(
+        self, db_session, subscriber, subscription
+    ):
+        from app.models.billing import InvoiceLine
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+
+        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
+        period_start = datetime(2026, 7, 1, tzinfo=UTC)
+        period_end = datetime(2026, 8, 1, tzinfo=UTC)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
+        subscription.next_billing_at = period_start
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        paid_invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            currency="NGN",
+            subtotal=Decimal("37625.00"),
+            total=Decimal("37625.00"),
+            balance_due=Decimal("0.00"),
+            status=InvoiceStatus.paid,
+        )
+        paid_invoice.billing_period_start = period_start
+        paid_invoice.billing_period_end = period_end
+        db_session.add(paid_invoice)
+        db_session.flush()
+        db_session.add(
+            InvoiceLine(
+                invoice_id=paid_invoice.id,
+                subscription_id=subscription.id,
+                description="Paid July service",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("37625.00"),
+                amount=Decimal("37625.00"),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("37625.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=paid_at,
+            ),
+        )
+
+        debit = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.invoice)
+            .first()
+        )
+        assert debit is None
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == period_end.replace(tzinfo=None)
+
 
 # ============================================================================
 # Payment with explicit allocations
@@ -1874,6 +2022,66 @@ class TestReportingHelpers:
         assert "31_60" in result["buckets"]
         assert "61_90" in result["buckets"]
         assert "90_plus" in result["buckets"]
+
+    def test_ar_aging_excludes_draft_invoices(self, db_session, subscriber):
+        draft = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.draft,
+        )
+        draft.due_at = datetime.now(UTC) - timedelta(days=45)
+        issued = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("50.00"),
+            status=InvoiceStatus.issued,
+        )
+        issued.due_at = datetime.now(UTC) - timedelta(days=45)
+        db_session.commit()
+
+        result = BillingReporting.get_ar_aging_buckets(db_session)
+        all_bucketed_invoices = [
+            invoice for invoices in result["buckets"].values() for invoice in invoices
+        ]
+
+        assert draft not in all_bucketed_invoices
+        assert issued in all_bucketed_invoices
+
+    def test_ar_aging_uses_configured_bucket_days(self, db_session, subscriber):
+        spec = get_spec(SettingDomain.billing, "ar_aging_bucket_days")
+        assert spec is not None
+        assert spec.default == "30,60,90"
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="ar_aging_bucket_days",
+                value_type=SettingValueType.string,
+                value_text="10,20,30",
+                is_active=True,
+            )
+        )
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.overdue,
+        )
+        invoice.due_at = datetime.now(UTC) - timedelta(days=15)
+        db_session.commit()
+        SettingsCache.invalidate(SettingDomain.billing.value, "ar_aging_bucket_days")
+
+        result = BillingReporting.get_ar_aging_buckets(db_session)
+
+        assert invoice in result["buckets"]["31_60"]
+        assert invoice not in result["buckets"]["1_30"]
 
 
 # ============================================================================

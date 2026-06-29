@@ -198,7 +198,7 @@ def _default_refresh_radius() -> None:
     Prefers the relocated ``app.services.radius_population`` module; falls back to
     the committed ``scripts.migration.populate_radius_from_subs`` (same logic,
     its current home on ``main``). Both expose ``populate(dry_run=...)``, so this
-    one file works before and after the Splynx-decommission relocation lands.
+    one file works before and after the legacy-decommission relocation lands.
     """
     try:
         module = import_module("app.services.radius_population")

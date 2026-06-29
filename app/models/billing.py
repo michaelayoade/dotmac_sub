@@ -425,7 +425,15 @@ class CreditNoteApplication(Base):
 
 class InvoiceLine(Base):
     __tablename__ = "invoice_lines"
-    __table_args__ = (Index("ix_invoice_lines_invoice_id", "invoice_id"),)
+    __table_args__ = (
+        Index("ix_invoice_lines_invoice_id", "invoice_id"),
+        Index(
+            "uq_invoice_lines_active_billing_line_key",
+            "billing_line_key",
+            unique=True,
+            postgresql_where=text("is_active AND billing_line_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -447,6 +455,7 @@ class InvoiceLine(Base):
         Enum(TaxApplication), default=TaxApplication.exclusive
     )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    billing_line_key: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(

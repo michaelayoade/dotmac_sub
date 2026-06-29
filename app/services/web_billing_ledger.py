@@ -27,6 +27,32 @@ from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
 
+
+def _currency_code(value: object | None) -> str:
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
+def _format_currency_amount(amount: object, currency: object | None) -> str:
+    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
+
+
+def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
+    if not amounts:
+        return _format_currency_amount(0, "NGN")
+    return ", ".join(
+        _format_currency_amount(amounts[currency], currency)
+        for currency in sorted(amounts)
+    )
+
+
+def _add_grouped_amount(
+    amounts: dict[str, Decimal], *, currency: object | None, amount: object
+) -> None:
+    code = _currency_code(currency)
+    amounts[code] = amounts.get(code, Decimal("0")) + Decimal(str(amount or 0))
+
+
 _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
     "service": (LedgerSource.invoice,),
     "payment": (LedgerSource.payment,),
@@ -36,7 +62,7 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
     "other": (LedgerSource.other,),
 }
 
-# Splynx cutover: the migrated ledger carries invoice debits only through this
+# Legacy cutover: the migrated ledger carries invoice debits only through this
 # instant. Native invoice issuance does NOT post a debit to ledger_entries (the
 # invoice row itself is the AR record), so without merging post-cutover invoices
 # the ledger view looks frozen at March 2026. Invoices issued on/before the
@@ -89,9 +115,9 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
 
 
 def _splynx_credit_as_ledger_row(txn, account) -> SimpleNamespace:  # type: ignore[no-untyped-def]
-    """Adapt an unmigrated Splynx credit transaction into a display row.
+    """Adapt an unmigrated legacy credit transaction into a display row.
 
-    Some pre-cutover Splynx credits (back-office corrections, credit notes,
+    Some pre-cutover credits (back-office corrections, credit notes,
     withholding-tax, service credits) were not imported 1:1 into ledger_entries;
     their VALUE is already reflected in each prepaid account's balance via the
     cutover deposit true-up, so they must NOT be inserted as real ledger rows
@@ -113,7 +139,7 @@ def _splynx_credit_as_ledger_row(txn, account) -> SimpleNamespace:  # type: igno
         source=SimpleNamespace(value="credit_note"),
         amount=txn.amount,
         currency="NGN",
-        memo=f"{label} (Splynx)",
+        memo=f"{label} (legacy import)",
         effective_date=when,
         created_at=when,
         is_active=True,
@@ -239,13 +265,13 @@ def build_ledger_entries_data(
                 .all()
             ]
 
-        # Merge pre-cutover Splynx credits that were never migrated 1:1 into the
+        # Merge pre-cutover credits that were never migrated 1:1 into the
         # ledger (corrections / credit notes / withholding-tax / service credits),
-        # so they are visible "as they were in Splynx". Display-only: deduped
+        # so they remain visible for audit. Display-only: deduped
         # against existing ledger credits (same account+amount+date) so already-
         # migrated ones aren't shown twice; never written to ledger_entries, so
         # balances are untouched. They are credits, shown under "credit_note".
-        # These Splynx credits are all pre-cutover (<= 2026-03-15), so in an
+        # These legacy credits are all pre-cutover (<= 2026-03-15), so in an
         # unscoped, recency-ordered view they can never beat the post-cutover
         # top-N — running the (correlated) dedup scan there is pure cost for zero
         # rows. Only evaluate it when the view is scoped to a customer/partner or
@@ -326,18 +352,37 @@ def build_ledger_entries_data(
         for entry in entries
         if getattr(getattr(entry, "entry_type", None), "value", None) == "debit"
     ]
-    credit_total = sum(
-        float(getattr(entry, "amount", 0) or 0) for entry in credit_entries
-    )
-    debit_total = sum(
-        float(getattr(entry, "amount", 0) or 0) for entry in debit_entries
-    )
+    credit_amounts: dict[str, Decimal] = {}
+    debit_amounts: dict[str, Decimal] = {}
+    for entry in credit_entries:
+        _add_grouped_amount(
+            credit_amounts,
+            currency=getattr(entry, "currency", None),
+            amount=getattr(entry, "amount", 0),
+        )
+    for entry in debit_entries:
+        _add_grouped_amount(
+            debit_amounts,
+            currency=getattr(entry, "currency", None),
+            amount=getattr(entry, "amount", 0),
+        )
+    net_amounts = dict(credit_amounts)
+    for currency, amount in debit_amounts.items():
+        net_amounts[currency] = net_amounts.get(currency, Decimal("0")) - amount
+    credit_total = sum(float(amount) for amount in credit_amounts.values())
+    debit_total = sum(float(amount) for amount in debit_amounts.values())
     ledger_totals = {
         "credit_count": len(credit_entries),
         "credit_total": credit_total,
+        "credit_amounts": credit_amounts,
+        "credit_display": _format_currency_groups(credit_amounts),
         "debit_count": len(debit_entries),
         "debit_total": debit_total,
+        "debit_amounts": debit_amounts,
+        "debit_display": _format_currency_groups(debit_amounts),
         "net_total": credit_total - debit_total,
+        "net_amounts": net_amounts,
+        "net_display": _format_currency_groups(net_amounts),
     }
 
     return {

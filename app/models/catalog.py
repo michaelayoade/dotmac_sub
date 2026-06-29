@@ -156,9 +156,9 @@ class AccessState(enum.Enum):
 
 
 class SubscriptionStatus(enum.Enum):
-    """Service/subscription status — mirrors Splynx service status lifecycle.
+    """Service/subscription status — mirrors the imported service status lifecycle.
 
-    Splynx mapping (1:1):
+    Imported status mapping (1:1):
       pending  → pending (awaiting activation / provisioning)
       active   → active (service running, can connect)
       blocked  → blocked (temporarily blocked — non-payment)
@@ -168,18 +168,18 @@ class SubscriptionStatus(enum.Enum):
       deleted  → canceled (soft-deleted, record preserved)
 
     DotMac-only statuses:
-      suspended — generic suspension (non-Splynx origin)
-      archived  — generic archive (non-Splynx origin)
+      suspended — generic suspension (local origin)
+      archived  — generic archive (local origin)
       expired   — contract/prepaid period ended
     """
 
     pending = "pending"  # Awaiting activation / provisioning
     active = "active"  # Service running, subscriber can connect
-    blocked = "blocked"  # Temporarily blocked (Splynx: blocked)
+    blocked = "blocked"  # Temporarily blocked
     suspended = "suspended"  # Generic suspension (DotMac-native)
-    stopped = "stopped"  # Manually paused by admin (Splynx: stopped)
-    disabled = "disabled"  # Terminated by admin (Splynx: disabled)
-    hidden = "hidden"  # Not visible to customer (Splynx: hidden)
+    stopped = "stopped"  # Manually paused by admin
+    disabled = "disabled"  # Terminated by admin
+    hidden = "hidden"  # Not visible to customer
     archived = "archived"  # Generic archive (DotMac-native)
     canceled = "canceled"  # Soft-deleted / fully terminated
     expired = "expired"  # Contract/prepaid period ended
@@ -360,7 +360,7 @@ class UsageAllowance(Base):
     overage_cap_gb: Mapped[int | None] = mapped_column(Integer)
     throttle_rate_mbps: Mapped[int | None] = mapped_column(Integer)
     # Unused allowance carries into next period's quota bucket (capped at one
-    # period's included_gb). Sourced from Splynx fup_limits.rollover_data.
+    # period's included_gb). Sourced from imported fup_limits.rollover_data.
     rollover_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -422,13 +422,13 @@ class AddOn(Base):
     ip_prefix_length: Mapped[int | None] = mapped_column(Integer)
 
     # Data top-up: GB granted to the subscription's quota bucket on purchase
-    # (null for non-data add-ons). Sourced from Splynx cap_tariff.
+    # (null for non-data add-ons). Sourced from imported cap_tariff.
     grant_gb: Mapped[int | None] = mapped_column(Integer)
     # Top-up validity in days; null means it expires at the end of the billing
-    # period it was bought in. Sourced from Splynx cap_tariff.validity.
+    # period it was bought in. Sourced from imported cap_tariff.validity.
     validity_days: Mapped[int | None] = mapped_column(Integer)
 
-    # Provenance for the Splynx importer — "custom:8" / "one_time:3" /
+    # Provenance for the legacy importer — "custom:8" / "one_time:3" /
     # "cap_tariff:1". Unique so re-running the import updates rather than
     # duplicates.
     splynx_source: Mapped[str | None] = mapped_column(String(40), unique=True)
@@ -536,7 +536,7 @@ class CatalogOffer(Base):
     versions = relationship("OfferVersion", back_populates="offer")
     default_ont_profile = relationship("OntProvisioningProfile")
 
-    # Availability controls (Splynx tariffs_*_to_* junction tables)
+    # Availability controls from imported tariff junction tables.
     reseller_availability = relationship(
         "OfferResellerAvailability",
         back_populates="offer",
@@ -806,6 +806,14 @@ class Subscription(Base):
     login: Mapped[str | None] = mapped_column(String(120))
     ipv4_address: Mapped[str | None] = mapped_column(String(64))
     ipv6_address: Mapped[str | None] = mapped_column(String(128))
+    # OBSERVED framed address from live RADIUS accounting (display/diagnostics
+    # only). Kept SEPARATE from ipv4_address/ipv6_address, which are the
+    # DESIRED/served IP owned by the IP assignment + connectivity reconciler.
+    # Splitting observed from desired stops the live IP overwriting the desired
+    # IP and being re-emitted by the RADIUS sweep — see
+    # docs/designs/CONNECTIVITY_STATE_MACHINE.md §3.1.
+    last_seen_framed_ipv4: Mapped[str | None] = mapped_column(String(64))
+    last_seen_framed_ipv6: Mapped[str | None] = mapped_column(String(128))
     mac_address: Mapped[str | None] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(

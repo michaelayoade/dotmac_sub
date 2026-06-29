@@ -333,21 +333,33 @@ class MetricsStore:
         start: datetime,
         end: datetime,
         step: str = "1m",
+        aggregate: str = "avg",
     ) -> dict[str, list[TimeSeriesPoint]]:
         """
         Get bandwidth time series for a specific subscription.
+
+        Reads the per-window aggregate series written by the bandwidth worker
+        (``bandwidth_rx_bps_avg`` / ``bandwidth_rx_bps_max``) — the raw
+        unsuffixed ``bandwidth_rx_bps`` series is no longer ingested.
+        ``aggregate`` selects which: ``"avg"`` for the throughput chart,
+        ``"max"`` for the peak fallback.
 
         Args:
             subscription_id: The subscription UUID
             start: Start time
             end: End time
             step: Query resolution
+            aggregate: ``"avg"`` or ``"max"`` — which aggregate series to read
 
         Returns:
             Dict with 'rx' and 'tx' keys containing time series points
         """
-        rx_query = f'bandwidth_rx_bps{{subscription_id="{subscription_id}"}}'
-        tx_query = f'bandwidth_tx_bps{{subscription_id="{subscription_id}"}}'
+        rx_query = (
+            f'bandwidth_rx_bps_{aggregate}{{subscription_id="{subscription_id}"}}'
+        )
+        tx_query = (
+            f'bandwidth_tx_bps_{aggregate}{{subscription_id="{subscription_id}"}}'
+        )
 
         rx_results = await self.query_range(rx_query, start, end, step)
         tx_results = await self.query_range(tx_query, start, end, step)
@@ -370,8 +382,8 @@ class MetricsStore:
         Returns:
             Dict with rx_bps and tx_bps values
         """
-        rx_query = f'bandwidth_rx_bps{{subscription_id="{subscription_id}"}}'
-        tx_query = f'bandwidth_tx_bps{{subscription_id="{subscription_id}"}}'
+        rx_query = f'bandwidth_rx_bps_avg{{subscription_id="{subscription_id}"}}'
+        tx_query = f'bandwidth_tx_bps_avg{{subscription_id="{subscription_id}"}}'
 
         rx_results = await self.get_instant(rx_query)
         tx_results = await self.get_instant(tx_query)
@@ -394,21 +406,45 @@ class MetricsStore:
     ) -> dict[str, float]:
         """
         Get peak bandwidth for a subscription within a time range.
+
+        Reads the per-window ``bandwidth_rx_bps_max`` aggregate written by the
+        bandwidth worker (the raw unsuffixed series is no longer ingested).
+
+        Prefers an exact ``max_over_time`` instant query. That query can return
+        nothing on a long lookbehind window (VictoriaMetrics rejects an
+        over-long ``[duration]`` rollup, or the data predates the instant
+        evaluation's staleness window), so when it yields no peak we fall back
+        to the max of the *range* ``_max`` series, which is known to return
+        data over multi-day windows.
         """
         duration = int((end - start).total_seconds())
-        rx_query = f'max_over_time(bandwidth_rx_bps{{subscription_id="{subscription_id}"}}[{duration}s])'
-        tx_query = f'max_over_time(bandwidth_tx_bps{{subscription_id="{subscription_id}"}}[{duration}s])'
-
-        rx_results = await self.get_instant(rx_query)
-        tx_results = await self.get_instant(tx_query)
+        rx_query = f'max_over_time(bandwidth_rx_bps_max{{subscription_id="{subscription_id}"}}[{duration}s])'
+        tx_query = f'max_over_time(bandwidth_tx_bps_max{{subscription_id="{subscription_id}"}}[{duration}s])'
 
         rx_peak = 0.0
         tx_peak = 0.0
+        try:
+            rx_results = await self.get_instant(rx_query)
+            tx_results = await self.get_instant(tx_query)
+            rx_peak = max(
+                (float(r["value"][1]) for r in rx_results if r.get("value")),
+                default=0.0,
+            )
+            tx_peak = max(
+                (float(r["value"][1]) for r in tx_results if r.get("value")),
+                default=0.0,
+            )
+        except Exception as exc:  # pragma: no cover - metrics store dependent
+            logger.warning(
+                "peak instant query failed, falling back to range series: %s", exc
+            )
 
-        if rx_results and rx_results[0].get("value"):
-            rx_peak = float(rx_results[0]["value"][1])
-        if tx_results and tx_results[0].get("value"):
-            tx_peak = float(tx_results[0]["value"][1])
+        if rx_peak <= 0 and tx_peak <= 0:
+            series = await self.get_subscription_bandwidth(
+                subscription_id, start, end, step="1m", aggregate="max"
+            )
+            rx_peak = max((p.value for p in series.get("rx", [])), default=0.0)
+            tx_peak = max((p.value for p in series.get("tx", [])), default=0.0)
 
         return {"rx_peak_bps": rx_peak, "tx_peak_bps": tx_peak}
 
@@ -422,9 +458,11 @@ class MetricsStore:
         Get total bytes transferred for a subscription within a time range.
         """
         duration = int((end - start).total_seconds())
-        # Convert bps to bytes by integrating over time (bps * seconds / 8)
-        rx_query = f'sum(increase(bandwidth_rx_bps{{subscription_id="{subscription_id}"}}[{duration}s])) / 8'
-        tx_query = f'sum(increase(bandwidth_tx_bps{{subscription_id="{subscription_id}"}}[{duration}s])) / 8'
+        # Integrate the average-bps gauge over the window to estimate bytes:
+        # mean(bps) * seconds / 8. (The unsuffixed counter-style series this
+        # once used ``increase()`` on is no longer ingested.)
+        rx_query = f'sum(avg_over_time(bandwidth_rx_bps_avg{{subscription_id="{subscription_id}"}}[{duration}s])) * {duration} / 8'
+        tx_query = f'sum(avg_over_time(bandwidth_tx_bps_avg{{subscription_id="{subscription_id}"}}[{duration}s])) * {duration} / 8'
 
         rx_results = await self.get_instant(rx_query)
         tx_results = await self.get_instant(tx_query)
@@ -454,7 +492,11 @@ class MetricsStore:
         Returns:
             List of top users with subscription_id and bandwidth
         """
-        query = f"topk({limit}, sum by (subscription_id) (rate(bandwidth_rx_bps[{duration}]) + rate(bandwidth_tx_bps[{duration}])))"
+        query = (
+            f"topk({limit}, sum by (subscription_id) ("
+            f"avg_over_time(bandwidth_rx_bps_avg[{duration}]) + "
+            f"avg_over_time(bandwidth_tx_bps_avg[{duration}])))"
+        )
 
         results = await self.get_instant(query)
 

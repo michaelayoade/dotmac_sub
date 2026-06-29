@@ -241,6 +241,91 @@ class TestBuildRadiusReplyAttributes:
         assert "Framed-IPv6-Prefix" in attr_names
 
 
+class TestFramedIpParity:
+    """Writer-#2 parity: never emit a stale/empty/0.0.0.0 Framed-IP — fall back to
+    the active IPAM assignment like the authoritative sweep does."""
+
+    @staticmethod
+    def _attrs(value):
+        return [
+            {"attribute": "Service-Type", "op": ":=", "value": "Framed-User"},
+            {"attribute": "Framed-IP-Address", "op": ":=", "value": value},
+        ]
+
+    def test_valid_column_kept_without_db_lookup(self, mock_subscription):
+        from app.services.connection_type_provisioning import _ensure_framed_ip
+
+        db = MagicMock()
+        mock_subscription.ipv4_address = "10.0.0.100"
+        attrs = self._attrs("10.0.0.100")
+        _ensure_framed_ip(db, attrs, mock_subscription)
+        db.execute.assert_not_called()  # no fallback query when the column is usable
+        framed = [a for a in attrs if a["attribute"] == "Framed-IP-Address"]
+        assert [a["value"] for a in framed] == ["10.0.0.100"]
+
+    def test_zero_address_replaced_by_ipam_fallback(self, mock_subscription):
+        from app.services.connection_type_provisioning import _ensure_framed_ip
+
+        db = MagicMock()
+        db.execute.return_value.scalar.return_value = "10.9.9.9"
+        mock_subscription.ipv4_address = "0.0.0.0"
+        attrs = self._attrs("0.0.0.0")
+        _ensure_framed_ip(db, attrs, mock_subscription)
+        framed = [a for a in attrs if a["attribute"] == "Framed-IP-Address"]
+        assert [a["value"] for a in framed] == ["10.9.9.9"]
+
+    def test_empty_column_injects_fallback(self, mock_subscription):
+        from app.services.connection_type_provisioning import _ensure_framed_ip
+
+        db = MagicMock()
+        db.execute.return_value.scalar.return_value = "10.9.9.9"
+        mock_subscription.ipv4_address = None
+        attrs = [{"attribute": "Service-Type", "op": ":=", "value": "Framed-User"}]
+        _ensure_framed_ip(db, attrs, mock_subscription)
+        assert {
+            "attribute": "Framed-IP-Address",
+            "op": ":=",
+            "value": "10.9.9.9",
+        } in attrs
+
+    def test_no_ip_anywhere_drops_zero_address(self, mock_subscription):
+        from app.services.connection_type_provisioning import _ensure_framed_ip
+
+        db = MagicMock()
+        db.execute.return_value.scalar.return_value = None
+        mock_subscription.ipv4_address = "0.0.0.0"
+        attrs = self._attrs("0.0.0.0")
+        _ensure_framed_ip(db, attrs, mock_subscription)
+        assert not [a for a in attrs if a["attribute"] == "Framed-IP-Address"]
+
+    def test_offer_rate_limit_fallback(self, mock_subscription):
+        from types import SimpleNamespace
+
+        from app.services.connection_type_provisioning import (
+            _offer_rate_limit_fallback,
+        )
+
+        db = MagicMock()
+        db.get.return_value = SimpleNamespace(
+            speed_download_mbps=50, speed_upload_mbps=25
+        )
+        assert _offer_rate_limit_fallback(db, mock_subscription) == "50M/25M"
+
+        db.get.return_value = None
+        assert _offer_rate_limit_fallback(db, mock_subscription) is None
+
+    def test_build_emits_acct_interim_interval(self, mock_subscription, mock_profile):
+        db = MagicMock()
+        db.get.return_value = mock_profile
+        db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
+        db.query.return_value.filter.return_value.all.return_value = []
+        mock_subscription.radius_profile_id = mock_profile.id
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
+        assert any(a["attribute"] == "Acct-Interim-Interval" for a in attrs)
+
+
 # ---------------------------------------------------------------------------
 # _append_additional_routes
 # ---------------------------------------------------------------------------

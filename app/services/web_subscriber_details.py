@@ -936,7 +936,7 @@ def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
     else:
         enrichment["reseller_name"] = None
 
-    # Last online from metadata (backfilled from Splynx API)
+    # Last online from imported metadata.
     enrichment["last_online"] = metadata.get("splynx_last_online") or metadata.get(
         "last_online"
     )
@@ -950,7 +950,7 @@ def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
     gps_raw = metadata.get("splynx_gps") or metadata.get("gps")
     enrichment["gps_coordinates"] = gps_raw
 
-    # Splynx location
+    # Imported location metadata.
     enrichment["splynx_location_id"] = metadata.get("splynx_location_id")
 
     # RADIUS credentials per subscription

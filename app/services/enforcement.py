@@ -21,6 +21,7 @@ from app.models.catalog import (
     OfferRadiusProfile,
     RadiusProfile,
     Subscription,
+    SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusClient
@@ -30,6 +31,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
 from app.services.radius import sync_credential_to_radius
+from app.services.radius_address_lists import suspended_address_list
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
@@ -136,7 +138,7 @@ def _mikrotik_kill_enabled(db: Session) -> bool:
 
 def _mikrotik_api_session_kick_enabled(db: Session) -> bool:
     return _setting_bool(
-        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", False
+        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", True
     )
 
 
@@ -583,10 +585,15 @@ def update_subscription_sessions(
             ):
                 count += 1
             else:
-                # Fall back to disconnect — subscriber reconnects with new profile
+                # Fall back to disconnect — subscriber reconnects with new
+                # profile. CoA → RouterOS API (read-back verified) → SSH, the
+                # same fallback chain the suspend/cancel disconnect path uses,
+                # so API-only NAS (no SSH creds) are still refreshed.
                 if _send_coa_disconnect(
                     db, nas_device, username, framed_ip, session_id
                 ):
+                    count += 1
+                elif _api_kick_session(db, nas_device, username):
                     count += 1
                 elif _disconnect_mikrotik_session(db, nas_device, username):
                     count += 1
@@ -694,6 +701,91 @@ def _remove_mikrotik_address_list(
         return True
     except Exception as exc:
         logger.warning("MikroTik address-list removal failed: %s", exc)
+        return False
+
+
+def _api_kick_session(db: Session, nas_device: NasDevice, username: str | None) -> bool:
+    """Disconnect one PPPoE session via the RouterOS API (read-back verified).
+
+    The profile-change refresh path historically fell straight from CoA to SSH;
+    on API-only MikroTik NAS (no SSH creds — the common case) that left the
+    session live on the old profile. This mirrors the API tier of the
+    suspend/cancel disconnect path.
+    """
+    if not username:
+        return False
+    if nas_device.vendor != NasVendor.mikrotik:
+        return False
+    api_dev = _nas_with_api_creds(db, nas_device)
+    if api_dev is None:
+        return False
+    try:
+        from app.services.nas._mikrotik import disconnect_mikrotik_pppoe_bulk
+
+        return bool(disconnect_mikrotik_pppoe_bulk(api_dev, {username}))
+    except Exception as exc:
+        logger.warning(
+            "API kick (profile refresh) failed on %s: %s",
+            getattr(api_dev, "name", "?"),
+            exc,
+        )
+        return False
+
+
+def _enforce_address_list_on_nas(
+    db: Session,
+    nas_device: NasDevice,
+    list_name: str,
+    address: str,
+    *,
+    add: bool,
+) -> bool:
+    """Add (``add=True``) or remove an address-list block on one NAS.
+
+    Tries SSH first (unchanged behaviour for SSH-credentialed devices), then
+    falls back to the RouterOS API for API-only MikroTik NAS. Both paths are
+    idempotent.
+    """
+    action = "add" if add else "remove"
+    try:
+        with DeviceProvisioner.ssh_session(nas_device) as ssh:
+            if add:
+                ok = _apply_mikrotik_address_list(
+                    nas_device, list_name, address, ssh=ssh
+                )
+            else:
+                ok = _remove_mikrotik_address_list(
+                    nas_device, list_name, address, ssh=ssh
+                )
+        if ok:
+            return True
+    except Exception as exc:
+        logger.warning(
+            "Address-list %s: SSH path failed for %s: %s — trying API.",
+            action,
+            getattr(nas_device, "name", "?"),
+            exc,
+        )
+
+    api_dev = _nas_with_api_creds(db, nas_device)
+    if api_dev is None:
+        return False
+    try:
+        from app.services.nas._mikrotik import (
+            apply_mikrotik_address_list_via_api,
+            remove_mikrotik_address_list_via_api,
+        )
+
+        if add:
+            return apply_mikrotik_address_list_via_api(api_dev, list_name, address)
+        return remove_mikrotik_address_list_via_api(api_dev, list_name, address)
+    except Exception as exc:
+        logger.warning(
+            "Address-list %s: API fallback failed for %s: %s",
+            action,
+            getattr(api_dev, "name", "?"),
+            exc,
+        )
         return False
 
 
@@ -918,6 +1010,92 @@ def disconnect_subscription_sessions(
     return count
 
 
+def network_identity_signature(db: Session, subscription: Subscription) -> tuple:
+    """The RADIUS-effective network identity of a subscription: login, served
+    IPv4, served IPv6 prefix, RADIUS profile, and the sorted set of active routed
+    blocks. Used to decide whether an edit actually changed something the BNG must
+    re-learn — so a non-effective edit doesn't trigger a needless session kick.
+    """
+    from app.models.network import SubscriberAdditionalRoute
+
+    routes: tuple[str, ...] = ()
+    if subscription.subscriber_id is not None:
+        routes = tuple(
+            sorted(
+                str(cidr)
+                for (cidr,) in db.query(SubscriberAdditionalRoute.cidr)
+                .filter(
+                    SubscriberAdditionalRoute.subscriber_id
+                    == subscription.subscriber_id
+                )
+                .filter(SubscriberAdditionalRoute.is_active.is_(True))
+                .all()
+            )
+        )
+    return (
+        (subscription.login or "").strip(),
+        (subscription.ipv4_address or "").strip(),
+        (subscription.ipv6_address or "").strip(),
+        str(subscription.radius_profile_id or ""),
+        routes,
+    )
+
+
+def reauth_subscription_on_identity_change(
+    db: Session,
+    subscription_id: str,
+    *,
+    before: tuple,
+    reason: str = "network_identity_change",
+) -> dict:
+    """Reconcile RADIUS then kick live sessions when an ACTIVE subscription's
+    network identity changed.
+
+    Call AFTER the edit is committed (never mid-transaction). Compares the current
+    signature to ``before``; if unchanged — or the subscription is not active —
+    it's a no-op (avoids needless kicks). Otherwise it reconciles this
+    subscriber's RADIUS state *first* (so a re-auth lands on the new
+    Framed-IP/routes/profile) and *then* disconnects open sessions so the BNG
+    re-learns them.
+    """
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    if not subscription or subscription.status != SubscriptionStatus.active:
+        return {"changed": False, "reason": "not_active"}
+    after = network_identity_signature(db, subscription)
+    if after == before:
+        return {"changed": False, "reason": "no_effective_change"}
+
+    # RADIUS first (synchronous, per-subscriber), then kick.
+    try:
+        from app.services.radius import reconcile_subscription_connectivity
+
+        reconcile_subscription_connectivity(db, subscription_id)
+    except Exception as exc:  # pragma: no cover - reconcile is best-effort here
+        logger.warning(
+            "reauth: RADIUS reconcile failed for sub=%s: %s (periodic sweep "
+            "converges within 15 min)",
+            subscription_id,
+            exc,
+        )
+
+    disconnected = 0
+    try:
+        disconnected = disconnect_subscription_sessions(
+            db, subscription_id, reason=reason
+        )
+    except Exception as exc:  # pragma: no cover - kick is best-effort
+        logger.warning(
+            "reauth: session disconnect failed for sub=%s: %s", subscription_id, exc
+        )
+    logger.info(
+        "reauth on identity change sub=%s reason=%s disconnected=%d",
+        subscription_id,
+        reason,
+        disconnected,
+    )
+    return {"changed": True, "disconnected": disconnected}
+
+
 def disconnect_account_sessions(
     db: Session, account_id: str, reason: str | None = None
 ) -> int:
@@ -970,11 +1148,7 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         return 0
-    profile = _resolve_effective_profile(db, subscription)
-    list_name = profile.mikrotik_address_list if profile else None
-    list_name = list_name or _default_address_list(db)
-    if not list_name:
-        return 0
+    list_name = suspended_address_list(db)
     if not subscription.ipv4_address:
         return 0
     sessions = (
@@ -995,18 +1169,10 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
         if nas_device:
             targets[nas_device.id] = nas_device
     for nas_device in targets.values():
-        try:
-            with DeviceProvisioner.ssh_session(nas_device) as ssh:
-                if _apply_mikrotik_address_list(
-                    nas_device, list_name, subscription.ipv4_address, ssh=ssh
-                ):
-                    count += 1
-        except Exception as exc:
-            logger.warning(
-                "Address-list add: SSH open failed for %s: %s",
-                getattr(nas_device, "name", "?"),
-                exc,
-            )
+        if _enforce_address_list_on_nas(
+            db, nas_device, list_name, subscription.ipv4_address, add=True
+        ):
+            count += 1
     return count
 
 
@@ -1016,11 +1182,7 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         return 0
-    profile = _resolve_effective_profile(db, subscription)
-    list_name = profile.mikrotik_address_list if profile else None
-    list_name = list_name or _default_address_list(db)
-    if not list_name:
-        return 0
+    list_name = suspended_address_list(db)
     if not subscription.ipv4_address:
         return 0
     sessions = (
@@ -1041,18 +1203,10 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
         if nas_device:
             targets[nas_device.id] = nas_device
     for nas_device in targets.values():
-        try:
-            with DeviceProvisioner.ssh_session(nas_device) as ssh:
-                if _remove_mikrotik_address_list(
-                    nas_device, list_name, subscription.ipv4_address, ssh=ssh
-                ):
-                    count += 1
-        except Exception as exc:
-            logger.warning(
-                "Address-list remove: SSH open failed for %s: %s",
-                getattr(nas_device, "name", "?"),
-                exc,
-            )
+        if _enforce_address_list_on_nas(
+            db, nas_device, list_name, subscription.ipv4_address, add=False
+        ):
+            count += 1
     return count
 
 

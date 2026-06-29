@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.services import module_manager as module_manager_service
 from app.services import web_admin as web_admin_service
 from app.web.admin.admin_hub import router as admin_hub_router
+from app.web.admin.alerts import router as alerts_router
 from app.web.admin.billing_accounts import router as billing_accounts_router
 from app.web.admin.billing_arrangements import router as billing_arrangements_router
 from app.web.admin.billing_channels import router as billing_channels_router
@@ -78,6 +79,7 @@ from app.web.admin.notifications import router as notifications_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
+from app.web.admin.service_requests_queue import router as service_requests_queue_router
 from app.web.admin.support_automation import router as support_automation_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.system import router as system_router
@@ -356,6 +358,8 @@ router.include_router(
     ],
 )
 router.include_router(resellers_router)
+router.include_router(service_requests_queue_router)
+router.include_router(alerts_router)
 router.include_router(
     notifications_router,
     dependencies=[

@@ -107,7 +107,7 @@ final gate.
       billing-aware suspend guards, and _send_coa_update repair (af2983f4);
       15-min reconciler + hourly password sync firing on cadence, platform
       converged overnight. Remaining: end-to-end manual re-test against a live
-      line; operator flip of group_routing_enabled; Splynx multi-sub cleanup.
+      line; operator flip of group_routing_enabled; legacy BSS multi-sub cleanup.
 - [ ] Self-service ONT reboot reaches the device (TR-069/GenieACS).
       Notes: only ~17% of ONTs are TR-069-managed (2026-06-11 review);
       PR #198 (5-min per-device cooldown, failed attempts excluded) MERGED

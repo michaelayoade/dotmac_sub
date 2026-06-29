@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'config/env.dart';
 import 'core/messenger.dart';
+import 'core/semantic_colors.dart';
 import 'core/payment_link_handler.dart';
 import 'providers/auth_controller.dart';
 import 'providers/theme_controller.dart';
@@ -29,6 +31,15 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
     // surface a snackbar from outside any BuildContext.
     _messengerKey = ref.read(scaffoldMessengerKeyProvider);
     _paymentLinks = PaymentLinkHandler(ref, _messengerKey)..start();
+    ref.read(pushServiceProvider).wireRouteHandler(_openPushRoute);
+  }
+
+  void _openPushRoute(String route) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = rootNavigatorKey.currentContext;
+      if (context == null) return;
+      GoRouter.of(context).go(route);
+    });
   }
 
   @override
@@ -54,6 +65,12 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
     } else if (state == AppLifecycleState.resumed && _wasPaused) {
       _wasPaused = false;
       auth.lockOnResume();
+      // Refresh the signed-in profile on foreground so changes made while
+      // backgrounded (e.g. email verified via the link) reflect without a
+      // manual pull-to-refresh. Cheap (/auth/me); guarded to signed-in only.
+      if (ref.read(authControllerProvider).status == AuthStatus.authenticated) {
+        auth.reloadProfile();
+      }
     }
   }
 
@@ -61,26 +78,34 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
 
-    ThemeData themeFor(Brightness brightness) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Brand.primaryColor,
-            brightness: brightness,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(centerTitle: false),
-          inputDecorationTheme: const InputDecorationTheme(
-            border: OutlineInputBorder(),
-          ),
-        );
-
     return MaterialApp.router(
       title: Brand.name,
       scaffoldMessengerKey: _messengerKey,
       debugShowCheckedModeBanner: false,
-      theme: themeFor(Brightness.light),
-      darkTheme: themeFor(Brightness.dark),
+      theme: dotmacThemeFor(Brightness.light),
+      darkTheme: dotmacThemeFor(Brightness.dark),
       themeMode: ref.watch(themeModeProvider),
       routerConfig: router,
     );
   }
 }
+
+/// The app's [ThemeData] for a given [brightness]. Top-level (not a closure)
+/// so widget tests can mount the real theme — including the [SemanticColors]
+/// extension that backs `context.semantic.success/warning` in both modes.
+ThemeData dotmacThemeFor(Brightness brightness) => ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Brand.primaryColor,
+        brightness: brightness,
+      ),
+      useMaterial3: true,
+      appBarTheme: const AppBarTheme(centerTitle: false),
+      inputDecorationTheme: const InputDecorationTheme(
+        border: OutlineInputBorder(),
+      ),
+      extensions: [
+        brightness == Brightness.dark
+            ? SemanticColors.dark
+            : SemanticColors.light,
+      ],
+    );

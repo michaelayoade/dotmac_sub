@@ -29,6 +29,29 @@
     </dl>
     {% endcall %}
 
+    {% if extension.scope_type.value == "subscribers" and preview.selected_subscribers %}
+    {% call card("Selected customers", color="amber") %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-sm">
+            <thead><tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                <th class="px-4 py-3">Customer</th>
+                <th class="px-4 py-3">Account number</th>
+                <th class="px-4 py-3">Email</th>
+            </tr></thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% for customer in preview.selected_subscribers %}
+                <tr>
+                    <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">{{ customer.display_name or (customer.first_name ~ " " ~ customer.last_name) | trim or "—" }}</td>
+                    <td class="px-4 py-3 font-mono text-xs">{{ customer.account_number or customer.subscriber_number or "—" }}</td>
+                    <td class="px-4 py-3">{{ customer.email or "—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endcall %}
+    {% endif %}
+
     {% if extension.status.value == "pending" %}
     {% call card(color="amber") %}
         <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

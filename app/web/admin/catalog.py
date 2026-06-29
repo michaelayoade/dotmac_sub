@@ -2,6 +2,7 @@
 
 import logging
 from typing import Any, cast
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -183,7 +184,11 @@ def catalog_offer_edit(
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
-@router.post("/offers/{offer_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/offers/{offer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_offer_edit_post(
     request: Request,
     offer_id: str,
@@ -452,7 +457,11 @@ def catalog_subscription_ipv4_addresses(
     return JSONResponse(payload)
 
 
-@router.post("/subscriptions", response_class=HTMLResponse)
+@router.post(
+    "/subscriptions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_subscription_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -471,7 +480,10 @@ def catalog_subscription_create(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
-@router.get("/subscriptions/ipam/ipv4-available")
+@router.get(
+    "/subscriptions/ipam/ipv4-available",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_subscription_ipv4_available(
     selector: str = Query(...),
     current_ip: str | None = None,
@@ -490,7 +502,10 @@ def catalog_subscription_ipv4_available(
     return JSONResponse({"available_ips": available_ips})
 
 
-@router.get("/subscriptions/ipam/route-children")
+@router.get(
+    "/subscriptions/ipam/route-children",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_subscription_route_children(
     parent_cidr: str = Query(...),
     prefix: int = Query(...),
@@ -540,6 +555,7 @@ def catalog_subscription_detail(
     subscription_id: str,
     db: Session = Depends(get_db),
     notice: str | None = None,
+    warning: str | None = None,
     error: str | None = None,
 ) -> HTMLResponse:
     detail_context = (
@@ -558,6 +574,7 @@ def catalog_subscription_detail(
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(detail_context)
     context["notice"] = notice
+    context["warning"] = warning
     context["error"] = error
     subscription_obj = context.get("subscription")
     network_path = (
@@ -573,7 +590,70 @@ def catalog_subscription_detail(
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 
-@router.post("/subscriptions/{subscription_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/subscriptions/{subscription_id}/force-reauth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_force_reauth(
+    request: Request,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        result = web_catalog_subscriptions_service.force_subscription_reauth(
+            db,
+            subscription_id,
+            request,
+            actor_id=_get_actor_id(request),
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        url = (
+            f"/admin/catalog/subscriptions/{subscription_id}"
+            f"?error={quote_plus(str(detail))}"
+        )
+        return RedirectResponse(
+            url,
+            status_code=303,
+        )
+    count_raw = result.get("sessions_disconnected", 0)
+    if isinstance(count_raw, int):
+        count = count_raw
+    elif isinstance(count_raw, str):
+        count = int(count_raw or "0")
+    else:
+        count = 0
+    if count > 0:
+        message = (
+            f"Force reauthentication requested. Disconnected {count} active session(s)."
+        )
+        url = (
+            f"/admin/catalog/subscriptions/{subscription_id}"
+            f"?notice={quote_plus(message)}"
+        )
+        return RedirectResponse(
+            url,
+            status_code=303,
+        )
+    message = (
+        "Force reauthentication requested, but no active PPPoE session was "
+        "found to disconnect."
+    )
+    url = (
+        f"/admin/catalog/subscriptions/{subscription_id}?warning={quote_plus(message)}"
+    )
+    return RedirectResponse(
+        url,
+        status_code=303,
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_subscription_update(
     request: Request,
     subscription_id: str,

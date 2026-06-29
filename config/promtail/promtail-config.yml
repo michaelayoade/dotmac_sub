@@ -135,6 +135,13 @@ scrape_configs:
       - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
         target_label: service
 
+      # Match the generic docker job so app logs are queryable by project.
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+
+      - source_labels: ['__meta_docker_container_id']
+        target_label: container_id
+
     pipeline_stages:
       - drop:
           older_than: 24h
@@ -168,6 +175,13 @@ scrape_configs:
 
       - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
         target_label: service
+
+      # Match the generic docker job so worker logs are queryable by project.
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+
+      - source_labels: ['__meta_docker_container_id']
+        target_label: container_id
 
     pipeline_stages:
       - drop:

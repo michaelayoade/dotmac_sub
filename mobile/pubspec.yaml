@@ -17,6 +17,10 @@ dependencies:
   # Networking
   dio: ^5.5.0
 
+  # Live-chat realtime transport (CRM widget /ws/widget): instant messages,
+  # "agent is typing", and "Seen" without poll lag.
+  web_socket_channel: ^3.0.1
+
   # Routing
   go_router: ^14.2.0
 
@@ -62,6 +66,7 @@ dependencies:
   flutter_map: ^8.3.0
   latlong2: ^0.9.1
   geolocator: ^14.0.2
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_lints: ^4.0.0

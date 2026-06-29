@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from app.web.customer import routes as customer_routes
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROUTES_PATH = REPO_ROOT / "app/web/customer/routes.py"
 
@@ -47,3 +49,44 @@ def test_support_list_route_delegates_to_crm_portal() -> None:
 
     assert "crm_portal.tickets_list_context" in support_source
     assert '"customer/support/index.html"' in support_source
+
+
+def test_customer_portal_chat_session_uses_portal_session() -> None:
+    source = _function_source("customer_portal_chat_session")
+
+    assert "get_current_customer_from_request" in source
+    assert "require_user_auth" not in source
+    assert "broker_customer_session" in source
+
+
+def test_customer_portal_chat_session_brokers_with_portal_subscriber(
+    monkeypatch,
+) -> None:
+    request = object()
+    db = object()
+    calls = {}
+
+    monkeypatch.setattr(
+        customer_routes,
+        "get_current_customer_from_request",
+        lambda actual_request, actual_db: {
+            "subscriber_id": "sub-123",
+            "account_id": "acct-ignored",
+        },
+    )
+
+    def _broker(actual_db, subscriber_id):
+        calls["db"] = actual_db
+        calls["subscriber_id"] = subscriber_id
+        return {"session_id": "sess-1", "visitor_token": "tok-1"}
+
+    monkeypatch.setattr(
+        customer_routes.chat_session_service,
+        "broker_customer_session",
+        _broker,
+    )
+
+    result = customer_routes.customer_portal_chat_session(request, db)
+
+    assert result == {"session_id": "sess-1", "visitor_token": "tok-1"}
+    assert calls == {"db": db, "subscriber_id": "sub-123"}

@@ -1,3 +1,4 @@
+from app.tasks.admin_alerts import evaluate_infrastructure_alerts
 from app.tasks.alert_evaluation import evaluate_alert_rules
 from app.tasks.app_cache import (
     refresh_dashboard_stats_cache_task,
@@ -17,13 +18,9 @@ from app.tasks.bandwidth import (
 from app.tasks.bandwidth import (
     trim_redis_stream as trim_bandwidth_stream,
 )
-from app.tasks.billing import run_invoice_cycle
+from app.tasks.billing import check_billing_switch_task, run_invoice_cycle
 from app.tasks.catalog import expire_subscriptions
-from app.tasks.collections import (
-    run_dunning,
-    run_prepaid_enforcement,
-    run_retired_lock_reconcile,
-)
+from app.tasks.collections import run_dunning
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.crm_sync import redrive_crm_dead_letters
@@ -35,6 +32,7 @@ from app.tasks.crm_ticket_push import (
     push_comment_to_crm,
     push_ticket_to_crm,
 )
+from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
     mark_stale_processing_events,
@@ -43,6 +41,10 @@ from app.tasks.events import (
 from app.tasks.exports import run_export_job, run_scheduled_export
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
+from app.tasks.infrastructure_availability import (
+    prune_infrastructure_availability,
+    snapshot_infrastructure_availability,
+)
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.ip_utilization import (
@@ -55,6 +57,7 @@ from app.tasks.monitoring_cleanup import (
 from app.tasks.monitoring_cleanup import (
     sync_nas_to_monitoring as sync_nas_devices_to_monitoring,
 )
+from app.tasks.monitoring_coverage import refresh_monitoring_coverage
 from app.tasks.monitoring_warm import warm_monitoring_caches
 from app.tasks.mrr import snapshot_mrr
 from app.tasks.nas import (
@@ -81,10 +84,6 @@ from app.tasks.ont_provisioning import (
     queue_bulk_provisioning,
 )
 from app.tasks.payment_reconciliation import reconcile_topups
-from app.tasks.prepaid_billing import (
-    check_billing_switch_task,
-    run_prepaid_charges_task,
-)
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
@@ -184,9 +183,6 @@ __all__ = [
     "reconcile_topups",
     "expire_subscriptions",
     "run_dunning",
-    "run_prepaid_enforcement",
-    "run_retired_lock_reconcile",
-    "run_prepaid_charges_task",
     "check_billing_switch_task",
     "push_crm_subscriber_change",
     "redrive_crm_dead_letters",
@@ -200,6 +196,7 @@ __all__ = [
     "retry_failed_events",
     "mark_stale_processing_events",
     "cleanup_old_events",
+    "cleanup_subscription_block_sessions",
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",
@@ -230,6 +227,8 @@ __all__ = [
     "deliver_notification_queue",
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",
+    "snapshot_infrastructure_availability",
+    "prune_infrastructure_availability",
     "prune_ip_pool_utilization_snapshots",
     "run_topology_reconcile",
     "warm_topology_status",
@@ -248,6 +247,7 @@ __all__ = [
     "execute_ont_bulk_action",
     "authorize_ont_task",
     "evaluate_alert_rules",
+    "evaluate_infrastructure_alerts",
     "refresh_dashboard_stats_cache_task",
     "refresh_ont_zabbix_snapshot_cache_task",
     "cleanup_device_metrics",
@@ -266,4 +266,5 @@ __all__ = [
     # OLT queue processing (Phase 4)
     "execute_due_profile_sync_tasks",
     "warm_monitoring_caches",
+    "refresh_monitoring_coverage",
 ]

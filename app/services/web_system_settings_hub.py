@@ -105,11 +105,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Customer transfer account details and instructions",
             },
             {
-                "name": "Finance Automation",
-                "url": "/admin/system/config/finance-automation",
-                "description": "Auto-invoicing, blocking rules",
-            },
-            {
                 "name": "Payment Methods",
                 "url": "/admin/system/config/payment-methods",
                 "description": "Available customer payment methods and entry points",

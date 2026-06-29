@@ -173,6 +173,27 @@ def test_run_skips_account_with_no_live_service(
     )
 
 
+def test_run_charges_blocked_account(db_session, subscriber, subscription, monkeypatch):
+    """``blocked`` is a recoverable non-payment hold, not a dead service —
+    autopay must still try to recover it (collectible), unlike truly-terminal
+    statuses. Regression guard for the 2026-06-26 collections leak where the
+    live-service gate excluded ``blocked`` and stopped auto-charging walled
+    non-payers entirely."""
+    subscription.status = SubscriptionStatus.blocked
+    db_session.add(subscription)
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    db_session.commit()
+    _mock_charge(monkeypatch, status="success")
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    assert result.get("skipped") != "no_live_service"
+    assert result["charged"] == 1
+    assert result["failed"] == 0
+
+
 def test_run_noop_when_not_enabled(db_session, subscriber, monkeypatch):
     _card(db_session, subscriber.id)
     _open_invoice(db_session, subscriber.id, Decimal("1000.00"))
@@ -254,6 +275,11 @@ def test_setting_spec_registered():
     assert spec is not None
     assert spec.env_var == "BILLING_AUTOPAY_CHARGE_ONLY_DUE"
     assert spec.default is True
+
+    failure_spec = get_spec(SettingDomain.billing, "autopay_max_consecutive_failures")
+    assert failure_spec is not None
+    assert failure_spec.env_var == "BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES"
+    assert failure_spec.default == 3
 
 
 def test_gating_skips_invoice_not_yet_due(db_session, subscriber, monkeypatch):
@@ -378,6 +404,40 @@ def test_mandate_skipped_after_three_consecutive_failures(
     result = autopay.run_account_autopay(db_session, str(subscriber.id))
     assert result.get("skipped") == "too_many_failures"
     assert len(calls) == autopay.MAX_CONSECUTIVE_FAILURES  # no further charges
+
+
+def test_mandate_failure_cap_can_be_configured(db_session, subscriber, monkeypatch):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="autopay_max_consecutive_failures",
+            value_type=SettingValueType.integer,
+            value_text="2",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="failed", calls=calls)
+
+    for _ in range(2):
+        autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == 2
+    assert status["suspended"] is True
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result.get("skipped") == "too_many_failures"
+    assert len(calls) == 2
 
 
 def test_success_resets_failure_count(db_session, subscriber, monkeypatch):

@@ -26,6 +26,31 @@ logger = logging.getLogger(__name__)
 _CACHE_LIST_TTL = int(os.getenv("CRM_CACHE_LIST_SECONDS", "60"))
 _CACHE_DETAIL_TTL = int(os.getenv("CRM_CACHE_DETAIL_SECONDS", "30"))
 
+# Bounded retry for transient rate-limit / unavailable responses. A 429/503
+# means the request was rejected (not processed), so retrying — including for
+# POSTs — cannot double-apply. Honour the server's Retry-After when present,
+# else back off exponentially, each delay capped so total wait stays well
+# inside the Celery task time limits.
+_RETRY_STATUSES = frozenset({429, 503})
+_RETRY_MAX_ATTEMPTS = int(os.getenv("CRM_RETRY_MAX_ATTEMPTS", "2"))  # extra tries
+_RETRY_MAX_SLEEP = float(os.getenv("CRM_RETRY_MAX_SLEEP_SECONDS", "8"))
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before the next retry of a 429/503 response.
+
+    Prefers a numeric ``Retry-After`` header; falls back to exponential
+    backoff (0.5s, 1s, 2s, …). Always clamped to ``_RETRY_MAX_SLEEP``.
+    """
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(_RETRY_MAX_SLEEP, max(0.0, float(retry_after)))
+        except ValueError:
+            # HTTP-date form is rare here; fall through to backoff.
+            pass
+    return min(_RETRY_MAX_SLEEP, 0.5 * (2**attempt))
+
 
 class CRMClientError(Exception):
     """Base exception for CRM client errors."""
@@ -126,6 +151,7 @@ class CRMClient:
         path: str,
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """Make an authenticated request to the CRM API.
 
@@ -141,14 +167,36 @@ class CRMClient:
         token = self._ensure_token()
         url = f"{self.base_url}{path}"
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.request(
-                    method,
-                    url,
-                    params=params,
-                    json=json_data,
-                    headers={"Authorization": f"Bearer {token}"},
-                )
+            attempt = 0
+            while True:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json_data,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            **(headers or {}),
+                        },
+                    )
+                if (
+                    resp.status_code in _RETRY_STATUSES
+                    and attempt < _RETRY_MAX_ATTEMPTS
+                ):
+                    delay = _retry_delay(resp, attempt)
+                    logger.warning(
+                        "CRM %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
+                        method,
+                        path,
+                        resp.status_code,
+                        delay,
+                        attempt + 1,
+                        _RETRY_MAX_ATTEMPTS,
+                    )
+                    time.sleep(delay)
+                    attempt += 1
+                    continue
                 resp.raise_for_status()
                 _REACHABILITY_CIRCUIT.reset()
                 if not resp.text:
@@ -209,7 +257,7 @@ class CRMClient:
     # ── Subscriber resolution ────────────────────────────────────────────
 
     def resolve_subscriber_id(self, splynx_customer_id: int) -> str | None:
-        """Look up CRM subscriber UUID by Splynx external_id.
+        """Look up CRM subscriber UUID by legacy external_id.
 
         Returns:
             CRM subscriber UUID string, or None if not found.
@@ -359,6 +407,236 @@ class CRMClient:
     def delete_subscriber(self, subscriber_id: str) -> None:
         """Soft-delete a CRM subscriber (sets is_active=False CRM-side)."""
         self._request("DELETE", f"/api/v1/subscribers/{subscriber_id}")
+
+    def create_widget_session(
+        self,
+        *,
+        config_id: str,
+        email: str,
+        name: str | None = None,
+        crm_subscriber_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Mint an already-identified chat_widget visitor session (server-to-server).
+
+        The CRM trusts this caller (authenticated service JWT) to assert the
+        visitor's identity, so the client never calls the public, browser-driven
+        identify endpoint. Returns {session_id, visitor_token, conversation_id}.
+        """
+        payload: dict[str, Any] = {"config_id": config_id, "email": email}
+        if name:
+            payload["name"] = name
+        if crm_subscriber_id:
+            payload["crm_subscriber_id"] = crm_subscriber_id
+        if metadata:
+            payload["metadata"] = metadata
+        try:
+            data = self._request(
+                "POST", "/api/v1/widget/internal/session", json_data=payload
+            )
+            return data if isinstance(data, dict) else {}
+        except CRMClientError:
+            logger.warning(
+                "CRM internal widget session mint failed; falling back to public widget flow"
+            )
+
+        origin = os.getenv("APP_URL", "").rstrip("/") or "https://selfcare.dotmac.io"
+        session_data = self._request(
+            "POST",
+            f"/api/v1/widget/{config_id}/session",
+            json_data={"page_url": f"{origin}/mobile-chat"},
+            headers={"Origin": origin},
+        )
+        if not isinstance(session_data, dict):
+            return {}
+
+        session_id = str(session_data.get("session_id") or "")
+        visitor_token = str(session_data.get("visitor_token") or "")
+        if not session_id or not visitor_token:
+            return session_data
+
+        custom_fields = dict(metadata or {})
+        if crm_subscriber_id:
+            custom_fields["crm_subscriber_id"] = crm_subscriber_id
+        identify_payload: dict[str, Any] = {"email": email}
+        if name:
+            identify_payload["name"] = name
+        if custom_fields:
+            identify_payload["custom_fields"] = custom_fields
+        identify_data = self._request(
+            "POST",
+            f"/api/v1/widget/session/{session_id}/identify",
+            json_data=identify_payload,
+            headers={"Origin": origin, "X-Visitor-Token": visitor_token},
+        )
+        if isinstance(identify_data, dict) and identify_data.get("conversation_id"):
+            session_data["conversation_id"] = identify_data.get("conversation_id")
+        return session_data
+
+    def create_portal_session(
+        self,
+        *,
+        crm_subscriber_id: str,
+        actor: str = "subscriber",
+        scopes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Mint a customer Portal API token (server-to-server, RFC #73).
+
+        The CRM trusts this service JWT to assert the subject, so the client
+        never authenticates to the CRM directly — it presents the returned
+        short-lived, scoped token. Returns {portal_token, expires_at, api_base}.
+        """
+        payload: dict[str, Any] = {
+            "crm_subscriber_id": crm_subscriber_id,
+            "actor": actor,
+            "scopes": list(scopes or []),
+        }
+        data = self._request(
+            "POST", "/api/v1/portal/internal/session", json_data=payload
+        )
+        return data if isinstance(data, dict) else {}
+
+    def _portal_token(
+        self, crm_subscriber_id: str, scopes: list[str], actor: str = "subscriber"
+    ) -> str:
+        minted = self.create_portal_session(
+            crm_subscriber_id=crm_subscriber_id, actor=actor, scopes=scopes
+        )
+        token = str(minted.get("portal_token") or "")
+        if not token:
+            raise CRMClientError("portal token mint returned an empty token")
+        return token
+
+    def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's referrals from the CRM Portal API (server-side).
+
+        Mints a scoped portal token then calls the portal API with it (the
+        per-request ``Authorization`` overrides the service token). Used by the
+        local-mirror reconcile, not the customer's own request path.
+        """
+        token = self._portal_token(crm_subscriber_id, ["referrals:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/referrals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's projects (with derived stages/progress) from the
+        CRM Portal API (server-side). Used by the local-mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["projects:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/projects",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's work orders (technician, schedule, ETA, status)
+        from the CRM Portal API (server-side). Used by the local-mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["work_orders:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/work-orders",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def create_portal_referral(
+        self,
+        crm_subscriber_id: str,
+        *,
+        name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
+        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
+        payload: dict[str, Any] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "note": note,
+            }.items()
+            if v
+        }
+        data = self._request(
+            "POST",
+            "/api/v1/portal/referrals",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's self-serve quotes (feasibility, estimate, deposit,
+        status) from the CRM Portal API (server-side). Used by the mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/quotes",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def request_portal_quote(
+        self,
+        crm_subscriber_id: str,
+        *,
+        latitude: float,
+        longitude: float,
+        address: str | None = None,
+        region: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a map-pinned installation quote (write-through to the CRM
+        Portal API). Returns the created quote payload (feasibility + estimate)."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
+        payload: dict[str, Any] = {"latitude": latitude, "longitude": longitude}
+        if address:
+            payload["address"] = address
+        if region:
+            payload["region"] = region
+        if note:
+            payload["note"] = note
+        data = self._request(
+            "POST",
+            "/api/v1/portal/quote-request",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def accept_portal_quote(
+        self,
+        crm_subscriber_id: str,
+        quote_id: str,
+        *,
+        deposit_reference: str,
+        deposit_amount: str,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        """Accept a quote after the deposit is verified (write-through). The CRM
+        records the deposit and triggers the sales-order + install-project."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
+        payload: dict[str, Any] = {
+            "deposit_reference": deposit_reference,
+            "deposit_amount": deposit_amount,
+        }
+        if provider:
+            payload["provider"] = provider
+        data = self._request(
+            "POST",
+            f"/api/v1/portal/quotes/{quote_id}/accept",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
 
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""

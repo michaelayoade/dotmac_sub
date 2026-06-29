@@ -110,6 +110,11 @@ def test_live_status_at_stamped_only_on_change(db_session):
 
     warm_topology_status(db_session, _FakeClient(up, []))
     n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="5").one()
+    # Re-read from the DB so first_at is in the same representation the later
+    # refreshed comparison uses — SQLite drops tzinfo on round-trip, so an
+    # in-session aware value would never equal the refreshed naive one. We are
+    # asserting the stamp does not MOVE, not its tz-awareness.
+    db_session.refresh(n)
     first_at = n.live_status_at
 
     # same status next poll -> timestamp does NOT move
@@ -125,3 +130,27 @@ def test_live_status_at_stamped_only_on_change(db_session):
     db_session.refresh(n)
     assert n.live_status == "down"
     assert n.live_status_at != datetime(2020, 1, 1, tzinfo=UTC)
+
+
+def test_disabled_or_maintenance_host_is_unknown(db_session):
+    # A host Zabbix isn't actively monitoring (disabled) or in maintenance must
+    # not surface as "up" off a stale availability — it reads unknown.
+    db_session.add_all([_node("10", "disabled"), _node("11", "maint")])
+    db_session.flush()
+    hosts = [
+        {"hostid": "10", "available": "1", "status": "1", "interfaces": []},
+        {
+            "hostid": "11",
+            "available": "1",
+            "maintenance_status": "1",
+            "interfaces": [],
+        },
+    ]
+    warm_topology_status(db_session, _FakeClient(hosts, []))
+    by_host = {
+        n.zabbix_hostid: n.live_status
+        for n in db_session.query(NetworkDevice).all()
+        if n.zabbix_hostid
+    }
+    assert by_host["10"] == "unknown"
+    assert by_host["11"] == "unknown"

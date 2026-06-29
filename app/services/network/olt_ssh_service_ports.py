@@ -19,6 +19,33 @@ _CONFLICTED_SERVICE_PORT_RE = re.compile(
 )
 
 
+def _service_port_matches_intent(
+    port: ServicePortEntry,
+    *,
+    fsp: str,
+    ont_id: int,
+    gem_index: int,
+    vlan_id: int,
+    user_vlan: int | str | None,
+    tag_transform: str,
+) -> bool:
+    if port.ont_id != ont_id or port.gem_index != gem_index or port.vlan_id != vlan_id:
+        return False
+    if port.fsp and port.fsp.strip() != fsp.strip():
+        return False
+
+    expected_user_vlan = vlan_id if user_vlan is None else user_vlan
+    if (
+        port.flow_para
+        and str(port.flow_para).strip() != str(expected_user_vlan).strip()
+    ):
+        return False
+
+    if port.tag_transform and tag_transform:
+        return port.tag_transform.strip().casefold() == tag_transform.strip().casefold()
+    return True
+
+
 def get_service_ports_for_ont(
     olt: OLTDevice, fsp: str, ont_id: int
 ) -> tuple[bool, str, list[ServicePortEntry]]:
@@ -230,6 +257,37 @@ def create_single_service_port(
                 and conflict_match
             ):
                 conflicted_index = int(conflict_match.group(1))
+                read_ok, read_msg, existing_port = get_service_port_by_index(
+                    olt,
+                    conflicted_index,
+                )
+                if not read_ok or existing_port is None:
+                    return (
+                        False,
+                        (
+                            "Service-port conflict detected, but existing index "
+                            f"{conflicted_index} could not be verified: {read_msg}"
+                        ),
+                        None,
+                    )
+                if not _service_port_matches_intent(
+                    existing_port,
+                    fsp=fsp,
+                    ont_id=ont_id,
+                    gem_index=gem_index,
+                    vlan_id=vlan_id,
+                    user_vlan=user_vlan,
+                    tag_transform=tag_transform,
+                ):
+                    return (
+                        False,
+                        (
+                            "Service-port conflict detected at index "
+                            f"{conflicted_index}, but it maps to a different "
+                            "ONT/VLAN/GEM tuple"
+                        ),
+                        None,
+                    )
                 logger.info(
                     "Service-port already exists on OLT %s: index=%d VLAN=%d GEM=%d ONT=%d %s",
                     olt.name,

@@ -1,0 +1,32 @@
+name: Version Impact
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-impact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check version impact label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        # Full history (no --depth): the three-dot diff in check_version_impact.py
+        # needs the merge-base of base and HEAD, which a shallow base tip lacks
+        # (git diff base...HEAD then exits 128).
+        run: git fetch --no-tags origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+
+      - name: Validate version impact
+        run: python3 scripts/ci/check_version_impact.py --base origin/${{ github.base_ref }} --head HEAD

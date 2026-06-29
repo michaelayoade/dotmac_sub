@@ -42,6 +42,7 @@ build/
 logs/
 
 # Secrets
+.env.bak
 .env.bak.*
 .env.local
 .env.*.local
@@ -70,9 +71,12 @@ SmartOLT_onus_list.csv
 # Reference materials & artifacts
 screenshots/
 uploads/
+backups/
+scratchpad/
 *.zip
 mypy_errors.txt
 scripts/export_wifi_credentials.py
+chat-customer-portal.png
 
 # OLT CLI capture samples (auto-generated)
 data/olt_samples/

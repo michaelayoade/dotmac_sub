@@ -14,6 +14,7 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.notification import Notification
+from app.models.subscriber import SubscriberStatus
 from app.services import payment_proofs as svc
 
 
@@ -106,6 +107,60 @@ def test_verify_creates_succeeded_payment_and_notifies(db_session):
     with pytest.raises(HTTPException) as exc:
         svc.verify_proof(db_session, proof["id"], verified_by="admin-1")
     assert exc.value.status_code == 400
+
+
+def test_verify_resolves_delinquent_status_after_paid_invoice(db_session):
+    from app.models.catalog import (
+        AccessType,
+        BillingMode,
+        CatalogOffer,
+        OfferStatus,
+        PriceBasis,
+        ServiceType,
+        Subscription,
+        SubscriptionStatus,
+    )
+    from app.models.collections import DunningCase, DunningCaseStatus
+
+    sub = _account(db_session)
+    sub.status = SubscriberStatus.delinquent
+    offer = CatalogOffer(
+        name="Proof Restore Plan",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        status=OfferStatus.active,
+        is_active=True,
+    )
+    db_session.add(offer)
+    db_session.flush()
+    db_session.add(
+        Subscription(
+            subscriber_id=sub.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.active,
+            billing_mode=BillingMode.prepaid,
+        )
+    )
+    invoice = _open_invoice(db_session, sub, "3000.00")
+    db_session.add(DunningCase(account_id=sub.id, status=DunningCaseStatus.open))
+    db_session.commit()
+
+    proof = _submit(db_session, sub, amount="3000", reference="TRF-RESTORE")
+    svc.verify_proof(db_session, proof["id"], verified_by="admin-1")
+
+    db_session.refresh(sub)
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert sub.status == SubscriberStatus.active
+    assert (
+        db_session.query(DunningCase)
+        .filter(DunningCase.account_id == sub.id)
+        .one()
+        .status
+        == DunningCaseStatus.resolved
+    )
 
 
 def test_reject_requires_reason_and_notifies(db_session):

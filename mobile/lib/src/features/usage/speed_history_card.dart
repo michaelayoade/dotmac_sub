@@ -1,0 +1,342 @@
+import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../models/usage.dart';
+import '../../providers/data_providers.dart';
+import '../../widgets/skeleton.dart';
+
+/// Look-back windows for the speed chart, in hours.
+const _ranges = <int, String>{
+  1: '1h',
+  6: '6h',
+  24: '24h',
+  168: '7d',
+  720: '30d'
+};
+
+String _fmtBps(double bps) {
+  const k = 1000.0, m = 1e6, g = 1e9;
+  if (bps >= g) return '${(bps / g).toStringAsFixed(1)} Gbps';
+  if (bps >= m) return '${(bps / m).toStringAsFixed(bps >= 1e7 ? 0 : 1)} Mbps';
+  if (bps >= k) return '${(bps / k).toStringAsFixed(0)} Kbps';
+  return '${bps.toStringAsFixed(0)} bps';
+}
+
+/// Actual download/upload speed over time, from the bandwidth pipeline
+/// (Postgres <24h, VictoriaMetrics older — so it reaches as far back as VM
+/// retention). Mirrors the web "Bandwidth Speed History" chart.
+class SpeedHistoryCard extends ConsumerWidget {
+  const SpeedHistoryCard({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final hours = ref.watch(speedRangeHoursProvider);
+    final series = ref.watch(bandwidthSeriesProvider(hours));
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Speed', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            _RangeChips(
+              selected: hours,
+              onSelect: (h) =>
+                  ref.read(speedRangeHoursProvider.notifier).state = h,
+            ),
+            const SizedBox(height: 12),
+            // Degrade gracefully: a 403/unavailable connection shows a muted
+            // note (this account may have no live-bandwidth mapping), not an
+            // alarming error.
+            series.when(
+              loading: () => const CardSkeleton(height: 180),
+              error: (_, __) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    'Speed data isn\'t available for this connection.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ),
+              ),
+              data: (pts) => _SpeedBody(points: pts, hours: hours),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RangeChips extends StatelessWidget {
+  const _RangeChips({required this.selected, required this.onSelect});
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final e in _ranges.entries)
+          ChoiceChip(
+            label: Text(e.value),
+            selected: selected == e.key,
+            onSelected: (_) => onSelect(e.key),
+          ),
+      ],
+    );
+  }
+}
+
+class _SpeedBody extends StatelessWidget {
+  const _SpeedBody({required this.points, required this.hours});
+  final List<BandwidthPoint> points;
+  final int hours;
+
+  String _xLabel(DateTime d) => hours <= 24
+      ? '${d.hour}:${d.minute.toString().padLeft(2, '0')}'
+      : '${d.day}/${d.month}';
+
+  /// X-axis ticks anchored to round local time units (e.g. 16:00, not 16:18).
+  /// We pick a "nice" step for the window, walk the round boundaries across it,
+  /// and snap each to the nearest sample index — labelling with the round
+  /// boundary time. Returns {sampleIndex: label}.
+  Map<int, String> _roundTicks() {
+    final first = points.first.at;
+    final last = points.last.at;
+    final Duration step = hours <= 1
+        ? const Duration(minutes: 15)
+        : hours <= 6
+            ? const Duration(hours: 1)
+            : hours <= 24
+                ? const Duration(hours: 4)
+                : hours <= 168
+                    ? const Duration(days: 1)
+                    : const Duration(days: 5);
+
+    // First round boundary at or after the first sample.
+    DateTime boundary;
+    if (step.inDays >= 1) {
+      boundary = DateTime(first.year, first.month, first.day);
+    } else {
+      final stepMin = step.inMinutes;
+      final mins = (first.hour * 60 + first.minute) ~/ stepMin * stepMin;
+      boundary = DateTime(first.year, first.month, first.day)
+          .add(Duration(minutes: mins));
+    }
+    if (boundary.isBefore(first)) boundary = boundary.add(step);
+
+    final ticks = <int, String>{};
+    for (var t = boundary; !t.isAfter(last); t = t.add(step)) {
+      var best = 0;
+      var bestDiff = points[0].at.difference(t).inSeconds.abs();
+      for (var i = 1; i < points.length; i++) {
+        final d = points[i].at.difference(t).inSeconds.abs();
+        if (d < bestDiff) {
+          bestDiff = d;
+          best = i;
+        }
+      }
+      ticks[best] = _xLabel(t);
+    }
+    return ticks;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (points.length < 2) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: Text('No speed data for this range',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.outline)),
+        ),
+      );
+    }
+
+    final peakDown =
+        points.fold<double>(0, (a, p) => p.downloadBps > a ? p.downloadBps : a);
+    final peakUp =
+        points.fold<double>(0, (a, p) => p.uploadBps > a ? p.uploadBps : a);
+    final latest = points.last;
+    final maxBps = peakDown > peakUp ? peakDown : peakUp;
+
+    const k = 1000.0, m = 1e6, g = 1e9;
+    final (double div, String unit) = maxBps >= g
+        ? (g, 'Gbps')
+        : maxBps >= m
+            ? (m, 'Mbps')
+            : maxBps >= k
+                ? (k, 'Kbps')
+                : (1, 'bps');
+    final maxY = maxBps <= 0 ? 1.0 : (maxBps / div) * 1.25;
+    final tickLabels = _roundTicks();
+    final download = theme.colorScheme.primary;
+    final upload = theme.colorScheme.tertiary;
+
+    List<FlSpot> spots(double Function(BandwidthPoint) sel) => [
+          for (var i = 0; i < points.length; i++)
+            FlSpot(i.toDouble(), sel(points[i]) / div)
+        ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            // "Latest", not "Now": this is the most recent point in the window,
+            // which may be a few minutes old — labelling it "Now" overstated it.
+            Expanded(
+                child: _Stat(
+                    label: 'Latest ↓', value: _fmtBps(latest.downloadBps))),
+            Expanded(child: _Stat(label: 'Peak ↓', value: _fmtBps(peakDown))),
+            Expanded(child: _Stat(label: 'Peak ↑', value: _fmtBps(peakUp))),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Text('Speed ($unit)', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 180,
+          child: LineChart(
+            LineChartData(
+              minY: 0,
+              maxY: maxY,
+              gridData: const FlGridData(show: true, drawVerticalLine: false),
+              borderData: FlBorderData(show: false),
+              // Tap/drag a point to see its exact value + time.
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (spots) => spots.map((s) {
+                    final i = s.x.round();
+                    final at = (i >= 0 && i < points.length)
+                        ? _xLabel(points[i].at)
+                        : '';
+                    final dir = s.barIndex == 0 ? '↓' : '↑';
+                    return LineTooltipItem(
+                      '$dir ${s.y.toStringAsFixed(1)} $unit\n$at',
+                      TextStyle(
+                          color: theme.colorScheme.onInverseSurface,
+                          fontSize: 11),
+                    );
+                  }).toList(),
+                ),
+              ),
+              titlesData: FlTitlesData(
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 36,
+                    getTitlesWidget: (v, _) => Text(
+                      v >= 100 ? v.toStringAsFixed(0) : v.toStringAsFixed(1),
+                      style: theme.textTheme.labelSmall,
+                    ),
+                  ),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 24,
+                    // Evaluate every sample (interval 1) but only render the
+                    // round-time ticks from _roundTicks(), so labels land on
+                    // whole hours/days (16:00) rather than offsets from the
+                    // first sample (16:18).
+                    interval: 1,
+                    getTitlesWidget: (v, _) {
+                      final label = tickLabels[v.round()];
+                      if (label == null) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(label, style: theme.textTheme.labelSmall),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: spots((p) => p.downloadBps),
+                  isCurved: true,
+                  barWidth: 2,
+                  color: download,
+                  dotData: const FlDotData(show: false),
+                ),
+                LineChartBarData(
+                  spots: spots((p) => p.uploadBps),
+                  isCurved: true,
+                  barWidth: 2,
+                  color: upload,
+                  dotData: const FlDotData(show: false),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            _LegendDot(color: download, label: 'Download'),
+            const SizedBox(width: 16),
+            _LegendDot(color: upload, label: 'Upload'),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(value, style: theme.textTheme.titleMedium),
+        const SizedBox(height: 2),
+        Text(label,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.outline)),
+      ],
+    );
+  }
+}
+
+class _LegendDot extends StatelessWidget {
+  const _LegendDot({required this.color, required this.label});
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+}

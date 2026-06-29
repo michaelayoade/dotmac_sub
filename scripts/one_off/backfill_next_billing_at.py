@@ -1,6 +1,6 @@
 """Re-initialize subscriptions.next_billing_at from paid-through state.
 
-Most active subscriptions carry a stale or NULL next_billing_at: the Splynx
+Most active subscriptions carry a stale or NULL next_billing_at: the legacy
 migration backfill set it once from imported invoice periods and the local
 invoice cycle never successfully advanced it (see billing_runs history). This
 re-anchors the field so the billing runner — and the customer-facing
@@ -12,7 +12,7 @@ Per subscription (active, next_billing_at NULL or in the past):
      back to start_at, then created_at;
   2. roll forward one billing cycle at a time until the boundary lands after
      --forgive-before (default: now). Periods ending before that date are
-     forgiven — they belong to the Splynx era and must not be re-billed here.
+     forgiven — they belong to the legacy billing era and must not be re-billed here.
 
 Pass --forgive-before 2026-05-18 (the local-payments cutover) to instead let
 the runner catch up on post-cutover lapsed periods.

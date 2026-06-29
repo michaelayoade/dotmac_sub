@@ -45,6 +45,61 @@
     </div>
     {% endif %}
 
+    {% set infrastructure_alerts = admin_alert_summary.by_category.infrastructure if admin_alert_summary and admin_alert_summary.by_category.infrastructure is defined else {} %}
+    {% if network_attention_items or infrastructure_alerts.total %}
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Network Alerts</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Device, ONT, OLT, and monitoring attention items.</p>
+                </div>
+                <a href="/admin/network/alarms" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">View alarms</a>
+            </div>
+            {% if network_attention_items %}
+            <div class="mt-4 space-y-2">
+                {% for item in network_attention_items[:4] %}
+                <a href="{{ item.href }}" class="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-sm transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/60">
+                    <span class="truncate text-slate-700 dark:text-slate-200">{{ item.label }}</span>
+                    {{ status_badge(item.severity|title, 'error' if item.severity in ['critical', 'major'] else 'warning' if item.severity == 'warning' else 'info', size='sm') }}
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="mt-4 rounded-md border border-dashed border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No network alerts currently need attention.</p>
+            {% endif %}
+        </div>
+
+        <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Infrastructure Alerts</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Workers, queues, standby replication, services, and scheduled tasks.</p>
+                </div>
+                <a href="/admin/alerts?category=infrastructure&status=open" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">View alerts</a>
+            </div>
+            {% if infrastructure_alerts.total %}
+            <div class="mt-4 grid grid-cols-3 gap-2">
+                <div class="rounded-md bg-red-50 px-3 py-2 dark:bg-red-900/20">
+                    <p class="text-xs text-red-600 dark:text-red-300">Critical</p>
+                    <p class="text-lg font-bold text-red-700 dark:text-red-200">{{ infrastructure_alerts.critical }}</p>
+                </div>
+                <div class="rounded-md bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
+                    <p class="text-xs text-amber-600 dark:text-amber-300">Warning</p>
+                    <p class="text-lg font-bold text-amber-700 dark:text-amber-200">{{ infrastructure_alerts.warning }}</p>
+                </div>
+                <div class="rounded-md bg-blue-50 px-3 py-2 dark:bg-blue-900/20">
+                    <p class="text-xs text-blue-600 dark:text-blue-300">Info</p>
+                    <p class="text-lg font-bold text-blue-700 dark:text-blue-200">{{ infrastructure_alerts.info }}</p>
+                </div>
+            </div>
+            {% else %}
+            <p class="mt-4 rounded-md border border-dashed border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No infrastructure alerts currently need attention.</p>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
     {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
     {% include "admin/dashboard/_stats.html" %}
 

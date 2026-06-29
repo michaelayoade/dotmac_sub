@@ -48,7 +48,7 @@ def test_splynx_subscriber_enqueues_splynx_webhook(monkeypatch, db_session, subs
     assert external_id == 777
     assert system == "splynx"
     assert payload["balance"] == "200.00"
-    # The splynx mapper has no billing_cycle output — and the dedupe key is
+    # The legacy CRM mapper has no billing_cycle output — and the dedupe key is
     # exactly what we transmit, so the stamp/compare stay consistent.
     assert "billing_cycle" not in payload
     assert kwargs["billing_snapshot_subscriber_id"] == str(subscriber.id)

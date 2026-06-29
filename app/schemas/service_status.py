@@ -26,11 +26,9 @@ class ServiceStatusItem(BaseModel):
     # Currently providing service (RADIUS/connectivity allowed).
     usable: bool
     # The date the service genuinely lapses if nothing changes, or null when it
-    # has none: contract end, else (prepaid, low balance) the grace/deactivation
-    # date. Never derived from next_charge_at.
+    # has none. Never derived from next_charge_at.
     expires_at: datetime | None = None
-    # Next drawdown charge (prepaid) / next invoice (postpaid). Informational —
-    # NOT an expiry.
+    # Next billing event. Informational — NOT an expiry.
     next_charge_at: datetime | None = None
     # ok | low_balance | overdue | needs_payment | stopped | ended
     reason: str

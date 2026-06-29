@@ -47,6 +47,7 @@ from app.services.customer_portal_flow_services import (
     get_service_order_detail,
     get_service_orders_page,
     get_services_page,
+    get_usage_history,
     get_usage_page,
 )
 
@@ -58,6 +59,7 @@ __all__ = [
     "get_billing_page",
     "get_payment_methods_page",
     "get_usage_page",
+    "get_usage_history",
     "get_services_page",
     "get_service_detail",
     "get_service_orders_page",

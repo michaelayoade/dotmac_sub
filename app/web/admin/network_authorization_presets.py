@@ -21,7 +21,7 @@ router = APIRouter(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:authorization:read"))],
 )
 def authorization_presets_list(
     request: Request,
@@ -46,7 +46,7 @@ def authorization_presets_list(
 @router.get(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:authorization:read"))],
 )
 def authorization_preset_create_form(
     request: Request,
@@ -62,7 +62,7 @@ def authorization_preset_create_form(
 @router.post(
     "/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:authorization:write"))],
 )
 def authorization_preset_create(
     request: Request,
@@ -95,7 +95,7 @@ def authorization_preset_create(
 @router.get(
     "/{preset_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:authorization:read"))],
 )
 def authorization_preset_edit_form(
     request: Request,
@@ -119,7 +119,7 @@ def authorization_preset_edit_form(
 @router.post(
     "/{preset_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:authorization:write"))],
 )
 def authorization_preset_update(
     request: Request,
@@ -153,7 +153,7 @@ def authorization_preset_update(
 @router.post(
     "/{preset_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:authorization:write"))],
 )
 def authorization_preset_delete(
     request: Request,

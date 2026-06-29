@@ -63,13 +63,15 @@ class TestForwardFix:
             status=SubscriptionStatus.canceled,
             ipv4="10.0.0.1",
         )
-        a = _assign(db_session, s, "10.0.0.1")
+        a = _assign(db_session, s, "10.0.0.1", allocation_type="wan")
         db_session.commit()
         res = release_service_ips_for_subscription(db_session, sub)
         assert res["released"] == 1
         db_session.refresh(a)
+        db_session.refresh(a.ipv4_address)
         db_session.refresh(sub)
         assert a.is_active is False
+        assert a.ipv4_address.allocation_type is None
         assert sub.ipv4_address is None
 
     def test_guard_when_subscriber_has_active_sub(self, db_session, catalog_offer):

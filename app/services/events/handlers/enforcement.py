@@ -15,7 +15,6 @@ from app.services.enforcement import (
     _resolve_effective_profile,
     _setting_bool,
     apply_radius_profile_to_account,
-    apply_subscription_address_list_block,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
     remove_subscription_address_list_block,
@@ -67,15 +66,13 @@ class EnforcementHandler:
             self._handle_invoice_overdue(db, event)
 
     def _shadow_write_access_state(self, db: Session, subscription_id: str) -> None:
-        """Phase 3 shadow write — mirror the derived access_state to
-        ``subscription.access_state`` and external RADIUS radusergroup.
-        Gated by the ``radius.group_routing_enabled`` DomainSetting,
-        defaults OFF so the new path is dormant until explicitly enabled.
+        """Mirror the derived access state locally, and to radusergroup when
+        group routing is enabled.
 
-        Failures are logged and swallowed — the legacy block path is still
-        authoritative until phase 7."""
-        if not _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False):
-            return
+        ``subscription.access_state`` is now an operational truth for portals
+        and audits, so keep it current even while the external radusergroup
+        path remains feature-flagged off.
+        """
         sub = db.get(Subscription, subscription_id)
         if not sub:
             return
@@ -84,6 +81,13 @@ class EnforcementHandler:
         )
         captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
         state = derive_access_state(sub.status, captive_redirect_enabled=captive)
+        target = state.value if state else None
+        if getattr(sub, "access_state", None) != target:
+            sub.access_state = target
+            db.flush()
+
+        if not _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False):
+            return
         try:
             result = set_subscription_access_state(db, str(subscription_id), state)
             logger.info(
@@ -95,6 +99,22 @@ class EnforcementHandler:
         except Exception as exc:
             logger.warning(
                 "shadow access_state write failed for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+    def _enqueue_subscription_session_cleanup(
+        self, subscription_id: str, *, reason: str
+    ) -> None:
+        try:
+            from app.tasks.enforcement import cleanup_subscription_block_sessions
+
+            cleanup_subscription_block_sessions.delay(
+                str(subscription_id), reason=reason
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to enqueue session cleanup for subscription %s: %s",
                 subscription_id,
                 exc,
             )
@@ -160,16 +180,9 @@ class EnforcementHandler:
         # No-op unless DomainSetting radius.group_routing_enabled is true.
         self._shadow_write_access_state(db, str(subscription_id))
 
-        # Disconnect sessions and apply address list block
-        try:
-            disconnect_subscription_sessions(db, str(subscription_id), reason=reason)
-            apply_subscription_address_list_block(db, str(subscription_id))
-        except Exception as exc:
-            logger.error(
-                "Failed to disconnect sessions for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        # Slow NAS cleanup runs out-of-band so the authoritative DB/RADIUS
+        # reject state is not held hostage by session disconnect latency.
+        self._enqueue_subscription_session_cleanup(str(subscription_id), reason=reason)
 
     def _handle_subscription_block(
         self, db: Session, event: Event, reason: str
@@ -356,10 +369,12 @@ class EnforcementHandler:
                 account_id,
             )
             return
-        action = (
-            settings_spec.resolve_value(db, SettingDomain.usage, "fup_action")
-            or "throttle"
+        action = event.payload.get("action") or settings_spec.resolve_value(
+            db, SettingDomain.usage, "fup_action"
         )
+        if action == "reduce_speed":
+            action = "throttle"
+        action = action or "throttle"
         if action not in {"throttle", "suspend", "block", "none"}:
             action = "throttle"
         if action == "none":
@@ -369,6 +384,10 @@ class EnforcementHandler:
         offer_id = event.payload.get("offer_id")
         rule_id = event.payload.get("rule_id")
         cap_resets_at_raw = event.payload.get("cap_resets_at")
+        # Set when a FUP "block" is downgraded to a full suspend (no captive
+        # redirect), so the persisted state distinguishes it from a non-payment
+        # suspension.
+        fup_block_downgraded = False
 
         if action == "block":
             # The soft captive walled-garden is opt-in per customer. A blocked
@@ -381,27 +400,31 @@ class EnforcementHandler:
             captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
             if not captive:
                 action = "suspend"
+                # A FUP cap is becoming a full (offline) suspension rather than a
+                # captive walled-garden because this customer hasn't opted into
+                # captive redirect. Surface it: in subscription status this then
+                # looks like any other suspension, so make the FUP cause visible.
+                logger.warning(
+                    "fup_block_downgraded_to_suspend subscription=%s account=%s "
+                    "rule=%s — captive redirect not enabled; applying full suspend",
+                    subscription_id,
+                    account_id,
+                    rule_id,
+                )
+                fup_block_downgraded = True
             else:
-                try:
-                    disconnect_subscription_sessions(
-                        db, str(subscription_id), reason="fup_block"
-                    )
-                    apply_subscription_address_list_block(db, str(subscription_id))
-                    self._persist_fup_state(
-                        db,
-                        str(subscription_id),
-                        offer_id,
-                        rule_id,
-                        action_status="blocked",
-                        cap_resets_at=cap_resets_at_raw,
-                        notes="FUP captive redirect applied",
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to apply FUP captive redirect for subscription %s: %s",
-                        subscription_id,
-                        exc,
-                    )
+                self._persist_fup_state(
+                    db,
+                    str(subscription_id),
+                    offer_id,
+                    rule_id,
+                    action_status="blocked",
+                    cap_resets_at=cap_resets_at_raw,
+                    notes="FUP captive redirect applied",
+                )
+                self._enqueue_subscription_session_cleanup(
+                    str(subscription_id), reason="fup_block"
+                )
                 return
         if action == "suspend":
             from app.models.enforcement_lock import EnforcementReason
@@ -428,7 +451,11 @@ class EnforcementHandler:
                     rule_id,
                     action_status="blocked",
                     cap_resets_at=cap_resets_at_raw,
-                    notes="FUP suspension applied",
+                    notes=(
+                        "FUP cap: block downgraded to suspend (captive not enabled)"
+                        if fup_block_downgraded
+                        else "FUP suspension applied"
+                    ),
                 )
             except ValueError as e:
                 logger.info(
@@ -587,6 +614,9 @@ class EnforcementHandler:
                 str(account_id),
                 invoice_id=str(invoice_id) if invoice_id else None,
             )
+            from app.services.account_lifecycle import compute_account_status
+
+            compute_account_status(db, str(account_id))
             if restored:
                 logger.info(
                     "Auto-restored %d subscription(s) for account %s after payment",

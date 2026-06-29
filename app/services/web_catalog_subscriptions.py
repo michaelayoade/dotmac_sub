@@ -1804,11 +1804,27 @@ def normalize_additional_routes(
         if "/" not in text:
             text = f"{text}/32"
         try:
+            # strict=False intentionally snaps a host address to its network
+            # (e.g. 203.0.113.9/29 -> 203.0.113.8/29); the snapped value is what
+            # gets stored, billed and validated, so there is no stored-vs-billed
+            # mismatch — callers should display the normalized CIDR back.
             network = ipaddress.ip_network(text, strict=False)
         except ValueError as exc:
             raise ValueError(f"Invalid additional routed IP block: {raw_cidr}") from exc
         if network.version != 4:
             raise ValueError("Additional routed IP blocks must be IPv4 CIDRs.")
+        if (
+            network.prefixlen == 0
+            or network.is_multicast
+            or network.is_loopback
+            or network.is_link_local
+            or network.is_reserved
+            or network.is_unspecified
+        ):
+            raise ValueError(
+                f"Additional routed IP block {network} is not a routable range "
+                "(default-route, multicast, loopback, link-local, or reserved space)."
+            )
         cidr = str(network)
         if cidr in seen:
             raise ValueError(f"Duplicate additional routed IP block: {cidr}")
@@ -1826,6 +1842,16 @@ def normalize_additional_routes(
             if metric < 1:
                 raise ValueError(f"Route metric for {cidr} must be 1 or higher.")
         routes.append((cidr, int(network.prefixlen), metric))
+    # Reject overlapping routes within a single submission (exact-string dedupe
+    # above does not catch a nested block, e.g. /30 inside a /28).
+    for outer in range(len(routes)):
+        net_a = ipaddress.ip_network(routes[outer][0], strict=False)
+        for inner in range(outer + 1, len(routes)):
+            net_b = ipaddress.ip_network(routes[inner][0], strict=False)
+            if net_a.overlaps(net_b):
+                raise ValueError(
+                    f"Additional routed IP blocks {net_a} and {net_b} overlap."
+                )
     return routes
 
 
@@ -1988,7 +2014,7 @@ def _validate_additional_routes_match_addon(
 
 
 def _priced_public_ip_addon_by_prefix(db: Session, prefix_length: int) -> AddOn | None:
-    return (
+    matches = (
         db.query(AddOn)
         .join(AddOnPrice, AddOnPrice.add_on_id == AddOn.id)
         .filter(AddOn.is_active.is_(True))
@@ -1997,8 +2023,29 @@ def _priced_public_ip_addon_by_prefix(db: Session, prefix_length: int) -> AddOn 
         .filter(AddOnPrice.is_active.is_(True))
         .filter(AddOnPrice.price_type == PriceType.recurring)
         .order_by(AddOn.name.asc(), AddOnPrice.created_at.asc())
-        .first()
+        .all()
     )
+    # An add-on can have more than one active recurring price row, so dedupe by
+    # add-on before judging ambiguity.
+    unique: list[AddOn] = []
+    seen_ids: set = set()
+    for add_on in matches:
+        if add_on.id not in seen_ids:
+            seen_ids.add(add_on.id)
+            unique.append(add_on)
+    if len(unique) > 1:
+        # The route→add-on tie is by prefix length, not a FK; two priced add-ons
+        # of the same prefix mean the route silently maps to whichever sorts
+        # first and may be billed the wrong price. Surface it.
+        logger.warning(
+            "ambiguous_public_ip_addon_prefix: %d priced add-ons for /%d (%s) — "
+            "using '%s'; prefix→add-on mapping is not unique",
+            len(unique),
+            prefix_length,
+            ", ".join(a.name for a in unique),
+            unique[0].name,
+        )
+    return unique[0] if unique else None
 
 
 def _priced_public_ip_addons_for_routes(
@@ -2038,6 +2085,12 @@ def sync_additional_routes_for_subscription(
     """Upsert active subscriber additional routes and deactivate removed ones."""
     if not subscription_obj.subscriber_id:
         return []
+    from app.services.enforcement import (
+        network_identity_signature,
+        reauth_subscription_on_identity_change,
+    )
+
+    before_sig = network_identity_signature(db, subscription_obj)
     desired = normalize_additional_routes(cidrs, metrics)
     _validate_additional_routes_match_addon(
         db,
@@ -2097,6 +2150,16 @@ def sync_additional_routes_for_subscription(
             route.is_active = False
 
     db.commit()
+
+    # Routes changed -> reconcile RADIUS and kick live sessions so the BNG
+    # re-learns the Framed-Routes. No-op if the route set is unchanged or the
+    # subscription isn't active.
+    reauth_subscription_on_identity_change(
+        db,
+        str(subscription_obj.id),
+        before=before_sig,
+        reason="additional_routes_change",
+    )
     return list(desired_map)
 
 
@@ -2313,11 +2376,9 @@ def _route_parent_networks_for_ipam(
             [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
         )
         for parent in parent_networks:
-            if parent.prefixlen > 24:
-                parent = cast(
-                    ipaddress.IPv4Network,
-                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
-                )
+            # Keep the real owned network as the parent. A sub-/24 block must NOT
+            # be widened to its enclosing /24 — that would offer routed children
+            # outside the org's actual allocation (i.e. third-party address space).
             key = str(parent)
             ranges.setdefault(
                 key,
@@ -2350,11 +2411,9 @@ def _route_parent_networks_for_ipam(
             [network] if network.prefixlen >= 24 else network.subnets(new_prefix=24)
         )
         for parent in parent_networks:
-            if parent.prefixlen > 24:
-                parent = cast(
-                    ipaddress.IPv4Network,
-                    ipaddress.ip_network(f"{parent.network_address}/24", strict=False),
-                )
+            # Keep the real owned network as the parent. A sub-/24 block must NOT
+            # be widened to its enclosing /24 — that would offer routed children
+            # outside the org's actual allocation (i.e. third-party address space).
             key = str(parent)
             ranges[key] = (
                 parent,
@@ -3867,6 +3926,78 @@ def bulk_change_plan(
             continue
 
     return count
+
+
+def force_subscription_reauth(
+    db: Session,
+    subscription_id: str,
+    request: object,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Refresh RADIUS state and disconnect active PPPoE sessions for one sub."""
+    subscription = catalog_service.subscriptions.get(db, subscription_id)
+    subscriber = subscription.subscriber or db.get(
+        Subscriber, subscription.subscriber_id
+    )
+    nas_device = subscription.provisioning_nas_device
+    nas_ip = None
+    if nas_device is not None:
+        nas_ip = (
+            getattr(nas_device, "nas_ip", None)
+            or getattr(nas_device, "management_ip", None)
+            or getattr(nas_device, "ip_address", None)
+        )
+    metadata = {
+        "reason": "manual_force_reauth",
+        "subscription_id": str(subscription.id),
+        "subscriber_id": str(subscription.subscriber_id),
+        "customer_name": (
+            getattr(subscriber, "display_name", None) if subscriber else None
+        ),
+        "customer_account_number": (
+            getattr(subscriber, "account_number", None) if subscriber else None
+        ),
+        "nas_device_id": str(subscription.provisioning_nas_device_id)
+        if subscription.provisioning_nas_device_id
+        else None,
+        "nas_name": getattr(nas_device, "name", None) if nas_device else None,
+        "nas_ip": nas_ip,
+        "login": subscription.login,
+    }
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    try:
+        from app.services.radius import reconcile_subscription_connectivity
+
+        reconcile_subscription_connectivity(db, str(subscription.id))
+        metadata["radius_reconciled"] = True
+    except Exception:
+        logger.warning(
+            "RADIUS reconcile failed before manual force reauth for %s",
+            subscription.id,
+            exc_info=True,
+        )
+        metadata["radius_reconciled"] = False
+
+    from app.services.enforcement import disconnect_subscription_sessions
+
+    kicked_count = disconnect_subscription_sessions(
+        db, str(subscription.id), reason="manual_force_reauth"
+    )
+    metadata["sessions_disconnected"] = kicked_count
+    record_audit_event(
+        db,
+        action="force_reauth",
+        entity_type="subscription",
+        entity_id=str(subscription.id),
+        actor_id=actor_id,
+        metadata=metadata,
+        request_id=request_id,
+    )
+    return {
+        "subscription_id": str(subscription.id),
+        "sessions_disconnected": kicked_count,
+        "metadata": metadata,
+    }
 
 
 def create_subscription_with_audit(

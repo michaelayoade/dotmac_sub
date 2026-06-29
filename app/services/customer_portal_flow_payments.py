@@ -48,6 +48,7 @@ _ONLINE_PROVIDER_LABELS = {
 _DIRECT_TRANSFER_PROVIDER = "direct_bank_transfer"
 _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
 _DIRECT_TRANSFER_TTL = timedelta(days=7)
+_DEFAULT_TOPUP_PRESET_AMOUNTS = (1000, 2000, 5000, 10000, 20000, 50000)
 
 
 def _resolve_payment_provider(db: Session) -> str:
@@ -253,6 +254,41 @@ def _resolve_topup_limits(db: Session) -> tuple[int, int]:
         int(max_amount) if isinstance(max_amount, (str, int, float)) else 500000
     )
     return min_amount_value, max_amount_value
+
+
+def _default_topup_presets(min_amount: int, max_amount: int) -> list[int]:
+    return [
+        amount
+        for amount in _DEFAULT_TOPUP_PRESET_AMOUNTS
+        if min_amount <= amount <= max_amount
+    ]
+
+
+def _resolve_topup_presets(
+    db: Session,
+    *,
+    min_amount: int,
+    max_amount: int,
+) -> list[int]:
+    """Return configured top-up presets constrained by the active limits."""
+    raw_presets = resolve_value(db, SettingDomain.billing, "topup_preset_amounts")
+    if not isinstance(raw_presets, str) or not raw_presets.strip():
+        return _default_topup_presets(min_amount, max_amount)
+
+    presets: list[int] = []
+    seen: set[int] = set()
+    for part in raw_presets.split(","):
+        try:
+            amount = int(part.strip())
+        except ValueError:
+            return _default_topup_presets(min_amount, max_amount)
+        if amount <= 0:
+            return _default_topup_presets(min_amount, max_amount)
+        if min_amount <= amount <= max_amount and amount not in seen:
+            presets.append(amount)
+            seen.add(amount)
+
+    return presets or _default_topup_presets(min_amount, max_amount)
 
 
 def _format_naira(amount: Decimal | int | float) -> str:
@@ -844,6 +880,8 @@ def create_invoice_payment_intent(
         "reference": gateway_context.reference,
         "amount": amount,
         "currency": "NGN",
+        "invoice_number": invoice_number,
+        "customer_email": _resolve_customer_email(db, customer),
         "checkout_metadata": checkout_metadata,
         "charged": False,
         "checkout_url": None,
@@ -1108,7 +1146,11 @@ def get_topup_page(
         "prepaid_balance": prepaid_balance,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
-        "preset_amounts": [1000, 2000, 5000, 10000, 20000, 50000],
+        "preset_amounts": _resolve_topup_presets(
+            db,
+            min_amount=min_amount_value,
+            max_amount=max_amount_value,
+        ),
         "payment_methods": payment_methods,
     }
     try:

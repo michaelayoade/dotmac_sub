@@ -1,0 +1,143 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Infrastructure Performance &amp; SLA - Admin{% endblock %}
+
+{% set state_color = {
+  'up': 'text-emerald-600 dark:text-emerald-400',
+  'degraded': 'text-amber-600 dark:text-amber-400',
+  'down': 'text-rose-600 dark:text-rose-400',
+  'unknown': 'text-slate-400 dark:text-slate-500'
+} %}
+
+{% macro uptime_badge(pct, derived) %}
+  {% if pct is none %}
+    <span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-300">no data</span>
+  {% else %}
+    {% set cls = 'text-emerald-600 dark:text-emerald-400' if pct >= 99.5 else ('text-amber-600 dark:text-amber-400' if pct >= 98 else 'text-rose-600 dark:text-rose-400') %}
+    <span class="font-semibold {{ cls }}">{{ '%.2f'|format(pct) }}%{% if derived %}<span class="ml-0.5 text-slate-400" title="Estimated from current ONT-online ratio — not measured downtime">*</span>{% endif %}</span>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Infrastructure Performance &amp; SLA</h1>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+      Where the network has been having challenges — across basestations, OLTs, PON ports and access points.
+    </p>
+  </div>
+
+  {% if not sla_logging_enabled %}
+  <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+    <strong>Availability logging is off.</strong> Uptime/SLA figures stay at 100% until
+    <code>SLA_AVAILABILITY_LOG_ENABLED</code> is turned on, which records device up/down transitions as downtime intervals.
+  </div>
+  {% endif %}
+
+  <!-- Tabs -->
+  <div class="border-b border-slate-200 dark:border-slate-700">
+    <nav class="-mb-px flex gap-6 text-sm font-medium">
+      {% for key, label in [('wallboard','Live wallboard'), ('ranking','Worst performers'), ('sla','SLA compliance')] %}
+      <a href="?tab={{ key }}{% if key != 'wallboard' %}&amp;tier={{ sel_tier }}&amp;window={{ sel_window }}{% endif %}"
+         class="border-b-2 px-1 py-3 {{ 'border-indigo-500 text-indigo-600 dark:text-indigo-400' if active_tab == key else 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}">
+        {{ label }}
+      </a>
+      {% endfor %}
+    </nav>
+  </div>
+
+  {% if active_tab == 'wallboard' %}
+  <!-- ===== Live wallboard ===== -->
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    {% for card in wallboard.cards %}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ card.label }}</h3>
+        <span class="text-xs text-slate-400">{{ card.total }} total</span>
+      </div>
+      <div class="mt-4 grid grid-cols-2 gap-2 text-sm">
+        <div><span class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ card.up }}</span><div class="text-xs text-slate-400">up</div></div>
+        <div><span class="text-2xl font-bold text-rose-600 dark:text-rose-400">{{ card.down }}</span><div class="text-xs text-slate-400">down</div></div>
+        <div><span class="text-2xl font-bold text-amber-600 dark:text-amber-400">{{ card.degraded }}</span><div class="text-xs text-slate-400">degraded</div></div>
+        <div><span class="text-2xl font-bold text-slate-400">{{ card.unmonitored }}</span><div class="text-xs text-slate-400">unmonitored</div></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="text-xs text-slate-400">Live status is read from the warmed cache (no Zabbix call on this page). PON state is the current ONT-online ratio per port.</p>
+
+  {% else %}
+  <!-- ===== Ranking / SLA (shared table, different emphasis) ===== -->
+  <form method="get" class="flex flex-wrap items-end gap-3">
+    <input type="hidden" name="tab" value="{{ active_tab }}">
+    <div>
+      <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Tier</label>
+      <select name="tier" onchange="this.form.submit()" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+        {% for key, t in tiers.items() %}
+        <option value="{{ key }}" {{ 'selected' if key == sel_tier }}>{{ t[0] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Window</label>
+      <select name="window" onchange="this.form.submit()" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+        {% for key, w in windows.items() %}
+        <option value="{{ key }}" {{ 'selected' if key == sel_window }}>{{ w[0] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <a href="/admin/network/performance/export?tier={{ sel_tier }}&amp;window={{ sel_window }}"
+       class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Export CSV</a>
+  </form>
+
+  <div class="flex flex-wrap gap-4 text-sm text-slate-500 dark:text-slate-400">
+    <span>{{ ranking.total }} {{ ranking.tier_label|lower }}{{ 's' if ranking.total != 1 }}</span>
+    <span>SLA target <strong class="text-slate-700 dark:text-slate-200">{{ '%.2f'|format(ranking.sla_target) }}%</strong></span>
+    <span class="text-rose-600 dark:text-rose-400">{{ ranking.breach_count }} breaching</span>
+  </div>
+
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-100 text-left text-xs uppercase text-slate-400 dark:border-slate-700">
+          <th class="px-4 py-3">{{ ranking.tier_label }}</th>
+          <th class="px-4 py-3">Uptime</th>
+          {% if active_tab == 'sla' %}<th class="px-4 py-3">SLA</th><th class="px-4 py-3">MTTR</th>{% endif %}
+          <th class="px-4 py-3">Downtime</th>
+          <th class="px-4 py-3">Incidents</th>
+          <th class="px-4 py-3">Affected subs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in ranking.rows %}
+        <tr class="border-t border-slate-100 dark:border-slate-700">
+          <td class="px-4 py-3 text-slate-700 dark:text-slate-200">
+            {% if row.id %}
+            <a href="/admin/network/performance/trend?element_type={{ ranking.element_type }}&amp;element_id={{ row.id }}&amp;name={{ row.name | urlencode }}" class="hover:text-indigo-600 hover:underline dark:hover:text-indigo-400">{{ row.name }}</a>
+            {% else %}{{ row.name }}{% endif %}
+          </td>
+          <td class="px-4 py-3">{{ uptime_badge(row.uptime_percent, row.derived) }}</td>
+          {% if active_tab == 'sla' %}
+          <td class="px-4 py-3">
+            {% if row.sla_status == 'pass' %}<span class="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">PASS</span>
+            {% elif row.sla_status == 'breach' %}<span class="rounded bg-rose-100 px-1.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">BREACH</span>
+            {% else %}<span class="text-xs text-slate-400">—</span>{% endif %}
+          </td>
+          <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.mttr_human or '—' }}</td>
+          {% endif %}
+          <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.downtime_human }}</td>
+          <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.incident_count if not row.derived else '—' }}</td>
+          <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.affected_subscribers }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="px-4 py-8 text-center text-slate-400">No data for this tier and window.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if ranking.derived %}
+  <p class="text-xs text-slate-400">* PON uptime is estimated from the current ONT-online ratio per port (no per-PON downtime alerts) — treat as an indicator, not contractual SLA.</p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -798,6 +798,81 @@ def test_send_subscription_credentials_uses_email_and_sms_targets(
     assert [row[0] for row in sent_sms] == ["+2348000000001", "+2348000000002"]
 
 
+def test_force_subscription_reauth_reconciles_disconnects_and_audits(
+    db_session,
+    subscriber,
+    catalog_offer,
+    monkeypatch,
+):
+    nas = NasDevice(
+        name="NAS Force Reauth",
+        nas_ip="10.20.30.1",
+        management_ip="10.20.30.1",
+        ip_address="10.20.30.1",
+        is_active=True,
+    )
+    db_session.add(nas)
+    db_session.commit()
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+            provisioning_nas_device_id=nas.id,
+            login="pppoe-force-1",
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_reconcile(db, subscription_id):
+        captured["reconcile_subscription_id"] = subscription_id
+        return {"external_credentials_synced": 1}
+
+    def fake_disconnect(db, subscription_id, reason=None):
+        captured["disconnect_subscription_id"] = subscription_id
+        captured["disconnect_reason"] = reason
+        return 2
+
+    def fake_audit(db, **kwargs):
+        captured["audit"] = kwargs
+
+    monkeypatch.setattr(
+        "app.services.radius.reconcile_subscription_connectivity", fake_reconcile
+    )
+    monkeypatch.setattr(
+        "app.services.enforcement.disconnect_subscription_sessions", fake_disconnect
+    )
+    monkeypatch.setattr(
+        web_catalog_subscriptions_service, "record_audit_event", fake_audit
+    )
+
+    result = web_catalog_subscriptions_service.force_subscription_reauth(
+        db_session,
+        str(subscription.id),
+        request=None,
+        actor_id="admin-1",
+    )
+
+    assert result["sessions_disconnected"] == 2
+    assert captured["reconcile_subscription_id"] == str(subscription.id)
+    assert captured["disconnect_subscription_id"] == str(subscription.id)
+    assert captured["disconnect_reason"] == "manual_force_reauth"
+    audit = captured["audit"]
+    assert audit["action"] == "force_reauth"
+    assert audit["entity_type"] == "subscription"
+    assert audit["entity_id"] == str(subscription.id)
+    assert audit["actor_id"] == "admin-1"
+    metadata = audit["metadata"]
+    assert metadata["subscriber_id"] == str(subscriber.id)
+    assert metadata["nas_device_id"] == str(nas.id)
+    assert metadata["nas_name"] == "NAS Force Reauth"
+    assert metadata["nas_ip"] == "10.20.30.1"
+    assert metadata["login"] == "pppoe-force-1"
+    assert metadata["sessions_disconnected"] == 2
+    assert metadata["radius_reconciled"] is True
+
+
 def test_create_subscription_with_audit_uses_requested_free_ipv4(
     db_session,
     subscriber,
@@ -1223,6 +1298,64 @@ def test_subscription_form_context_bootstraps_ip_addons_from_ipv4_blocks(
     )
     assert "203.0.113.8/29" in {child["cidr"] for child in children_29}
     assert "203.0.113.8/30" in {child["cidr"] for child in children_30}
+
+
+def test_route_parent_for_sub24_block_is_not_widened_to_24(db_session, subscriber):
+    """A sub-/24 block must be offered as itself, and its children must stay
+    inside it — never the enclosing /24 (which would route third-party space)."""
+    import ipaddress
+
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Small Routed Block",
+            "ip_version": "ipv4",
+            "cidr": "203.0.113.16/28",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+
+    parents = web_catalog_subscriptions_service._route_range_parent_options_for_ipam(
+        db_session
+    )
+    parent_cidrs = {p["cidr"] for p in parents}
+    assert "203.0.113.16/28" in parent_cidrs
+    assert "203.0.113.0/24" not in parent_cidrs
+
+    block_net = ipaddress.ip_network("203.0.113.16/28")
+    for prefix in (29, 30, 32):
+        children = web_catalog_subscriptions_service.route_child_options_for_parent(
+            db_session,
+            parent_cidr="203.0.113.16/28",
+            prefix=prefix,
+            current_subscriber_id=subscriber.id,
+        )
+        for child in children:
+            child_net = ipaddress.ip_network(child["cidr"])
+            assert child_net.subnet_of(block_net), (
+                f"/{prefix} child {child['cidr']} escapes owned block {block_net}"
+            )
+
+
+def test_normalize_additional_routes_rejects_non_routable_ranges():
+    for bad in ["0.0.0.0/0", "224.0.0.0/24", "240.0.0.0/24", "127.0.0.0/24"]:
+        with pytest.raises(ValueError):
+            web_catalog_subscriptions_service.normalize_additional_routes([bad])
+
+
+def test_normalize_additional_routes_rejects_overlapping_blocks():
+    with pytest.raises(ValueError, match="overlap"):
+        web_catalog_subscriptions_service.normalize_additional_routes(
+            ["203.0.113.0/28", "203.0.113.4/30"]
+        )
+
+
+def test_normalize_additional_routes_snaps_host_bits_to_network():
+    routes = web_catalog_subscriptions_service.normalize_additional_routes(
+        ["203.0.113.9/29"]
+    )
+    assert routes[0][0] == "203.0.113.8/29"
 
 
 def test_subscription_form_context_prioritizes_160_and_102_ipam_parents(
