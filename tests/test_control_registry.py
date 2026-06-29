@@ -53,6 +53,24 @@ def _clear_module_cache():
     SettingsCache.invalidate("modules", "feature_states")
 
 
+@pytest.fixture(autouse=True)
+def _clear_control_env(monkeypatch):
+    """Make the registry tests hermetic w.r.t. the host's deployment ``.env``.
+
+    conftest calls ``load_dotenv()``, which on a prod host pulls feature-flag
+    overrides such as ``CRM_TICKET_PULL_ENABLED=true``. An env override is the
+    registry's highest precedence (the emergency lever), so it defeats the
+    "no rows, no overrides" premise these parity/composition tests assert
+    against — the suite passed on a clean checkout but failed on the prod box.
+    Strip every control's alias env so resolution starts from the bare default
+    regardless of where the suite runs.
+    """
+    for control in control_registry.all_controls():
+        for alias in getattr(control, "legacy", ()):
+            if alias.env:
+                monkeypatch.delenv(alias.env, raising=False)
+
+
 def test_resolver_parity_with_legacy_defaults(db_session):
     """With no rows and all modules on, every feature resolves to its declared
     on_missing — which is set to the legacy _effective_bool default. A mismatch
