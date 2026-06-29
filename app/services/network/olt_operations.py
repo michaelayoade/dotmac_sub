@@ -229,16 +229,8 @@ def compare_olt_backups(
 
     path1 = backup_file_path(backup1)
     path2 = backup_file_path(backup2)
-    size1 = (
-        backup1.file_size_bytes
-        if backup1.file_size_bytes is not None
-        else path1.stat().st_size
-    )
-    size2 = (
-        backup2.file_size_bytes
-        if backup2.file_size_bytes is not None
-        else path2.stat().st_size
-    )
+    size1 = path1.stat().st_size
+    size2 = path2.stat().st_size
     if size1 > max_bytes or size2 > max_bytes:
         raise HTTPException(
             status_code=413,

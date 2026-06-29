@@ -3495,13 +3495,13 @@ def test_compare_olt_backups_rejects_large_web_diff(
     path1 = tmp_path / "large" / "b1.txt"
     path2 = tmp_path / "large" / "b2.txt"
     path1.parent.mkdir(parents=True, exist_ok=True)
-    path1.write_text("a\n")
+    path1.write_text("a" * 101)
     path2.write_text("b\n")
     b1 = OltConfigBackup(
         olt_device_id=olt.id,
         backup_type=OltConfigBackupType.auto,
         file_path="large/b1.txt",
-        file_size_bytes=10_000,
+        file_size_bytes=101,
     )
     b2 = OltConfigBackup(
         olt_device_id=olt.id,
@@ -3521,6 +3521,44 @@ def test_compare_olt_backups_rejects_large_web_diff(
         )
     assert exc.value.status_code == 413
     assert "too large" in str(exc.value.detail).lower()
+
+
+def test_compare_olt_backups_uses_actual_file_size_for_limit(
+    db_session, monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
+    olt = OLTDevice(name="OLT Stale Size Compare", mgmt_ip="198.51.100.47")
+    db_session.add(olt)
+    db_session.flush()
+
+    path1 = tmp_path / "stale-size" / "b1.txt"
+    path2 = tmp_path / "stale-size" / "b2.txt"
+    path1.parent.mkdir(parents=True, exist_ok=True)
+    path1.write_text("a" * 101)
+    path2.write_text("b\n")
+    b1 = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.auto,
+        file_path="stale-size/b1.txt",
+        file_size_bytes=1,
+    )
+    b2 = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.manual,
+        file_path="stale-size/b2.txt",
+        file_size_bytes=1,
+    )
+    db_session.add_all([b1, b2])
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        web_network_olts_service.compare_olt_backups(
+            db_session,
+            str(b1.id),
+            str(b2.id),
+            max_bytes=100,
+        )
+    assert exc.value.status_code == 413
 
 
 def test_test_olt_connection_and_test_backup(db_session, monkeypatch, tmp_path: Path):

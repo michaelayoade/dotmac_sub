@@ -362,6 +362,55 @@ class TestOltSshPoolInvalidate:
         mock_channel.close.assert_called()
         mock_transport.close.assert_called()
 
+    def test_invalidate_during_pending_create_closes_stale_connection_and_retries(
+        self, mock_olt, mock_policy
+    ):
+        pool = OltSshPool(max_connections_per_olt=1, acquire_timeout_seconds=1)
+        stale_transport = MagicMock()
+        stale_channel = MagicMock()
+        fresh_transport = MagicMock()
+        fresh_channel = MagicMock()
+        stale = PooledConnection(
+            transport=stale_transport,
+            channel=stale_channel,
+            policy=mock_policy,
+            olt_id=str(mock_olt.id),
+            olt_name=mock_olt.name,
+            in_use=True,
+        )
+        fresh = PooledConnection(
+            transport=fresh_transport,
+            channel=fresh_channel,
+            policy=mock_policy,
+            olt_id=str(mock_olt.id),
+            olt_name=mock_olt.name,
+            in_use=True,
+        )
+
+        def create_connection(_olt):
+            if create_connection.calls == 0:
+                create_connection.calls += 1
+                pool.invalidate(str(mock_olt.id))
+                return stale
+            create_connection.calls += 1
+            return fresh
+
+        create_connection.calls = 0
+        with patch("app.services.rate_limiter_adapter.allow_operation") as mock_allow:
+            mock_allow.return_value = SimpleNamespace(
+                allowed=True,
+                remaining=9,
+                retry_after_seconds=None,
+            )
+            with patch.object(pool, "_create_connection", side_effect=create_connection):
+                acquired = pool.acquire(mock_olt)
+
+        assert acquired is fresh
+        assert create_connection.calls == 2
+        stale_channel.close.assert_called_once()
+        stale_transport.close.assert_called_once()
+        assert pool._pools[str(mock_olt.id)] == [fresh]
+
 
 class TestOltSshPoolCloseAll:
     """Tests for OLT SSH pool close_all."""

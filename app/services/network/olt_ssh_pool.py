@@ -180,6 +180,7 @@ class OltSshPool:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._pending_creates: dict[str, int] = {}
+        self._invalidation_generation: dict[str, int] = {}
         self._max_per_olt = max_connections_per_olt
         self._ttl = timedelta(seconds=ttl_seconds)
         self._idle_timeout = timedelta(seconds=idle_timeout_seconds)
@@ -212,80 +213,85 @@ class OltSshPool:
         olt_key = str(olt.id)
 
         deadline = time.monotonic() + self._acquire_timeout_seconds
-        with self._condition:
-            while True:
-                # Clean up expired connections first
-                self._cleanup_pool(olt_key)
+        while True:
+            with self._condition:
+                while True:
+                    # Clean up expired connections first
+                    self._cleanup_pool(olt_key)
 
-                # Try to find an available connection
-                if olt_key in self._pools:
-                    for conn in self._pools[olt_key]:
-                        if not conn.in_use and conn.is_valid(
-                            self._ttl, self._max_reuses
-                        ):
-                            conn.in_use = True
-                            conn.touch()
-                            self._stats["hits"] += 1
-                            logger.debug(
-                                "SSH pool hit for %s (use #%d)",
-                                olt.name,
-                                conn.use_count,
-                            )
-                            return conn
+                    # Try to find an available connection
+                    if olt_key in self._pools:
+                        for conn in self._pools[olt_key]:
+                            if not conn.in_use and conn.is_valid(
+                                self._ttl, self._max_reuses
+                            ):
+                                conn.in_use = True
+                                conn.touch()
+                                self._stats["hits"] += 1
+                                logger.debug(
+                                    "SSH pool hit for %s (use #%d)",
+                                    olt.name,
+                                    conn.use_count,
+                                )
+                                return conn
 
-                current_count = len(self._pools.get(olt_key, []))
-                pending_count = self._pending_creates.get(olt_key, 0)
-                if current_count + pending_count < self._max_per_olt:
-                    self._pending_creates[olt_key] = pending_count + 1
-                    self._stats["misses"] += 1
-                    break
+                    current_count = len(self._pools.get(olt_key, []))
+                    pending_count = self._pending_creates.get(olt_key, 0)
+                    if current_count + pending_count < self._max_per_olt:
+                        self._pending_creates[olt_key] = pending_count + 1
+                        create_generation = self._invalidation_generation.get(
+                            olt_key, 0
+                        )
+                        self._stats["misses"] += 1
+                        break
 
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"SSH connection pool exhausted for OLT {olt.name} "
+                            f"({self._max_per_olt} connection(s) in use)"
+                        )
+                    self._condition.wait(timeout=remaining)
+
+            # Create connection outside lock to avoid blocking other threads.
+            # A pending slot was reserved above, so concurrent acquires cannot exceed
+            # the per-OLT connection cap while this transport is being opened.
+            logger.debug("SSH pool miss for %s, creating new connection", olt.name)
+            try:
+                conn = self._create_connection(olt)
+            except Exception:
+                with self._condition:
+                    self._finish_pending_create(olt_key)
+                raise
+
+            with self._condition:
+                self._finish_pending_create(olt_key)
+                if create_generation != self._invalidation_generation.get(olt_key, 0):
+                    conn.close()
+                    self._stats["evictions"] += 1
+                    self._condition.notify_all()
+                    if deadline - time.monotonic() <= 0:
+                        raise TimeoutError(
+                            "SSH connection pool was invalidated while opening "
+                            f"a connection for OLT {olt.name}"
+                        )
+                    continue
+
+                if olt_key not in self._pools:
+                    self._pools[olt_key] = []
+
+                if len(self._pools[olt_key]) < self._max_per_olt:
+                    self._pools[olt_key].append(conn)
+                else:
+                    conn.close()
+                    self._stats["evictions"] += 1
+                    self._condition.notify_all()
                     raise TimeoutError(
                         f"SSH connection pool exhausted for OLT {olt.name} "
                         f"({self._max_per_olt} connection(s) in use)"
                     )
-                self._condition.wait(timeout=remaining)
-
-        # Create connection outside lock to avoid blocking other threads.
-        # A pending slot was reserved above, so concurrent acquires cannot exceed
-        # the per-OLT connection cap while this transport is being opened.
-        logger.debug("SSH pool miss for %s, creating new connection", olt.name)
-        try:
-            conn = self._create_connection(olt)
-        except Exception:
-            with self._condition:
-                self._pending_creates[olt_key] = max(
-                    0, self._pending_creates.get(olt_key, 1) - 1
-                )
-                if self._pending_creates.get(olt_key) == 0:
-                    self._pending_creates.pop(olt_key, None)
                 self._condition.notify_all()
-            raise
-
-        with self._condition:
-            self._pending_creates[olt_key] = max(
-                0, self._pending_creates.get(olt_key, 1) - 1
-            )
-            if self._pending_creates.get(olt_key) == 0:
-                self._pending_creates.pop(olt_key, None)
-            if olt_key not in self._pools:
-                self._pools[olt_key] = []
-
-            if len(self._pools[olt_key]) < self._max_per_olt:
-                self._pools[olt_key].append(conn)
-            else:
-                conn.close()
-                self._stats["evictions"] += 1
-                self._condition.notify_all()
-                raise TimeoutError(
-                    f"SSH connection pool exhausted for OLT {olt.name} "
-                    f"({self._max_per_olt} connection(s) in use)"
-                )
-            self._condition.notify_all()
-
-        return conn
+                return conn
 
     def release(self, conn: PooledConnection, *, close: bool = False) -> None:
         """Return a connection to the pool.
@@ -320,13 +326,14 @@ class OltSshPool:
         Returns:
             Number of connections closed.
         """
-        with self._lock:
-            if olt_id not in self._pools:
-                return 0
-
-            connections = self._pools.pop(olt_id)
+        with self._condition:
+            self._invalidation_generation[olt_id] = (
+                self._invalidation_generation.get(olt_id, 0) + 1
+            )
+            connections = self._pools.pop(olt_id, [])
             for conn in connections:
                 conn.close()
+            self._condition.notify_all()
 
             logger.info(
                 "Invalidated %d pooled connections for OLT %s", len(connections), olt_id
@@ -335,13 +342,18 @@ class OltSshPool:
 
     def close_all(self) -> None:
         """Close all pooled connections (for shutdown)."""
-        with self._lock:
+        with self._condition:
             total = 0
+            for olt_id in set(self._pools) | set(self._pending_creates):
+                self._invalidation_generation[olt_id] = (
+                    self._invalidation_generation.get(olt_id, 0) + 1
+                )
             for olt_id, connections in self._pools.items():
                 for conn in connections:
                     conn.close()
                     total += 1
             self._pools.clear()
+            self._condition.notify_all()
             logger.info("Closed %d pooled SSH connections", total)
 
     def get_stats(self) -> dict:
@@ -393,6 +405,15 @@ class OltSshPool:
                 f"Retry after {decision.retry_after_seconds}s",
                 retry_after_seconds=decision.retry_after_seconds,
             )
+
+    def _finish_pending_create(self, olt_key: str) -> None:
+        """Release one reserved create slot and wake pool waiters."""
+        self._pending_creates[olt_key] = max(
+            0, self._pending_creates.get(olt_key, 1) - 1
+        )
+        if self._pending_creates.get(olt_key) == 0:
+            self._pending_creates.pop(olt_key, None)
+        self._condition.notify_all()
 
     def _cleanup_pool(self, olt_key: str) -> None:
         """Remove invalid connections from an OLT's pool (must hold lock)."""
