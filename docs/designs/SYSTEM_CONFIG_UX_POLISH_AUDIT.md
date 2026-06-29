@@ -28,14 +28,16 @@ theme.
 - GIS sync runs now persist the latest status, timing, options, result counts, and
   error text in the GIS settings domain, and the admin GIS page surfaces that
   latest run summary.
+- Geocoding settings now allow the supported runtime providers (`nominatim`,
+  `google`, `mapbox`), seed provider API-key settings, and enforce a configurable
+  minimum interval for external geocoding requests while skipping self-hosted URLs.
 
 ### Still open
 
 - Dead config pages and toggles: Data Retention, Monitoring drift, and the largely
   inert preference/subscriber/portal/CPE/IPv6 key groups.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
-- Geocoding provider/rate-limit controls and broader bespoke-save validation
-  consistency.
+- Broader bespoke-save validation consistency.
 
 ### Verification
 
@@ -46,6 +48,10 @@ theme.
 - `poetry run pytest tests/test_gis_sync_services.py tests/test_gis_route_gaps.py tests/test_admin_route_permissions.py tests/test_celery_tasks.py -q`
   - Result: passed
 - `poetry run ruff check app/services/gis_sync.py app/services/web_gis.py app/tasks/gis.py tests/test_gis_sync_services.py tests/test_gis_route_gaps.py`
+  - Result: passed
+- `poetry run pytest tests/test_geocoding_services.py tests/test_settings_seed_services.py tests/test_control_registry.py`
+  - Result: `92 passed`
+- `poetry run ruff check app/services/geocoding.py app/services/settings_spec.py app/services/settings_seed.py tests/test_geocoding_services.py tests/test_settings_seed_services.py`
   - Result: passed
 
 ## What this audit is
