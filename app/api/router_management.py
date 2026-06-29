@@ -325,6 +325,9 @@ def create_push(
             initiated_by=user_id,
             template_id=payload.template_id,
             variable_values=payload.variable_values,
+            dry_run=payload.dry_run,
+            failure_policy=payload.failure_policy,
+            allow_dangerous_commands=payload.allow_dangerous_commands,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

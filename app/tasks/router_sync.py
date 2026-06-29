@@ -143,6 +143,35 @@ def _capture_post_snapshot(db, router: Router) -> RouterConfigSnapshot | None:
         return None
 
 
+def _parse_routeros_rest_command(cmd: str) -> tuple[str, dict | None, str | None]:
+    """Parse one push command into RouterOS REST path and optional JSON payload."""
+    parts = cmd.strip().split(" ", 1)
+    path = parts[0]
+    payload: dict | None = None
+    warning: str | None = None
+    if len(parts) == 2:
+        try:
+            parsed = json.loads(parts[1])
+            if isinstance(parsed, dict):
+                payload = parsed
+            else:
+                warning = "Payload JSON is not an object; sending without payload."
+        except json.JSONDecodeError:
+            warning = "Payload JSON could not be parsed; sending without payload."
+    return path, payload, warning
+
+
+def _preview_commands(commands: list[str]) -> list[dict[str, object]]:
+    preview = []
+    for cmd in commands:
+        path, payload, warning = _parse_routeros_rest_command(cmd)
+        row: dict[str, object] = {"command": cmd, "path": path, "payload": payload}
+        if warning:
+            row["warning"] = warning
+        preview.append(row)
+    return preview
+
+
 @celery_app.task(name="router_sync.execute_config_push")
 def execute_config_push(push_id: str) -> dict:
     db = db_session_adapter.create_session()
@@ -156,13 +185,25 @@ def execute_config_push(push_id: str) -> dict:
 
         success_count = 0
         fail_count = 0
+        skipped_count = 0
+        abort_remaining = False
 
         for result in push.results:
+            if abort_remaining:
+                result.status = RouterPushResultStatus.skipped
+                result.error_message = (
+                    "Skipped because failure policy aborted after a prior failure."
+                )
+                db.commit()
+                skipped_count += 1
+                continue
+
             router = db.get(Router, result.router_id)
             if not router or not router.is_active:
                 result.status = RouterPushResultStatus.skipped
                 result.error_message = "Router inactive or not found"
                 db.commit()
+                skipped_count += 1
                 continue
 
             start_time = time.time()
@@ -179,21 +220,24 @@ def execute_config_push(push_id: str) -> dict:
                 result.pre_snapshot_id = pre_snap.id
                 db.commit()
 
+                if push.dry_run:
+                    result.response_data = {
+                        "dry_run": True,
+                        "planned_commands": _preview_commands(push.commands),
+                    }
+                    result.status = RouterPushResultStatus.success
+                    result.duration_ms = int((time.time() - start_time) * 1000)
+                    db.commit()
+                    success_count += 1
+                    continue
+
                 # Each command is a RouterOS REST API path, optionally followed
                 # by a single space and a JSON object payload, e.g.:
                 #   /ip/address/add {"address":"192.168.1.1/24","interface":"ether1"}
                 for cmd in push.commands:
-                    parts = cmd.strip().split(" ", 1)
-                    path = parts[0]
-                    payload: dict | None = None
-                    if len(parts) == 2:
-                        try:
-                            payload = json.loads(parts[1])
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                "Could not parse payload for command %r — sending without payload",
-                                cmd,
-                            )
+                    path, payload, warning = _parse_routeros_rest_command(cmd)
+                    if warning:
+                        logger.warning("%s Command: %r", warning, cmd)
                     resp = RouterConnectionService.execute(
                         router, "POST", path, payload=payload
                     )
@@ -224,6 +268,8 @@ def execute_config_push(push_id: str) -> dict:
                 db.commit()
                 fail_count += 1
                 logger.warning("Push to %s failed: %s", router.name, exc)
+                if push.failure_policy == "abort":
+                    abort_remaining = True
 
         if fail_count == 0:
             push.status = RouterConfigPushStatus.completed
@@ -239,6 +285,9 @@ def execute_config_push(push_id: str) -> dict:
             "status": push.status.value,
             "success": success_count,
             "failed": fail_count,
+            "skipped": skipped_count,
+            "dry_run": push.dry_run,
+            "failure_policy": push.failure_policy,
         }
     finally:
         db.close()

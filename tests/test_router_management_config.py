@@ -132,8 +132,13 @@ def test_create_push_record(db_session):
         commands=["/queue simple set [find] queue=sfq/sfq"],
         router_ids=[router.id],
         initiated_by=user_id,
+        dry_run=True,
+        failure_policy="abort",
     )
     assert push.status == RouterConfigPushStatus.pending
+    assert push.dry_run is True
+    assert push.failure_policy == "abort"
+    assert push.allow_dangerous_commands is False
     assert len(push.results) == 1
     assert push.results[0].router_id == router.id
 
@@ -146,6 +151,32 @@ def test_create_push_dangerous_command(db_session):
             commands=["/system/reset-configuration"],
             router_ids=[router.id],
             initiated_by=uuid.uuid4(),
+        )
+
+
+def test_create_push_dangerous_command_override(db_session):
+    router = _make_router(db_session, "push-danger-override-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        commands=["/system/reset-configuration"],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+        allow_dangerous_commands=True,
+    )
+
+    assert push.allow_dangerous_commands is True
+    assert push.commands == ["/system/reset-configuration"]
+
+
+def test_create_push_rejects_unknown_failure_policy(db_session):
+    router = _make_router(db_session, "push-bad-policy-test")
+    with pytest.raises(ValueError, match="Failure policy"):
+        RouterConfigService.create_push(
+            db_session,
+            commands=["/ip address print"],
+            router_ids=[router.id],
+            initiated_by=uuid.uuid4(),
+            failure_policy="rollback",
         )
 
 
@@ -183,3 +214,101 @@ def test_api_create_push_marks_results_failed_when_enqueue_fails(
     assert len(push.results) == 1
     assert push.results[0].status == RouterPushResultStatus.failed
     assert "broker unavailable" in push.results[0].error_message
+
+
+def test_execute_config_push_dry_run_captures_preview_without_posting(
+    db_session, monkeypatch
+):
+    from app.tasks.router_sync import execute_config_push
+
+    router = _make_router(db_session, "push-dry-run-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        commands=['/system/ntp/client/set {"enabled":"yes"}'],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+        dry_run=True,
+    )
+    calls = []
+
+    def fake_execute(router_arg, method, path, payload=None):
+        calls.append((router_arg.name, method, path, payload))
+        if method == "GET" and path == "/export":
+            return "/exported config"
+        raise AssertionError("dry-run must not POST router changes")
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", fake_execute
+    )
+
+    result = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push)
+    db_session.refresh(push.results[0])
+    assert result["dry_run"] is True
+    assert result["success"] == 1
+    assert push.status == RouterConfigPushStatus.completed
+    assert push.results[0].status == RouterPushResultStatus.success
+    assert push.results[0].pre_snapshot_id is not None
+    assert push.results[0].post_snapshot_id is None
+    assert push.results[0].response_data["planned_commands"][0]["path"] == (
+        "/system/ntp/client/set"
+    )
+    assert calls == [
+        ("push-dry-run-test", "GET", "/export", None),
+    ]
+
+
+def test_execute_config_push_abort_policy_skips_remaining_after_failure(
+    db_session, monkeypatch
+):
+    from app.tasks.router_sync import execute_config_push
+
+    first = _make_router(db_session, "push-abort-a")
+    second = _make_router(db_session, "push-abort-b")
+    push = RouterConfigService.create_push(
+        db_session,
+        commands=['/system/ntp/client/set {"enabled":"yes"}'],
+        router_ids=[first.id, second.id],
+        initiated_by=uuid.uuid4(),
+        failure_policy="abort",
+    )
+    calls = []
+
+    def fake_execute(router_arg, method, path, payload=None):
+        calls.append((router_arg.name, method, path, payload))
+        if method == "GET" and path == "/export":
+            return "/exported config"
+        if router_arg.name == "push-abort-a":
+            raise RuntimeError("router rejected command")
+        return {}
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute", fake_execute
+    )
+
+    result = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push)
+    for row in push.results:
+        db_session.refresh(row)
+    statuses = {row.router_id: row.status for row in push.results}
+    errors = {row.router_id: row.error_message for row in push.results}
+    assert result["failure_policy"] == "abort"
+    assert result["failed"] == 1
+    assert result["skipped"] == 1
+    assert push.status == RouterConfigPushStatus.failed
+    assert statuses[first.id] == RouterPushResultStatus.failed
+    assert statuses[second.id] == RouterPushResultStatus.skipped
+    assert "aborted" in (errors[second.id] or "")
+    assert not any(call[0] == "push-abort-b" for call in calls)
