@@ -25,6 +25,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _validate_non_negative_int(value: object, field: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a non-negative integer")
+    if not isinstance(value, int | str | bytes | bytearray):
+        raise ValueError(f"{field} must be a non-negative integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return parsed
+
+
+def _validate_priority(value: object) -> int:
+    priority = _validate_non_negative_int(value, "ip_priority")
+    if priority > 7:
+        raise ValueError("ip_priority must be between 0 and 7")
+    return priority
+
+
 @dataclass
 class BatchedMgmtSpec:
     """Specification for batched management configuration.
@@ -118,8 +139,30 @@ def build_management_command_batch(
     1. Global config: service-port create
     2. Interface mode: ont ipconfig, ont internet-config, ont wan-config, ont tr069-server-config
     """
+    from app.services.network.olt_validators import (
+        ValidationError,
+        validate_fsp,
+        validate_gem_index,
+        validate_ip_address,
+        validate_ont_id,
+        validate_subnet_mask,
+        validate_vlan_id,
+    )
+
+    def validate_value(validator, *args, **kwargs):
+        try:
+            return validator(*args, **kwargs)
+        except ValidationError as exc:
+            raise ValueError(exc.message) from exc
+
     commands: list[tuple[str, str]] = []
-    frame, slot, port = spec.fsp.split("/")
+    fsp = validate_value(validate_fsp, spec.fsp)
+    ont_id = validate_value(
+        validate_ont_id, _validate_non_negative_int(spec.ont_id_on_olt, "ont_id_on_olt")
+    )
+    ip_index = _validate_non_negative_int(spec.ip_index, "ip_index")
+    ip_priority = _validate_priority(spec.ip_priority)
+    frame, slot, port = fsp.split("/")
 
     # Phase 1: Service-port (global config mode)
     if spec.has_service_port:
@@ -127,14 +170,24 @@ def build_management_command_batch(
             raise ValueError(
                 "Management service-port requires an explicit management GEM index"
             )
+        mgmt_vlan_tag = validate_value(
+            validate_vlan_id,
+            _validate_non_negative_int(spec.mgmt_vlan_tag, "mgmt_vlan_tag"),
+        )
+        mgmt_gem_index = validate_value(
+            validate_gem_index,
+            _validate_non_negative_int(spec.mgmt_gem_index, "mgmt_gem_index"),
+        )
         sp_cmd = (
-            f"service-port vlan {spec.mgmt_vlan_tag} "
-            f"gpon {spec.fsp} ont {spec.ont_id_on_olt} "
-            f"gemport {spec.mgmt_gem_index} "
-            f"multi-service user-vlan {spec.mgmt_vlan_tag} "
+            f"service-port vlan {mgmt_vlan_tag} "
+            f"gpon {fsp} ont {ont_id} "
+            f"gemport {mgmt_gem_index} "
+            f"multi-service user-vlan {mgmt_vlan_tag} "
             f"tag-transform translate"
         )
         commands.append((sp_cmd, "create_mgmt_service_port"))
+    else:
+        mgmt_vlan_tag = None
 
     # Phase 2: ONT configuration (interface mode)
     interface_commands: list[tuple[str, str]] = []
@@ -157,45 +210,62 @@ def build_management_command_batch(
                     "Static management IP configuration is incomplete; missing "
                     + ", ".join(missing)
                 )
+            ip_address = validate_value(validate_ip_address, str(spec.ip_address))
+            subnet_mask = validate_value(validate_subnet_mask, str(spec.subnet_mask))
+            gateway = validate_value(
+                validate_ip_address, str(spec.gateway), field="gateway"
+            )
             iphost_cmd = (
-                f"ont ipconfig {port} {spec.ont_id_on_olt} "
-                f"ip-index {spec.ip_index} static "
-                f"ip-address {spec.ip_address} "
-                f"mask {spec.subnet_mask} "
-                f"gateway {spec.gateway} "
-                f"vlan {spec.mgmt_vlan_tag} "
-                f"priority {spec.ip_priority}"
+                f"ont ipconfig {port} {ont_id} "
+                f"ip-index {ip_index} static "
+                f"ip-address {ip_address} "
+                f"mask {subnet_mask} "
+                f"gateway {gateway} "
+                f"vlan {mgmt_vlan_tag} "
+                f"priority {ip_priority}"
+            )
+        elif ip_mode in {"", "dhcp", "dynamic"}:
+            iphost_cmd = (
+                f"ont ipconfig {port} {ont_id} "
+                f"ip-index {ip_index} dhcp "
+                f"vlan {mgmt_vlan_tag}"
             )
         else:
-            iphost_cmd = (
-                f"ont ipconfig {port} {spec.ont_id_on_olt} "
-                f"ip-index {spec.ip_index} dhcp "
-                f"vlan {spec.mgmt_vlan_tag}"
-            )
+            raise ValueError(f"Unsupported management IP mode: {spec.ip_mode!r}")
         interface_commands.append((iphost_cmd, "configure_iphost"))
 
     # internet-config (TCP stack activation)
     if spec.has_internet_config:
+        internet_config_ip_index = _validate_non_negative_int(
+            spec.internet_config_ip_index, "internet_config_ip_index"
+        )
         inet_cmd = (
-            f"ont internet-config {port} {spec.ont_id_on_olt} "
-            f"ip-index {spec.internet_config_ip_index}"
+            f"ont internet-config {port} {ont_id} ip-index {internet_config_ip_index}"
         )
         interface_commands.append((inet_cmd, "activate_internet_config"))
 
     # wan-config (route+NAT mode)
     if spec.has_wan_config and spec.internet_config_ip_index is not None:
+        internet_config_ip_index = _validate_non_negative_int(
+            spec.internet_config_ip_index, "internet_config_ip_index"
+        )
+        wan_config_profile_id = _validate_non_negative_int(
+            spec.wan_config_profile_id, "wan_config_profile_id"
+        )
         wan_cmd = (
-            f"ont wan-config {port} {spec.ont_id_on_olt} "
-            f"ip-index {spec.internet_config_ip_index} "
-            f"profile-id {spec.wan_config_profile_id}"
+            f"ont wan-config {port} {ont_id} "
+            f"ip-index {internet_config_ip_index} "
+            f"profile-id {wan_config_profile_id}"
         )
         interface_commands.append((wan_cmd, "configure_wan"))
 
     # TR-069 profile binding
     if spec.has_tr069:
+        tr069_profile_id = _validate_non_negative_int(
+            spec.tr069_profile_id, "tr069_profile_id"
+        )
         tr069_cmd = (
-            f"ont tr069-server-config {port} {spec.ont_id_on_olt} "
-            f"profile-id {spec.tr069_profile_id}"
+            f"ont tr069-server-config {port} {ont_id} profile-id {tr069_profile_id}"
         )
         interface_commands.append((tr069_cmd, "bind_tr069"))
 
@@ -371,8 +441,21 @@ def create_batched_mgmt_spec_from_config_pack(
     """
     mgmt_vlan_tag = config_pack.management_vlan.tag
 
+    static_parts = {
+        "allocated_ip": allocated_ip,
+        "subnet_mask": subnet_mask,
+        "gateway": gateway,
+    }
+    provided_static_parts = [name for name, value in static_parts.items() if value]
+    if provided_static_parts and len(provided_static_parts) != len(static_parts):
+        missing = [name for name, value in static_parts.items() if not value]
+        raise ValueError(
+            "Static management IP configuration is incomplete; missing "
+            + ", ".join(missing)
+        )
+
     # Determine IP mode
-    if allocated_ip and subnet_mask and gateway:
+    if provided_static_parts:
         ip_mode = "static"
     else:
         ip_mode = "dhcp"
