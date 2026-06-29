@@ -46,6 +46,10 @@ settings/integrity/reconcilers.
 - Billing automation and billing-health checks now import one canonical billable
   subscriber status set instead of carrying duplicated "keep in sync" constants
   and raw SQL literals.
+- Consolidated "Record & distribute" now confirms before submit, disables the
+  submit button after confirmation, enforces a positive minimum amount in the UI,
+  and redirects back with success/safe-error feedback instead of exposing raw
+  service exceptions.
 
 ### Partially resolved
 
@@ -58,8 +62,7 @@ settings/integrity/reconcilers.
 ### Still open
 
 - Remaining irreversible money-action server-side idempotency and untouched
-  high-risk actions such as consolidated record/distribute and fleet-wide billing
-  settings save.
+  high-risk actions such as fleet-wide billing settings save.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Customer post-payment-return states.
@@ -91,6 +94,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/billing_statuses.py app/services/billing_automation.py app/services/billing_health.py tests/test_billing_statuses.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_statuses.py tests/test_billing_health.py tests/test_billing_automation_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/web/admin/billing_consolidated.py tests/test_billing_consolidated_web.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_consolidated_web.py -q`
   - Result: passed
 
 ## What this audit is
