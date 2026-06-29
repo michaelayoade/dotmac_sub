@@ -99,13 +99,24 @@ def _get_csrf_token(request: Request) -> str:
     return getattr(request.state, "csrf_token", "")
 
 
-def login_page(request: Request, error: str | None = None, next_url: str | None = None):
+def _remember_duration_label(db: Session | None) -> str:
+    settings = AuthFlow.refresh_cookie_settings(db)
+    return auth_flow_service.duration_label(int(settings["max_age"]))
+
+
+def login_page(
+    request: Request,
+    error: str | None = None,
+    next_url: str | None = None,
+    db: Session | None = None,
+):
     return templates.TemplateResponse(
         "auth/login.html",
         {
             "request": request,
             "error": error,
             "next": next_url or "",
+            "remember_duration_label": _remember_duration_label(db),
             "csrf_token": _get_csrf_token(request),
         },
     )
@@ -213,6 +224,7 @@ def login_submit(
                 "request": request,
                 "error": error_msg,
                 "next": next_url,
+                "remember_duration_label": _remember_duration_label(db),
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=401,
@@ -437,6 +449,7 @@ def forgot_password_submit(request: Request, db: Session, email: str):
 
 def reset_password_page(
     request: Request,
+    db: Session,
     token: str,
     error: str | None = None,
     next_login: str | None = None,
@@ -449,6 +462,7 @@ def reset_password_page(
             "token": token,
             "error": error,
             "next_login": safe_next_login,
+            "password_min_length": auth_flow_service.password_min_length(db),
             "csrf_token": _get_csrf_token(request),
         },
     )
@@ -471,6 +485,7 @@ def reset_password_submit(
                 "token": token,
                 "error": "Passwords do not match",
                 "next_login": safe_next_login,
+                "password_min_length": auth_flow_service.password_min_length(db),
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=400,
@@ -496,6 +511,7 @@ def reset_password_submit(
                 "token": token,
                 "error": error_msg,
                 "next_login": safe_next_login,
+                "password_min_length": auth_flow_service.password_min_length(db),
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=400,

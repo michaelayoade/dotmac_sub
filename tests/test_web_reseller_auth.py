@@ -6,6 +6,8 @@ from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.services import web_reseller_auth as web_reseller_auth_service
 
 
@@ -76,6 +78,31 @@ def test_password_reset_email_for_identifier_uses_local_username(db_session, per
     )
 
     assert result == "reseller@example.com"
+
+
+def test_reseller_login_page_uses_configured_remember_duration(
+    db_session, monkeypatch
+):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="reseller_remember_ttl_seconds",
+            value_type=SettingValueType.integer,
+            value_text=str(14 * 86400),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        web_reseller_auth_service.db_session_adapter,
+        "create_session",
+        lambda: db_session,
+    )
+
+    response = web_reseller_auth_service.reseller_login_page(_request())
+
+    assert "Remember me for 14 days" in response.body.decode()
 
 
 def test_reseller_login_redirects_to_shared_reset_flow(monkeypatch):

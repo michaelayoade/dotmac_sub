@@ -2780,6 +2780,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.auth,
+        key="password_min_length",
+        env_var="PASSWORD_MIN_LENGTH",
+        value_type=SettingValueType.integer,
+        default=8,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
         key="reseller_session_ttl_seconds",
         env_var="RESELLER_SESSION_TTL_SECONDS",
         value_type=SettingValueType.integer,

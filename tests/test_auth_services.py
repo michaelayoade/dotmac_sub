@@ -129,6 +129,51 @@ def test_admin_login_reseller_tile_links_directly_to_reseller_login():
     assert 'href="/reseller"' not in body
 
 
+def test_admin_login_page_uses_configured_remember_duration(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="jwt_refresh_ttl_days",
+            value_type=SettingValueType.integer,
+            value_text="10",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    response = web_auth_service.login_page(
+        _make_get_request("/auth/login"),
+        next_url="/admin",
+        db=db_session,
+    )
+
+    assert "Remember me for 10 days" in response.body.decode()
+
+
+def test_reset_password_page_uses_configured_min_length(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="password_min_length",
+            value_type=SettingValueType.integer,
+            value_text="12",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    response = web_auth_service.reset_password_page(
+        _make_get_request("/auth/reset-password"),
+        db_session,
+        "reset-token",
+    )
+    body = response.body.decode()
+
+    assert 'minlength="12"' in body
+    assert "Must be at least 12 characters" in body
+    assert "password.length >= this.passwordMinLength" in body
+
+
 def _enable_force_admin_mfa(db_session):
     db_session.add(
         DomainSetting(
@@ -165,6 +210,7 @@ def test_auth_admin_policy_settings_are_registered():
         "admin_lockout_minutes": 15,
         "mfa_max_failed_attempts": 5,
         "mfa_lockout_minutes": 15,
+        "password_min_length": 8,
     }
 
     for key, default in expected.items():

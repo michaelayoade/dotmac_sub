@@ -34,13 +34,16 @@ UX-polish + operator-control lens (**not** a full security review).
   the previous hardcoded values preserved as defaults. The system preferences UI
   now writes the canonical `admin_mfa_required` key while still reading legacy
   `force_2fa` values.
+- Password reset minimum length is now backed by the registered
+  `password_min_length` auth setting and rendered into the reset form. Admin and
+  reseller login remember-me labels now render their configured remember TTLs
+  instead of hardcoding "30 days".
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
-- Password-min/remember-me copy, active sessions, and schema-backed MFA recovery
-  codes remain open.
+- Active sessions and schema-backed MFA recovery codes remain open.
 
 ### Verification
 
@@ -63,6 +66,10 @@ UX-polish + operator-control lens (**not** a full security review).
 - `poetry run pytest tests/test_auth_flow.py tests/test_auth_services.py -q`
   - Result: `68 passed`
 - `poetry run ruff check app/services/auth_flow.py app/services/settings_spec.py app/services/web_system_config.py tests/test_auth_flow.py tests/test_auth_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_flow.py tests/test_auth_services.py tests/test_web_reseller_auth.py -q`
+  - Result: `76 passed`
+- `poetry run ruff check app/services/auth_flow.py app/services/web_auth.py app/services/web_reseller_auth.py app/web/auth/routes.py app/services/settings_spec.py tests/test_auth_flow.py tests/test_auth_services.py tests/test_web_reseller_auth.py`
   - Result: passed
 
 ## What this audit is

@@ -108,6 +108,20 @@ def lockout_detail(
     return f"{prefix}. Try again in {minutes} {unit}."
 
 
+def duration_label(seconds: int) -> str:
+    seconds = max(int(seconds), 1)
+    for unit, unit_seconds in (
+        ("day", 86400),
+        ("hour", 3600),
+        ("minute", 60),
+    ):
+        if seconds >= unit_seconds:
+            value = max(1, (seconds + unit_seconds - 1) // unit_seconds)
+            suffix = unit if value == 1 else f"{unit}s"
+            return f"{value} {suffix}"
+    return "1 minute"
+
+
 def _truncate_user_agent(value: str | None, max_len: int = 512) -> str | None:
     if not value:
         return value
@@ -825,6 +839,10 @@ def _mfa_lockout_minutes(db: Session | None) -> int:
         "mfa_lockout_minutes",
         MFA_LOCKOUT_MINUTES,
     )
+
+
+def password_min_length(db: Session | None = None) -> int:
+    return _setting_int(db, "password_min_length", 8)
 
 
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
@@ -1743,9 +1761,11 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     from app.models.audit import AuditActorType
     from app.services.audit_adapter import record_audit_event
 
-    if len(new_password) < 8:
+    min_length = password_min_length(db)
+    if len(new_password) < min_length:
         raise HTTPException(
-            status_code=400, detail="Password must be at least 8 characters"
+            status_code=400,
+            detail=f"Password must be at least {min_length} characters",
         )
 
     payload = _decode_password_reset_token(db, token)

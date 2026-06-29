@@ -571,6 +571,38 @@ def test_reset_password_rejects_short_password(db_session, person, monkeypatch):
     assert exc.value.status_code == 400
 
 
+def test_reset_password_uses_configured_min_length(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="password_min_length",
+            value_type=SettingValueType.integer,
+            value_text="12",
+            is_active=True,
+        )
+    )
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="configured-min-pw@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = request_password_reset(db_session, person.email)
+    assert result
+    with pytest.raises(HTTPException) as exc:
+        reset_password(db_session, result["token"], "12345678901")
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Password must be at least 12 characters"
+
+    reset_at = reset_password(db_session, result["token"], "123456789012")
+    assert reset_at.tzinfo is not None
+
+
 def test_reset_token_is_single_use(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     credential = UserCredential(
