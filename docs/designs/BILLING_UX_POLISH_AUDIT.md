@@ -57,6 +57,8 @@ settings/integrity/reconcilers.
 - Bulk invoice mark-paid now returns processed and skipped counts with a
   partial-success message when selected invoices are missing, already paid, or
   not eligible.
+- Bulk dunning pause/resume now redirects with processed and skipped counts so
+  per-case failures are visible instead of looking like full success.
 
 ### Partially resolved
 
@@ -113,6 +115,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/web/admin/billing_invoice_bulk.py tests/test_billing_invoice_send_actions.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_invoice_send_actions.py -q`
+  - Result: passed
+- `poetry run ruff check app/web/admin/billing_dunning.py tests/test_billing_dunning_detail.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_dunning_detail.py -q`
   - Result: passed
 
 ## What this audit is

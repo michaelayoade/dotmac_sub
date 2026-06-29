@@ -4,6 +4,7 @@ from app.models.catalog import DunningAction
 from app.schemas.collections import DunningActionLogCreate, DunningCaseCreate
 from app.services import collections as collections_service
 from app.services import web_billing_dunning
+from app.web.admin import billing_dunning as dunning_routes
 from app.web.admin.billing_dunning import router
 
 
@@ -48,3 +49,40 @@ def test_dunning_templates_link_to_real_detail_route():
     assert "Action History" in detail
     assert "Pause Case" in detail
     assert "Close Case" in detail
+    assert "dunning_note" in listing
+    assert "dunning_warning" in listing
+
+
+def test_dunning_bulk_pause_redirect_reports_partial_success(
+    db_session, monkeypatch
+):
+    def _fake_actor_id(request):
+        return "actor-1"
+
+    def _fake_execute_action_with_audit(
+        db, *, request, action, actor_id, case_id=None, case_ids_csv=None
+    ):
+        assert action == "pause"
+        assert actor_id == "actor-1"
+        assert case_ids_csv == "case-1,case-2,missing"
+        assert case_id is None
+        return ["case-1"]
+
+    monkeypatch.setattr(dunning_routes, "_actor_id", _fake_actor_id)
+    monkeypatch.setattr(
+        dunning_routes.web_billing_dunning_service,
+        "execute_action_with_audit",
+        _fake_execute_action_with_audit,
+    )
+
+    response = dunning_routes.dunning_bulk_pause(
+        request=None,
+        case_ids="case-1,case-2,missing",
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(
+        "/admin/billing/dunning?dunning_note="
+    )
+    assert "dunning_warning=" in response.headers["location"]
