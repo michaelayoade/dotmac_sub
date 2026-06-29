@@ -58,6 +58,10 @@ theme.
   `settings_spec` entries. Preferences and Portal saves use the typed save path,
   and Portal redirects now validate the allowed root targets with explicit
   success/error feedback.
+- RADIUS config saves now use the typed `settings_spec` path for the consumed
+  captive-redirect and PPPoE auto-generation keys, preserving legacy string
+  behavior for older reject/debug fields while rejecting invalid spec-backed
+  values with explicit save feedback.
 
 ### Still open
 
@@ -114,6 +118,10 @@ theme.
 - `poetry run pytest tests/test_system_config_pages.py tests/test_auth_services.py tests/test_auth_flow.py tests/test_email_services.py tests/test_settings_seed_services.py -q`
   - Result: passed
 - `poetry run ruff check app/services/settings_spec.py app/services/web_system_config.py app/web/admin/system.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_customer_portal_gaps.py tests/test_pppoe_auto_generation.py tests/test_radius_reject_services.py tests/test_admin_route_permissions.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/web_system_config.py app/web/admin/system.py tests/test_system_config_pages.py`
   - Result: passed
 
 ## What this audit is

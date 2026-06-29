@@ -601,7 +601,7 @@ def get_radius_config_context(db: Session) -> dict:
 
 
 def save_radius_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS)
+    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS, use_specs=True)
 
 
 # 8.22 CPE Configuration — REMOVED. These QoS/blocking/DHCP/WLAN defaults had

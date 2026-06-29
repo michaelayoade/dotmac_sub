@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import web_system_config as web_system_config_service
@@ -135,4 +137,76 @@ def test_portal_config_template_shows_save_feedback():
     template = Path("templates/admin/system/config/portal.html").read_text()
 
     assert "{% if error %}" in template
+    assert "{% elif saved %}" in template
+
+
+def test_radius_config_saves_spec_backed_keys_with_types(db_session):
+    web_system_config_service.save_radius_config(
+        db_session,
+        {
+            "reject_ip_blocked": "172.16.134.11",
+            "captive_redirect_enabled": "true",
+            "captive_portal_ip": "203.0.113.10/32",
+            "captive_portal_url": "https://example.test/portal",
+            "pppoe_username_padding": "6",
+            "pppoe_username_start": "100",
+            "pppoe_default_password_length": "16",
+        },
+    )
+
+    rows = {
+        row.key: row
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .all()
+    }
+
+    assert rows["reject_ip_blocked"].value_text == "172.16.134.11"
+    assert rows["reject_ip_blocked"].value_type == SettingValueType.string
+    assert rows["captive_redirect_enabled"].value_text == "true"
+    assert rows["captive_redirect_enabled"].value_type == SettingValueType.boolean
+    assert rows["pppoe_username_padding"].value_text == "6"
+    assert rows["pppoe_username_padding"].value_type == SettingValueType.integer
+    assert rows["pppoe_default_password_length"].value_text == "16"
+    assert rows["pppoe_default_password_length"].value_type == SettingValueType.integer
+
+
+def test_radius_config_save_rejects_invalid_spec_value(db_session):
+    with pytest.raises(ValueError, match="PPPoE Username Zero-Pad Width"):
+        web_system_config_service.save_radius_config(
+            db_session,
+            {
+                "reject_ip_blocked": "172.16.134.11",
+                "pppoe_username_padding": "0",
+            },
+        )
+
+    assert (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .filter(DomainSetting.key == "reject_ip_blocked")
+        .first()
+        is None
+    )
+
+
+def test_radius_config_save_redirects_with_error_on_invalid_spec_value(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        admin_system,
+        "parse_form_data_sync",
+        lambda request: {"pppoe_username_padding": "0"},
+    )
+
+    response = admin_system.config_radius_save(SimpleNamespace(), db_session)
+
+    assert response.status_code == 303
+    assert "error=PPPoE+Username+Zero-Pad+Width" in response.headers["location"]
+
+
+def test_radius_config_template_shows_save_feedback():
+    template = Path("templates/admin/system/config/radius.html").read_text()
+
+    assert "{% elif error %}" in template
     assert "{% elif saved %}" in template

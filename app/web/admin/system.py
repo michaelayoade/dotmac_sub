@@ -4436,6 +4436,8 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_radius_config_context(db)
     push_status = str(request.query_params.get("push_status") or "").strip()
     push_message = str(request.query_params.get("push_message") or "").strip()
+    saved = request.query_params.get("saved") == "1"
+    error = str(request.query_params.get("error") or "").strip()
     return templates.TemplateResponse(
         "admin/system/config/radius.html",
         _config_context(
@@ -4445,6 +4447,8 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
                 "active_page": "config-radius",
                 "push_status": push_status,
                 "push_message": push_message,
+                "saved": saved,
+                "error": error,
                 "audit_items": _radius_config_audit_items(db),
                 **data,
             },
@@ -4456,7 +4460,14 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
 def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_radius_config_context(db)["radius"])
-    web_system_config_service.save_radius_config(db, form)
+    try:
+        web_system_config_service.save_radius_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/radius?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
     after = dict(web_system_config_service.get_radius_config_context(db)["radius"])
     changes = _diff_audit_snapshots(before, after)
     if changes:
@@ -4476,7 +4487,7 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
         logger.warning(
             "Failed to push RADIUS reject rules after config save", exc_info=True
         )
-    return RedirectResponse(url="/admin/system/config/radius", status_code=303)
+    return RedirectResponse(url="/admin/system/config/radius?saved=1", status_code=303)
 
 
 @router.post("/config/radius/push-reject-rules", response_class=HTMLResponse)
