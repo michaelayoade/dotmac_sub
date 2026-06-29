@@ -31,6 +31,11 @@ settings/integrity/reconcilers.
   in the covered surfaces.
 - Payment import audit metadata/history now preserves and displays grouped
   currency totals.
+- Manual payment and credit forms now confirm before submit, disable their submit
+  button after confirmation, and enforce a positive minimum amount in the UI.
+- Dunning pause/resume/close, bulk pause/resume, payment-arrangement approval,
+  payment-channel deactivation, and collection-account deactivation actions now
+  prompt before changing money-collection state.
 
 ### Partially resolved
 
@@ -42,7 +47,9 @@ settings/integrity/reconcilers.
 
 ### Still open
 
-- Irreversible money-action confirms and double-submit guards.
+- Remaining irreversible money-action server-side idempotency and untouched
+  high-risk actions such as consolidated record/distribute and fleet-wide billing
+  settings save.
 - Dead/broken account deactivate/delete actions, dunning detail route, ignored
   account filters, and invoice batch bare-fragment behavior.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
@@ -55,6 +62,10 @@ settings/integrity/reconcilers.
 
 - `poetry run pytest tests/test_billing_ar_aging_overview.py tests/test_billing_finance_workflows.py tests/test_billing_invoices_overview.py tests/test_billing_ledger_overview.py tests/test_billing_payment_import_options.py tests/test_billing_payments_overview.py`
   - Result: `45 passed`
+- `poetry run ruff check tests/test_billing_money_action_templates.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_money_action_templates.py -q`
+  - Result: `2 passed`
 
 ## What this audit is
 

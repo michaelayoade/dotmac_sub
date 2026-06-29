@@ -63,7 +63,7 @@
         {% call card(title="Actions", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="emerald") %}
             <div class="space-y-3">
                 {% if st == 'pending' %}
-                <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/approve">
+                <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/approve" onsubmit="return confirm('Approve this payment arrangement?');">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
                             class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
