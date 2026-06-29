@@ -31,8 +31,10 @@ import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
 import '../models/project.dart';
 import '../models/referral.dart';
+import '../models/work_order.dart';
 import '../repositories/project_repository.dart';
 import '../repositories/referral_repository.dart';
+import '../repositories/work_order_repository.dart';
 import 'auth_controller.dart';
 
 // --- Repository providers ---------------------------------------------------
@@ -481,6 +483,17 @@ final projectsProvider = FutureProvider.autoDispose<ProjectsSummary>((
 ) async {
   cacheFor(ref);
   return ref.watch(projectRepositoryProvider).summary();
+});
+
+final workOrderRepositoryProvider = Provider<WorkOrderRepository>(
+  (ref) => WorkOrderRepository(ref.watch(apiClientProvider).dio),
+);
+
+final workOrdersProvider = FutureProvider.autoDispose<WorkOrdersSummary>((
+  ref,
+) async {
+  cacheFor(ref);
+  return ref.watch(workOrderRepositoryProvider).summary();
 });
 
 final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((
