@@ -4,11 +4,14 @@ import pytest
 
 from app.models.router_management import (
     Router,
+    RouterConfigPush,
     RouterConfigPushStatus,
+    RouterPushResultStatus,
     RouterSnapshotSource,
     RouterTemplateCategory,
 )
 from app.schemas.router_management import (
+    RouterConfigPushCreate,
     RouterConfigTemplateCreate,
     RouterConfigTemplateUpdate,
 )
@@ -144,3 +147,39 @@ def test_create_push_dangerous_command(db_session):
             router_ids=[router.id],
             initiated_by=uuid.uuid4(),
         )
+
+
+def test_api_create_push_marks_results_failed_when_enqueue_fails(
+    db_session, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from app.api.router_management import create_push
+
+    router = _make_router(db_session, "push-enqueue-fail-test")
+    user_id = uuid.uuid4()
+
+    monkeypatch.setattr(
+        "app.services.queue_adapter.enqueue_task",
+        lambda *args, **kwargs: type(
+            "Dispatch", (), {"queued": False, "error": "broker unavailable"}
+        )(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_push(
+            RouterConfigPushCreate(
+                commands=["/system/ntp/client/set {\"enabled\":\"yes\"}"],
+                router_ids=[router.id],
+            ),
+            auth={"principal_id": str(user_id)},
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 502
+    push = db_session.query(RouterConfigPush).one()
+    assert push.status == RouterConfigPushStatus.failed
+    assert push.completed_at is not None
+    assert len(push.results) == 1
+    assert push.results[0].status == RouterPushResultStatus.failed
+    assert "broker unavailable" in push.results[0].error_message

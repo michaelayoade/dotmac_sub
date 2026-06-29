@@ -717,8 +717,6 @@ def _api_kick_session(
         return False
     if nas_device.vendor != NasVendor.mikrotik:
         return False
-    if not _mikrotik_api_session_kick_enabled(db):
-        return False
     api_dev = _nas_with_api_creds(db, nas_device)
     if api_dev is None:
         return False
@@ -770,8 +768,6 @@ def _enforce_address_list_on_nas(
             exc,
         )
 
-    if not _mikrotik_api_session_kick_enabled(db):
-        return False
     api_dev = _nas_with_api_creds(db, nas_device)
     if api_dev is None:
         return False

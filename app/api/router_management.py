@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -325,7 +326,10 @@ def create_push(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    from app.models.router_management import RouterConfigPushStatus
+    from app.models.router_management import (
+        RouterConfigPushStatus,
+        RouterPushResultStatus,
+    )
     from app.services.queue_adapter import enqueue_task
     from app.tasks.router_sync import execute_config_push
 
@@ -341,6 +345,13 @@ def create_push(
         # explicitly instead of returning a forever-"pending" push that the
         # operator believes is in flight.
         push.status = RouterConfigPushStatus.failed
+        push.completed_at = datetime.now(UTC)
+        for result in push.results:
+            result.status = RouterPushResultStatus.failed
+            result.error_message = (
+                f"Config push could not be queued: "
+                f"{dispatch.error or 'enqueue failed'}"
+            )
         db.commit()
         raise HTTPException(
             status_code=502,
