@@ -16,7 +16,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.domain_settings import SettingDomain
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionEntry,
@@ -24,15 +23,12 @@ from app.models.service_extension import (
     ServiceExtensionStatus,
 )
 from app.models.subscriber import Subscriber
-from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.customer_identity_resolution import resolve_customer_identity
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_EXTENSION_DAYS = 30
-MIN_EXTENSION_DAYS = 1
-MAX_ALLOWED_EXTENSION_DAYS = 365
+MAX_EXTENSION_DAYS = 30
 PREVIEW_SAMPLE_LIMIT = 50
 APPLY_BATCH_SIZE = 500
 # Postgres int4 ceiling: digit strings above this are not legacy customer IDs.
@@ -45,17 +41,6 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return uuid.UUID(str(value).strip())
     except (TypeError, ValueError):
         return None
-
-
-def _max_extension_days(db: Session) -> int:
-    value = settings_spec.resolve_value(
-        db, SettingDomain.billing, "service_extension_max_days"
-    )
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_EXTENSION_DAYS
-    return max(MIN_EXTENSION_DAYS, min(MAX_ALLOWED_EXTENSION_DAYS, parsed))
 
 
 def _unique_subscribers(rows: list[Subscriber]) -> list[Subscriber]:
@@ -362,12 +347,11 @@ def _iter_scope_subscriptions(
         offset += len(ids)
 
 
-def _validated_days(db: Session, days: int) -> int:
-    max_days = _max_extension_days(db)
-    if not MIN_EXTENSION_DAYS <= int(days) <= max_days:
+def _validated_days(days: int) -> int:
+    if not 1 <= int(days) <= MAX_EXTENSION_DAYS:
         raise HTTPException(
             status_code=400,
-            detail=f"Days must be between {MIN_EXTENSION_DAYS} and {max_days}",
+            detail=f"Days must be between 1 and {MAX_EXTENSION_DAYS}",
         )
     return int(days)
 
@@ -392,7 +376,7 @@ def create_extension(
         raise HTTPException(
             status_code=400, detail="Outage end must be after its start"
         )
-    days = _validated_days(db, days)
+    days = _validated_days(days)
     resolved_subscriber_ids = None
     if scope_type == ServiceExtensionScope.subscribers:
         resolver = (
@@ -586,7 +570,7 @@ def scope_options(db: Session) -> dict:
             db.scalars(select(NasDevice).order_by(NasDevice.name)).all()
         ),
         "scope_types": [item.value for item in ServiceExtensionScope],
-        "max_days": _max_extension_days(db),
+        "max_days": MAX_EXTENSION_DAYS,
     }
 
 

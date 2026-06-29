@@ -36,9 +36,10 @@ def invoice_generate_batch(
         billing_cycle=billing_cycle,
         billing_date=billing_date,
     )
-    query = urlencode({"note": note})
-    return RedirectResponse(
-        url=f"/admin/billing/invoices/batch?{query}", status_code=303
+    return HTMLResponse(
+        '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
+        f"{note}"
+        "</div>"
     )
 
 

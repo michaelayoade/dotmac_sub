@@ -20,19 +20,6 @@
       ]
   ) %}{% endcall %}
 
-  {% set payment_note = request.query_params.get("payment_note") %}
-  {% set payment_error = request.query_params.get("payment_error") %}
-  {% if payment_note %}
-  <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-200">
-    {{ payment_note }}
-  </div>
-  {% endif %}
-  {% if payment_error %}
-  <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-200">
-    {{ payment_error }}
-  </div>
-  {% endif %}
-
   <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
     <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
       <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total outstanding</p>
@@ -53,7 +40,7 @@
   <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
     <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100">Record bulk payment</h3>
     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Enter the verified lump sum. It will be auto-allocated FIFO across open invoices; any remainder credits the unallocated balance.</p>
-    <form method="post" action="/admin/billing/consolidated-accounts/{{ billing_account.id }}/record-payment" class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3" onsubmit="if (!confirm('Record and distribute this consolidated payment across reseller subscriber invoices?')) return false; this.querySelector('button[type=submit]').disabled = true;">
+    <form method="post" action="/admin/billing/consolidated-accounts/{{ billing_account.id }}/record-payment" class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
       {% include "components/forms/csrf_input.html" %}
       <div>
         <label for="amount" class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Amount</label>

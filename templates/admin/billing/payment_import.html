@@ -197,15 +197,11 @@
                     <span x-text="importResult?.total_errors || 0"></span> failed
                 </p>
                 <template x-if="importErrors.length > 0">
-                    <div>
-                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400"
-                           x-text="'Showing ' + (importResult?.shown_errors || importErrors.length) + ' of ' + (importResult?.total_errors || 0) + ' failed row(s)' + ((importResult?.omitted_errors || 0) > 0 ? '; ' + importResult.omitted_errors + ' more not shown' : '')"></p>
-                        <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-red-600 dark:text-red-400">
-                            <template x-for="(err, idx) in importErrors" :key="idx">
-                                <li x-text="err"></li>
-                            </template>
-                        </ul>
-                    </div>
+                    <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-red-600 dark:text-red-400">
+                        <template x-for="(err, idx) in importErrors" :key="idx">
+                            <li x-text="err"></li>
+                        </template>
+                    </ul>
                 </template>
             </div>
 
@@ -277,7 +273,7 @@
                                 <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.row_count }}</td>
                                 <td class="px-4 py-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ row.matched_count }}</td>
                                 <td class="px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400">{{ row.unmatched_count }}</td>
-                                <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white">{{ row.total_display }}</td>
+                                <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(row.total_amount or 0) }}</td>
                             </tr>
                             {% endfor %}
                             {% else %}

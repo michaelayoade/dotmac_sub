@@ -27,32 +27,6 @@ from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
 
-
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
-
-
-def _add_grouped_amount(
-    amounts: dict[str, Decimal], *, currency: object | None, amount: object
-) -> None:
-    code = _currency_code(currency)
-    amounts[code] = amounts.get(code, Decimal("0")) + Decimal(str(amount or 0))
-
-
 _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
     "service": (LedgerSource.invoice,),
     "payment": (LedgerSource.payment,),
@@ -352,37 +326,18 @@ def build_ledger_entries_data(
         for entry in entries
         if getattr(getattr(entry, "entry_type", None), "value", None) == "debit"
     ]
-    credit_amounts: dict[str, Decimal] = {}
-    debit_amounts: dict[str, Decimal] = {}
-    for entry in credit_entries:
-        _add_grouped_amount(
-            credit_amounts,
-            currency=getattr(entry, "currency", None),
-            amount=getattr(entry, "amount", 0),
-        )
-    for entry in debit_entries:
-        _add_grouped_amount(
-            debit_amounts,
-            currency=getattr(entry, "currency", None),
-            amount=getattr(entry, "amount", 0),
-        )
-    net_amounts = dict(credit_amounts)
-    for currency, amount in debit_amounts.items():
-        net_amounts[currency] = net_amounts.get(currency, Decimal("0")) - amount
-    credit_total = sum(float(amount) for amount in credit_amounts.values())
-    debit_total = sum(float(amount) for amount in debit_amounts.values())
+    credit_total = sum(
+        float(getattr(entry, "amount", 0) or 0) for entry in credit_entries
+    )
+    debit_total = sum(
+        float(getattr(entry, "amount", 0) or 0) for entry in debit_entries
+    )
     ledger_totals = {
         "credit_count": len(credit_entries),
         "credit_total": credit_total,
-        "credit_amounts": credit_amounts,
-        "credit_display": _format_currency_groups(credit_amounts),
         "debit_count": len(debit_entries),
         "debit_total": debit_total,
-        "debit_amounts": debit_amounts,
-        "debit_display": _format_currency_groups(debit_amounts),
         "net_total": credit_total - debit_total,
-        "net_amounts": net_amounts,
-        "net_display": _format_currency_groups(net_amounts),
     }
 
     return {

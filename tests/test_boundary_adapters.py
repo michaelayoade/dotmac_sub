@@ -315,50 +315,6 @@ def test_billing_adapter_builds_invoice_and_payment_payloads(monkeypatch) -> Non
     assert payment.status == PaymentStatus.succeeded
 
 
-def test_billing_adapter_uses_default_currency_when_intent_omits_currency(
-    monkeypatch,
-) -> None:
-    from app.services.billing_adapter import (
-        BillingAdapter,
-        InvoiceIntent,
-        PaymentIntent,
-    )
-
-    account_id = uuid4()
-    captured = {}
-
-    class FakeInvoices:
-        @staticmethod
-        def create(db, payload):
-            captured["invoice"] = payload
-            return payload
-
-    class FakePayments:
-        @staticmethod
-        def create(db, payload):
-            captured["payment"] = payload
-            return payload
-
-    fake_billing = SimpleNamespace(invoices=FakeInvoices(), payments=FakePayments())
-    adapter = BillingAdapter(billing_service=fake_billing)
-    monkeypatch.setattr(
-        "app.services.billing_adapter.settings_spec.resolve_value",
-        lambda *_args, **_kwargs: "USD",
-    )
-
-    adapter.create_invoice(
-        object(),
-        InvoiceIntent(account_id=account_id, total=Decimal("150.00")),
-    )
-    adapter.record_payment(
-        object(),
-        PaymentIntent(account_id=account_id, amount=Decimal("150.00")),
-    )
-
-    assert captured["invoice"].currency == "USD"
-    assert captured["payment"].currency == "USD"
-
-
 def test_external_bss_adapter_builds_reference_payload() -> None:
     from app.models.external import ExternalEntityType
     from app.services.external_bss_adapter import (

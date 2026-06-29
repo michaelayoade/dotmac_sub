@@ -39,8 +39,6 @@ def accounts_list(
     per_page: int = Query(25, ge=10, le=100),
     customer_ref: str | None = Query(None),
     reseller_id: str | None = Query(None),
-    search: str | None = Query(None),
-    status: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     state = web_billing_accounts_service.build_accounts_list_data(
@@ -49,8 +47,6 @@ def accounts_list(
         per_page=per_page,
         customer_ref=customer_ref,
         reseller_id=reseller_id,
-        search=search,
-        status=status,
     )
     from app.web.admin import get_current_user, get_sidebar_stats
 

@@ -39,15 +39,6 @@
         </div>
         {% endif %}
 
-        {% if card_save %}
-        <div class="rounded-xl border {% if card_save.status == 'saved' %}border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20{% else %}border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20{% endif %} p-4">
-            <p class="text-sm font-semibold {% if card_save.status == 'saved' %}text-emerald-800 dark:text-emerald-300{% else %}text-amber-800 dark:text-amber-300{% endif %}">
-                {% if card_save.status == 'saved' %}Card saved{% else %}Card not saved{% endif %}
-            </p>
-            <p class="mt-1 text-sm {% if card_save.status == 'saved' %}text-emerald-700 dark:text-emerald-400{% else %}text-amber-700 dark:text-amber-400{% endif %}">{{ card_save.message }}</p>
-        </div>
-        {% endif %}
-
         {% if already_recorded %}
         <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-900/50 dark:bg-blue-900/20">
             <div class="flex items-start gap-3">

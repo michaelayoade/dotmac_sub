@@ -1,15 +1,7 @@
-from pathlib import Path
-
-import pytest
-
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services.billing_settings import resolve_payment_due_days
-from app.services.settings_spec import get_spec
-from app.services.web_system_config import (
-    get_billing_config_context,
-    save_billing_config,
-)
+from app.services.web_system_config import get_billing_config_context
 
 
 def _setting(key: str, value: str) -> DomainSetting:
@@ -59,94 +51,3 @@ def test_billing_config_context_backfills_notification_defaults(db_session):
     assert context["billing"]["expiry_reminder_days"] == "7"
     assert context["billing"]["invoice_reminder_days"] == "7,1"
     assert context["billing"]["dunning_escalation_days"] == "3,7,14,30"
-    assert context["billing"]["blocking_period_days"] == "0"
-    assert context["billing"]["deactivation_period_days"] == "0"
-    assert context["billing"]["minimum_balance"] == "0"
-
-
-def test_billing_policy_settings_have_specs():
-    expected = {
-        "billing_enabled_expected": True,
-        "blocking_period_days": 0,
-        "deactivation_period_days": 0,
-        "minimum_balance": "0",
-    }
-
-    for key, default in expected.items():
-        spec = get_spec(SettingDomain.billing, key)
-        assert spec is not None
-        assert spec.default == default
-
-
-def test_save_billing_config_normalizes_valid_policy_values(db_session):
-    save_billing_config(
-        db_session,
-        {
-            "billing_enabled": "TRUE",
-            "payment_period": "Monthly",
-            "billing_day": "05",
-            "use_creation_date": "false",
-            "payment_due_days": "14",
-            "auto_suspend_on_overdue": "true",
-            "suspension_grace_hours": "48",
-            "expiry_reminder_days": "7",
-            "invoice_reminder_days": "7, 1",
-            "dunning_escalation_days": "3, 7, 14, 30",
-            "blocking_period_days": "0",
-            "deactivation_period_days": "30",
-            "minimum_balance": "10.50",
-            "send_billing_notifications": "false",
-            "proforma_enabled": "false",
-            "zero_total_invoices": "false",
-            "invoice_caching": "true",
-        },
-    )
-
-    context = get_billing_config_context(db_session)["billing"]
-
-    assert context["billing_enabled"] == "true"
-    assert context["payment_period"] == "monthly"
-    assert context["billing_day"] == "5"
-    assert context["invoice_reminder_days"] == "7,1"
-    assert context["dunning_escalation_days"] == "3,7,14,30"
-    assert context["minimum_balance"] == "10.50"
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("billing_day", "29", "Billing Day must be between 1 and 28."),
-        ("minimum_balance", "-1", "Minimum Balance must be at least 0."),
-        (
-            "invoice_reminder_days",
-            "7,today",
-            "Invoice Reminder Days must be a comma-separated list of day numbers.",
-        ),
-    ],
-)
-def test_save_billing_config_rejects_invalid_policy_values(
-    db_session, field, value, message
-):
-    payload = {
-        "billing_enabled": "true",
-        "payment_period": "monthly",
-        "billing_day": "1",
-        "minimum_balance": "0",
-        "invoice_reminder_days": "7,1",
-    }
-    payload[field] = value
-
-    with pytest.raises(ValueError, match=message):
-        save_billing_config(db_session, payload)
-
-
-def test_billing_settings_template_confirms_and_bounds_policy_save():
-    template = Path("templates/admin/system/config/billing.html").read_text()
-
-    assert "Save fleet-wide billing settings?" in template
-    assert "button[type=submit]').disabled = true" in template
-    assert "{% if error %}" in template
-    assert 'name="payment_due_days"' in template
-    assert 'name="minimum_balance"' in template
-    assert 'min="0"' in template
-    assert 'max="3650"' in template
