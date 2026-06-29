@@ -79,6 +79,8 @@ settings/integrity/reconcilers.
   `billing.autopay_max_consecutive_failures` with the existing default of 3.
 - Payment arrangement installment min/max and default-overdue thresholds now
   resolve from billing settings with existing defaults of 2, 24, and 2.
+- Service-extension maximum days now resolves from billing settings with the
+  existing default of 30 and a 1-365 range.
 
 ### Partially resolved
 
@@ -97,8 +99,8 @@ settings/integrity/reconcilers.
   messaging and saved-card capture confirmation.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
   policy defaults.
-- Remaining policy thresholds/settings work outside autopay and payment
-  arrangements.
+- Remaining policy thresholds/settings work outside autopay, payment
+  arrangements, and service extensions.
 
 ### Verification
 
@@ -173,6 +175,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/payment_arrangements.py app/services/settings_spec.py app/services/settings_seed.py tests/test_payment_arrangements.py tests/test_settings_seed_services.py`
   - Result: passed
 - `poetry run pytest tests/test_payment_arrangements.py tests/test_settings_seed_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/service_extensions.py app/services/settings_spec.py app/services/settings_seed.py tests/test_service_extensions.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_service_extensions.py tests/test_settings_seed_services.py -q`
   - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
@@ -348,7 +354,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Med) `payment_arrangement_detail.html:66` — Approve no confirm; activates dunning/suspension shield → confirm [recommend]
 - [CONTROL] (High) `app/services/autopay.py:64` — `MAX_CONSECUTIVE_FAILURES=3` (retry cap + auto-suspend threshold) hardcoded → setting (default 3, range 1-10) [recommend]
 - [CONTROL] (Med) `app/services/payment_arrangements.py:147-154` — installment bounds 2/24 hardcoded → settings (default 2/24, range 2-60) [resolved in draft]
-- [CONTROL] (Med) `app/services/service_extensions.py:31` — `MAX_EXTENSION_DAYS=30` hardcoded → setting (default 30, range 1-365) [defer]
+- [CONTROL] (Med) `app/services/service_extensions.py:31` — `MAX_EXTENSION_DAYS=30` hardcoded → setting (default 30, range 1-365) [resolved in draft]
 - [CONTROL] (Med) `app/services/payment_arrangements.py:546` — defaults when `overdue_count>=2` hardcoded → missed-installment threshold setting (default 2, range 1-5) [resolved in draft]
 - [POLISH] (Low) `payment_arrangements.html:120` + detail — amounts `"{:,.2f}"` no currency → prefix account currency [defer]
 - [POLISH] (Low) `dunning.html:172,175` — timestamps strftime on UTC, no tz → render in tz or label UTC [defer]

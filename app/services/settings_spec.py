@@ -1651,6 +1651,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="service_extension_max_days",
+        env_var="BILLING_SERVICE_EXTENSION_MAX_DAYS",
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=365,
+        label="Service Extension Maximum Days",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="proration_enabled",
         env_var="BILLING_PRORATION_ENABLED",
         value_type=SettingValueType.boolean,

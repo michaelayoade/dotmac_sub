@@ -386,6 +386,7 @@ class TestSeedBillingNotificationSettings:
                         "arrangement_min_installments",
                         "arrangement_max_installments",
                         "arrangement_default_overdue_installments",
+                        "service_extension_max_days",
                     ]
                 ),
             )
@@ -403,6 +404,7 @@ class TestSeedBillingNotificationSettings:
         assert settings["arrangement_min_installments"] == "2"
         assert settings["arrangement_max_installments"] == "24"
         assert settings["arrangement_default_overdue_installments"] == "2"
+        assert settings["service_extension_max_days"] == "30"
 
 
 # =============================================================================

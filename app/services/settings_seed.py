@@ -1589,6 +1589,12 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_ARRANGEMENT_DEFAULT_OVERDUE_INSTALLMENTS", "2"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="service_extension_max_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SERVICE_EXTENSION_MAX_DAYS", "30"),
+    )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
         db,
