@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.system_user import SystemUser
+from app.services import session_manager as session_manager_service
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -208,16 +209,28 @@ def build_profile_page_state(
     success: str | None = None,
     person_id: str | UUID | None = None,
     system_user_id: str | UUID | None = None,
+    current_session_id: str | None = None,
 ) -> dict[str, Any]:
     resolved_person_id = system_user_id or person_id
     if resolved_person_id is None and current_user:
         resolved_person_id = current_user.get("person_id")
     profile_data = get_profile_data(db, resolved_person_id)
+    active_sessions = []
+    if profile_data["person"]:
+        active_sessions = session_manager_service.list_sessions(
+            db,
+            profile_data["person"].id,
+            current_session_id,
+            principal_type="system_user",
+        ).sessions
+    other_session_count = sum(1 for session in active_sessions if not session.is_current)
     return {
         "person": profile_data["person"],
         "credential": profile_data["credential"],
         "mfa_enabled": profile_data["mfa_enabled"],
         "api_key_count": profile_data["api_key_count"],
+        "active_sessions": active_sessions,
+        "other_session_count": other_session_count,
         "error": error,
         "success": success,
     }

@@ -38,12 +38,16 @@ UX-polish + operator-control lens (**not** a full security review).
   `password_min_length` auth setting and rendered into the reset form. Admin and
   reseller login remember-me labels now render their configured remember TTLs
   instead of hardcoding "30 days".
+- The admin profile now lists active system-user sessions, marks the current
+  session, and provides a self-service "sign out other sessions" action backed by
+  the existing session revocation service.
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
-- Active sessions and schema-backed MFA recovery codes remain open.
+- Customer/reseller active-session views and schema-backed MFA recovery codes
+  remain open.
 
 ### Verification
 
@@ -70,6 +74,10 @@ UX-polish + operator-control lens (**not** a full security review).
 - `poetry run pytest tests/test_auth_flow.py tests/test_auth_services.py tests/test_web_reseller_auth.py -q`
   - Result: `76 passed`
 - `poetry run ruff check app/services/auth_flow.py app/services/web_auth.py app/services/web_reseller_auth.py app/web/auth/routes.py app/services/settings_spec.py tests/test_auth_flow.py tests/test_auth_services.py tests/test_web_reseller_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_admin_system_route_guards.py tests/test_auth_flow.py::test_session_manager_handles_system_user_principals tests/test_session_manager_persistence.py -q`
+  - Result: `11 passed`
+- `poetry run ruff check app/services/web_system_profiles.py app/web/admin/system.py tests/test_admin_system_route_guards.py`
   - Result: passed
 
 ## What this audit is

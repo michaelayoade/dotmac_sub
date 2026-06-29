@@ -52,6 +52,7 @@ from app.services import (
 from app.services import (
     scheduler as scheduler_service,
 )
+from app.services import session_manager as session_manager_service
 from app.services import settings_spec
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_system_about as web_system_about_service
@@ -95,6 +96,7 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.common import coerce_uuid
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
 from app.tasks.imports import run_import_job
@@ -1325,11 +1327,14 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
     success = None
     if request.query_params.get("mfa") == "enabled":
         success = "Two-factor authentication enabled successfully."
+    elif request.query_params.get("sessions") == "signed-out":
+        success = "Other active sessions signed out."
     state = web_system_profiles_service.build_profile_page_state(
         db,
         current_user=current_user,
         success=success,
         system_user_id=system_user_id,
+        current_session_id=auth.get("session_id"),
     )
 
     context = {
@@ -1390,6 +1395,7 @@ def user_profile_update(
         success=success,
         person_id=updated_person_id,
         system_user_id=system_user_id if updated_person_id is None else None,
+        current_session_id=auth.get("session_id"),
     )
 
     context = {
@@ -1401,6 +1407,27 @@ def user_profile_update(
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+@router.post("/users/profile/sessions/sign-out-others")
+def user_profile_sign_out_other_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        return RedirectResponse(url="/admin/system/users/profile", status_code=303)
+
+    session_manager_service.revoke_all_other_sessions(
+        db,
+        coerce_uuid(principal_id),
+        str(auth.get("session_id") or ""),
+        principal_type="system_user",
+    )
+    return RedirectResponse(
+        url="/admin/system/users/profile?sessions=signed-out", status_code=303
+    )
 
 
 @router.get("/users/profile/mfa/setup", response_class=HTMLResponse)
