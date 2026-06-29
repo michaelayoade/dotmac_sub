@@ -31,11 +31,14 @@ theme.
 - Geocoding settings now allow the supported runtime providers (`nominatim`,
   `google`, `mapbox`), seed provider API-key settings, and enforce a configurable
   minimum interval for external geocoding requests while skipping self-hosted URLs.
+- The Monitoring configuration page now reads and writes the runtime
+  `server_health_*` and `network_health_*` thresholds consumed by the dashboard and
+  system-health evaluator instead of orphan `cpu/mem/interface_warn_pct` keys.
 
 ### Still open
 
-- Dead config pages and toggles: Data Retention, Monitoring drift, and the largely
-  inert preference/subscriber/portal/CPE/IPv6 key groups.
+- Dead config pages and toggles: Data Retention and the largely inert
+  preference/subscriber/portal/CPE/IPv6 key groups.
 - Unifying bespoke config saves with the typed/cached `settings_spec` system.
 - Broader bespoke-save validation consistency.
 
@@ -52,6 +55,10 @@ theme.
 - `poetry run pytest tests/test_geocoding_services.py tests/test_settings_seed_services.py tests/test_control_registry.py`
   - Result: `92 passed`
 - `poetry run ruff check app/services/geocoding.py app/services/settings_spec.py app/services/settings_seed.py tests/test_geocoding_services.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_network_monitoring_services.py tests/test_admin_route_permissions.py`
+  - Result: `49 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_network_monitoring_services.py`
   - Result: passed
 
 ## What this audit is

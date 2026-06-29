@@ -3,7 +3,9 @@
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import (
     OLTDevice,
     OntAssignment,
@@ -989,10 +991,54 @@ def test_monitoring_config_context_includes_runtime_settings(db_session):
 
     context = get_monitoring_config_context(db_session)
 
+    assert context["monitoring"]["server_health_disk_warn_pct"] == "80"
+    assert context["monitoring"]["server_health_mem_warn_pct"] == "80"
+    assert context["monitoring"]["server_health_load_warn"] == "1.0"
+    assert context["monitoring"]["network_health_warn_pct"] == "90"
+    assert "cpu_warn_pct" not in context["monitoring"]
+    assert "interface_warn_pct" not in context["monitoring"]
     assert context["monitoring"]["device_metrics_retention_days"] == "90"
     assert context["monitoring"]["alert_evaluation_interval_seconds"] == "60"
     assert context["monitoring"]["interface_walk_interval_seconds"] == "300"
     assert context["monitoring"]["hot_retention_hours"] == "24"
+
+
+def test_save_monitoring_config_writes_runtime_health_keys(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+            "server_health_mem_crit_pct": "92",
+            "network_health_warn_pct": "88",
+            "network_health_crit_pct": "65",
+            "cpu_warn_pct": "10",
+        },
+    )
+
+    rows = {
+        row.key: row.value_text
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .all()
+    }
+
+    assert rows["server_health_mem_warn_pct"] == "75"
+    assert rows["server_health_mem_crit_pct"] == "92"
+    assert rows["network_health_warn_pct"] == "88"
+    assert rows["network_health_crit_pct"] == "65"
+    assert "cpu_warn_pct" not in rows
+
+
+def test_monitoring_config_template_uses_runtime_health_keys():
+    template = Path("templates/admin/system/config/monitoring.html").read_text()
+
+    assert 'name="server_health_disk_warn_pct"' in template
+    assert 'name="server_health_mem_warn_pct"' in template
+    assert 'name="network_health_warn_pct"' in template
+    assert 'name="cpu_warn_pct"' not in template
+    assert 'name="interface_warn_pct"' not in template
 
 
 def test_notify_alert_uses_policy_engine_before_admin_fallback(
