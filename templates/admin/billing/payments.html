@@ -34,11 +34,12 @@
     {% endcall %}
 
     {# ── Summary Stats ── #}
+    {% set total_payments = payments | sum(attribute='amount') if payments else 0 %}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card("Total Collected", status_totals.succeeded.display, icon=icon_credit_card(), color="emerald", color2="green") }}
-        {{ stats_card("Completed", status_totals.succeeded.count, icon=icon_check_circle(), color="blue", color2="indigo") }}
-        {{ stats_card("Pending", status_totals.pending.count, icon=icon_clock(), color="amber", color2="yellow") }}
-        {{ stats_card("Failed", status_totals.failed.count, icon=icon_warning(), color="red", color2="rose") }}
+        {{ stats_card("Total Collected", "₦" ~ "{:,.2f}".format(total_payments), icon=icon_credit_card(), color="emerald", color2="green") }}
+        {{ stats_card("Completed", payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'succeeded') | list | length if payments else 0, icon=icon_check_circle(), color="blue", color2="indigo") }}
+        {{ stats_card("Pending", payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'pending') | list | length if payments else 0, icon=icon_clock(), color="amber", color2="yellow") }}
+        {{ stats_card("Failed", payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'failed') | list | length if payments else 0, icon=icon_warning(), color="red", color2="rose") }}
     </div>
 
     {# ── Charts ── #}
@@ -216,7 +217,7 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm font-bold {% if status_val == 'succeeded' %}text-emerald-600 dark:text-emerald-400{% elif status_val == 'failed' %}text-red-600 dark:text-red-400{% else %}text-slate-900 dark:text-white{% endif %}">
-                                {{ payment.currency or 'NGN' }} {{ "{:,.2f}".format(payment.amount or 0) }}
+                                ₦{{ "{:,.2f}".format(payment.amount or 0) }}
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
@@ -270,11 +271,11 @@
                     <tr class="bg-slate-50 dark:bg-slate-800/70">
                         <td colspan="8" class="px-6 py-3">
                             <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                                <span>Completed: {{ status_totals.succeeded.count }} ({{ status_totals.succeeded.display }})</span>
-                                <span>Pending: {{ status_totals.pending.count }} ({{ status_totals.pending.display }})</span>
-                                <span>Failed: {{ status_totals.failed.count }} ({{ status_totals.failed.display }})</span>
-                                <span>Refunded: {{ status_totals.refunded.count }} ({{ status_totals.refunded.display }})</span>
-                                <span>Total: {{ status_totals.all.count }} ({{ status_totals.all.display }})</span>
+                                <span>Completed: {{ status_totals.succeeded.count }} (₦{{ "{:,.2f}".format(status_totals.succeeded.amount) }})</span>
+                                <span>Pending: {{ status_totals.pending.count }} (₦{{ "{:,.2f}".format(status_totals.pending.amount) }})</span>
+                                <span>Failed: {{ status_totals.failed.count }} (₦{{ "{:,.2f}".format(status_totals.failed.amount) }})</span>
+                                <span>Refunded: {{ status_totals.refunded.count }} (₦{{ "{:,.2f}".format(status_totals.refunded.amount) }})</span>
+                                <span>Total: {{ status_totals.all.count }} (₦{{ "{:,.2f}".format(status_totals.all.amount) }})</span>
                             </div>
                         </td>
                     </tr>

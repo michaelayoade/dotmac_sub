@@ -19,10 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Payment, PaymentStatus, TopupIntent
-from app.models.domain_settings import SettingDomain
 from app.schemas.billing import PaymentCreate
 from app.services import billing as billing_service
-from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
@@ -47,24 +45,6 @@ _GATEWAY_PROVIDERS = ("paystack", "flutterwave")
 # verify, so these expire rather than counting as retryable errors (otherwise
 # abandoned intents re-error every run and jam the bounded sweep).
 _NOT_FOUND_STATUSES = (400, 404)
-DEFAULT_STALE_MINUTES = 15
-DEFAULT_MAX_AGE_DAYS = 7
-
-
-def _resolve_positive_int_setting(
-    db: Session,
-    key: str,
-    default: int,
-    *,
-    minimum: int,
-    maximum: int,
-) -> int:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, min(maximum, parsed))
 
 
 def _park_if_expired(db: Session, intent: TopupIntent, now: datetime) -> bool:
@@ -127,33 +107,11 @@ def _settle_intent(
 def reconcile_pending_topups(
     db: Session,
     *,
-    older_than_minutes: int | None = None,
-    max_age_days: int | None = None,
+    older_than_minutes: int = 15,
+    max_age_days: int = 7,
     limit: int = 50,
 ) -> dict[str, int]:
     """Sweep stale pending top-up intents against the gateway verify API."""
-    older_than_minutes = (
-        int(older_than_minutes)
-        if older_than_minutes is not None
-        else _resolve_positive_int_setting(
-            db,
-            "topup_reconciliation_stale_minutes",
-            DEFAULT_STALE_MINUTES,
-            minimum=1,
-            maximum=1440,
-        )
-    )
-    max_age_days = (
-        int(max_age_days)
-        if max_age_days is not None
-        else _resolve_positive_int_setting(
-            db,
-            "topup_reconciliation_max_age_days",
-            DEFAULT_MAX_AGE_DAYS,
-            minimum=1,
-            maximum=30,
-        )
-    )
     now = datetime.now(UTC)
     stale_before = now - timedelta(minutes=older_than_minutes)
     oldest = now - timedelta(days=max_age_days)

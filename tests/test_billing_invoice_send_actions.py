@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -17,7 +16,6 @@ from app.services.web_billing_invoice_bulk import (
     list_invoices_by_ids,
 )
 from app.services.web_billing_invoices import maybe_send_invoice_notification
-from app.web.admin import billing_invoice_bulk as bulk_routes
 
 
 def test_bulk_send_calls_invoice_notification_helper(
@@ -189,31 +187,6 @@ def test_bulk_mark_paid_updates_only_eligible_statuses(db_session, subscriber):
     assert inv_overdue.status == InvoiceStatus.paid
     assert inv_overdue.balance_due == Decimal("0")
     assert inv_draft.status == InvoiceStatus.draft
-
-
-def test_bulk_mark_paid_route_reports_skipped_count(db_session, monkeypatch):
-    def _fake_execute_audited_bulk_action(db, request, *, action, invoice_ids_csv):
-        assert action == "mark_paid"
-        assert invoice_ids_csv == "inv-1,inv-2,missing"
-        return ["inv-1"]
-
-    monkeypatch.setattr(
-        bulk_routes.web_billing_invoice_bulk_service,
-        "execute_audited_bulk_action",
-        _fake_execute_audited_bulk_action,
-    )
-
-    response = bulk_routes.invoice_bulk_mark_paid(
-        request=None,
-        invoice_ids="inv-1,inv-2,missing",
-        db=db_session,
-    )
-    payload = json.loads(response.body)
-
-    assert response.status_code == 200
-    assert payload["count"] == 1
-    assert payload["skipped"] == 2
-    assert "skipped 2" in payload["message"]
 
 
 def test_bulk_queue_pdf_exports_reports_ready_and_queued(

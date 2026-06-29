@@ -5,19 +5,16 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
 from app.models.domain_settings import SettingDomain
-from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.billing import PaymentCreate, PaymentMethodCreate, PaymentUpdate
 from app.services import audit as audit_service
@@ -28,27 +25,6 @@ from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
-MANUAL_PAYMENT_IDEMPOTENCY_SCOPE = "admin_manual_payment"
-_IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
-
-
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
-
 
 IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
     "base_csv": {
@@ -278,79 +254,6 @@ def build_create_payload(
     )
 
 
-def _manual_payment_idempotency_key(token: str | None) -> str | None:
-    key = (token or "").strip()
-    if not key:
-        return None
-    if not _IDEMPOTENCY_TOKEN_RE.fullmatch(key):
-        raise ValueError("Invalid payment submission token")
-    return key
-
-
-def _reserve_manual_payment_key(
-    db: Session, *, key: str | None, account_id: UUID
-) -> tuple[IdempotencyKey | None, Payment | None]:
-    key = _manual_payment_idempotency_key(key)
-    if key is None:
-        return None, None
-
-    prior = db.scalars(
-        select(IdempotencyKey).where(
-            IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-            IdempotencyKey.key == key,
-        )
-    ).first()
-    if prior is not None:
-        if str(prior.account_id) != str(account_id):
-            raise ValueError("Payment submission token has already been used")
-        if prior.ref_id:
-            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
-            return None, payment
-        raise ValueError("This payment is already being recorded. Please refresh.")
-
-    reservation = IdempotencyKey(
-        scope=MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-        key=key,
-        account_id=account_id,
-        ref_id=None,
-    )
-    db.add(reservation)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == key,
-            )
-        ).first()
-        if prior and str(prior.account_id) == str(account_id) and prior.ref_id:
-            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
-            return None, payment
-        raise ValueError(
-            "This payment is already being recorded. Please refresh."
-        ) from exc
-    return reservation, None
-
-
-def _release_manual_payment_key(
-    db: Session, reservation: IdempotencyKey | None
-) -> None:
-    if reservation is not None:
-        db.delete(reservation)
-        db.commit()
-
-
-def _commit_manual_payment_key(
-    db: Session, reservation: IdempotencyKey | None, payment_id: object
-) -> None:
-    if reservation is not None:
-        reservation.ref_id = str(payment_id)
-        db.add(reservation)
-        db.commit()
-
-
 def build_update_payload(
     *,
     payment_method_id,
@@ -556,12 +459,9 @@ def build_payments_list_data(
 ) -> dict[str, object]:
     """Build list/stat data for payments page."""
 
-    def _empty_status_total() -> dict[str, object]:
-        return {"count": 0, "amount": 0.0, "amounts": {}, "display": "NGN 0.00"}
-
-    def _build_status_totals(filtered_subquery) -> dict[str, dict[str, object]]:  # type: ignore[no-untyped-def]
-        summary: dict[str, dict[str, object]] = {
-            key: _empty_status_total()
+    def _build_status_totals(filtered_subquery) -> dict[str, dict[str, float | int]]:  # type: ignore[no-untyped-def]
+        summary: dict[str, dict[str, float | int]] = {
+            key: {"count": 0, "amount": 0.0}
             for key in (
                 "succeeded",
                 "pending",
@@ -574,40 +474,23 @@ def build_payments_list_data(
         rows = db.execute(
             select(
                 filtered_subquery.c.status,
-                filtered_subquery.c.currency,
                 func.count().label("count"),
                 func.coalesce(func.sum(filtered_subquery.c.amount), 0).label("amount"),
-            ).group_by(filtered_subquery.c.status, filtered_subquery.c.currency)
+            ).group_by(filtered_subquery.c.status)
         ).all()
-        for status_value, currency_value, count_value, amount_value in rows:
+        for status_value, count_value, amount_value in rows:
             key = (
                 status_value.value
                 if hasattr(status_value, "value")
                 else str(status_value)
             )
             if key not in summary:
-                summary[key] = _empty_status_total()
-            currency = _currency_code(currency_value)
-            amount = Decimal(str(amount_value or 0))
-            amounts = cast(dict[str, Decimal], summary[key]["amounts"])
-            amounts[currency] = amounts.get(currency, Decimal("0")) + amount
-            summary[key]["count"] = int(summary[key]["count"]) + int(count_value or 0)
-            summary[key]["amount"] = float(
-                Decimal(str(summary[key]["amount"])) + amount
-            )
-        for item in summary.values():
-            item["display"] = _format_currency_groups(
-                cast(dict[str, Decimal], item["amounts"])
-            )
-        all_amounts: dict[str, Decimal] = {}
-        for item in summary.values():
-            for currency, amount in cast(dict[str, Decimal], item["amounts"]).items():
-                all_amounts[currency] = all_amounts.get(currency, Decimal("0")) + amount
+                summary[key] = {"count": 0, "amount": 0.0}
+            summary[key]["count"] = int(count_value or 0)
+            summary[key]["amount"] = float(amount_value or 0)
         summary["all"] = {
             "count": sum(int(item["count"]) for item in summary.values()),
             "amount": sum(float(item["amount"]) for item in summary.values()),
-            "amounts": all_amounts,
-            "display": _format_currency_groups(all_amounts),
         }
         return summary
 
@@ -717,7 +600,7 @@ def build_payments_list_data(
     payments: list[Payment] = []
     total = 0
     status_totals = {
-        key: _empty_status_total()
+        key: {"count": 0, "amount": 0.0}
         for key in (
             "succeeded",
             "pending",
@@ -730,7 +613,7 @@ def build_payments_list_data(
     }
     if account_ids or not customer_filtered:
         filtered_subquery = _apply_payment_filters(
-            select(Payment.id, Payment.status, Payment.amount, Payment.currency)
+            select(Payment.id, Payment.status, Payment.amount)
         ).subquery()
         total = db.scalar(select(func.count()).select_from(filtered_subquery)) or 0
         status_totals = _build_status_totals(filtered_subquery)
@@ -838,13 +721,10 @@ def resolve_default_currency(db: Session) -> str:
 def build_import_result_payload(
     *, imported_count: int, errors: list[str]
 ) -> dict[str, object]:
-    shown_errors = errors[:10] if errors else []
     return {
         "imported": imported_count,
-        "errors": shown_errors,
-        "shown_errors": len(shown_errors),
+        "errors": errors[:10] if errors else [],
         "total_errors": len(errors),
-        "omitted_errors": max(0, len(errors) - len(shown_errors)),
     }
 
 
@@ -867,15 +747,11 @@ def process_payment_import_payload(
     pair_inactive_customers = bool(body.get("pair_inactive_customers", True))
     row_count = len(normalized_rows)
     total_amount = Decimal("0")
-    currency_totals: dict[str, Decimal] = {}
     for row in normalized_rows:
         try:
-            amount = Decimal(str(row.get("amount", 0) or 0))
+            total_amount += Decimal(str(row.get("amount", 0) or 0))
         except (TypeError, ValueError, InvalidOperation):
             continue
-        currency = _currency_code(row.get("currency") or default_currency)
-        total_amount += amount
-        currency_totals[currency] = currency_totals.get(currency, Decimal("0")) + amount
 
     imported_count, errors = import_payments(
         db,
@@ -898,9 +774,6 @@ def process_payment_import_payload(
             "file_name": file_name,
             "row_count": row_count,
             "total_amount": float(total_amount),
-            "currency_totals": {
-                currency: float(amount) for currency, amount in currency_totals.items()
-            },
             "pair_inactive_customers": pair_inactive_customers,
             "handler": handler,
         },
@@ -960,7 +833,6 @@ def list_payment_import_history_filtered(
         offset=0,
     )
     rows: list[dict[str, object]] = []
-    default_currency = resolve_default_currency(db)
     for event in events:
         if start is not None and event.occurred_at and event.occurred_at < start:
             continue
@@ -981,16 +853,6 @@ def list_payment_import_history_filtered(
         if status in {"success", "partial", "failed"} and row_status != status:
             continue
         row_count = int(metadata.get("row_count", imported + errors) or 0)
-        total_amount = Decimal(str(metadata.get("total_amount", 0) or 0))
-        raw_currency_totals = metadata.get("currency_totals")
-        currency_totals: dict[str, Decimal] = {}
-        if isinstance(raw_currency_totals, dict):
-            for currency, amount in raw_currency_totals.items():
-                currency_totals[_currency_code(currency)] = Decimal(str(amount or 0))
-        if not currency_totals:
-            currency_totals[
-                _currency_code(metadata.get("currency") or default_currency)
-            ] = total_amount
         rows.append(
             {
                 "occurred_at": event.occurred_at,
@@ -1002,9 +864,7 @@ def list_payment_import_history_filtered(
                 "row_count": row_count,
                 "matched_count": imported,
                 "unmatched_count": errors,
-                "total_amount": float(total_amount),
-                "currency_totals": currency_totals,
-                "total_display": _format_currency_groups(currency_totals),
+                "total_amount": float(metadata.get("total_amount", 0) or 0),
             }
         )
     return rows
@@ -1063,7 +923,6 @@ def process_payment_create(
     collection_account_id: str | None,
     payment_method_id: str | None,
     memo: str | None,
-    idempotency_token: str | None = None,
 ) -> dict[str, object]:
     """Validate inputs, create a payment, and return result dict."""
     from app.services import web_billing_payment_forms as forms_svc
@@ -1099,27 +958,7 @@ def process_payment_create(
         memo=memo,
         invoice_id=invoice_id,
     )
-    reservation, replayed_payment = _reserve_manual_payment_key(
-        db, key=idempotency_token, account_id=parsed_account_id
-    )
-    if replayed_payment is not None:
-        return {
-            "payment": replayed_payment,
-            "resolved_invoice": resolved_invoice,
-            "balance_value": balance_value,
-            "balance_display": balance_display,
-            "idempotent_replay": True,
-            "audit_metadata": {
-                "amount": str(replayed_payment.amount),
-                "invoice_id": payment_primary_invoice_id(replayed_payment),
-            },
-        }
-    try:
-        payment = billing_service.payments.create(db, payload)
-    except Exception:
-        _release_manual_payment_key(db, reservation)
-        raise
-    _commit_manual_payment_key(db, reservation, payment.id)
+    payment = billing_service.payments.create(db, payload)
     return {
         "payment": payment,
         "resolved_invoice": resolved_invoice,
@@ -1151,7 +990,6 @@ def process_payment_create_with_audit(
     collection_account_id: str | None,
     payment_method_id: str | None,
     memo: str | None,
-    idempotency_token: str | None = None,
 ) -> dict[str, object]:
     result = process_payment_create(
         db,
@@ -1163,19 +1001,17 @@ def process_payment_create_with_audit(
         collection_account_id=collection_account_id,
         payment_method_id=payment_method_id,
         memo=memo,
-        idempotency_token=idempotency_token,
     )
     payment = cast(Payment, result["payment"])
-    if not result.get("idempotent_replay"):
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create",
-            entity_type="payment",
-            entity_id=str(payment.id),
-            actor_id=_actor_id(request),
-            metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
-        )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create",
+        entity_type="payment",
+        entity_id=str(payment.id),
+        actor_id=_actor_id(request),
+        metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
+    )
     return result
 
 

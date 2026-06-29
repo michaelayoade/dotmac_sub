@@ -15,7 +15,6 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.payment_arrangement import (
     ArrangementStatus,
     InstallmentStatus,
@@ -23,7 +22,6 @@ from app.models.payment_arrangement import (
     PaymentArrangementInstallment,
     PaymentFrequency,
 )
-from app.models.subscription_engine import SettingValueType
 from app.services import web_billing_arrangements
 from app.services.customer_portal_flow_billing import cancel_customer_arrangement
 from app.services.payment_arrangements import (
@@ -34,7 +32,6 @@ from app.services.payment_arrangements import (
     get_next_actionable_installment,
     payment_arrangements,
 )
-from app.services.settings_spec import get_spec
 
 # ============================================================================
 # helpers
@@ -143,23 +140,6 @@ def _fake_admin_request(user_id=None):
 # ============================================================================
 # helper-function tests
 # ============================================================================
-
-
-def test_arrangement_policy_setting_specs_registered():
-    expected = {
-        "arrangement_min_installments": (2, 2, 60),
-        "arrangement_max_installments": (24, 2, 60),
-        "arrangement_default_overdue_installments": (2, 1, 5),
-    }
-
-    for key, (default, min_value, max_value) in expected.items():
-        spec = get_spec(SettingDomain.billing, key)
-
-        assert spec is not None
-        assert spec.value_type == SettingValueType.integer
-        assert spec.default == default
-        assert spec.min_value == min_value
-        assert spec.max_value == max_value
 
 
 class TestPaymentArrangementHelpers:
@@ -321,34 +301,6 @@ class TestPaymentArrangements:
             )
         assert exc_info.value.status_code == 400
         assert "invoice" in exc_info.value.detail.lower()
-
-    def test_create_respects_configured_max_installments(
-        self, db_session, subscriber
-    ):
-        db_session.add(
-            DomainSetting(
-                domain=SettingDomain.billing,
-                key="arrangement_max_installments",
-                value_type=SettingValueType.integer,
-                value_text="3",
-                is_active=True,
-            )
-        )
-        db_session.commit()
-        _overdue_invoice(db_session, subscriber, amount="1000.00")
-
-        with pytest.raises(HTTPException) as exc_info:
-            payment_arrangements.create(
-                db_session,
-                subscriber_id=str(subscriber.id),
-                total_amount=Decimal("100.00"),
-                installments=4,
-                frequency=PaymentFrequency.monthly.value,
-                start_date=date(2026, 7, 1),
-            )
-
-        assert exc_info.value.status_code == 400
-        assert "Maximum 3 installments allowed" in exc_info.value.detail
 
     def test_create_within_invoice_balance_succeeds(self, db_session, subscriber):
         invoice = _overdue_invoice(db_session, subscriber, amount="300.00")
@@ -606,34 +558,6 @@ class TestArrangementLifecycle:
         _, event_type = emit_mock.call_args[0][0], emit_mock.call_args[0][1]
         assert event_type.value == "arrangement.defaulted"
         assert emit_mock.call_args[0][2]["arrangement_id"] == str(arrangement.id)
-
-    def test_check_overdue_respects_configured_default_threshold(
-        self, db_session, subscriber
-    ):
-        db_session.add(
-            DomainSetting(
-                domain=SettingDomain.billing,
-                key="arrangement_default_overdue_installments",
-                value_type=SettingValueType.integer,
-                value_text="3",
-                is_active=True,
-            )
-        )
-        arrangement = _create_arrangement_directly(
-            db_session,
-            subscriber,
-            start=date.today() - timedelta(days=90),
-            frequency=PaymentFrequency.weekly,
-        )
-        payment_arrangements.approve(db_session, str(arrangement.id))
-
-        payment_arrangements.check_overdue_installments(db_session)
-        result = payment_arrangements.check_overdue_installments(db_session)
-
-        db_session.refresh(arrangement)
-        assert result["installments_marked_overdue"] == 1
-        assert result["arrangements_defaulted"] == 0
-        assert arrangement.status == ArrangementStatus.active
 
     def test_check_overdue_ignores_unapproved_arrangements(
         self, db_session, subscriber

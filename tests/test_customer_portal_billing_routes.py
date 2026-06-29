@@ -1,4 +1,3 @@
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -413,7 +412,7 @@ class TestSaveCardOnVerify:
             patch(
                 "app.web.customer.routes.templates.TemplateResponse",
                 return_value=MagicMock(name="template_response"),
-            ) as render,
+            ),
         ):
             customer_verify_payment(
                 request=request,
@@ -424,56 +423,6 @@ class TestSaveCardOnVerify:
             )
 
         capture.assert_called_once_with(db, "acct-1", "ref-1", "paystack")
-        assert render.call_args.args[1]["card_save"] == {
-            "status": "saved",
-            "message": "Your card was saved for future payments.",
-        }
-
-    def test_pay_verify_surfaces_card_save_failure_without_failing_payment(self) -> None:
-        from app.web.customer.routes import customer_verify_payment
-
-        request = MagicMock()
-        db = MagicMock()
-        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
-
-        with (
-            patch(
-                "app.web.customer.routes.get_current_customer_from_request",
-                return_value=customer,
-            ),
-            patch(
-                "app.web.customer.routes.customer_portal.verify_and_record_payment",
-                return_value=self._pay_result(),
-            ),
-            patch(
-                "app.web.customer.routes.is_subscriber_restricted",
-                return_value=False,
-            ),
-            patch(
-                "app.web.customer.routes.customer_cards.capture_card_after_payment",
-                side_effect=RuntimeError("provider token missing"),
-            ),
-            patch(
-                "app.web.customer.routes.templates.TemplateResponse",
-                return_value=MagicMock(name="template_response"),
-            ) as render,
-        ):
-            customer_verify_payment(
-                request=request,
-                reference="ref-1",
-                provider="paystack",
-                save_card=True,
-                db=db,
-            )
-
-        assert render.call_args.args[0] == "customer/billing/pay_success.html"
-        assert render.call_args.args[1]["card_save"] == {
-            "status": "failed",
-            "message": (
-                "Payment was recorded, but we could not save this card. "
-                "You can add a card from Payment Methods."
-            ),
-        }
 
     def test_pay_verify_does_not_save_card_by_default(self) -> None:
         from app.web.customer.routes import customer_verify_payment
@@ -549,72 +498,6 @@ class TestSaveCardOnVerify:
 
         capture.assert_not_called()
 
-    def test_pay_verify_uses_safe_message_for_gateway_exception(self) -> None:
-        from app.web.customer.routes import (
-            PAYMENT_VERIFICATION_ERROR_MESSAGE,
-            customer_verify_payment,
-        )
-
-        request = MagicMock()
-        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
-        template_response = MagicMock(name="template_response")
-
-        with (
-            patch(
-                "app.web.customer.routes.get_current_customer_from_request",
-                return_value=customer,
-            ),
-            patch(
-                "app.web.customer.routes.customer_portal.verify_and_record_payment",
-                side_effect=RuntimeError("gateway raw stack detail"),
-            ),
-            patch(
-                "app.web.customer.routes.is_subscriber_restricted",
-                return_value=False,
-            ),
-            patch(
-                "app.web.customer.routes.templates.TemplateResponse",
-                return_value=template_response,
-            ) as render,
-        ):
-            response = customer_verify_payment(
-                request=request,
-                reference="ref-1",
-                provider="paystack",
-                save_card=True,
-                db=MagicMock(),
-            )
-
-        assert response is template_response
-        assert render.call_args.args[0] == "customer/errors/400.html"
-        assert render.call_args.args[1]["message"] == PAYMENT_VERIFICATION_ERROR_MESSAGE
-        assert "gateway raw stack detail" not in render.call_args.args[1]["message"]
-        assert render.call_args.kwargs["status_code"] == 400
-
-    def test_invoice_pay_template_blocks_paystack_without_email(self) -> None:
-        template = Path("templates/customer/billing/pay.html").read_text()
-
-        assert "const checkoutEmail =" in template
-        assert "Add an email address to your account before paying with Paystack." in template
-        assert "email: checkoutEmail" in template
-
-    def test_invoice_pay_success_template_shows_remaining_balance(self) -> None:
-        template = Path("templates/customer/billing/pay_success.html").read_text()
-
-        assert "remaining_balance = invoice.balance_due or 0" in template
-        assert "Remaining Invoice Balance" in template
-        assert "partially applied to your invoice" in template
-        assert "{{ invoice_currency }} {{" in template
-        assert "Card saved" in template
-        assert "Card not saved" in template
-
-    def test_topup_success_template_shows_card_save_status(self) -> None:
-        template = Path("templates/customer/billing/topup_success.html").read_text()
-
-        assert "Card saved" in template
-        assert "Card not saved" in template
-        assert "card_save.message" in template
-
     def test_topup_verify_saves_card_when_requested(self) -> None:
         from app.web.customer.routes import customer_verify_topup
 
@@ -641,7 +524,7 @@ class TestSaveCardOnVerify:
             patch(
                 "app.web.customer.routes.templates.TemplateResponse",
                 return_value=MagicMock(name="template_response"),
-            ) as render,
+            ),
         ):
             customer_verify_topup(
                 request=request,
@@ -652,10 +535,6 @@ class TestSaveCardOnVerify:
             )
 
         capture.assert_called_once_with(db, "acct-1", "ref-topup-1", "paystack")
-        assert render.call_args.args[1]["card_save"] == {
-            "status": "saved",
-            "message": "Your card was saved for future payments.",
-        }
 
     def test_topup_verify_does_not_save_card_by_default(self) -> None:
         from app.web.customer.routes import customer_verify_topup

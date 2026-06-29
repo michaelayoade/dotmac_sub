@@ -27,13 +27,9 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import settings_spec
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_AR_AGING_BUCKET_DAYS = (30, 60, 90)
 
 
 def _month_start(value: datetime) -> datetime:
@@ -125,23 +121,6 @@ def _subscriber_location_expr():
     return func.lower(
         func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")
     )
-
-
-def _ar_aging_bucket_days(db: Session) -> tuple[int, int, int]:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "ar_aging_bucket_days")
-    raw_parts = str(value or "").split(",")
-    parsed: list[int] = []
-    for raw_part in raw_parts:
-        try:
-            day = int(raw_part.strip())
-        except ValueError:
-            return DEFAULT_AR_AGING_BUCKET_DAYS
-        if day <= 0:
-            return DEFAULT_AR_AGING_BUCKET_DAYS
-        parsed.append(day)
-    if len(parsed) != 3 or parsed != sorted(set(parsed)):
-        return DEFAULT_AR_AGING_BUCKET_DAYS
-    return tuple(parsed)
 
 
 class BillingReporting:
@@ -288,9 +267,9 @@ class BillingReporting:
         """
         today = datetime.now(UTC).date()
 
-        # Only issued receivables are AR. Drafts are pre-issue work and should
-        # not inflate customer debt or aging totals.
+        # Only fetch unpaid invoices — paid/void are excluded
         unpaid_statuses = [
+            InvoiceStatus.draft,
             InvoiceStatus.issued,
             InvoiceStatus.overdue,
             InvoiceStatus.partially_paid,
@@ -302,7 +281,6 @@ class BillingReporting:
             .order_by(Invoice.due_at.asc())
         )
         invoices = db.scalars(stmt).all()
-        bucket_1_max, bucket_2_max, bucket_3_max = _ar_aging_bucket_days(db)
 
         buckets: dict[str, list[Any]] = {
             "current": [],
@@ -319,11 +297,11 @@ class BillingReporting:
                 continue
 
             days = (today - due_at).days
-            if days <= bucket_1_max:
+            if days <= 30:
                 buckets["1_30"].append(invoice)
-            elif days <= bucket_2_max:
+            elif days <= 60:
                 buckets["31_60"].append(invoice)
-            elif days <= bucket_3_max:
+            elif days <= 90:
                 buckets["61_90"].append(invoice)
             else:
                 buckets["90_plus"].append(invoice)

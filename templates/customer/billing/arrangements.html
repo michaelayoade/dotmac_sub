@@ -109,7 +109,7 @@
                             </div>
                         </td>
                         <td class="px-6 py-4 text-right text-sm font-medium text-slate-900 dark:text-white">
-                            {{ arrangement.currency or default_currency|default('NGN') }} {{ '{:,.2f}'.format(arrangement.total_amount or 0) }}
+                            NGN {{ '{:,.2f}'.format(arrangement.total_amount or 0) }}
                         </td>
                         <td class="px-6 py-4 text-right">
                             <a href="/portal/billing/arrangements/{{ arrangement.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">

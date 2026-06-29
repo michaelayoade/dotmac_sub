@@ -1,25 +1,16 @@
 """Tests for collections and dunning service."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from app.models.catalog import SubscriptionStatus
 from app.models.collections import DunningAction, DunningCase, DunningCaseStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.notification import (
-    Notification,
-    NotificationChannel,
-    NotificationStatus,
-)
 from app.models.subscriber import SubscriberStatus
-from app.models.subscription_engine import SettingValueType
 from app.schemas.collections import (
     DunningActionLogCreate,
     DunningCaseCreate,
     DunningCaseUpdate,
 )
 from app.services import collections as collections_service
-from app.services.settings_cache import SettingsCache
-from app.services.settings_spec import get_spec
 
 
 def test_create_dunning_case(db_session, subscriber_account):
@@ -109,55 +100,6 @@ def test_dunning_action_log_creation(db_session, subscriber_account):
     assert log.case_id == case.id
     assert log.action == DunningAction.notify
     assert log.outcome == "Email sent successfully"
-
-
-def test_suspension_notification_uses_configured_dedupe_window(
-    db_session, subscriber_account
-):
-    from app.services.collections._core import _create_suspension_notification
-
-    spec = get_spec(SettingDomain.collections, "suspension_notification_dedupe_hours")
-    assert spec is not None
-    assert spec.default == 24
-    assert spec.min_value == 1
-    assert spec.max_value == 168
-
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.collections,
-            key="suspension_notification_dedupe_hours",
-            value_type=SettingValueType.integer,
-            value_text="1",
-            is_active=True,
-        )
-    )
-    existing = Notification(
-        channel=NotificationChannel.email,
-        event_type="account_suspended",
-        category="billing",
-        recipient=subscriber_account.email,
-        subject="Account Suspended",
-        body="Already queued",
-        status=NotificationStatus.queued,
-        created_at=datetime.now(UTC) - timedelta(hours=2),
-    )
-    db_session.add(existing)
-    db_session.commit()
-    SettingsCache.invalidate(
-        SettingDomain.collections.value, "suspension_notification_dedupe_hours"
-    )
-
-    _create_suspension_notification(db_session, str(subscriber_account.id))
-    db_session.commit()
-
-    rows = (
-        db_session.query(Notification)
-        .filter(Notification.recipient == subscriber_account.email)
-        .filter(Notification.subject == "Account Suspended")
-        .order_by(Notification.created_at.asc())
-        .all()
-    )
-    assert len(rows) == 2
 
 
 def test_list_dunning_cases_by_account(db_session, subscriber_account):
