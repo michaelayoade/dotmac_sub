@@ -67,7 +67,7 @@ def upgrade() -> None:
             sa.Column("hostname", sa.String(255), nullable=False),
             sa.Column("management_ip", sa.String(255), nullable=False),
             sa.Column("rest_api_port", sa.Integer, server_default="443"),
-            sa.Column("rest_api_username", sa.String(255), nullable=False),
+            sa.Column("rest_api_username", sa.String(512), nullable=False),
             sa.Column("rest_api_password", sa.String(512), nullable=False),
             sa.Column("use_ssl", sa.Boolean, server_default="true"),
             sa.Column("verify_tls", sa.Boolean, server_default="false"),

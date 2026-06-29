@@ -8,6 +8,21 @@ logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
 
+@celery_app.task(name="app.tasks.radius.reap_radacct_ghosts")
+def reap_radacct_ghosts() -> dict:
+    """Close stale-open radacct sessions (dead NAS / lost Acct-Stop) so phantom
+    'online' sessions don't accumulate. Age-based; safe (interim keeps live
+    sessions fresh). Scheduled via scheduler_config; gated on the same
+    radius_session_reap flag as the app-side reaper."""
+    from app.services.radius_reconciliation import reap_stale_radacct_ghosts
+
+    session = SessionLocal()
+    try:
+        return reap_stale_radacct_ghosts(session)
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.radius.run_radius_sync_job")
 def run_radius_sync_job(job_id: str) -> dict[str, int]:
     logger.info("Starting run_radius_sync_job for job_id=%s", job_id)

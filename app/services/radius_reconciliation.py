@@ -18,7 +18,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Column, DateTime, String, func, select
+from sqlalchemy import BigInteger, Column, DateTime, String, func, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
@@ -343,3 +343,70 @@ def load_latest_audit() -> dict[str, Any] | None:
     except Exception:
         logger.debug("Suspension audit: load failed.", exc_info=True)
         return None
+
+
+# Close open radacct rows whose accounting feed has gone silent. A live session
+# advances acctupdatetime via interim accounting every Acct-Interim-Interval
+# (300s), so "open but no update since the cutoff" reliably means dead (NAS
+# down/rebooted, or a lost Acct-Stop). Nothing else ages radacct — the app-side
+# RadiusAccountingSession reaper only closes the mirror — so without this, dead
+# NAS leave phantom "online" sessions forever (inflating online/usage counts and
+# wasting the enforcement reconciler's capped CoA budget on dead sessions).
+_RADACCT_REAP_STALE_DEFAULT_SECONDS = 7200  # 2h (24x the 300s interim interval)
+_RADACCT_REAP_STALE_FLOOR_SECONDS = 1800  # never reap anything fresher than 30m
+
+
+def reap_stale_radacct_ghosts(
+    db: Session,
+    *,
+    stale_after_seconds: int = _RADACCT_REAP_STALE_DEFAULT_SECONDS,
+    batch: int = 5000,
+) -> dict[str, int]:
+    """Synthetic-close stale-open radacct sessions across external RADIUS DBs.
+
+    acctstoptime is set to the last time we actually saw the session (not the
+    reap time), which is closer to the truth for usage. Age-based only — no CoA
+    dependency — so it converges even when the NAS is unreachable. Safe because
+    interim accounting keeps genuinely-live sessions well under the cutoff.
+    """
+    cutoff_seconds = max(int(stale_after_seconds), _RADACCT_REAP_STALE_FLOOR_SECONDS)
+    cutoff = datetime.now(UTC) - timedelta(seconds=cutoff_seconds)
+    reaped = 0
+    for config in _active_external_sync_configs(db):
+        try:
+            engine = _get_external_engine(config["db_url"])
+            radacct = _external_radius_table(
+                "radacct",
+                Column("radacctid", BigInteger, primary_key=True),
+                Column("acctstarttime", DateTime),
+                Column("acctstoptime", DateTime),
+                Column("acctupdatetime", DateTime),
+                Column("acctterminatecause", String),
+            )
+            last_seen = func.coalesce(radacct.c.acctupdatetime, radacct.c.acctstarttime)
+            with engine.begin() as conn:
+                ids = [
+                    row[0]
+                    for row in conn.execute(
+                        select(radacct.c.radacctid)
+                        .where(radacct.c.acctstoptime.is_(None))
+                        .where(last_seen < cutoff)
+                        .limit(batch)
+                    )
+                ]
+                if not ids:
+                    continue
+                conn.execute(
+                    radacct.update()
+                    .where(radacct.c.radacctid.in_(ids))
+                    .values(
+                        acctstoptime=last_seen,
+                        acctterminatecause="Ghost-Reaped",
+                    )
+                )
+                reaped += len(ids)
+        except Exception:
+            logger.warning("radacct ghost reap failed for a sync target", exc_info=True)
+    if reaped:
+        logger.info("radacct ghost reap closed %d stale sessions", reaped)
+    return {"reaped": reaped}

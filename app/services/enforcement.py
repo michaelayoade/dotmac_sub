@@ -584,10 +584,15 @@ def update_subscription_sessions(
             ):
                 count += 1
             else:
-                # Fall back to disconnect — subscriber reconnects with new profile
+                # Fall back to disconnect — subscriber reconnects with new
+                # profile. CoA → RouterOS API (read-back verified) → SSH, the
+                # same fallback chain the suspend/cancel disconnect path uses,
+                # so API-only NAS (no SSH creds) are still refreshed.
                 if _send_coa_disconnect(
                     db, nas_device, username, framed_ip, session_id
                 ):
+                    count += 1
+                elif _api_kick_session(db, nas_device, username):
                     count += 1
                 elif _disconnect_mikrotik_session(db, nas_device, username):
                     count += 1
@@ -695,6 +700,91 @@ def _remove_mikrotik_address_list(
         return True
     except Exception as exc:
         logger.warning("MikroTik address-list removal failed: %s", exc)
+        return False
+
+
+def _api_kick_session(db: Session, nas_device: NasDevice, username: str | None) -> bool:
+    """Disconnect one PPPoE session via the RouterOS API (read-back verified).
+
+    The profile-change refresh path historically fell straight from CoA to SSH;
+    on API-only MikroTik NAS (no SSH creds — the common case) that left the
+    session live on the old profile. This mirrors the API tier of the
+    suspend/cancel disconnect path.
+    """
+    if not username:
+        return False
+    if nas_device.vendor != NasVendor.mikrotik:
+        return False
+    api_dev = _nas_with_api_creds(db, nas_device)
+    if api_dev is None:
+        return False
+    try:
+        from app.services.nas._mikrotik import disconnect_mikrotik_pppoe_bulk
+
+        return bool(disconnect_mikrotik_pppoe_bulk(api_dev, {username}))
+    except Exception as exc:
+        logger.warning(
+            "API kick (profile refresh) failed on %s: %s",
+            getattr(api_dev, "name", "?"),
+            exc,
+        )
+        return False
+
+
+def _enforce_address_list_on_nas(
+    db: Session,
+    nas_device: NasDevice,
+    list_name: str,
+    address: str,
+    *,
+    add: bool,
+) -> bool:
+    """Add (``add=True``) or remove an address-list block on one NAS.
+
+    Tries SSH first (unchanged behaviour for SSH-credentialed devices), then
+    falls back to the RouterOS API for API-only MikroTik NAS. Both paths are
+    idempotent.
+    """
+    action = "add" if add else "remove"
+    try:
+        with DeviceProvisioner.ssh_session(nas_device) as ssh:
+            if add:
+                ok = _apply_mikrotik_address_list(
+                    nas_device, list_name, address, ssh=ssh
+                )
+            else:
+                ok = _remove_mikrotik_address_list(
+                    nas_device, list_name, address, ssh=ssh
+                )
+        if ok:
+            return True
+    except Exception as exc:
+        logger.warning(
+            "Address-list %s: SSH path failed for %s: %s — trying API.",
+            action,
+            getattr(nas_device, "name", "?"),
+            exc,
+        )
+
+    api_dev = _nas_with_api_creds(db, nas_device)
+    if api_dev is None:
+        return False
+    try:
+        from app.services.nas._mikrotik import (
+            apply_mikrotik_address_list_via_api,
+            remove_mikrotik_address_list_via_api,
+        )
+
+        if add:
+            return apply_mikrotik_address_list_via_api(api_dev, list_name, address)
+        return remove_mikrotik_address_list_via_api(api_dev, list_name, address)
+    except Exception as exc:
+        logger.warning(
+            "Address-list %s: API fallback failed for %s: %s",
+            action,
+            getattr(api_dev, "name", "?"),
+            exc,
+        )
         return False
 
 
@@ -1082,18 +1172,10 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
         if nas_device:
             targets[nas_device.id] = nas_device
     for nas_device in targets.values():
-        try:
-            with DeviceProvisioner.ssh_session(nas_device) as ssh:
-                if _apply_mikrotik_address_list(
-                    nas_device, list_name, subscription.ipv4_address, ssh=ssh
-                ):
-                    count += 1
-        except Exception as exc:
-            logger.warning(
-                "Address-list add: SSH open failed for %s: %s",
-                getattr(nas_device, "name", "?"),
-                exc,
-            )
+        if _enforce_address_list_on_nas(
+            db, nas_device, list_name, subscription.ipv4_address, add=True
+        ):
+            count += 1
     return count
 
 
@@ -1128,18 +1210,10 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
         if nas_device:
             targets[nas_device.id] = nas_device
     for nas_device in targets.values():
-        try:
-            with DeviceProvisioner.ssh_session(nas_device) as ssh:
-                if _remove_mikrotik_address_list(
-                    nas_device, list_name, subscription.ipv4_address, ssh=ssh
-                ):
-                    count += 1
-        except Exception as exc:
-            logger.warning(
-                "Address-list remove: SSH open failed for %s: %s",
-                getattr(nas_device, "name", "?"),
-                exc,
-            )
+        if _enforce_address_list_on_nas(
+            db, nas_device, list_name, subscription.ipv4_address, add=False
+        ):
+            count += 1
     return count
 
 

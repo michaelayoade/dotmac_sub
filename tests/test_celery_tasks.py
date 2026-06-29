@@ -705,6 +705,13 @@ class TestUsageTask:
 class TestDailyRunnerQueueRouting:
     """Daily business runners must not share the (backlogged) default queue."""
 
+    def test_radacct_ghost_reaper_routes_to_ingestion_queue(self):
+        from app.celery_app import celery_app
+
+        assert celery_app.conf.task_routes["app.tasks.radius.reap_radacct_ghosts"] == {
+            "queue": "ingestion"
+        }
+
     def test_daily_runners_route_to_billing_queue(self):
         from app.celery_app import celery_app
 
