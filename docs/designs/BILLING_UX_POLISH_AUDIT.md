@@ -104,6 +104,8 @@ settings/integrity/reconcilers.
   receivables, matching the admin AR-aging overview behavior.
 - Billing account list rows no longer expose dead Deactivate/Delete actions;
   row actions are limited to real View/Edit/Create Invoice routes.
+- Invoice detail, invoice list, ledger, and AR-aging templates now render
+  currency-aware amounts instead of hardcoded naira glyphs.
 
 ### Partially resolved
 
@@ -259,6 +261,10 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run python -c "...accounts.html no dead deactivate/delete actions..."`
   - Result: passed
+- `poetry run ruff check tests/test_billing_invoice_templates.py`
+  - Result: passed
+- `poetry run python -c "...billing money templates contain no naira glyphs..."`
+  - Result: passed
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -400,7 +406,7 @@ address-list name and the billing billable-status set. Worth a small shared
 Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [recommend|defer]`
 
 ### Invoices / ledger / credit-notes / tax / AR-aging
-- [POLISH] (High) `templates/admin/billing/invoice_detail.html:167-171,268` (also `invoices.html:98,230,252`; `ledger.html:117-126`; `ar_aging.html:61,227`) — money hard-rendered `₦{{...}}` while `Invoice.currency` supports NGN/USD/EUR/GBP and `credits.html` honors currency → render entry currency [recommend]
+- [POLISH] (High) `templates/admin/billing/invoice_detail.html:167-171,268` (also `invoices.html:98,230,252`; `ledger.html:117-126`; `ar_aging.html:61,227`) — money hard-rendered `₦{{...}}` while `Invoice.currency` supports NGN/USD/EUR/GBP and `credits.html` honors currency → render entry currency [resolved in draft]
 - [POLISH] (High) `app/services/billing/reporting.py:271-276` — `get_ar_aging_buckets` includes `draft` in unpaid; pre-issue drafts counted as AR, overstating receivables → drop draft [resolved in draft]
 - [CONTROL] (Med) `app/services/billing/reporting.py:300-307` — aging thresholds 30/60/90 hardcoded → bucket-edges setting (default 30/60/90) [resolved in draft]
 - [POLISH] (Med) `app/web/admin/billing_invoice_bulk.py:97` — bulk mark-paid no skipped count though ineligible rows dropped (bulk void already reports) → report skipped consistently [resolved in draft]

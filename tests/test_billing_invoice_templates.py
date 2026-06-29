@@ -28,3 +28,17 @@ def test_invoice_batch_run_button_has_submit_guard():
     assert ':disabled="!$refs.confirmed?.checked || submitting"' in template
     assert "submitting: false" in template
     assert "submitting ? 'Running...' : 'Run Batch'" in template
+
+
+def test_billing_money_templates_render_currency_codes_not_naira_glyphs():
+    template_paths = [
+        "templates/admin/billing/invoice_detail.html",
+        "templates/admin/billing/invoices.html",
+        "templates/admin/billing/ledger.html",
+        "templates/admin/billing/ar_aging.html",
+    ]
+
+    for template_path in template_paths:
+        template = Path(template_path).read_text()
+        assert "₦" not in template
+        assert "currency" in template or "_display" in template
