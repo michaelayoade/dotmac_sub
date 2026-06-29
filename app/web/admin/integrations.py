@@ -952,7 +952,9 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
         "auth_basic_username": _auth_value(hook.auth_config, "username"),
         "auth_basic_password": _auth_value(hook.auth_config, "password"),
         "auth_hmac_secret": _auth_value(hook.auth_config, "secret"),
-        "auth_config_json": json.dumps(hook.auth_config or {}, indent=2),
+        "auth_config_json": json.dumps(
+            _decrypted_auth_config(hook.auth_config), indent=2
+        ),
         "event_filters_csv": ", ".join(hook.event_filters or []),
         "retry_max": hook.retry_max,
         "retry_backoff_ms": hook.retry_backoff_ms,
@@ -1452,10 +1454,31 @@ def _build_hook_auth_config(
 
 
 def _auth_value(auth_config: object, key: str) -> str:
-    if isinstance(auth_config, dict):
-        raw = auth_config.get(key)
-        return str(raw) if raw is not None else ""
-    return ""
+    """Edit-form value for a hook auth_config key, decrypted for display.
+
+    Secret values are encrypted at rest; the edit form shows the plaintext (its
+    long-standing behaviour) so the operator can see/change it. They are
+    re-encrypted on save.
+    """
+    if not isinstance(auth_config, dict):
+        return ""
+    raw = auth_config.get(key)
+    if raw is None:
+        return ""
+    from app.models.integration_hook import SECRET_AUTH_CONFIG_KEYS
+
+    if key in SECRET_AUTH_CONFIG_KEYS:
+        from app.services.credential_crypto import decrypt_credential
+
+        return str(decrypt_credential(str(raw)) or "")
+    return str(raw)
+
+
+def _decrypted_auth_config(auth_config: object) -> dict:
+    """A copy of ``auth_config`` with secret values decrypted, for display."""
+    if not isinstance(auth_config, dict):
+        return {}
+    return {key: _auth_value(auth_config, key) for key in auth_config}
 
 
 def _hook_form_defaults(
