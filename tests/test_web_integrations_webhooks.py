@@ -41,3 +41,10 @@ def test_integrations_webhook_templates_do_not_render_secret_values():
     assert "form.secret" not in new_template
     assert "endpoint.secret[-4:]" not in detail_template
     assert "Configured" in detail_template
+
+
+def test_connector_detail_exposes_check_connection_action():
+    template = Path("templates/admin/integrations/connectors/detail.html").read_text()
+
+    assert "Check Connection" in template
+    assert "/embed?check=1" in template

@@ -22,6 +22,8 @@ path are covered in the CRM and Notifications audits.)
 - Integrations webhook endpoint creation now encrypts signing secrets at rest,
   the new form uses a password field, failed submissions do not echo the secret,
   and detail pages show only configured/not-configured state.
+- Connector detail pages now expose the existing Check Connection probe action
+  directly instead of hiding it behind the embedded view.
 
 ### Still open
 
@@ -30,9 +32,8 @@ path are covered in the CRM and Notifications audits.)
 - Hook auth secrets still need encrypted storage and masked edit semantics.
 - Integrations webhook endpoints still need edit-time secret rotation/preserve
   controls as part of the edit/disable/delete/test remediation surface.
-- Webhook delivery retry/timeout settings, delivery observability, connector
-  check-connection, hook execution timeout controls, confirmation polish, and the
-  separate RBAC review remain open.
+- Webhook delivery retry/timeout settings, delivery observability, hook execution
+  timeout controls, confirmation polish, and the separate RBAC review remain open.
 
 ### Verification
 
@@ -50,6 +51,8 @@ path are covered in the CRM and Notifications audits.)
   - Result: `2 passed`
 - `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
   - Result: `12 passed`
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `3 passed`
 
 ## What this audit is
 
