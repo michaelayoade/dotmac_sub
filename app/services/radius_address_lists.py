@@ -13,6 +13,8 @@ DEFAULT_SUSPENDED_ADDRESS_LIST = "suspended"
 def suspended_address_list(db: Session | None = None) -> str:
     if db is None:
         return DEFAULT_SUSPENDED_ADDRESS_LIST
-    value = settings_spec.resolve_value(db, SettingDomain.radius, "suspended_address_list")
+    value = settings_spec.resolve_value(
+        db, SettingDomain.radius, "suspended_address_list"
+    )
     name = str(value or "").strip()
     return name or DEFAULT_SUSPENDED_ADDRESS_LIST

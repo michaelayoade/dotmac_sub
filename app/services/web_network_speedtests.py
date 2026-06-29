@@ -683,7 +683,7 @@ def list_page_data(
 def _speedtest_sla_ratio(db: Session) -> float:
     raw = settings_spec.resolve_value(db, SettingDomain.network, "speedtest_sla_ratio")
     try:
-        value = float(raw)
+        value = float(str(raw))
     except (TypeError, ValueError):
         return DEFAULT_SPEEDTEST_SLA_RATIO
     if value <= 0 or value > 1:
