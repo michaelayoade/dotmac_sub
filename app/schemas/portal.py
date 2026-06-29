@@ -99,3 +99,32 @@ class MyProjectsResponse(BaseModel):
     projects: list[ProjectItem] = Field(default_factory=list)
     total: int = 0
     active: int = 0
+
+
+# ── Field Service / Work Orders (served from the local mirror) ───────────────
+
+
+class WorkOrderItem(BaseModel):
+    id: str
+    title: str
+    status: str
+    work_type: str | None = None
+    priority: str | None = None
+    technician_name: str | None = None
+    technician_phone: str | None = None
+    address: str | None = None
+    scheduled_start: str | None = None
+    scheduled_end: str | None = None
+    estimated_arrival_at: str | None = None
+    estimated_duration_minutes: int | None = None
+    completed_at: str | None = None
+    created_at: str | None = None
+
+
+class MyWorkOrdersResponse(BaseModel):
+    """The signed-in subscriber's field-service work orders (Field Service
+    tracker)."""
+
+    work_orders: list[WorkOrderItem] = Field(default_factory=list)
+    total: int = 0
+    upcoming: int = 0

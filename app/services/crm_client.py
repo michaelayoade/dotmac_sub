@@ -531,6 +531,17 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
+    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's work orders (technician, schedule, ETA, status)
+        from the CRM Portal API (server-side). Used by the local-mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["work_orders:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/work-orders",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
     def create_portal_referral(
         self,
         crm_subscriber_id: str,

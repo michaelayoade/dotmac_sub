@@ -1513,6 +1513,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(project_reconcile_seconds, 900),
         )
+        # Work-order/field-service mirror reconcile — backstop for missed
+        # work_order.* webhook deliveries.
+        work_order_reconcile_seconds = _resolve_int(
+            session,
+            SettingDomain.subscriber,
+            "work_order_reconcile_interval_seconds",
+            3600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="work_order_mirror_reconcile",
+            task_name="app.tasks.work_orders.reconcile_work_order_mirror",
+            enabled=True,
+            interval_seconds=max(work_order_reconcile_seconds, 900),
+        )
         olt_profile_sync_enabled = _effective_bool(
             session,
             SettingDomain.network,
