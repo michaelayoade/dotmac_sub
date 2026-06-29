@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from http.cookies import SimpleCookie
+from pathlib import Path
 from types import SimpleNamespace
 
 import pyotp
@@ -44,6 +45,25 @@ def _response_cookies(response) -> dict[str, str]:
         if header.lower() == b"set-cookie":
             jar.load(value.decode())
     return {key: morsel.value for key, morsel in jar.items()}
+
+
+def test_customer_login_template_has_submit_loading_state():
+    template = Path("templates/customer/auth/login.html").read_text()
+
+    assert 'x-data="{ loading: false }"' in template
+    assert 'x-on:submit="loading = true"' in template
+    assert ':disabled="loading"' in template
+    assert "loading ? 'Signing in...' : 'Sign in'" in template
+
+
+def test_customer_mfa_template_has_submit_loading_state():
+    template = Path("templates/customer/auth/mfa.html").read_text()
+
+    assert 'x-data="{ loading: false, code: \'\' }"' in template
+    assert 'x-on:submit="loading = true"' in template
+    assert 'x-model="code"' in template
+    assert ':disabled="loading || code.length !== 6"' in template
+    assert "loading ? 'Verifying...' : 'Verify'" in template
 
 
 def test_get_current_customer_enriches_module_flags(monkeypatch):

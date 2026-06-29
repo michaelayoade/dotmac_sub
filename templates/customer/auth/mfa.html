@@ -32,17 +32,23 @@
         </div>
         {% endif %}
 
-        <form class="space-y-6" action="/portal/auth/mfa" method="POST">
+        <form class="space-y-6" action="/portal/auth/mfa" method="POST"
+              x-data="{ loading: false, code: '' }"
+              x-on:submit="loading = true">
             {% include "components/forms/csrf_input.html" %}
             <div>
                 <label for="code" class="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-200">Verification Code</label>
                 <div class="mt-2">
-                    <input id="code" name="code" type="text" required maxlength="6" pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" class="block w-full rounded-lg border-0 px-4 py-3 text-center font-mono text-2xl tracking-widest text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-primary-600 dark:bg-slate-700/50 dark:text-white dark:ring-slate-600 dark:placeholder:text-slate-500">
+                    <input id="code" name="code" type="text" x-model="code" required maxlength="6" pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" class="block w-full rounded-lg border-0 px-4 py-3 text-center font-mono text-2xl tracking-widest text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-primary-600 dark:bg-slate-700/50 dark:text-white dark:ring-slate-600 dark:placeholder:text-slate-500">
                 </div>
             </div>
 
-            <button type="submit" class="flex w-full justify-center rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
-                Verify
+            <button type="submit" :disabled="loading || code.length !== 6" class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-800">
+                <svg x-show="loading" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span x-text="loading ? 'Verifying...' : 'Verify'">Verify</span>
             </button>
         </form>
 

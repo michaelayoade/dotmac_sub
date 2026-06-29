@@ -26,13 +26,16 @@ UX-polish + operator-control lens (**not** a full security review).
   minutes instead of the generic "try again later" copy.
 - Admin and customer forgot-password forms now disable submit on submission and
   show a loading spinner/text state, matching the existing reset/login patterns.
+- Customer portal login and MFA forms now have submit loading states, disabled
+  buttons during submission, and MFA code-length gating to match the admin/reseller
+  auth experience.
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
 - Admin lockout/MFA policy drift, password-min/remember-me copy, active sessions,
-  customer auth loading parity, and schema-backed MFA recovery codes remain open.
+  and schema-backed MFA recovery codes remain open.
 
 ### Verification
 
@@ -47,6 +50,10 @@ UX-polish + operator-control lens (**not** a full security review).
 - `poetry run pytest tests/test_auth_services.py tests/test_web_customer_auth.py -q`
   - Result: `31 passed`
 - `poetry run ruff check tests/test_auth_services.py tests/test_web_customer_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_customer_auth.py -q`
+  - Result: `14 passed`
+- `poetry run ruff check tests/test_web_customer_auth.py`
   - Result: passed
 
 ## What this audit is
