@@ -63,6 +63,8 @@ settings/integrity/reconcilers.
   first 10-row error sample cannot hide additional failures.
 - Invoice batch run and preview failures now return stable operator-safe copy
   while preserving exception detail in server logs.
+- Invoice detail status badges now map issued, partially paid, void, and
+  written-off states to explicit variants instead of falling back to draft-grey.
 
 ### Partially resolved
 
@@ -131,6 +133,10 @@ settings/integrity/reconcilers.
 - `poetry run ruff check app/services/web_billing_invoice_batch.py tests/test_billing_invoice_batch_web.py`
   - Result: passed
 - `poetry run pytest tests/test_billing_invoice_batch_web.py -q`
+  - Result: passed
+- `poetry run ruff check tests/test_billing_invoice_templates.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_invoice_templates.py -q`
   - Result: passed
 
 ## What this audit is

@@ -14,19 +14,23 @@
 {% set status = invoice.status|default('draft') %}
 {% set status_val = status.value if status is not string else status %}
 {% set invoice_currency = invoice.currency or 'NGN' %}
+{% set status_variant_map = {
+    'paid': 'paid',
+    'issued': 'info',
+    'sent': 'pending',
+    'pending': 'pending',
+    'partially_paid': 'warning',
+    'overdue': 'overdue',
+    'void': 'inactive',
+    'written_off': 'inactive',
+    'draft': 'draft'
+} %}
+{% set status_label = status_val | replace('_', ' ') | title %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% set status_html %}
-        {% if status_val == 'paid' %}
-        {{ status_badge("Paid", variant="paid") }}
-        {% elif status_val in ['pending', 'sent'] %}
-        {{ status_badge("Pending", variant="pending") }}
-        {% elif status_val == 'overdue' %}
-        {{ status_badge("Overdue", variant="overdue") }}
-        {% else %}
-        {{ status_badge(status_val | title, variant="draft") }}
-        {% endif %}
+        {{ status_badge(status_label, variant=status_variant_map.get(status_val, 'default')) }}
     {% endset %}
 
     <div class="relative z-40">
