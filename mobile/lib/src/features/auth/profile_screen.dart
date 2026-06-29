@@ -275,9 +275,7 @@ class _AvatarEditorState extends ConsumerState<_AvatarEditor> {
     setState(() => _busy = true);
     try {
       final bytes = await picked.readAsBytes();
-      await ref
-          .read(authRepositoryProvider)
-          .uploadAvatar(
+      await ref.read(authRepositoryProvider).uploadAvatar(
             bytes: bytes,
             filename: picked.name,
             contentType: picked.mimeType,
@@ -496,9 +494,8 @@ class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
-      final sent = await ref
-          .read(authRepositoryProvider)
-          .resendVerificationEmail();
+      final sent =
+          await ref.read(authRepositoryProvider).resendVerificationEmail();
       if (sent) {
         messenger.showSnackBar(
           const SnackBar(
@@ -675,8 +672,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     );
     if (picked != null) {
       setState(
-        () => _dob =
-            '${picked.year.toString().padLeft(4, '0')}-'
+        () => _dob = '${picked.year.toString().padLeft(4, '0')}-'
             '${picked.month.toString().padLeft(2, '0')}-'
             '${picked.day.toString().padLeft(2, '0')}',
       );
@@ -737,9 +733,8 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       );
     } on ApiException catch (e) {
       setState(
-        () => _error = e.statusCode == 409
-            ? 'That email is already in use.'
-            : e.message,
+        () => _error =
+            e.statusCode == 409 ? 'That email is already in use.' : e.message,
       );
     } catch (e) {
       setState(() => _error = '$e');
@@ -836,9 +831,8 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                 for (final e in _contactMethods.entries)
                   DropdownMenuItem<String?>(value: e.key, child: Text(e.value)),
               ],
-              onChanged: _busy
-                  ? null
-                  : (v) => setState(() => _contactMethod = v),
+              onChanged:
+                  _busy ? null : (v) => setState(() => _contactMethod = v),
             ),
             const SizedBox(height: 20),
             Text(
@@ -935,9 +929,7 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
       _error = null;
     });
     try {
-      await ref
-          .read(authRepositoryProvider)
-          .changePassword(
+      await ref.read(authRepositoryProvider).changePassword(
             currentPassword: _current.text,
             newPassword: _next.text,
           );

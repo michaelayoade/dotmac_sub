@@ -35,12 +35,12 @@ class ReferralTotals {
   final String totalEarned;
 
   factory ReferralTotals.fromJson(Map<String, dynamic> json) => ReferralTotals(
-    total: _asInt(json['total']),
-    pending: _asInt(json['pending']),
-    qualified: _asInt(json['qualified']),
-    rewarded: _asInt(json['rewarded']),
-    totalEarned: (json['total_earned'] ?? '0').toString(),
-  );
+        total: _asInt(json['total']),
+        pending: _asInt(json['pending']),
+        qualified: _asInt(json['qualified']),
+        rewarded: _asInt(json['rewarded']),
+        totalEarned: (json['total_earned'] ?? '0').toString(),
+      );
 }
 
 class ReferralItem {
@@ -63,14 +63,14 @@ class ReferralItem {
   final DateTime? createdAt;
 
   factory ReferralItem.fromJson(Map<String, dynamic> json) => ReferralItem(
-    id: json['id'].toString(),
-    status: (json['status'] ?? 'pending').toString(),
-    referredName: json['referred_name'] as String?,
-    rewardAmount: json['reward_amount']?.toString(),
-    rewardCurrency: (json['reward_currency'] ?? 'NGN').toString(),
-    rewardStatus: (json['reward_status'] ?? 'none').toString(),
-    createdAt: _asDate(json['created_at']),
-  );
+        id: json['id'].toString(),
+        status: (json['status'] ?? 'pending').toString(),
+        referredName: json['referred_name'] as String?,
+        rewardAmount: json['reward_amount']?.toString(),
+        rewardCurrency: (json['reward_currency'] ?? 'NGN').toString(),
+        rewardStatus: (json['reward_status'] ?? 'none').toString(),
+        createdAt: _asDate(json['created_at']),
+      );
 }
 
 class ReferralSummary {
