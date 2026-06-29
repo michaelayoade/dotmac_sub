@@ -71,9 +71,18 @@ def test_hook_form_defaults_applies_template():
         "event_filters_csv": "invoice.created",
         "retry_max": 4,
         "retry_backoff_ms": 750,
+        "timeout_seconds": 9,
     }
     defaults = integrations_web._hook_form_defaults(template=template)
     assert defaults["title"] == "n8n Hook"
     assert defaults["url"] == "https://n8n.example/hook"
     assert defaults["retry_max"] == 4
     assert defaults["retry_backoff_ms"] == 750
+    assert defaults["timeout_seconds"] == 9
+
+
+def test_hook_form_exposes_timeout_control():
+    template = Path("templates/admin/integrations/hooks/form.html").read_text()
+
+    assert 'name="timeout_seconds"' in template
+    assert 'max="300"' in template

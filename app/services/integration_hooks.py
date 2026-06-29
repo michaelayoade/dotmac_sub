@@ -34,6 +34,8 @@ from app.services.credential_crypto import decrypt_credential, encrypt_credentia
 logger = logging.getLogger(__name__)
 
 HOOK_AUTH_SECRET_KEYS = frozenset({"token", "password", "secret"})
+MIN_HOOK_TIMEOUT_SECONDS = 1
+MAX_HOOK_TIMEOUT_SECONDS = 300
 
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
@@ -137,6 +139,7 @@ def create_hook(
     event_filters: list[str] | None,
     is_enabled: bool,
     notes: str | None,
+    timeout_seconds: int | None = None,
 ) -> IntegrationHook:
     _validate_hook_fields(hook_type=hook_type, command=command, url=url)
     hook = IntegrationHook(
@@ -153,6 +156,7 @@ def create_hook(
         auth_config=encrypt_hook_auth_config(auth_config),
         retry_max=max(0, retry_max),
         retry_backoff_ms=max(0, retry_backoff_ms),
+        timeout_seconds=_normalize_timeout_seconds(timeout_seconds),
         event_filters=event_filters or [],
         is_enabled=is_enabled,
         notes=notes.strip() if notes else None,
@@ -179,6 +183,7 @@ def update_hook(
     event_filters: list[str] | None,
     is_enabled: bool,
     notes: str | None,
+    timeout_seconds: int | None = None,
 ) -> IntegrationHook:
     hook = get_hook(db, hook_id)
     _validate_hook_fields(hook_type=hook_type, command=command, url=url)
@@ -195,6 +200,7 @@ def update_hook(
     hook.auth_config = encrypt_hook_auth_config(auth_config)
     hook.retry_max = max(0, retry_max)
     hook.retry_backoff_ms = max(0, retry_backoff_ms)
+    hook.timeout_seconds = _normalize_timeout_seconds(timeout_seconds)
     hook.event_filters = event_filters or []
     hook.is_enabled = is_enabled
     hook.notes = notes.strip() if notes else None
@@ -216,6 +222,7 @@ def duplicate_hook(db: Session, *, hook_id: str) -> IntegrationHook:
         auth_config=source.auth_config,
         retry_max=source.retry_max,
         retry_backoff_ms=source.retry_backoff_ms,
+        timeout_seconds=source.timeout_seconds,
         event_filters=source.event_filters or [],
         is_enabled=False,
         notes=source.notes,
@@ -260,6 +267,24 @@ def public_hook_auth_config(auth_config: object) -> dict[str, Any]:
         for key, value in auth_config.items()
         if key not in HOOK_AUTH_SECRET_KEYS
     }
+
+
+def _normalize_timeout_seconds(timeout_seconds: int | None) -> int | None:
+    if timeout_seconds is None:
+        return None
+    return max(
+        MIN_HOOK_TIMEOUT_SECONDS,
+        min(MAX_HOOK_TIMEOUT_SECONDS, int(timeout_seconds)),
+    )
+
+
+def _hook_timeout_seconds(hook: IntegrationHook) -> int:
+    configured = _normalize_timeout_seconds(getattr(hook, "timeout_seconds", None))
+    if configured is not None:
+        return configured
+    if hook.hook_type == IntegrationHookType.cli:
+        return 20
+    return 10
 
 
 def set_enabled(db: Session, *, hook_id: str, is_enabled: bool) -> IntegrationHook:
@@ -465,7 +490,7 @@ def _execute_http_hook(
         url=str(hook.url or ""),
         headers=headers,
         json=payload,
-        timeout=10.0,
+        timeout=float(_hook_timeout_seconds(hook)),
     )
     body = response.text
     if len(body) > 2000:
@@ -483,7 +508,7 @@ def _execute_cli_hook(
         shlex.split(command),
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=_hook_timeout_seconds(hook),
         input=json.dumps(payload),
     )
     body = (result.stdout or "").strip()

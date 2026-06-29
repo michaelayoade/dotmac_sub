@@ -826,6 +826,7 @@ def hooks_create(
     event_filters_csv: str | None = Form(None),
     retry_max: int = Form(3),
     retry_backoff_ms: int = Form(500),
+    timeout_seconds: int | None = Form(None),
     notes: str | None = Form(None),
     is_enabled: bool = Form(False),
     db: Session = Depends(get_db),
@@ -850,6 +851,7 @@ def hooks_create(
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
             retry_backoff_ms=retry_backoff_ms,
+            timeout_seconds=timeout_seconds,
             notes=notes,
             is_enabled=is_enabled,
         )
@@ -876,6 +878,7 @@ def hooks_create(
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
                     "retry_backoff_ms": retry_backoff_ms,
+                    "timeout_seconds": timeout_seconds or "",
                     "notes": notes or "",
                     "is_enabled": is_enabled,
                 },
@@ -919,6 +922,7 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
         "event_filters_csv": ", ".join(hook.event_filters or []),
         "retry_max": hook.retry_max,
         "retry_backoff_ms": hook.retry_backoff_ms,
+        "timeout_seconds": hook.timeout_seconds or "",
         "notes": hook.notes or "",
         "is_enabled": hook.is_enabled,
         "id": str(hook.id),
@@ -957,6 +961,7 @@ def hooks_update(
     event_filters_csv: str | None = Form(None),
     retry_max: int = Form(3),
     retry_backoff_ms: int = Form(500),
+    timeout_seconds: int | None = Form(None),
     notes: str | None = Form(None),
     is_enabled: bool = Form(False),
     db: Session = Depends(get_db),
@@ -986,6 +991,7 @@ def hooks_update(
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
             retry_backoff_ms=retry_backoff_ms,
+            timeout_seconds=timeout_seconds,
             notes=notes,
             is_enabled=is_enabled,
         )
@@ -1013,6 +1019,7 @@ def hooks_update(
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
                     "retry_backoff_ms": retry_backoff_ms,
+                    "timeout_seconds": timeout_seconds or "",
                     "notes": notes or "",
                     "is_enabled": is_enabled,
                 },
@@ -1556,6 +1563,7 @@ def _hook_form_defaults(
         "event_filters_csv": "",
         "retry_max": 3,
         "retry_backoff_ms": 500,
+        "timeout_seconds": "",
         "notes": "",
         "is_enabled": True,
     }
@@ -1576,6 +1584,7 @@ def _hook_form_defaults(
                 "retry_backoff_ms": int(
                     template.get("retry_backoff_ms") or defaults["retry_backoff_ms"]
                 ),
+                "timeout_seconds": int(template.get("timeout_seconds") or 10),
             }
         )
     return defaults

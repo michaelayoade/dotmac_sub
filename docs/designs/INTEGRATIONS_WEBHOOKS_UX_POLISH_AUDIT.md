@@ -34,11 +34,14 @@ path are covered in the CRM and Notifications audits.)
 - Installed integration bulk enable/disable, relay toggle, integration
   enable/disable, and hook enable/disable actions now prompt before changing
   state.
+- Integration hooks now have a bounded per-hook execution timeout control that
+  drives both HTTP and CLI hook execution while preserving legacy defaults for
+  existing rows.
 
 ### Still open
 
-- Webhook delivery retry/timeout settings, hook execution timeout controls, and
-  the separate RBAC review remain open.
+- Webhook delivery retry/timeout settings and the separate RBAC review remain
+  open.
 
 ### Verification
 
@@ -60,6 +63,12 @@ path are covered in the CRM and Notifications audits.)
   - Result: passed
 - `poetry run pytest tests/test_integration_hooks_web_admin.py tests/test_web_integrations_webhooks.py -q`
   - Result: `14 passed`
+- `poetry run ruff check app/models/integration_hook.py app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py alembic/versions/186_integration_hook_timeout_seconds.py`
+  - Result: passed
+- `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`
+  - Result: `13 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
 - `poetry run ruff check app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py`
   - Result: passed
 - `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`

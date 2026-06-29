@@ -43,12 +43,14 @@ def test_create_and_duplicate_hook(db_session):
         auth_config={"token": "secret"},
         retry_max=5,
         retry_backoff_ms=200,
+        timeout_seconds=12,
         event_filters=["invoice.created", "payment.received"],
         is_enabled=True,
         notes="Primary automation",
     )
     assert hook.title == "n8n sync"
     assert hook.url == "https://example.test/hook"
+    assert hook.timeout_seconds == 12
     assert hook.auth_config["token"] != "secret"
     assert decrypt_credential(hook.auth_config["token"]) == "secret"
 
@@ -56,6 +58,7 @@ def test_create_and_duplicate_hook(db_session):
     assert copy.id != hook.id
     assert copy.title.endswith("(Copy)")
     assert copy.is_enabled is False
+    assert copy.timeout_seconds == 12
     assert decrypt_credential(copy.auth_config["token"]) == "secret"
 
 
@@ -71,6 +74,7 @@ def test_execute_http_hook_decrypts_auth_secret(db_session, monkeypatch):
         auth_config={"token": "outbound-secret"},
         retry_max=1,
         retry_backoff_ms=10,
+        timeout_seconds=7,
         event_filters=[],
         is_enabled=True,
         notes=None,
@@ -94,6 +98,7 @@ def test_execute_http_hook_decrypts_auth_secret(db_session, monkeypatch):
     assert status_code == 202
     assert body == "accepted"
     assert captured["headers"]["Authorization"] == "Bearer outbound-secret"
+    assert captured["timeout"] == 7.0
 
 
 def test_build_hooks_page_state_includes_success_rate(db_session):
