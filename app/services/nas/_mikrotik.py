@@ -390,6 +390,109 @@ def disconnect_mikrotik_pppoe_bulk(device: NasDevice, logins: set[str]) -> set[s
         pool.disconnect()
 
 
+def _address_list_matches(row: dict[str, object], list_name: str, address: str) -> bool:
+    return (
+        str(row.get("list") or "").strip() == list_name
+        and str(row.get("address") or "").strip() == address
+    )
+
+
+def apply_mikrotik_address_list_via_api(
+    device: NasDevice, list_name: str, address: str
+) -> bool:
+    """Add ``address`` to firewall ``address-list`` via the RouterOS API.
+
+    Idempotent: skips the add when an identical (list, address) entry already
+    exists, then re-reads to confirm presence. Returns True when the entry is
+    present afterwards. Raises if the API is unreachable or uncredentialed so
+    the caller can fall back to SSH.
+    """
+    from routeros_api import RouterOsApiPool
+
+    list_name = str(list_name or "").strip()
+    address = str(address or "").strip()
+    if not list_name or not address:
+        return False
+    host, port, username, password = _mikrotik_routeros_auth(device)
+    use_ssl = port == 8729
+    pool = RouterOsApiPool(
+        host,
+        username=username,
+        password=password,
+        port=port,
+        plaintext_login=not use_ssl,
+        use_ssl=use_ssl,
+        ssl_verify=False,
+        ssl_verify_hostname=False,
+    )
+    try:
+        api = pool.get_api()
+        res = cast(Any, api.get_resource("/ip/firewall/address-list"))
+        if not any(
+            _address_list_matches(r, list_name, address)
+            for r in _as_dict_list(res.get())
+        ):
+            res.add(list=list_name, address=address)
+        return any(
+            _address_list_matches(r, list_name, address)
+            for r in _as_dict_list(res.get())
+        )
+    finally:
+        pool.disconnect()
+
+
+def remove_mikrotik_address_list_via_api(
+    device: NasDevice, list_name: str, address: str
+) -> bool:
+    """Remove ``address`` from firewall ``address-list`` via the RouterOS API.
+
+    Removes every matching (list, address) entry, then re-reads to confirm
+    absence. Returns True when no matching entry remains (removed, or already
+    absent — idempotent). Raises if the API is unreachable/uncredentialed so
+    the caller can fall back to SSH.
+    """
+    from routeros_api import RouterOsApiPool
+
+    list_name = str(list_name or "").strip()
+    address = str(address or "").strip()
+    if not list_name or not address:
+        return False
+    host, port, username, password = _mikrotik_routeros_auth(device)
+    use_ssl = port == 8729
+    pool = RouterOsApiPool(
+        host,
+        username=username,
+        password=password,
+        port=port,
+        plaintext_login=not use_ssl,
+        use_ssl=use_ssl,
+        ssl_verify=False,
+        ssl_verify_hostname=False,
+    )
+    try:
+        api = pool.get_api()
+        res = cast(Any, api.get_resource("/ip/firewall/address-list"))
+        for row in _as_dict_list(res.get()):
+            if _address_list_matches(row, list_name, address):
+                rid = row.get("id") or row.get(".id")
+                if rid:
+                    try:
+                        res.remove(id=rid)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "API address-list remove failed for %s on %s: %s",
+                            address,
+                            getattr(device, "name", "?"),
+                            exc,
+                        )
+        return not any(
+            _address_list_matches(r, list_name, address)
+            for r in _as_dict_list(res.get())
+        )
+    finally:
+        pool.disconnect()
+
+
 def _float_value(value: object) -> float:
     if value is None:
         return 0.0

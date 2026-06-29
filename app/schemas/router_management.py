@@ -41,7 +41,7 @@ class RouterCreate(BaseModel):
     hostname: str = Field(min_length=1, max_length=255)
     management_ip: str = Field(min_length=1, max_length=255)
     rest_api_port: int = Field(default=443, ge=1, le=65535)
-    rest_api_username: str = Field(min_length=1, max_length=255)
+    rest_api_username: str = Field(min_length=1, max_length=512)
     rest_api_password: str = Field(min_length=1, max_length=512)
     use_ssl: bool = True
     verify_tls: bool = False
@@ -59,7 +59,7 @@ class RouterUpdate(BaseModel):
     hostname: str | None = Field(default=None, min_length=1, max_length=255)
     management_ip: str | None = Field(default=None, min_length=1, max_length=255)
     rest_api_port: int | None = Field(default=None, ge=1, le=65535)
-    rest_api_username: str | None = Field(default=None, min_length=1, max_length=255)
+    rest_api_username: str | None = Field(default=None, min_length=1, max_length=512)
     rest_api_password: str | None = Field(default=None, min_length=1, max_length=512)
     use_ssl: bool | None = None
     verify_tls: bool | None = None
