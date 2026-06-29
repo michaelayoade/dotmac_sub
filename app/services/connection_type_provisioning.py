@@ -846,8 +846,14 @@ def _mikrotik_commands(
 
     elif connection_type == ConnectionType.static:
         if action == "suspend" and ip:
+            # Conditional add so a repeated suspend (e.g. duplicate event) is a
+            # no-op instead of a "already have such entry" error — matching the
+            # enforcement address-list helper.
             commands.append(
-                f"/ip firewall address-list add list=blocked-subscribers address={ip}"
+                f":if ([:len [/ip firewall address-list find "
+                f'list="blocked-subscribers" address="{ip}"]] = 0) '
+                f"do={{/ip firewall address-list add "
+                f'list="blocked-subscribers" address="{ip}"}}'
             )
         elif action == "unsuspend" and ip:
             commands.append(

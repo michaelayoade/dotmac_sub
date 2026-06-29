@@ -47,9 +47,12 @@
             </label>
             <textarea x-model="commands" rows="8"
                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                      placeholder="/queue simple set [find] queue=sfq/sfq&#10;/system ntp client set enabled=yes"></textarea>
+                      placeholder="/system/ntp/client/set {&quot;enabled&quot;:&quot;yes&quot;}&#10;/ip/dns/set {&quot;servers&quot;:&quot;1.1.1.1&quot;}"></textarea>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                RouterOS commands to execute. Commands are validated against a blocklist before execution.
+                One RouterOS <strong>REST</strong> command per line: a path, optionally
+                followed by a single space and a JSON object —
+                e.g. <code>/system/ntp/client/set {"enabled":"yes"}</code>.
+                Validated against a blocklist before execution.
             </p>
         </div>
     </div>
