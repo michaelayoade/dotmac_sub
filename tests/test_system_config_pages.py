@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.services import web_system_config as web_system_config_service
 from app.web.admin import system as admin_system
 
@@ -72,6 +73,14 @@ def test_preferences_config_saves_only_consumed_force_2fa(db_session):
     assert "admin_portal_title" not in rows
     assert "search_debounce_ms" not in rows
 
+    force_2fa = (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == "force_2fa")
+        .one()
+    )
+    assert force_2fa.value_type == SettingValueType.boolean
+
 
 def test_preferences_template_exposes_only_force_2fa_control():
     template = Path("templates/admin/system/config/preferences.html").read_text()
@@ -99,6 +108,31 @@ def test_monitoring_config_save_redirects_with_error_on_invalid_value(
 
 def test_monitoring_config_template_shows_save_feedback():
     template = Path("templates/admin/system/config/monitoring.html").read_text()
+
+    assert "{% if error %}" in template
+    assert "{% elif saved %}" in template
+
+
+def test_portal_config_save_redirects_with_error_on_invalid_redirect(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        admin_system,
+        "parse_form_data_sync",
+        lambda request: {
+            "selfcare_domain": "selfcare.example.test",
+            "selfcare_redirect_root": "/admin",
+        },
+    )
+
+    response = admin_system.config_portal_save(SimpleNamespace(), db_session)
+
+    assert response.status_code == 303
+    assert "error=Selfcare+Root+Redirect" in response.headers["location"]
+
+
+def test_portal_config_template_shows_save_feedback():
+    template = Path("templates/admin/system/config/portal.html").read_text()
 
     assert "{% if error %}" in template
     assert "{% elif saved %}" in template

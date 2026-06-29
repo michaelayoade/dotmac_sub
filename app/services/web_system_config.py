@@ -147,7 +147,7 @@ def get_preferences_context(db: Session) -> dict:
 
 
 def save_preferences(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS)
+    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS, use_specs=True)
 
 
 # 8.7 Subscriber Settings — REMOVED. The page's keys were not consumed by
@@ -172,7 +172,7 @@ def get_portal_config_context(db: Session) -> dict:
 
 
 def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS)
+    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS, use_specs=True)
 
 
 # 8.10 Data Retention — REMOVED. The page's retention keys were inert: no cleanup

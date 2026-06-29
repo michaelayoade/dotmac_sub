@@ -4144,6 +4144,12 @@ def config_email_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/portal", response_class=HTMLResponse)
 def config_portal_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_portal_config_context(db)
+    data.update(
+        {
+            "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse(
         "admin/system/config/portal.html",
         _config_context(request, db, {"active_page": "config-portal", **data}),
@@ -4153,8 +4159,15 @@ def config_portal_page(request: Request, db: Session = Depends(get_db)):
 @router.post("/config/portal", response_class=HTMLResponse)
 def config_portal_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_portal_config(db, form)
-    return RedirectResponse(url="/admin/system/config/portal", status_code=303)
+    try:
+        web_system_config_service.save_portal_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/portal?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(url="/admin/system/config/portal?saved=1", status_code=303)
 
 
 # --- 8.10 Data Retention: REMOVED (inert/dead config; enforced retention lives on

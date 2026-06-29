@@ -54,6 +54,10 @@ theme.
 - Monitoring config saves now redirect back with explicit success or validation
   error feedback instead of allowing invalid spec-backed values to become server
   errors.
+- The remaining consumed auth-domain Preferences/Portal settings now have
+  `settings_spec` entries. Preferences and Portal saves use the typed save path,
+  and Portal redirects now validate the allowed root targets with explicit
+  success/error feedback.
 
 ### Still open
 
@@ -106,6 +110,10 @@ theme.
 - `poetry run pytest tests/test_system_config_pages.py tests/test_network_monitoring_services.py tests/test_admin_route_permissions.py -q`
   - Result: `58 passed`
 - `poetry run ruff check app/web/admin/system.py app/services/web_system_config.py tests/test_system_config_pages.py tests/test_network_monitoring_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_auth_services.py tests/test_auth_flow.py tests/test_email_services.py tests/test_settings_seed_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/settings_spec.py app/services/web_system_config.py app/web/admin/system.py tests/test_system_config_pages.py`
   - Result: passed
 
 ## What this audit is
