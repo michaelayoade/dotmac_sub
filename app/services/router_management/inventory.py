@@ -29,7 +29,10 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
-ROUTER_CREDENTIAL_FIELDS = ("rest_api_password",)
+# Both are encrypted at rest. Reads go through decrypt_credential(), which
+# passes legacy plaintext values through unchanged, so existing rows keep
+# working until their next write re-encrypts them.
+ROUTER_CREDENTIAL_FIELDS = ("rest_api_username", "rest_api_password")
 JUMP_HOST_CREDENTIAL_FIELDS = ("ssh_key", "ssh_password")
 
 
