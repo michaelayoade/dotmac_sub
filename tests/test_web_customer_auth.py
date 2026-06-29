@@ -62,7 +62,8 @@ def test_customer_mfa_template_has_submit_loading_state():
     assert 'x-data="{ loading: false, code: \'\' }"' in template
     assert 'x-on:submit="loading = true"' in template
     assert 'x-model="code"' in template
-    assert ':disabled="loading || code.length !== 6"' in template
+    assert ':disabled="loading || code.length < 6"' in template
+    assert "Verification or recovery code" in template
     assert "loading ? 'Verifying...' : 'Verify'" in template
 
 

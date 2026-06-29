@@ -44,12 +44,15 @@ UX-polish + operator-control lens (**not** a full security review).
 - Customer and reseller profile pages now list active portal sessions, mark the
   current session, and provide a "sign out other sessions" action that preserves
   the current portal cookie while revoking older sessions.
+- MFA recovery codes are now schema-backed, stored as one-time hashes, shown once
+  after MFA enrollment/replacement, and accepted on the existing MFA challenge for
+  admin, customer, and reseller login flows.
 
 ### Still open
 
-- Real MFA recovery/backup codes still need a schema-backed design and security
-  review.
-- Schema-backed MFA recovery codes remain open.
+- No Auth/Sessions UX-polish/control audit items remain open in this draft PR.
+  The separate security-review pointers noted above remain out of scope for this
+  audit series.
 
 ### Verification
 
@@ -87,6 +90,16 @@ UX-polish + operator-control lens (**not** a full security review).
   - Result: `10 passed`
 - `poetry run pytest tests/test_web_customer_auth.py tests/test_web_reseller_auth.py -q`
   - Result: `21 passed`
+- `poetry run pytest tests/test_auth_flow.py::test_mfa_setup_confirm tests/test_auth_flow.py::test_admin_login_mfa_verify_issues_tokens tests/test_auth_flow.py::test_mfa_recovery_code_is_one_time_login_fallback tests/test_auth_flow.py::test_admin_mfa_verify_rejects_wrong_code tests/test_auth_flow.py::test_mfa_verify_locks_after_repeated_wrong_codes -q`
+  - Result: `5 passed`
+- `poetry run pytest tests/test_reseller_portal_phase1b.py::test_reseller_user_mfa_setup_and_confirm tests/test_api_reseller_self_scoped.py::test_mfa_setup_and_confirm_flow -q`
+  - Result: `2 passed`
+- `poetry run pytest tests/test_auth_flow.py tests/test_web_customer_auth.py tests/test_web_reseller_auth.py tests/test_admin_system_route_guards.py -q`
+  - Result: `77 passed`
+- `poetry run pytest tests/test_auth_flow_helpers.py -q`
+  - Result: `42 passed`
+- `poetry run ruff check app/models/auth.py app/models/__init__.py app/services/auth_flow.py app/services/web_auth.py app/web/customer/routes.py app/services/web_reseller_routes.py app/web/admin/system.py tests/test_auth_flow.py tests/test_web_customer_auth.py alembic/versions/186_mfa_recovery_codes.py`
+  - Result: passed
 
 ## What this audit is
 

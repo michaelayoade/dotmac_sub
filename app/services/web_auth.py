@@ -373,13 +373,34 @@ def mfa_enroll_confirm(
     try:
         payload = _mfa_enrollment_payload(db, enrollment_token)
         principal_id = str(payload.get("principal_id") or payload.get("sub"))
-        auth_flow_service.auth_flow.admin_mfa_confirm(
+        method = auth_flow_service.auth_flow.admin_mfa_confirm(
             db, method_id, code.strip(), principal_id
+        )
+        recovery_codes = (
+            auth_flow_service.generate_mfa_recovery_codes(db, method)
+            if getattr(method, "id", None)
+            else []
         )
         result = auth_flow_service.auth_flow._issue_tokens(  # noqa: SLF001
             db, "system_user", principal_id, request
         )
-        response = RedirectResponse(url=redirect_url, status_code=303)
+        if recovery_codes:
+            response = templates.TemplateResponse(
+                request,
+                "auth/mfa_enroll.html",
+                {
+                    "request": request,
+                    "next": redirect_url,
+                    "method_id": method_id,
+                    "secret_key": "",
+                    "otpauth_uri": "",
+                    "recovery_codes": recovery_codes,
+                    "continue_url": redirect_url,
+                    "csrf_token": _get_csrf_token(request),
+                },
+            )
+        else:
+            response = RedirectResponse(url=redirect_url, status_code=303)
         response.delete_cookie(MFA_ENROLLMENT_COOKIE)
         cookie_cfg = _session_cookie_settings(db)
         secure_cookie = cookie_cfg["secure"] and _is_https_request(request)

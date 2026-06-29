@@ -1481,7 +1481,7 @@ def user_profile_mfa_confirm(
         return RedirectResponse(url="/admin/system/users/profile", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.admin_mfa_confirm(
+        method = auth_flow_service.auth_flow.admin_mfa_confirm(
             db, method_id, code.strip(), principal_id
         )
     except Exception:
@@ -1500,6 +1500,29 @@ def user_profile_mfa_confirm(
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "admin/system/profile_mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "users",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "qr_code_url": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/admin/system/users/profile?mfa=enabled",
+            },
         )
 
     return RedirectResponse(

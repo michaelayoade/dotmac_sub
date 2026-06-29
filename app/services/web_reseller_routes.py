@@ -544,11 +544,11 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
 
     try:
         if context["principal_type"] == "reseller_user":
-            auth_flow_service.auth_flow.reseller_mfa_confirm(
+            method = auth_flow_service.auth_flow.reseller_mfa_confirm(
                 db, method_id, code.strip(), context["principal_id"]
             )
         else:
-            auth_flow_service.auth_flow.mfa_confirm(
+            method = auth_flow_service.auth_flow.mfa_confirm(
                 db, method_id, code.strip(), context["principal_id"]
             )
     except Exception:
@@ -565,6 +565,27 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "reseller/profile/mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "profile",
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/reseller/profile",
+            },
         )
 
     mfa_methods = _reseller_mfa_methods(db, context)

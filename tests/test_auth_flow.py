@@ -10,7 +10,13 @@ from jose import jwt
 from starlette.requests import Request
 
 from app.api.auth_flow import router as auth_flow_router
-from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
+from app.models.auth import (
+    AuthProvider,
+    MFAMethod,
+    MFARecoveryCode,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import UserType
@@ -819,6 +825,71 @@ def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
         request,
     )
     assert verified["access_token"]
+
+
+def test_mfa_recovery_code_is_one_time_login_fallback(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="mfa-recovery@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    method = AuthFlow.mfa_confirm(
+        db_session,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        str(person.id),
+    )
+    recovery_codes = auth_flow_service.generate_mfa_recovery_codes(db_session, method)
+
+    assert len(recovery_codes) == 10
+    assert (
+        db_session.query(MFARecoveryCode)
+        .filter(MFARecoveryCode.mfa_method_id == method.id)
+        .filter(MFARecoveryCode.is_active.is_(True))
+        .count()
+        == 10
+    )
+    stored_codes = (
+        db_session.query(MFARecoveryCode)
+        .filter(MFARecoveryCode.mfa_method_id == method.id)
+        .all()
+    )
+    assert all(row.code_hash not in recovery_codes for row in stored_codes)
+
+    request = _make_request()
+    result = AuthFlow.login(
+        db_session, "mfa-recovery@example.com", "secret", request, None
+    )
+
+    verified = AuthFlow.mfa_verify(
+        db_session,
+        result["mfa_token"],
+        recovery_codes[0],
+        request,
+    )
+    assert verified["access_token"]
+
+    reused_login = AuthFlow.login(
+        db_session, "mfa-recovery@example.com", "secret", request, None
+    )
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.mfa_verify(
+            db_session,
+            reused_login["mfa_token"],
+            recovery_codes[0],
+            request,
+        )
+    assert exc.value.status_code == 401
 
 
 def test_admin_mfa_verify_rejects_wrong_code(db_session, monkeypatch):

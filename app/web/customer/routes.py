@@ -1388,7 +1388,7 @@ def customer_mfa_confirm(
         return RedirectResponse(url="/portal/profile", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.mfa_confirm(
+        method = auth_flow_service.auth_flow.mfa_confirm(
             db, method_id, code.strip(), str(subscriber_id)
         )
     except Exception:
@@ -1404,6 +1404,26 @@ def customer_mfa_confirm(
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "customer/profile/mfa_setup.html",
+            {
+                "request": request,
+                "customer": customer,
+                "active_page": "profile",
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/portal/profile?saved=security",
+            },
         )
 
     return RedirectResponse(url="/portal/profile?saved=security", status_code=303)
