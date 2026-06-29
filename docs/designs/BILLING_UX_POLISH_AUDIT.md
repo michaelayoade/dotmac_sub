@@ -54,6 +54,9 @@ settings/integrity/reconcilers.
   submit button after confirmation, re-renders validation errors, and normalizes
   booleans, enum values, numeric ranges, decimal money fields, and CSV day lists
   before persistence.
+- Bulk invoice mark-paid now returns processed and skipped counts with a
+  partial-success message when selected invoices are missing, already paid, or
+  not eligible.
 
 ### Partially resolved
 
@@ -65,8 +68,7 @@ settings/integrity/reconcilers.
 
 ### Still open
 
-- Remaining irreversible money-action server-side idempotency and untouched
-  high-risk actions such as fleet-wide billing settings save.
+- Remaining irreversible money-action server-side idempotency.
 - Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
   and raw exception copy cleanup.
 - Customer post-payment-return states.
@@ -108,6 +110,10 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run pytest tests/test_billing_settings.py -q`
   - Result: `10 passed`
+- `poetry run ruff check app/web/admin/billing_invoice_bulk.py tests/test_billing_invoice_send_actions.py`
+  - Result: passed
+- `poetry run pytest tests/test_billing_invoice_send_actions.py -q`
+  - Result: passed
 
 ## What this audit is
 
