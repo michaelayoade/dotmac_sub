@@ -61,6 +61,40 @@ def test_consolidated_record_payment_redirects_with_success(db_session, monkeypa
     }
 
 
+def test_consolidated_record_payment_uses_default_currency_when_omitted(
+    db_session, monkeypatch
+):
+    captured = {}
+
+    def _fake_record_bulk_payment(db, **kwargs):
+        captured.update(kwargs)
+        return "payment-1"
+
+    monkeypatch.setattr(
+        billing_consolidated.web_consolidated_billing_service,
+        "record_bulk_payment",
+        _fake_record_bulk_payment,
+    )
+    monkeypatch.setattr(
+        billing_consolidated.settings_spec,
+        "resolve_value",
+        lambda *_args, **_kwargs: "USD",
+    )
+
+    response = billing_consolidated.consolidated_record_payment(
+        request=None,
+        billing_account_id="account-1",
+        amount="1000.00",
+        currency=None,
+        memo=None,
+        collection_account_id=None,
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert captured["currency"] == "USD"
+
+
 def test_consolidated_record_payment_redirects_with_safe_error(
     db_session, monkeypatch
 ):

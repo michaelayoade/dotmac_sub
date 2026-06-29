@@ -106,6 +106,9 @@ settings/integrity/reconcilers.
   row actions are limited to real View/Edit/Create Invoice routes.
 - Invoice detail, invoice list, ledger, and AR-aging templates now render
   currency-aware amounts instead of hardcoded naira glyphs.
+- Credit and collection-account forms, consolidated payment routing, and the
+  billing adapter now use `billing.default_currency` when no explicit currency is
+  provided.
 
 ### Partially resolved
 
@@ -265,6 +268,11 @@ settings/integrity/reconcilers.
   - Result: passed
 - `poetry run python -c "...billing money templates contain no naira glyphs..."`
   - Result: passed
+- `poetry run ruff check app/services/web_billing_credits.py app/services/web_billing_collection_accounts.py app/web/admin/billing_consolidated.py app/services/billing_adapter.py tests/test_billing_money_action_templates.py tests/test_billing_consolidated_web.py tests/test_boundary_adapters.py`
+  - Result: passed
+- `poetry run python -c "...default currency form/route/adapter assertions..."`
+  - Result: passed; importing the admin route emitted local scheduler/DB
+    connection warnings before the assertions completed.
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -453,7 +461,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Med) `accounts.html:29-53` — stat cards read total_balance/active_count/suspended_count never provided → always ₦0/0 → compute aggregates or drop cards [resolved in draft]
 - [POLISH] (Med) `credit_form.html:34,53` — Issue Credit no confirm, no `min` → confirm + `min="0.01"` [resolved in draft]
 - [POLISH] (Med) `collection_accounts.html:115` — Deactivate settlement account (payments reference it) no confirm → confirm [resolved in draft]
-- [CONTROL] (Med) `credit_form.html:39`, `collection_accounts.html:55`, `billing_consolidated.py:90`, `billing_adapter` — currency hardcoded NGN despite `default_currency` setting → seed from setting [recommend]
+- [CONTROL] (Med) `credit_form.html:39`, `collection_accounts.html:55`, `billing_consolidated.py:90`, `billing_adapter` — currency hardcoded NGN despite `default_currency` setting → seed from setting [resolved in draft]
 - [CONTROL] (Med) `app/services/web_billing_invoice_batch.py:410` / `invoice_batch.html:199` — run_day default 1, cap 1-28 hardcoded → consider end-of-month anchor option [defer]
 - [CONTROL] (Low) `app/services/reseller_portal_billing.py:38` — `_INTENT_TTL=30min` hardcoded → setting (default 30m) [defer]
 - [CONTROL] (Low) `app/services/vas_wallet.py:461` — dup-submit guard 60s hardcoded → setting if false positives [defer]

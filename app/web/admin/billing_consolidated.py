@@ -10,6 +10,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.domain_settings import SettingDomain
+from app.services import settings_spec
 from app.services import web_consolidated_billing as web_consolidated_billing_service
 from app.services.auth_dependencies import require_permission
 
@@ -20,6 +22,12 @@ _CONSOLIDATED_PAYMENT_ERROR = (
     "Unable to record consolidated payment. Check the amount and account details."
 )
 _CONSOLIDATED_PAYMENT_SUCCESS = "Consolidated payment recorded and distributed."
+
+
+def _default_currency(db: Session) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
 
 
 def _consolidated_detail_url(
@@ -115,7 +123,7 @@ def consolidated_record_payment(
     request: Request,
     billing_account_id: str,
     amount: str = Form(...),
-    currency: str = Form("NGN"),
+    currency: str | None = Form(None),
     memo: str | None = Form(None),
     collection_account_id: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -125,7 +133,7 @@ def consolidated_record_payment(
             db,
             billing_account_id=billing_account_id,
             amount=amount,
-            currency=currency,
+            currency=(currency or _default_currency(db)).strip().upper(),
             memo=memo,
             collection_account_id=collection_account_id or None,
         )

@@ -36,7 +36,7 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Currency</label>
-                    <input type="text" name="currency" value="NGN"
+                    <input type="text" name="currency" value="{{ default_currency|default('NGN') }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>

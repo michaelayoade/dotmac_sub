@@ -18,6 +18,16 @@ def test_manual_payment_and_credit_forms_confirm_and_bound_amounts():
     assert 'min="0.01"' in credit_form
 
 
+def test_credit_and_collection_forms_seed_currency_from_default_setting_context():
+    credit_form = _template("templates/admin/billing/credit_form.html")
+    collection_accounts = _template("templates/admin/billing/collection_accounts.html")
+
+    assert 'value="{{ default_currency|default(' in credit_form
+    assert 'value="NGN"' not in credit_form
+    assert "default_currency|default(" in collection_accounts
+    assert 'value="NGN"' not in collection_accounts
+
+
 def test_dunning_and_routing_actions_confirm_before_state_changes():
     dunning = _template("templates/admin/billing/dunning.html")
     arrangement = _template("templates/admin/billing/payment_arrangement_detail.html")
