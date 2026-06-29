@@ -45,6 +45,9 @@ def list_context(
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, object]:
+    total = RouterInventory.count(db, status=status, search=search)
+    page = (offset // limit) + 1 if limit else 1
+    total_pages = max(1, (total + limit - 1) // limit) if limit else 1
     context = _base_context(request, db)
     context.update(
         {
@@ -53,6 +56,17 @@ def list_context(
             ),
             "status_filter": status,
             "search": search or "",
+            "limit": limit,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "total_pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "start": offset + 1 if total else 0,
+                "end": min(offset + limit, total),
+            },
             "summary": RouterMonitoringService.get_dashboard_summary(db),
         }
     )
