@@ -13,19 +13,24 @@
 
 {% set status = invoice.status|default('draft') %}
 {% set status_val = status.value if status is not string else status %}
+{% set invoice_currency = invoice.currency or 'NGN' %}
+{% set status_variant_map = {
+    'paid': 'paid',
+    'issued': 'info',
+    'sent': 'pending',
+    'pending': 'pending',
+    'partially_paid': 'warning',
+    'overdue': 'overdue',
+    'void': 'inactive',
+    'written_off': 'inactive',
+    'draft': 'draft'
+} %}
+{% set status_label = status_val | replace('_', ' ') | title %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% set status_html %}
-        {% if status_val == 'paid' %}
-        {{ status_badge("Paid", variant="paid") }}
-        {% elif status_val in ['pending', 'sent'] %}
-        {{ status_badge("Pending", variant="pending") }}
-        {% elif status_val == 'overdue' %}
-        {{ status_badge("Overdue", variant="overdue") }}
-        {% else %}
-        {{ status_badge(status_val | title, variant="draft") }}
-        {% endif %}
+        {{ status_badge(status_label, variant=status_variant_map.get(status_val, 'default')) }}
     {% endset %}
 
     <div class="relative z-40">
@@ -164,11 +169,11 @@
                 {% endcall %}
 
                 <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
-                    {{ metric_row("Subtotal", "₦" ~ '{:,.2f}'.format(invoice.subtotal or 0), color="slate", mono=True) }}
-                    {{ metric_row("Tax", "₦" ~ '{:,.2f}'.format(invoice.tax_total or 0), color="slate", mono=True) }}
+                    {{ metric_row("Subtotal", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.subtotal or 0), color="slate", mono=True) }}
+                    {{ metric_row("Tax", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.tax_total or 0), color="slate", mono=True) }}
                     <div class="flex items-center justify-between py-2.5 mt-2">
                         <span class="text-base font-semibold text-slate-900 dark:text-white">Total</span>
-                        <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</span>
+                        <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</span>
                     </div>
                 </div>
             {% endcall %}
@@ -226,8 +231,8 @@
                             <tr>
                                 <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ item.description | default('Service charge') }}</td>
                                 <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ item.quantity | default(1) }}</td>
-                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono tabular-nums">₦{{ '{:,.2f}'.format(item.unit_amount or item.unit_price or 0) }}</td>
-                                <td class="px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(item.total_amount or item.amount or 0) }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(item.unit_amount or item.unit_price or 0) }}</td>
+                                <td class="px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(item.total_amount or item.amount or 0) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -265,11 +270,11 @@
                 {% endif %}
 
                 <div class="mb-4">
-                    <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(invoice.balance_due or 0) }}</p>
+                    <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.balance_due or 0) }}</p>
                     <p class="text-sm text-slate-500 dark:text-slate-400">Balance due</p>
                 </div>
-                {{ metric_row("Payments", "₦" ~ '{:,.2f}'.format(totals.paid), color="emerald", mono=True) }}
-                {{ metric_row("Credits", "₦" ~ '{:,.2f}'.format(totals.credit), color="blue", mono=True) }}
+                {{ metric_row("Payments", invoice_currency ~ " " ~ '{:,.2f}'.format(totals.paid), color="emerald", mono=True) }}
+                {{ metric_row("Credits", invoice_currency ~ " " ~ '{:,.2f}'.format(totals.credit), color="blue", mono=True) }}
             {% endcall %}
 
             {# Bank Details #}
@@ -312,7 +317,7 @@
                                 {% set available = (note.total or 0) - (note.applied_total or 0) %}
                                 {% if available > 0 %}
                                 <option value="{{ note.id }}">
-                                    {{ note.credit_number | default('Credit Note') }} - ₦{{ '{:,.2f}'.format(available) }} available
+                                    {{ note.credit_number | default('Credit Note') }} - {{ note.currency or invoice_currency }} {{ '{:,.2f}'.format(available) }} available
                                 </option>
                                 {% endif %}
                             {% endfor %}

@@ -276,6 +276,11 @@ def test_setting_spec_registered():
     assert spec.env_var == "BILLING_AUTOPAY_CHARGE_ONLY_DUE"
     assert spec.default is True
 
+    failure_spec = get_spec(SettingDomain.billing, "autopay_max_consecutive_failures")
+    assert failure_spec is not None
+    assert failure_spec.env_var == "BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES"
+    assert failure_spec.default == 3
+
 
 def test_gating_skips_invoice_not_yet_due(db_session, subscriber, monkeypatch):
     _card(db_session, subscriber.id)
@@ -399,6 +404,40 @@ def test_mandate_skipped_after_three_consecutive_failures(
     result = autopay.run_account_autopay(db_session, str(subscriber.id))
     assert result.get("skipped") == "too_many_failures"
     assert len(calls) == autopay.MAX_CONSECUTIVE_FAILURES  # no further charges
+
+
+def test_mandate_failure_cap_can_be_configured(db_session, subscriber, monkeypatch):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="autopay_max_consecutive_failures",
+            value_type=SettingValueType.integer,
+            value_text="2",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _card(db_session, subscriber.id)
+    _open_invoice(db_session, subscriber.id, Decimal("5000.00"))
+    autopay.enable(db_session, str(subscriber.id))
+    _mock_no_recovery(monkeypatch)
+
+    calls: list[dict] = []
+    _mock_charge(monkeypatch, status="failed", calls=calls)
+
+    for _ in range(2):
+        autopay.run_account_autopay(db_session, str(subscriber.id))
+
+    status = autopay.get_status(db_session, str(subscriber.id))
+    assert status["failure_count"] == 2
+    assert status["suspended"] is True
+
+    result = autopay.run_account_autopay(db_session, str(subscriber.id))
+    assert result.get("skipped") == "too_many_failures"
+    assert len(calls) == 2
 
 
 def test_success_resets_failure_count(db_session, subscriber, monkeypatch):
