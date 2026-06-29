@@ -28,7 +28,9 @@ from app.schemas.auth import (
 )
 from app.services import auth as auth_service
 from app.services import auth_flow as auth_flow_service
+from app.services import settings_spec
 from app.services import web_auth as web_auth_service
+from app.services import web_system_config as web_system_config_service
 from app.services.auth_flow import hash_password
 
 
@@ -154,6 +156,65 @@ def test_admin_forgot_password_template_has_submit_loading_state():
     assert 'x-on:submit="loading = true"' in template
     assert ':disabled="loading"' in template
     assert "loading ? 'Sending...' : 'Send reset link'" in template
+
+
+def test_auth_admin_policy_settings_are_registered():
+    expected = {
+        "admin_mfa_required": False,
+        "admin_login_max_attempts": 5,
+        "admin_lockout_minutes": 15,
+        "mfa_max_failed_attempts": 5,
+        "mfa_lockout_minutes": 15,
+    }
+
+    for key, default in expected.items():
+        spec = settings_spec.get_spec(SettingDomain.auth, key)
+        assert spec is not None
+        assert spec.default == default
+
+
+def test_preferences_context_reads_legacy_force_2fa(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="force_2fa",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = web_system_config_service.get_preferences_context(db_session)
+
+    assert context["preferences"]["admin_mfa_required"] == "true"
+
+
+def test_preferences_save_writes_canonical_admin_mfa_required(db_session):
+    web_system_config_service.save_preferences(
+        db_session,
+        {
+            "default_landing_page": "admin",
+            "admin_portal_title": "DotMac Admin",
+            "admin_mfa_required": "true",
+            "search_debounce_ms": "250",
+        },
+    )
+
+    setting = (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == "admin_mfa_required")
+        .one()
+    )
+    assert setting.value_text == "true"
+    assert (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == "force_2fa")
+        .first()
+        is None
+    )
 
 
 def test_user_credentials_soft_delete(db_session, person):

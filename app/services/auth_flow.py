@@ -48,6 +48,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -189,10 +190,25 @@ def _totp_issuer(db: Session | None) -> str:
 
 
 def _force_admin_mfa(db: Session | None) -> bool:
-    value = _setting_value(db, "force_2fa")
+    value = _env_value("ADMIN_MFA_REQUIRED")
     if value is None:
         value = _setting_value(db, "admin_mfa_required")
+    if value is None:
+        value = _setting_value(db, "force_2fa")
+    if value is None:
+        value = resolve_value(db, SettingDomain.auth, "admin_mfa_required")
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _setting_int(
+    db: Session | None, key: str, default: int, *, minimum: int = 1
+) -> int:
+    value = resolve_value(db, SettingDomain.auth, key)
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
 
 
 def _refresh_cookie_name(db: Session | None) -> str:
@@ -766,15 +782,49 @@ LOGIN_MAX_FAILED_ATTEMPTS = 5
 LOGIN_LOCKOUT_MINUTES = 15
 
 
+def _admin_login_max_failed_attempts(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "admin_login_max_attempts",
+        LOGIN_MAX_FAILED_ATTEMPTS,
+    )
+
+
+def _admin_login_lockout_minutes(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "admin_lockout_minutes",
+        LOGIN_LOCKOUT_MINUTES,
+    )
+
+
 def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
     credential.failed_login_attempts += 1
-    if credential.failed_login_attempts >= LOGIN_MAX_FAILED_ATTEMPTS:
-        credential.locked_until = now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+    if credential.failed_login_attempts >= _admin_login_max_failed_attempts(db):
+        credential.locked_until = now + timedelta(
+            minutes=_admin_login_lockout_minutes(db)
+        )
     db.commit()
 
 
 MFA_MAX_FAILED_ATTEMPTS = 5
 MFA_LOCKOUT_MINUTES = 15
+
+
+def _mfa_max_failed_attempts(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "mfa_max_failed_attempts",
+        MFA_MAX_FAILED_ATTEMPTS,
+    )
+
+
+def _mfa_lockout_minutes(db: Session | None) -> int:
+    return _setting_int(
+        db,
+        "mfa_lockout_minutes",
+        MFA_LOCKOUT_MINUTES,
+    )
 
 
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
@@ -790,8 +840,8 @@ def ensure_mfa_not_locked(method: MFAMethod) -> None:
 
 def record_mfa_failure(db: Session, method: MFAMethod) -> None:
     method.failed_attempts = (method.failed_attempts or 0) + 1
-    if method.failed_attempts >= MFA_MAX_FAILED_ATTEMPTS:
-        method.locked_until = _now() + timedelta(minutes=MFA_LOCKOUT_MINUTES)
+    if method.failed_attempts >= _mfa_max_failed_attempts(db):
+        method.locked_until = _now() + timedelta(minutes=_mfa_lockout_minutes(db))
         method.failed_attempts = 0
     db.commit()
 

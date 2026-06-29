@@ -78,13 +78,17 @@ def _save_settings(
 PREFERENCE_KEYS = [
     "default_landing_page",
     "admin_portal_title",
-    "force_2fa",
+    "admin_mfa_required",
     "search_debounce_ms",
 ]
 
 
 def get_preferences_context(db: Session) -> dict:
-    return {"preferences": _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)}
+    preferences = _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)
+    if not preferences.get("admin_mfa_required"):
+        legacy = _read_settings(db, SettingDomain.auth, ["force_2fa"])
+        preferences["admin_mfa_required"] = legacy.get("force_2fa", "")
+    return {"preferences": preferences}
 
 
 def save_preferences(db: Session, data: Mapping[str, Any]) -> None:

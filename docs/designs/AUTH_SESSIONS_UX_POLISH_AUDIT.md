@@ -29,13 +29,18 @@ UX-polish + operator-control lens (**not** a full security review).
 - Customer portal login and MFA forms now have submit loading states, disabled
   buttons during submission, and MFA code-length gating to match the admin/reseller
   auth experience.
+- Admin login lockout, admin lockout duration, MFA failure threshold, MFA lockout
+  duration, and admin MFA enforcement are now registered auth-domain settings with
+  the previous hardcoded values preserved as defaults. The system preferences UI
+  now writes the canonical `admin_mfa_required` key while still reading legacy
+  `force_2fa` values.
 
 ### Still open
 
 - Real MFA recovery/backup codes still need a schema-backed design and security
   review.
-- Admin lockout/MFA policy drift, password-min/remember-me copy, active sessions,
-  and schema-backed MFA recovery codes remain open.
+- Password-min/remember-me copy, active sessions, and schema-backed MFA recovery
+  codes remain open.
 
 ### Verification
 
@@ -54,6 +59,10 @@ UX-polish + operator-control lens (**not** a full security review).
 - `poetry run pytest tests/test_web_customer_auth.py -q`
   - Result: `14 passed`
 - `poetry run ruff check tests/test_web_customer_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_flow.py tests/test_auth_services.py -q`
+  - Result: `68 passed`
+- `poetry run ruff check app/services/auth_flow.py app/services/settings_spec.py app/services/web_system_config.py tests/test_auth_flow.py tests/test_auth_services.py`
   - Result: passed
 
 ## What this audit is

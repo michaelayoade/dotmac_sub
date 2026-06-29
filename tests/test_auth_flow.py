@@ -814,7 +814,7 @@ def test_admin_login_requires_mfa_enrollment_when_forced(db_session, monkeypatch
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     setting = DomainSetting(
         domain=SettingDomain.auth,
-        key="force_2fa",
+        key="admin_mfa_required",
         value_type=SettingValueType.boolean,
         value_text="true",
         is_active=True,
@@ -827,6 +827,28 @@ def test_admin_login_requires_mfa_enrollment_when_forced(db_session, monkeypatch
     result = AuthFlow.login(
         db_session, system_user.email, "secret", _make_request(), None
     )
+    assert result["mfa_enrollment_required"] is True
+    assert result["mfa_enrollment_token"]
+
+
+def test_admin_login_legacy_force_2fa_still_requires_mfa(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    setting = DomainSetting(
+        domain=SettingDomain.auth,
+        key="force_2fa",
+        value_type=SettingValueType.boolean,
+        value_text="true",
+        is_active=True,
+    )
+    db_session.add(setting)
+    system_user, _credential = _system_user_with_credential(
+        db_session, "admin-legacy-force-enroll@example.com"
+    )
+
+    result = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+
     assert result["mfa_enrollment_required"] is True
     assert result["mfa_enrollment_token"]
 
@@ -855,6 +877,66 @@ def test_login_locked_account_is_not_a_password_oracle(db_session, person, monke
     db_session.refresh(credential)
     # Attempts while locked must not extend the lock or bump the counter.
     assert credential.failed_login_attempts == 5
+
+
+def test_admin_login_lockout_uses_configured_policy(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="admin_login_max_attempts",
+                value_type=SettingValueType.integer,
+                value_text="2",
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="admin_lockout_minutes",
+                value_type=SettingValueType.integer,
+                value_text="7",
+                is_active=True,
+            ),
+        ]
+    )
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="configured-lockout@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    request = _make_request()
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.login(
+                db_session,
+                "configured-lockout@example.com",
+                "wrong",
+                request,
+                None,
+            )
+        assert exc.value.status_code == 401
+
+    db_session.refresh(credential)
+    assert credential.failed_login_attempts == 2
+    assert credential.locked_until is not None
+    remaining = auth_flow_service._as_utc(credential.locked_until) - datetime.now(UTC)
+    assert timedelta(minutes=6) <= remaining <= timedelta(minutes=7)
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(
+            db_session,
+            "configured-lockout@example.com",
+            "secret",
+            request,
+            None,
+        )
+    assert exc.value.status_code == 403
+    assert "Try again in 7 minutes." in str(exc.value.detail)
 
 
 def test_login_expired_lock_starts_fresh_window(db_session, person, monkeypatch):
@@ -962,6 +1044,65 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
 
     method = db_session.get(MFAMethod, setup["method_id"])
     assert method.locked_until is not None
+
+
+def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="mfa_max_failed_attempts",
+                value_type=SettingValueType.integer,
+                value_text="2",
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="mfa_lockout_minutes",
+                value_type=SettingValueType.integer,
+                value_text="4",
+                is_active=True,
+            ),
+        ]
+    )
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="configured-mfa-lockout@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    totp = pyotp.TOTP(setup["secret"])
+    AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    )
+
+    request = _make_request()
+    result = AuthFlow.login(
+        db_session, "configured-mfa-lockout@example.com", "secret", request, None
+    )
+    mfa_token = result["mfa_token"]
+    wrong = "000000" if totp.now() != "000000" else "111111"
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.mfa_verify(db_session, mfa_token, wrong, request)
+        assert exc.value.status_code == 401
+
+    method = db_session.get(MFAMethod, setup["method_id"])
+    assert method.locked_until is not None
+    remaining = auth_flow_service._as_utc(method.locked_until) - datetime.now(UTC)
+    assert timedelta(minutes=3) <= remaining <= timedelta(minutes=4)
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.mfa_verify(db_session, mfa_token, totp.now(), request)
+    assert exc.value.status_code == 429
+    assert "Try again in 4 minutes." in str(exc.value.detail)
 
 
 def test_mfa_setup_reuses_pending_method_row(db_session, person, monkeypatch):
