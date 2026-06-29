@@ -56,8 +56,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 Center(child: _AvatarEditor(me: me)),
                 const SizedBox(height: 12),
                 Center(
-                  child: Text(me.fullName,
-                      style: Theme.of(context).textTheme.titleLarge),
+                  child: Text(
+                    me.fullName,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                 ),
                 Center(child: Text(me.email)),
                 const SizedBox(height: 24),
@@ -112,10 +114,21 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.contacts_outlined),
                     title: const Text('Additional contacts'),
-                    subtitle:
-                        const Text('People we can reach about your account'),
+                    subtitle: const Text(
+                      'People we can reach about your account',
+                    ),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => context.push('/profile/contacts'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.card_giftcard_outlined),
+                    title: const Text('Refer & Earn'),
+                    subtitle: const Text('Invite friends, earn wallet credit'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/refer-and-earn'),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -141,10 +154,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 const SizedBox(height: 24),
                 FilledButton.tonalIcon(
                   style: FilledButton.styleFrom(
-                    backgroundColor:
-                        Theme.of(context).colorScheme.errorContainer,
-                    foregroundColor:
-                        Theme.of(context).colorScheme.onErrorContainer,
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.errorContainer,
+                    foregroundColor: Theme.of(
+                      context,
+                    ).colorScheme.onErrorContainer,
                   ),
                   icon: const Icon(Icons.logout),
                   label: const Text('Sign out'),
@@ -166,7 +181,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Future<void> _confirmDeleteAccount(
-      BuildContext context, WidgetRef ref) async {
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     final confirm = await showDialog<bool>(
       context: context,
@@ -196,17 +213,24 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     if (confirm != true) return;
     try {
       await ref.read(authControllerProvider.notifier).deleteAccount();
-      messenger.showSnackBar(const SnackBar(
-        content:
-            Text('Your account has been closed. You have been signed out.'),
-      ));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Your account has been closed. You have been signed out.',
+          ),
+        ),
+      );
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
-      messenger.showSnackBar(const SnackBar(
-        content: Text('Could not delete your account — please try again or '
-            'contact support@dotmac.ng.'),
-      ));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not delete your account — please try again or '
+            'contact support@dotmac.ng.',
+          ),
+        ),
+      );
     }
   }
 
@@ -242,8 +266,9 @@ class _AvatarEditorState extends ConsumerState<_AvatarEditor> {
         imageQuality: 85,
       );
     } catch (e) {
-      messenger
-          .showSnackBar(SnackBar(content: Text('Could not open gallery: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not open gallery: $e')),
+      );
       return;
     }
     if (picked == null) return;
@@ -397,8 +422,9 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
         if (ok) {
           setState(() => _enabled = true);
         } else {
-          messenger.showSnackBar(const SnackBar(
-              content: Text('Could not enable biometric unlock')));
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Could not enable biometric unlock')),
+          );
         }
       } else {
         await controller.disableBiometricLock();
@@ -421,8 +447,9 @@ class _BiometricToggleState extends ConsumerState<_BiometricToggle> {
         child: ListTile(
           leading: const Icon(Icons.fingerprint),
           title: const Text('Biometric unlock'),
-          subtitle:
-              const Text('Not available on this device. Tap to check again.'),
+          subtitle: const Text(
+            'Not available on this device. Tap to check again.',
+          ),
           onTap: _load,
         ),
       );
@@ -470,23 +497,36 @@ class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
       final sent =
           await ref.read(authRepositoryProvider).resendVerificationEmail();
       if (sent) {
-        messenger.showSnackBar(const SnackBar(
-            content: Text('Verification email sent — check your inbox.')));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Verification email sent — check your inbox.'),
+          ),
+        );
         // The verified flag lives on /me; refresh in case it just flipped.
         await ref.read(authControllerProvider.notifier).reloadProfile();
       } else {
-        messenger.showSnackBar(const SnackBar(
-            content: Text('Already verified or no email on file.')));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Already verified or no email on file.'),
+          ),
+        );
       }
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(
-        content: Text(e.statusCode == 429
-            ? 'Please wait a bit before trying again.'
-            : e.message),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            e.statusCode == 429
+                ? 'Please wait a bit before trying again.'
+                : e.message,
+          ),
+        ),
+      );
     } catch (_) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not send verification email. Try again.')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Could not send verification email. Try again.'),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -520,11 +560,9 @@ class _EmailVerifiedTileState extends ConsumerState<_EmailVerifiedTile> {
               ? const SizedBox(
                   height: 16,
                   width: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : TextButton(
-                  onPressed: _resend,
-                  child: const Text('Resend'),
-                ),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : TextButton(onPressed: _resend, child: const Text('Resend')),
         ],
       ),
     );
@@ -544,9 +582,11 @@ class _Tile extends StatelessWidget {
           Text(label),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(value,
-                textAlign: TextAlign.end,
-                style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TextStyle(color: Theme.of(context).colorScheme.outline),
+            ),
           ),
         ],
       ),
@@ -568,8 +608,9 @@ class _EditProfileSheet extends ConsumerStatefulWidget {
 class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   late final _firstName = TextEditingController(text: widget.me.firstName);
   late final _lastName = TextEditingController(text: widget.me.lastName);
-  late final _displayName =
-      TextEditingController(text: widget.me.displayName ?? '');
+  late final _displayName = TextEditingController(
+    text: widget.me.displayName ?? '',
+  );
   late final _phone = TextEditingController(text: widget.me.phone ?? '');
   late final _email = TextEditingController(text: widget.me.email);
   late final _addr1 = TextEditingController(text: widget.me.addressLine1 ?? '');
@@ -577,8 +618,9 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   late final _city = TextEditingController(text: widget.me.city ?? '');
   late final _region = TextEditingController(text: widget.me.region ?? '');
   late final _postal = TextEditingController(text: widget.me.postalCode ?? '');
-  late final _country =
-      TextEditingController(text: widget.me.countryCode ?? '');
+  late final _country = TextEditingController(
+    text: widget.me.countryCode ?? '',
+  );
   late String _gender = widget.me.gender ?? 'unknown';
   late String? _contactMethod = widget.me.preferredContactMethod;
   late String? _dob = widget.me.dateOfBirth; // ISO yyyy-MM-dd
@@ -629,9 +671,11 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       lastDate: now,
     );
     if (picked != null) {
-      setState(() => _dob = '${picked.year.toString().padLeft(4, '0')}-'
-          '${picked.month.toString().padLeft(2, '0')}-'
-          '${picked.day.toString().padLeft(2, '0')}');
+      setState(
+        () => _dob = '${picked.year.toString().padLeft(4, '0')}-'
+            '${picked.month.toString().padLeft(2, '0')}-'
+            '${picked.day.toString().padLeft(2, '0')}',
+      );
     }
   }
 
@@ -678,14 +722,20 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       final emailChanged = email != widget.me.email.trim();
       await ref.read(authControllerProvider.notifier).reloadProfile();
       navigator.pop();
-      messenger.showSnackBar(SnackBar(
-        content: Text(emailChanged
-            ? 'Email updated — check your inbox to verify it.'
-            : 'Profile updated'),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            emailChanged
+                ? 'Email updated — check your inbox to verify it.'
+                : 'Profile updated',
+          ),
+        ),
+      );
     } on ApiException catch (e) {
-      setState(() => _error =
-          e.statusCode == 409 ? 'That email is already in use.' : e.message);
+      setState(
+        () => _error =
+            e.statusCode == 409 ? 'That email is already in use.' : e.message,
+      );
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -706,8 +756,10 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             Text('Edit profile', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 16),
             if (_error != null) ...[
-              Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
               const SizedBox(height: 8),
             ],
             TextField(
@@ -725,8 +777,9 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             TextField(
               controller: _displayName,
               textCapitalization: TextCapitalization.words,
-              decoration:
-                  const InputDecoration(labelText: 'Display name (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Display name (optional)',
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -767,8 +820,9 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
               initialValue: _contactMethod,
-              decoration:
-                  const InputDecoration(labelText: 'Preferred contact method'),
+              decoration: const InputDecoration(
+                labelText: 'Preferred contact method',
+              ),
               items: [
                 const DropdownMenuItem<String?>(
                   value: null,
@@ -781,8 +835,10 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                   _busy ? null : (v) => setState(() => _contactMethod = v),
             ),
             const SizedBox(height: 20),
-            Text('Contact address',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Contact address',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _addr1,
@@ -793,8 +849,9 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             TextField(
               controller: _addr2,
               textCapitalization: TextCapitalization.words,
-              decoration:
-                  const InputDecoration(labelText: 'Address line 2 (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Address line 2 (optional)',
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -830,7 +887,8 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                   ? const SizedBox(
                       height: 20,
                       width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Text('Save'),
             ),
           ],
@@ -877,9 +935,9 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
           );
       if (mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Password changed')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Password changed')));
       }
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -897,8 +955,10 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Change password',
-              style: Theme.of(context).textTheme.titleLarge),
+          Text(
+            'Change password',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           const SizedBox(height: 4),
           Text(
             'This updates the password you use to sign in to the app and '
@@ -908,8 +968,10 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
           ),
           const SizedBox(height: 16),
           if (_error != null) ...[
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
             const SizedBox(height: 8),
           ],
           TextField(
@@ -930,7 +992,8 @@ class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
                 ? const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text('Save'),
           ),
         ],
