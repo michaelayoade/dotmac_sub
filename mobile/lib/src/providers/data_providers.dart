@@ -29,7 +29,9 @@ import '../repositories/wallet_repository.dart';
 import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
+import '../models/project.dart';
 import '../models/referral.dart';
+import '../repositories/project_repository.dart';
 import '../repositories/referral_repository.dart';
 import 'auth_controller.dart';
 
@@ -468,6 +470,17 @@ final referralsProvider = FutureProvider.autoDispose<ReferralSummary>((
 ) async {
   cacheFor(ref);
   return ref.watch(referralRepositoryProvider).summary();
+});
+
+final projectRepositoryProvider = Provider<ProjectRepository>(
+  (ref) => ProjectRepository(ref.watch(apiClientProvider).dio),
+);
+
+final projectsProvider = FutureProvider.autoDispose<ProjectsSummary>((
+  ref,
+) async {
+  cacheFor(ref);
+  return ref.watch(projectRepositoryProvider).summary();
 });
 
 final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((

@@ -13,6 +13,7 @@ import '../features/auth/profile_screen.dart';
 import '../features/auth/reset_password_screen.dart';
 import '../features/auth/sessions_screen.dart';
 import '../features/profile/contacts_screen.dart';
+import '../features/profile/installation_tracker_screen.dart';
 import '../features/profile/refer_and_earn_screen.dart';
 import '../features/profile/service_location_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
@@ -352,6 +353,10 @@ final routerProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: 'refer-and-earn',
                     builder: (_, __) => const ReferAndEarnScreen(),
+                  ),
+                  GoRoute(
+                    path: 'installation-progress',
+                    builder: (_, __) => const InstallationTrackerScreen(),
                   ),
                 ],
               ),
