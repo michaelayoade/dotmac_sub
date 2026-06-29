@@ -94,6 +94,8 @@ settings/integrity/reconcilers.
 - Customer top-up preset amounts now resolve from billing settings with the
   existing default of `1000,2000,5000,10000,20000,50000` and are constrained by
   the configured minimum/maximum top-up limits.
+- New/edit invoice form browser config now uses `resolve_payment_due_days`
+  instead of a hardcoded 30-day payment term.
 
 ### Partially resolved
 
@@ -225,6 +227,13 @@ settings/integrity/reconcilers.
 - `poetry run pytest tests/test_customer_portal_topup_flow.py tests/test_settings_seed_services.py -q`
   - Result: interrupted locally after pytest setup produced no output for about
     90 seconds; a single-test retry also stalled before the assertion body.
+- `poetry run ruff check app/services/web_billing_invoice_forms.py tests/test_web_billing_invoice_forms.py`
+  - Result: passed
+- `poetry run python -c "...web_billing_invoice_forms.new_form_state/edit_form_state..."`
+  - Result: passed
+- `poetry run pytest tests/test_web_billing_invoice_forms.py -q`
+  - Result: interrupted locally after pytest setup produced no output for about
+    60 seconds.
 - `poetry run ruff check tests/test_customer_portal_billing_routes.py`
   - Result: passed
 - `poetry run pytest tests/test_customer_portal_billing_routes.py -q`
@@ -372,7 +381,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Med) `app/web/admin/billing_invoice_bulk.py:97` — bulk mark-paid no skipped count though ineligible rows dropped (bulk void already reports) → report skipped consistently [recommend]
 - [POLISH] (Med) `invoice_detail.html:19-29` — status badge styles only paid/pending/sent/overdue; issued/partially_paid/void/written_off fall through to draft-grey → extend map to all statuses [recommend]
 - [POLISH] (Med) `invoice_form.html:78-84` + `app/services/billing/invoices.py:340-343` — currency select editable on edit but service rejects change with 400 → lock currency in edit mode [recommend]
-- [CONTROL/POLISH] (Med) `app/services/web_billing_invoice_forms.py:78,135` — form hardcodes paymentTermsDays=30 while `resolve_payment_due_days` is the configurable source → pass resolved value into form config [recommend]
+- [CONTROL/POLISH] (Med) `app/services/web_billing_invoice_forms.py:78,135` — form hardcodes paymentTermsDays=30 while `resolve_payment_due_days` is the configurable source → pass resolved value into form config [resolved in draft]
 - [POLISH] (Med) `invoice_batch.html:110` — "Run Batch" (money-generating) no double-submit guard / disable (only Preview has spinner) → disable on submit / idempotency token [recommend]
 - [POLISH] (Low) `app/services/web_billing_invoice_batch.py:56,222` — returns raw exception string into the page → log + generic message [recommend]
 - [POLISH] (Low) `app/services/web_billing_invoice_batch.py:190` — batch preview truncates to [:50] silently → label "showing 50 of N" [defer]
