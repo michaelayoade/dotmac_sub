@@ -6,8 +6,8 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
+from app.models.auth import ApiKey, SessionStatus
 from app.models.auth import Session as AuthSession
-from app.models.auth import SessionStatus
 from app.models.rbac import (
     Permission,
     Role,
@@ -17,6 +17,7 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
+from app.services.auth import hash_api_key
 from app.services.auth_flow import (
     _load_rbac_claims,
     decode_access_token,
@@ -139,12 +140,25 @@ def require_audit_auth(
                 request.state.actor_id = session_actor_id
                 request.state.actor_type = "user"
             return {"actor_type": "user", "actor_id": session_actor_id}
-    # NOTE: API keys are intentionally NOT accepted here. The JWT path above
-    # enforces an explicit audit scope (`_has_audit_scope`); ApiKey carries no
-    # scopes column, so an API key can never satisfy that requirement. Accepting
-    # x_api_key unconditionally was an authorization bypass — any active key could
-    # read the audit log without the audit scope JWTs must hold. If scoped API
-    # keys are introduced later, re-add a branch that checks the audit scope.
+    # API keys are accepted only when they carry an explicit audit scope — the
+    # same gate JWTs must pass (`_has_audit_scope`). A key with no/other scopes is
+    # rejected, closing the historical unscoped-key bypass.
+    if x_api_key:
+        api_key = (
+            db.query(ApiKey)
+            .filter(ApiKey.key_hash == hash_api_key(x_api_key))
+            .filter(ApiKey.is_active.is_(True))
+            .filter(ApiKey.revoked_at.is_(None))
+            .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
+            .first()
+        )
+        if api_key and _has_audit_scope({"scopes": list(api_key.scopes or [])}):
+            api_key.last_used_at = now
+            db.commit()
+            if request is not None:
+                request.state.actor_id = str(api_key.id)
+                request.state.actor_type = "api_key"
+            return {"actor_type": "api_key", "actor_id": str(api_key.id)}
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
