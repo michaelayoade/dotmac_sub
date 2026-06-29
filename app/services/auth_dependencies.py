@@ -6,8 +6,8 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
-from app.models.auth import SessionStatus
 from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.rbac import (
     Permission,
     Role,

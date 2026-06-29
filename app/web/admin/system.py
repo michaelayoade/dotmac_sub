@@ -2509,7 +2509,11 @@ def api_key_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/api_key_form.html", context)
 
 
-@router.post("/api-keys", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/api-keys",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def api_key_create(
     request: Request,
     label: str = Form(...),
@@ -2563,7 +2567,11 @@ def api_key_create(
         return templates.TemplateResponse("admin/system/api_key_form.html", context)
 
 
-@router.post("/api-keys/{key_id}/revoke", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/api-keys/{key_id}/revoke",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user
 
@@ -4108,7 +4116,11 @@ def company_info_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/company-info", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/company-info",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def company_info_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_company_info_service.save_company_info(db, form)
@@ -4150,7 +4162,11 @@ def config_preferences_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/preferences", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/preferences",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_preferences_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_preferences(db, form)
@@ -4163,7 +4179,11 @@ def config_email_page(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/email", status_code=303)
 
 
-@router.post("/config/email", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/email",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_email_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/email", status_code=303)
 
@@ -4178,7 +4198,11 @@ def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/subscribers", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/subscribers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_subscriber_config(db, form)
@@ -4195,7 +4219,11 @@ def config_portal_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/portal", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/portal",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_portal_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_portal_config(db, form)
@@ -4212,7 +4240,11 @@ def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/data-retention", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/data-retention",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_retention(db, form)
@@ -4241,7 +4273,11 @@ def config_billing_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/billing", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/billing",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_billing_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_billing_config_context(db)["billing"])
@@ -4279,7 +4315,11 @@ def config_direct_bank_transfer_page(request: Request, db: Session = Depends(get
     )
 
 
-@router.post("/config/direct-bank-transfer", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/direct-bank-transfer",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before_context = web_system_config_service.get_direct_bank_transfer_context(db)
@@ -4357,7 +4397,11 @@ def config_reminders_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/reminders", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/reminders",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_reminders_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_reminders_context(db)["reminders"])
@@ -4395,7 +4439,11 @@ def config_billing_notif_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/billing-notifications", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/billing-notifications",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_billing_notif_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(
@@ -4439,7 +4487,11 @@ def config_plan_change_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/plan-change", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/plan-change",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_plan_change_context(db)["plan_change"])
@@ -4497,7 +4549,11 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/radius", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/radius",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_radius_config_context(db)["radius"])
@@ -4524,7 +4580,11 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/config/radius", status_code=303)
 
 
-@router.post("/config/radius/push-reject-rules", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/radius/push-reject-rules",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_db)):
     result = radius_reject_service.push_reject_rules_to_radius_nas(db)
     status = "success" if result.get("ok") else "error"
@@ -4571,7 +4631,11 @@ def config_cpe_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/cpe", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/cpe",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_cpe_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
@@ -4601,7 +4665,11 @@ def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/monitoring", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/monitoring",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_monitoring_config(db, form)
@@ -4618,7 +4686,11 @@ def config_fup_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/fup", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/fup",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_fup_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_fup_config(db, form)
@@ -4645,7 +4717,11 @@ def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/config/ipv6", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/config/ipv6",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_ipv6_config(db, form)
@@ -4655,7 +4731,11 @@ def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
 # ── Secrets Management (OpenBao) ─────────────────────────────────────
 
 
-@router.get("/secrets", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:secrets:read"))])
+@router.get(
+    "/secrets",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:secrets:read"))],
+)
 def secrets_management(
     request: Request,
     status: str | None = None,
@@ -4673,7 +4753,11 @@ def secrets_management(
     return templates.TemplateResponse("admin/system/secrets.html", ctx)
 
 
-@router.get("/secrets/{path:path}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:secrets:read"))])
+@router.get(
+    "/secrets/{path:path}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:secrets:read"))],
+)
 def secrets_edit(request: Request, path: str, db: Session = Depends(get_db)):
     """Edit a secret's fields."""
     state = web_system_secrets_service.build_secret_edit_context(path)
@@ -4684,7 +4768,11 @@ def secrets_edit(request: Request, path: str, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/secrets_edit.html", ctx)
 
 
-@router.post("/secrets/{path:path}/save", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:secrets:write"))])
+@router.post(
+    "/secrets/{path:path}/save",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:secrets:write"))],
+)
 def secrets_save(request: Request, path: str, db: Session = Depends(get_db)):
     """Save updated secret fields."""
     form = parse_form_data_sync(request)
@@ -4696,7 +4784,11 @@ def secrets_save(request: Request, path: str, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/secrets_edit.html", ctx)
 
 
-@router.get("/secrets/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:secrets:read"))])
+@router.get(
+    "/secrets/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:secrets:read"))],
+)
 def secrets_new(request: Request, db: Session = Depends(get_db)):
     """Create a new secret."""
     ctx = _system_page_context(request, db, "Secrets", "secrets")
@@ -4704,7 +4796,11 @@ def secrets_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/secrets_new.html", ctx)
 
 
-@router.post("/secrets/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:secrets:write"))])
+@router.post(
+    "/secrets/create",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:secrets:write"))],
+)
 def secrets_create(request: Request, db: Session = Depends(get_db)):
     """Create a new secret path with fields."""
     form = parse_form_data_sync(request)
@@ -4720,7 +4816,11 @@ def secrets_create(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/secrets_new.html", ctx)
 
 
-@router.post("/secrets/{path:path}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:secrets:write"))])
+@router.post(
+    "/secrets/{path:path}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:secrets:write"))],
+)
 def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
     """Delete a secret."""
     return RedirectResponse(

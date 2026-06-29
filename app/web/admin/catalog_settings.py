@@ -193,7 +193,11 @@ def region_zone_edit(
     )
 
 
-@router.post("/region-zones/{zone_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/region-zones/{zone_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def region_zone_update(
     request: Request,
     zone_id: str,
@@ -226,7 +230,11 @@ def region_zone_update(
     )
 
 
-@router.post("/region-zones/{zone_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/region-zones/{zone_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def region_zone_delete(
     request: Request, zone_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
@@ -300,7 +308,11 @@ def usage_allowance_new(
     )
 
 
-@router.post("/usage-allowances", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/usage-allowances",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def usage_allowance_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -357,7 +369,11 @@ def usage_allowance_edit(
     )
 
 
-@router.post("/usage-allowances/{allowance_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/usage-allowances/{allowance_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def usage_allowance_update(
     request: Request,
     allowance_id: str,
@@ -395,7 +411,11 @@ def usage_allowance_update(
     )
 
 
-@router.post("/usage-allowances/{allowance_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/usage-allowances/{allowance_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def usage_allowance_delete(
     request: Request, allowance_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
@@ -469,7 +489,11 @@ def sla_profile_new(request: Request, db: Session = Depends(get_db)) -> HTMLResp
     )
 
 
-@router.post("/sla-profiles", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/sla-profiles",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def sla_profile_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -520,7 +544,11 @@ def sla_profile_edit(
     )
 
 
-@router.post("/sla-profiles/{profile_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/sla-profiles/{profile_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def sla_profile_update(
     request: Request,
     profile_id: str,
@@ -556,7 +584,11 @@ def sla_profile_update(
     )
 
 
-@router.post("/sla-profiles/{profile_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/sla-profiles/{profile_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def sla_profile_delete(
     request: Request, profile_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
@@ -637,7 +669,11 @@ def policy_set_new(request: Request, db: Session = Depends(get_db)) -> HTMLRespo
     )
 
 
-@router.post("/policy-sets", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/policy-sets",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def policy_set_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -684,7 +720,11 @@ def policy_set_edit(
     )
 
 
-@router.post("/policy-sets/{policy_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/policy-sets/{policy_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def policy_set_update(
     request: Request,
     policy_id: str,
@@ -719,7 +759,11 @@ def policy_set_update(
     )
 
 
-@router.post("/policy-sets/{policy_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/policy-sets/{policy_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def policy_set_delete(
     request: Request, policy_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
@@ -802,7 +846,11 @@ def add_on_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     )
 
 
-@router.post("/add-ons", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/add-ons",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def add_on_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -849,7 +897,11 @@ def add_on_edit(
     )
 
 
-@router.post("/add-ons/{addon_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/add-ons/{addon_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def add_on_update(
     request: Request,
     addon_id: str,
@@ -884,7 +936,11 @@ def add_on_update(
     )
 
 
-@router.post("/add-ons/{addon_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/add-ons/{addon_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def add_on_delete(
     request: Request, addon_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
@@ -901,7 +957,11 @@ def add_on_delete(
 # =============================================================================
 
 
-@router.post("/region-zones/bulk-delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/region-zones/bulk-delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def bulk_delete_region_zones(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -913,7 +973,11 @@ def bulk_delete_region_zones(
     return RedirectResponse("/admin/catalog/settings/region-zones", status_code=303)
 
 
-@router.post("/usage-allowances/bulk-delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/usage-allowances/bulk-delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def bulk_delete_usage_allowances(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -925,7 +989,11 @@ def bulk_delete_usage_allowances(
     return RedirectResponse("/admin/catalog/settings/usage-allowances", status_code=303)
 
 
-@router.post("/sla-profiles/bulk-delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/sla-profiles/bulk-delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def bulk_delete_sla_profiles(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -937,7 +1005,11 @@ def bulk_delete_sla_profiles(
     return RedirectResponse("/admin/catalog/settings/sla-profiles", status_code=303)
 
 
-@router.post("/policy-sets/bulk-delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/policy-sets/bulk-delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def bulk_delete_policy_sets(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -949,7 +1021,11 @@ def bulk_delete_policy_sets(
     return RedirectResponse("/admin/catalog/settings/policy-sets", status_code=303)
 
 
-@router.post("/add-ons/bulk-delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/add-ons/bulk-delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def bulk_delete_add_ons(
     request: Request,
     form: FormData = Depends(parse_form_data),

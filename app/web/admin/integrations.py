@@ -228,7 +228,11 @@ def integrations_marketplace(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/marketplace.html", context)
 
 
-@router.post("/marketplace/check-updates", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/marketplace/check-updates",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integrations_marketplace_check_updates():
     return RedirectResponse(
         "/admin/integrations/marketplace?checked=1", status_code=303
@@ -248,7 +252,11 @@ def integrations_installed(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/installed.html", context)
 
 
-@router.post("/installed/bulk", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/installed/bulk",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integrations_installed_bulk(
     connector_ids: list[str] = Form(default=[]),
     action: str = Form(...),
@@ -263,7 +271,11 @@ def integrations_installed_bulk(
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
-@router.post("/installed/{connector_id}/relay", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/installed/{connector_id}/relay",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integrations_installed_relay_toggle(
     connector_id: str,
     relay_to_portal: bool = Form(False),
@@ -295,7 +307,11 @@ def integrations_installed_toggle(
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
-@router.post("/installed/{connector_id}/uninstall", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/installed/{connector_id}/uninstall",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integrations_installed_uninstall(connector_id: str, db: Session = Depends(get_db)):
     web_integrations_service.uninstall_integration(db, connector_id)
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
@@ -316,7 +332,11 @@ def integration_register_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/register.html", context)
 
 
-@router.post("/register", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/register",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integration_register_create(
     request: Request,
     name: str = Form(...),
@@ -371,7 +391,11 @@ def integration_register_configure_page(
     )
 
 
-@router.post("/register/{connector_id}/configure", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/register/{connector_id}/configure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integration_register_configure_save(
     request: Request,
     connector_id: str,
@@ -408,7 +432,11 @@ def integration_register_configure_save(
     )
 
 
-@router.post("/connectors", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/connectors",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def connector_create(
     request: Request,
     name: str = Form(...),
@@ -576,7 +604,11 @@ def target_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/targets/new.html", context)
 
 
-@router.post("/targets", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/targets",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def target_create(
     request: Request,
     name: str = Form(...),
@@ -665,7 +697,11 @@ def job_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/jobs/new.html", context)
 
 
-@router.post("/jobs", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/jobs",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def job_create(
     request: Request,
     target_id: str = Form(...),
@@ -809,7 +845,11 @@ def hooks_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/hooks/form.html", context)
 
 
-@router.post("/hooks", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/hooks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def hooks_create(
     request: Request,
     title: str = Form(...),
@@ -936,7 +976,11 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/hooks/form.html", context)
 
 
-@router.post("/hooks/{hook_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/hooks/{hook_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def hooks_update(
     request: Request,
     hook_id: str,
@@ -1018,7 +1062,11 @@ def hooks_update(
         )
 
 
-@router.post("/hooks/{hook_id}/duplicate", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/hooks/{hook_id}/duplicate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def hooks_duplicate(hook_id: str, db: Session = Depends(get_db)):
     copy = integration_hooks_service.duplicate_hook(db, hook_id=hook_id)
     return RedirectResponse(
@@ -1026,7 +1074,11 @@ def hooks_duplicate(hook_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/hooks/{hook_id}/toggle", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/hooks/{hook_id}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def hooks_toggle(
     hook_id: str, enabled: bool = Form(False), db: Session = Depends(get_db)
 ):
@@ -1034,7 +1086,11 @@ def hooks_toggle(
     return RedirectResponse(url="/admin/integrations/hooks", status_code=303)
 
 
-@router.post("/hooks/{hook_id}/test", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/hooks/{hook_id}/test",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def hooks_test(hook_id: str, db: Session = Depends(get_db)):
     integration_hooks_service.trigger_test(db, hook_id=hook_id)
     return RedirectResponse(
@@ -1068,7 +1124,11 @@ def webhook_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
 
 
-@router.post("/webhooks", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/webhooks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_create(
     request: Request,
     name: str = Form(...),
@@ -1165,7 +1225,11 @@ def provider_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/providers/new.html", context)
 
 
-@router.post("/providers", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:provider:write"))])
+@router.post(
+    "/providers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:provider:write"))],
+)
 def provider_create(
     request: Request,
     name: str = Form(...),
@@ -1308,7 +1372,11 @@ def whatsapp_config_save(
         )
 
 
-@router.post("/whatsapp/config/test-send", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/whatsapp/config/test-send",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def whatsapp_config_test_send(
     request: Request,
     test_recipient: str = Form(""),
