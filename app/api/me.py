@@ -75,6 +75,10 @@ from app.schemas.portal import (
     MyReferralsResponse,
     MyWorkOrdersResponse,
     PortalSessionResponse,
+    QuoteDepositInitiateRequest,
+    QuoteDepositInitiateResponse,
+    QuoteDepositVerifyRequest,
+    QuoteDepositVerifyResponse,
     QuoteItem,
     QuoteRequestCreate,
     ReferAFriendRequest,
@@ -135,6 +139,7 @@ from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
 from app.services import (
     projects_mirror,
+    quote_deposits,
     quotes_mirror,
     referrals_mirror,
     web_support_tickets,
@@ -844,6 +849,52 @@ def my_quote_request(
         address=payload.address,
         region=payload.region,
         note=payload.note,
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/deposit/initiate", response_model=QuoteDepositInitiateResponse
+)
+def my_quote_deposit_initiate(
+    quote_id: str,
+    payload: QuoteDepositInitiateRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Start paying a quote's installation deposit. Raises a deposit invoice and
+    returns a checkout intent via the customer's existing pay flow (any provider)."""
+    subscriber_id = _subscriber_id(principal)
+    customer = _customer(db, principal)
+    return quote_deposits.initiate_deposit(
+        db,
+        customer,
+        subscriber_id,
+        quote_id,
+        provider=payload.provider,
+        redirect_url=payload.redirect_url,
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/deposit/verify", response_model=QuoteDepositVerifyResponse
+)
+def my_quote_deposit_verify(
+    quote_id: str,
+    payload: QuoteDepositVerifyRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Verify the deposit payment; on full settlement the quote is accepted in the
+    CRM (which triggers the sales order + install project)."""
+    subscriber_id = _subscriber_id(principal)
+    customer = _customer(db, principal)
+    return quote_deposits.verify_deposit(
+        db,
+        customer,
+        subscriber_id,
+        quote_id,
+        reference=payload.reference,
+        provider=payload.provider,
     )
 
 
