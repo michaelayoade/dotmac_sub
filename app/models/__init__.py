@@ -368,6 +368,10 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageType,
     PortalOnboardingState,
 )
+from app.models.project_mirror import (  # noqa: F401
+    ProjectMirror,
+    ProjectSyncState,
+)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningRun,

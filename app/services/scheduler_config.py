@@ -1498,6 +1498,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(referral_reconcile_seconds, 900),
         )
+        # Project/installation mirror reconcile — backstop for missed project.*
+        # webhook deliveries so "where's my install?" stays accurate.
+        project_reconcile_seconds = _resolve_int(
+            session,
+            SettingDomain.subscriber,
+            "project_reconcile_interval_seconds",
+            3600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="project_mirror_reconcile",
+            task_name="app.tasks.projects.reconcile_project_mirror",
+            enabled=True,
+            interval_seconds=max(project_reconcile_seconds, 900),
+        )
         olt_profile_sync_enabled = _effective_bool(
             session,
             SettingDomain.network,

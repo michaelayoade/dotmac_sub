@@ -64,3 +64,38 @@ class ReferAFriendResponse(BaseModel):
     id: str
     status: str
     message: str = "Referral submitted"
+
+
+# ── Installation / Project tracker (served from the local mirror) ────────────
+
+
+class ProjectStage(BaseModel):
+    key: str | None = None
+    title: str
+    status: str = "pending"  # pending | in_progress | done
+    completed_at: str | None = None
+
+
+class ProjectItem(BaseModel):
+    id: str
+    name: str
+    status: str
+    project_type: str | None = None
+    progress_pct: int = 0
+    current_stage: str | None = None
+    stages: list[ProjectStage] = Field(default_factory=list)
+    customer_address: str | None = None
+    region: str | None = None
+    start_at: str | None = None
+    due_at: str | None = None
+    completed_at: str | None = None
+    created_at: str | None = None
+
+
+class MyProjectsResponse(BaseModel):
+    """The signed-in subscriber's installations/projects, served from the local
+    mirror (Installation tracker)."""
+
+    projects: list[ProjectItem] = Field(default_factory=list)
+    total: int = 0
+    active: int = 0

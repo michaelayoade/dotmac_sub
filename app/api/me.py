@@ -70,6 +70,7 @@ from app.schemas.notification import (
     PushTokenRegister,
 )
 from app.schemas.portal import (
+    MyProjectsResponse,
     MyReferralsResponse,
     PortalSessionResponse,
     ReferAFriendRequest,
@@ -128,8 +129,8 @@ from app.services import customer_portal_flow_payments as customer_payments
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
+from app.services import projects_mirror, referrals_mirror, web_support_tickets
 from app.services import push as push_service
-from app.services import referrals_mirror, web_support_tickets
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
@@ -780,6 +781,17 @@ def my_referrals(
     history — served from the local mirror (refreshed from the CRM lazily)."""
     subscriber_id = _subscriber_id(principal)
     return referrals_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get("/projects", response_model=MyProjectsResponse)
+def my_projects(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's installations/projects — stage timeline + progress % —
+    served from the local mirror (refreshed from the CRM lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return projects_mirror.read_for_subscriber(db, subscriber_id)
 
 
 @router.post("/referrals", response_model=ReferAFriendResponse, status_code=201)
