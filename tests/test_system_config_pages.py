@@ -1,7 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services import web_system_config as web_system_config_service
+from app.web.admin import system as admin_system
 
 
 def test_portal_config_saves_only_consumed_domain_routing_keys(db_session):
@@ -78,3 +80,25 @@ def test_preferences_template_exposes_only_force_2fa_control():
     assert 'name="default_landing_page"' not in template
     assert 'name="admin_portal_title"' not in template
     assert 'name="search_debounce_ms"' not in template
+
+
+def test_monitoring_config_save_redirects_with_error_on_invalid_value(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        admin_system,
+        "parse_form_data_sync",
+        lambda request: {"server_health_mem_warn_pct": "150"},
+    )
+
+    response = admin_system.config_monitoring_save(SimpleNamespace(), db_session)
+
+    assert response.status_code == 303
+    assert "error=Server+Health+Memory+Warning" in response.headers["location"]
+
+
+def test_monitoring_config_template_shows_save_feedback():
+    template = Path("templates/admin/system/config/monitoring.html").read_text()
+
+    assert "{% if error %}" in template
+    assert "{% elif saved %}" in template

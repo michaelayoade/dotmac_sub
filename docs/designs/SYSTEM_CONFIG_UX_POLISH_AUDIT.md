@@ -51,6 +51,9 @@ theme.
 - Monitoring config saves now use the typed `settings_spec` path where specs
   exist, rejecting invalid spec-backed values, preserving integer value types, and
   invalidating the settings cache through the domain-settings service.
+- Monitoring config saves now redirect back with explicit success or validation
+  error feedback instead of allowing invalid spec-backed values to become server
+  errors.
 
 ### Still open
 
@@ -99,6 +102,10 @@ theme.
 - `poetry run pytest tests/test_network_monitoring_services.py -q`
   - Result: `34 passed`
 - `poetry run ruff check app/services/web_system_config.py tests/test_network_monitoring_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_network_monitoring_services.py tests/test_admin_route_permissions.py -q`
+  - Result: `58 passed`
+- `poetry run ruff check app/web/admin/system.py app/services/web_system_config.py tests/test_system_config_pages.py tests/test_network_monitoring_services.py`
   - Result: passed
 
 ## What this audit is

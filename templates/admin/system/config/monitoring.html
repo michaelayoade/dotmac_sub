@@ -5,6 +5,11 @@
 {{ ambient_background("blue", "cyan") }}
 <div class="relative space-y-8">
     {% call page_header(title="Monitoring", subtitle="Equipment vendors, device types, and notification groups", icon=icon_cog(), color="blue", color2="cyan") %}{% endcall %}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
+    {% elif saved %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300">Monitoring settings saved.</div>
+    {% endif %}
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         {% call card("Monitoring", color="blue") %}

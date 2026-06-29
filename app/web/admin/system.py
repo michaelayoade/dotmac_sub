@@ -4499,6 +4499,12 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
 @router.get("/config/monitoring", response_class=HTMLResponse)
 def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_monitoring_config_context(db)
+    data.update(
+        {
+            "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse(
         "admin/system/config/monitoring.html",
         _config_context(request, db, {"active_page": "config-monitoring", **data}),
@@ -4508,8 +4514,15 @@ def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
 @router.post("/config/monitoring", response_class=HTMLResponse)
 def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_monitoring_config(db, form)
-    return RedirectResponse(url="/admin/system/config/monitoring", status_code=303)
+    try:
+        web_system_config_service.save_monitoring_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/monitoring?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(url="/admin/system/config/monitoring?saved=1", status_code=303)
 
 
 # --- 8.25 FUP ---
