@@ -24,6 +24,7 @@ CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 30.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2.0
+RouterResponse = dict | list | str
 
 
 def check_dangerous_commands(commands: list[str]) -> None:
@@ -152,7 +153,7 @@ class RouterConnectionService:
         method: str,
         path: str,
         payload: dict | None = None,
-    ) -> dict | list | str:
+    ) -> RouterResponse:
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES):
@@ -198,8 +199,26 @@ class RouterConnectionService:
             f"Router {router.name} unreachable after {MAX_RETRIES} attempts: {last_error}"
         )
 
+    @staticmethod
+    def require_dict_response(response: RouterResponse, path: str) -> dict:
+        if not isinstance(response, dict):
+            raise RuntimeError(
+                f"RouterOS endpoint {path} returned {type(response).__name__}; expected object"
+            )
+        return response
+
+    @staticmethod
+    def require_list_response(response: RouterResponse, path: str) -> list:
+        if not isinstance(response, list):
+            raise RuntimeError(
+                f"RouterOS endpoint {path} returned {type(response).__name__}; expected list"
+            )
+        return response
+
     @classmethod
-    def execute_batch(cls, router: Router, commands: list[dict]) -> list[dict]:
+    def execute_batch(
+        cls, router: Router, commands: list[dict]
+    ) -> list[RouterResponse]:
         results = []
         for cmd in commands:
             result = cls.execute(
@@ -215,7 +234,10 @@ class RouterConnectionService:
     def test_connection(cls, router: Router) -> ConnectionTestResult:
         start = time.time()
         try:
-            data = cls.execute(router, "GET", "/system/resource")
+            data = cls.require_dict_response(
+                cls.execute(router, "GET", "/system/resource"),
+                "/system/resource",
+            )
             elapsed_ms = int((time.time() - start) * 1000)
             version = data.get("version", "unknown")
             return ConnectionTestResult(

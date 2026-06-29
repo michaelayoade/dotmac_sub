@@ -169,7 +169,7 @@ def test_api_create_push_marks_results_failed_when_enqueue_fails(
     with pytest.raises(HTTPException) as exc_info:
         create_push(
             RouterConfigPushCreate(
-                commands=["/system/ntp/client/set {\"enabled\":\"yes\"}"],
+                commands=['/system/ntp/client/set {"enabled":"yes"}'],
                 router_ids=[router.id],
             ),
             auth={"principal_id": str(user_id)},

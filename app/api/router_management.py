@@ -159,7 +159,10 @@ def get_router_health(
     db: Session = Depends(get_db),
 ) -> RouterHealthRead:
     r = RouterInventory.get(db, router_id)
-    data = RouterConnectionService.execute(r, "GET", "/system/resource")
+    data = RouterConnectionService.require_dict_response(
+        RouterConnectionService.execute(r, "GET", "/system/resource"),
+        "/system/resource",
+    )
     parsed = RouterMonitoringService.parse_health_response(data)
     return RouterHealthRead(**parsed)
 
@@ -349,8 +352,7 @@ def create_push(
         for result in push.results:
             result.status = RouterPushResultStatus.failed
             result.error_message = (
-                f"Config push could not be queued: "
-                f"{dispatch.error or 'enqueue failed'}"
+                f"Config push could not be queued: {dispatch.error or 'enqueue failed'}"
             )
         db.commit()
         raise HTTPException(

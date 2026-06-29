@@ -390,9 +390,7 @@ def disconnect_mikrotik_pppoe_bulk(device: NasDevice, logins: set[str]) -> set[s
         pool.disconnect()
 
 
-def _address_list_matches(
-    row: dict[str, object], list_name: str, address: str
-) -> bool:
+def _address_list_matches(row: dict[str, object], list_name: str, address: str) -> bool:
     return (
         str(row.get("list") or "").strip() == list_name
         and str(row.get("address") or "").strip() == address

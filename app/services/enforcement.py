@@ -703,9 +703,7 @@ def _remove_mikrotik_address_list(
         return False
 
 
-def _api_kick_session(
-    db: Session, nas_device: NasDevice, username: str | None
-) -> bool:
+def _api_kick_session(db: Session, nas_device: NasDevice, username: str | None) -> bool:
     """Disconnect one PPPoE session via the RouterOS API (read-back verified).
 
     The profile-change refresh path historically fell straight from CoA to SSH;
