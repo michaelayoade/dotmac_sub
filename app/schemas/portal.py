@@ -189,3 +189,34 @@ class MyQuotesResponse(BaseModel):
     quotes: list[QuoteItem] = Field(default_factory=list)
     total: int = 0
     open: int = 0
+
+
+class QuoteDepositInitiateRequest(BaseModel):
+    """Start paying a quote's deposit via the existing billing/pay flow."""
+
+    provider: str | None = None
+    redirect_url: str | None = None
+
+
+class QuoteDepositInitiateResponse(BaseModel):
+    invoice_id: str
+    quote_id: str
+    amount: str
+    currency: str = "NGN"
+    provider_type: str | None = None
+    provider_public_key: str | None = None
+    payment_reference: str | None = None
+    checkout_url: str | None = None
+    customer_email: str | None = None
+    charged: bool = False
+
+
+class QuoteDepositVerifyRequest(BaseModel):
+    reference: str
+    provider: str | None = None
+
+
+class QuoteDepositVerifyResponse(BaseModel):
+    paid: bool
+    reference: str
+    quote: QuoteItem | None = None
