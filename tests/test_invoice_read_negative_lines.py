@@ -10,7 +10,14 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.schemas.billing import InvoiceLineRead, InvoiceRead
+from app.schemas.billing import (
+    CreditNoteApplicationRead,
+    CreditNoteLineRead,
+    CreditNoteRead,
+    InvoiceLineRead,
+    InvoiceRead,
+    PaymentAllocationRead,
+)
 
 
 def test_invoice_line_read_allows_negative_amounts():
@@ -57,3 +64,114 @@ def test_invoice_read_allows_negative_totals_and_lines():
     )
     assert inv.total == Decimal("-16333.00")
     assert inv.lines[0].amount == Decimal("-16333.00")
+
+
+def test_invoice_read_allows_negative_payment_allocation():
+    """The original #272 fix missed nested payment_allocations — a negative
+    (reversal/clawback) allocation still 500'd /api/v1/invoices for the whole
+    page. This is the actual cause of the live invoices-list 500.
+    """
+    inv = InvoiceRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "account_id": uuid.uuid4(),
+            "total": Decimal("0.00"),
+            "balance_due": Decimal("0.00"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+            "payment_allocations": [
+                {
+                    "id": uuid.uuid4(),
+                    "payment_id": uuid.uuid4(),
+                    "invoice_id": uuid.uuid4(),
+                    "amount": Decimal("-2500.00"),  # reversal/clawback
+                    "created_at": datetime.now(UTC),
+                }
+            ],
+        }
+    )
+    assert inv.payment_allocations[0].amount == Decimal("-2500.00")
+
+
+def test_payment_allocation_read_allows_negative_amount():
+    alloc = PaymentAllocationRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "payment_id": uuid.uuid4(),
+            "invoice_id": uuid.uuid4(),
+            "amount": Decimal("-2500.00"),
+            "created_at": datetime.now(UTC),
+        }
+    )
+    assert alloc.amount == Decimal("-2500.00")
+
+
+def test_credit_note_read_allows_negative_money():
+    """Credit notes carry credit amounts; the read tree must serialize them
+    (header totals, lines, and applications) — cause of the credit-notes 500.
+    """
+    cn = CreditNoteRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "account_id": uuid.uuid4(),
+            "subtotal": Decimal("-16333.00"),
+            "tax_total": Decimal("0.00"),
+            "total": Decimal("-16333.00"),
+            "applied_total": Decimal("-16333.00"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+            "lines": [
+                {
+                    "id": uuid.uuid4(),
+                    "credit_note_id": uuid.uuid4(),
+                    "description": "Credit line",
+                    "quantity": Decimal("1.000"),
+                    "unit_price": Decimal("-16333.00"),
+                    "amount": Decimal("-16333.00"),
+                    "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
+                }
+            ],
+            "applications": [
+                {
+                    "id": uuid.uuid4(),
+                    "credit_note_id": uuid.uuid4(),
+                    "invoice_id": uuid.uuid4(),
+                    "amount": Decimal("-16333.00"),
+                    "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
+                }
+            ],
+        }
+    )
+    assert cn.total == Decimal("-16333.00")
+    assert cn.lines[0].amount == Decimal("-16333.00")
+    assert cn.applications[0].amount == Decimal("-16333.00")
+
+
+def test_credit_note_line_and_application_read_standalone():
+    line = CreditNoteLineRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "credit_note_id": uuid.uuid4(),
+            "description": "Credit",
+            "quantity": Decimal("1.000"),
+            "unit_price": Decimal("-100.00"),
+            "amount": Decimal("-100.00"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert line.amount == Decimal("-100.00")
+
+    app = CreditNoteApplicationRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "credit_note_id": uuid.uuid4(),
+            "invoice_id": uuid.uuid4(),
+            "amount": Decimal("-100.00"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert app.amount == Decimal("-100.00")

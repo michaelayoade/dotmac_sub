@@ -191,6 +191,10 @@ class CreditNoteLineUpdate(BaseModel):
 class CreditNoteLineRead(CreditNoteLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
+    # Read model reflects stored data: credit-note lines are legitimately
+    # negative, so don't inherit the create-side ge=0 constraints (#272).
+    unit_price: Decimal = Decimal("0.00")
+    amount: Decimal | None = None
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -206,6 +210,9 @@ class CreditNoteApplicationBase(BaseModel):
 class CreditNoteApplicationRead(CreditNoteApplicationBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: don't inherit the create-side ge=0
+    # constraint, which 500s response serialization for negative amounts (#272).
+    amount: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -503,6 +510,11 @@ class PaymentAllocationCreate(PaymentAllocationBase):
 class PaymentAllocationRead(PaymentAllocationBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: reversal/clawback allocations are
+    # legitimately negative, so don't inherit the create-side ge=0 constraint
+    # (it 500s response serialization for any invoice carrying such an
+    # allocation — same class of bug fixed for invoice lines in #272).
+    amount: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
 
@@ -687,6 +699,12 @@ class InvoiceRead(InvoiceBase):
 class CreditNoteRead(CreditNoteBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: credit notes carry credit (often
+    # negative) amounts, so don't inherit the create-side ge=0/lt constraints
+    # (they 500 response serialization — same fix as InvoiceRead in #272).
+    subtotal: Decimal = Decimal("0.00")
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
     id: UUID
     applied_total: Decimal
     created_at: datetime
