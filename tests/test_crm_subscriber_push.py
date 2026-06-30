@@ -31,8 +31,9 @@ def _settings(secret=SECRET, base=BASE):
 def _resp(status_code=200, body=None):
     r = MagicMock()
     r.status_code = status_code
-    r.json.return_value = body or {"subscriber_id": "crm-uuid-1"}
-    r.text = json.dumps(body or {})
+    payload = {"subscriber_id": "crm-uuid-1"} if body is None else body
+    r.json.return_value = payload
+    r.text = json.dumps(payload)
     return r
 
 
@@ -58,15 +59,24 @@ def test_push_signs_body_and_posts_to_hmac_webhook():
 
 def test_push_noop_without_secret():
     with _settings(secret=""), patch.object(crm_webhook, "post") as post:
-        assert crm_webhook.push_subscriber_change(1, {}, external_system="dotmac") is None
+        assert (
+            crm_webhook.push_subscriber_change(1, {}, external_system="dotmac") is None
+        )
         post.assert_not_called()
 
 
 def test_push_returns_ok_when_response_has_no_id():
     with _settings(), patch.object(crm_webhook, "post", return_value=_resp(body={})):
-        assert crm_webhook.push_subscriber_change(1, {}, external_system="dotmac") == "ok"
+        assert (
+            crm_webhook.push_subscriber_change(1, {}, external_system="dotmac") == "ok"
+        )
 
 
 def test_push_returns_none_on_failure_status():
-    with _settings(), patch.object(crm_webhook, "post", return_value=_resp(status_code=401)):
-        assert crm_webhook.push_subscriber_change(1, {}, external_system="splynx") is None
+    with (
+        _settings(),
+        patch.object(crm_webhook, "post", return_value=_resp(status_code=401)),
+    ):
+        assert (
+            crm_webhook.push_subscriber_change(1, {}, external_system="splynx") is None
+        )

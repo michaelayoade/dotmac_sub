@@ -46,7 +46,9 @@ def push_subscriber_change(
     # Sign the exact bytes we send: the CRM verifies HMAC over the raw request
     # body, so serialize once and post that buffer (not json=, which re-encodes).
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    signature = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    signature = (
+        "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    )
 
     try:
         resp = post(
