@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -387,6 +388,134 @@ def plan_subscription_ip(
     }
 
 
+def desired_connectivity_signature(db: Session, subscriber_id: Any) -> str:
+    """Stable 16-hex-char hash of a subscriber's DESIRED connectivity across all
+    its subscriptions (status → ``DesiredConnectivity`` + desired IP). Same
+    desired state → same signature: the idempotency key for credential/RADIUS
+    sync, so a converge that changes nothing is a provable no-op rather than a
+    blind re-write."""
+    sid = coerce_uuid(subscriber_id)
+    subs = list(
+        db.scalars(
+            select(Subscription)
+            .where(Subscription.subscriber_id == sid)
+            .order_by(Subscription.id)
+        ).all()
+    )
+    payload = []
+    for sub in subs:
+        d = derive_desired_connectivity(sub.status)
+        payload.append(
+            {
+                "sub": str(sub.id),
+                "status": sub.status.value if sub.status is not None else None,
+                "access_state": (
+                    d.access_state.value if d.access_state is not None else None
+                ),
+                "creds": d.credentials_active,
+                "ip_active": d.ip_active,
+                "ip_retained": d.ip_retained,
+                "kick": d.kick_live_session,
+                "ip": _active_assignment_ip(db, sub) or _norm(sub.ipv4_address),
+            }
+        )
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+_LAST_SIG_KEY = "connectivity:last_sig:{}"
+_LAST_SIG_TTL = int(timedelta(days=30).total_seconds())
+
+
+def _should_enqueue_refresh(subscriber_id: Any, signature: str) -> bool:
+    """Idempotency gate: allow the RADIUS refresh only when the desired-state
+    signature changed since the last applied convergence for this subscriber.
+    Best-effort — if Redis is unavailable or the signature is empty, returns
+    True (never suppress a real refresh on an infra failure)."""
+    if not signature:
+        return True
+    try:
+        client = _shadow_redis()
+        if client is None:
+            return True
+        key = _LAST_SIG_KEY.format(subscriber_id)
+        prev = client.get(key)
+        if isinstance(prev, bytes):
+            prev = prev.decode()
+        if prev == signature:
+            return False
+        client.set(key, signature, ex=_LAST_SIG_TTL)
+        return True
+    except Exception:  # pragma: no cover - gate must never block on infra
+        return True
+
+
+def plan_subscription_suspend(
+    db: Session, subscription: Subscription
+) -> dict[str, Any]:
+    """SHADOW plan for a blocked-family subscription (suspended/blocked/stopped).
+    Reports the actions that would converge the suspend dimensions to the design
+    invariants (INV-1 IP retained, INV-3 credential survives, INV-5 CoA-once);
+    writes nothing. The ``apply=True`` cutover is deferred (design §2d)."""
+    desired = derive_desired_connectivity(subscription.status)
+    desired_access = (
+        desired.access_state.value if desired.access_state is not None else None
+    )
+    actions: list[dict[str, Any]] = []
+    if desired_access != subscription.access_state:
+        actions.append(
+            {
+                "kind": "set_access_state",
+                "from": subscription.access_state,
+                "to": desired_access,
+            }
+        )
+    if desired.credentials_active:
+        active_creds = (
+            db.scalar(
+                select(func.count())
+                .select_from(AccessCredential)
+                .where(
+                    AccessCredential.subscriber_id == subscription.subscriber_id,
+                    AccessCredential.is_active.is_(True),
+                )
+            )
+            or 0
+        )
+        if active_creds == 0:
+            actions.append(
+                {
+                    "kind": "ensure_credentials_active",
+                    "note": "credential must survive suspend (INV-3)",
+                }
+            )
+    if desired.ip_retained:
+        assign_ip = _active_assignment_ip(db, subscription)
+        col_ip = _norm(subscription.ipv4_address)
+        if not assign_ip and not col_ip:
+            actions.append(
+                {
+                    "kind": "ip_retention_violated",
+                    "note": "no retained IP while suspended (INV-1)",
+                }
+            )
+    if desired.kick_live_session:
+        actions.append(
+            {
+                "kind": "kick_live_session",
+                "note": "CoA-disconnect once if a session is live (INV-5)",
+            }
+        )
+    return {
+        "subscription_id": str(subscription.id),
+        "status": (
+            subscription.status.value if subscription.status is not None else None
+        ),
+        "desired_access_state": desired_access,
+        "actions": actions,
+    }
+
+
 def converge_subscription_connectivity(
     db: Session,
     subscription_id: str,
@@ -408,7 +537,27 @@ def converge_subscription_connectivity(
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if subscription is None:
         return {"ok": False, "reason": "subscription_not_found", "actions": []}
+    if subscription.status in BLOCKED_STATUSES:
+        # Suspend dimension — SHADOW ONLY in this slice (design §2d). Compute the
+        # plan that would converge the blocked-family invariants; never mutate
+        # here. The apply=True cutover is gauge-gated and deferred.
+        plan = plan_subscription_suspend(db, subscription)
+        plan["ok"] = True
+        plan["dimension"] = "suspend"
+        plan["applied"] = False
+        plan["applied_actions"] = []
+        plan["signature"] = desired_connectivity_signature(
+            db, subscription.subscriber_id
+        )
+        if plan["actions"]:
+            logger.info(
+                "connectivity reconciler (suspend, shadow) sub=%s would: %s",
+                subscription_id,
+                plan["actions"],
+            )
+        return plan
     if subscription.status != _CONVERGE_STATUS:
+        # pending/terminal — out of scope for this reconciler increment.
         return {
             "ok": True,
             "reason": "not_active",
@@ -456,18 +605,27 @@ def converge_subscription_connectivity(
             db.commit()
 
     if needs_refresh:
-        try:
-            from app.tasks.radius_population import refresh_radius_from_subs
+        # Idempotent credential sync: only enqueue the single-writer refresh when
+        # the desired-state signature actually changed since the last applied
+        # convergence — a re-run with unchanged desired state is a provable no-op
+        # instead of a blind full re-write.
+        signature = desired_connectivity_signature(db, subscription.subscriber_id)
+        plan["signature"] = signature
+        if _should_enqueue_refresh(subscription.subscriber_id, signature):
+            try:
+                from app.tasks.radius_population import refresh_radius_from_subs
 
-            refresh_radius_from_subs.delay()
-            applied.append("refresh_radius")
-        except Exception as exc:
-            logger.error(
-                "connectivity reconciler: failed to enqueue RADIUS refresh "
-                "for sub=%s: %s (periodic sweep converges within 15 min)",
-                subscription_id,
-                exc,
-            )
+                refresh_radius_from_subs.delay()
+                applied.append("refresh_radius")
+            except Exception as exc:
+                logger.error(
+                    "connectivity reconciler: failed to enqueue RADIUS refresh "
+                    "for sub=%s: %s (periodic sweep converges within 15 min)",
+                    subscription_id,
+                    exc,
+                )
+        else:
+            applied.append("refresh_skipped_idempotent")
 
     # If we changed the served IP, a live session is still pinned to the old
     # Framed-IP until it reconnects — reconcile this subscriber's RADIUS state and

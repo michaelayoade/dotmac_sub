@@ -109,7 +109,7 @@ def cleanup_old_events(retention_days: int = 30):
             session.query(EventStore.id)
             .filter(EventStore.status == EventStatus.completed)
             .filter(EventStore.created_at < cutoff)
-            .subquery()
+            .scalar_subquery()
         )
         deleted_attempts = session.execute(
             text(
@@ -119,6 +119,7 @@ def cleanup_old_events(retention_days: int = 30):
             ),
             {"cutoff": cutoff},
         )
+        deleted_attempt_count = int(getattr(deleted_attempts, "rowcount", 0) or 0)
         deleted_count = (
             session.query(EventStore)
             .filter(EventStore.id.in_(old_completed_event_ids))
@@ -128,11 +129,11 @@ def cleanup_old_events(retention_days: int = 30):
         logger.info(
             "Cleaned up %s old completed events and %s handler attempts",
             deleted_count,
-            deleted_attempts.rowcount,
+            deleted_attempt_count,
         )
         return {
             "deleted": deleted_count,
-            "handler_attempts_deleted": deleted_attempts.rowcount,
+            "handler_attempts_deleted": deleted_attempt_count,
         }
 
 
