@@ -149,8 +149,7 @@ def warm_topology_status(session: Session, client) -> dict:
             host_id = str(h.get("hostid"))
             avail[host_id] = _availability(h)
             icmp_allowed[host_id] = (
-                str(h.get("status")) != "1"
-                and str(h.get("maintenance_status")) != "1"
+                str(h.get("status")) != "1" and str(h.get("maintenance_status")) != "1"
             )
         for item in client.get_items(host_ids=chunk, metric="icmpping", limit=100000):
             if str(item.get("key_") or "") != "icmpping":
@@ -172,9 +171,7 @@ def warm_topology_status(session: Session, client) -> dict:
             continue
         raw_icmp = icmp_up.get(hid)
         zabbix_icmp = (
-            raw_icmp
-            if raw_icmp is False or icmp_allowed.get(hid, False)
-            else None
+            raw_icmp if raw_icmp is False or icmp_allowed.get(hid, False) else None
         )
         status = _derive(avail.get(hid, UNKNOWN), zabbix_icmp)
         # Stamp live_status_at only when the state CHANGES, so it marks when the
