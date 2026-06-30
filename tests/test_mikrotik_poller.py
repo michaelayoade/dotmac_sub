@@ -2,7 +2,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
-from app.poller.mikrotik_poller import BandwidthPoller, QueueStats
+import app.poller.mikrotik_poller as mikrotik_poller
+from app.poller.mikrotik_poller import BandwidthPoller, MikroTikConnection, QueueStats
 
 
 def _run_async(coro):
@@ -57,3 +58,26 @@ def test_mikrotik_queue_rates_are_stored_as_bits_per_second():
     assert len(published) == 1
     assert published[0].rx_bps == 6_000_000
     assert published[0].tx_bps == 6_000_000
+
+
+def test_mikrotik_connection_does_not_pass_unsupported_socket_timeout(monkeypatch):
+    captured_kwargs = {}
+
+    class _Pool:
+        def __init__(self, host, **kwargs):
+            captured_kwargs.update(kwargs)
+
+        def get_api(self):
+            return object()
+
+    monkeypatch.setattr(mikrotik_poller, "RouterOsApiPool", _Pool)
+
+    conn = MikroTikConnection(
+        device_id=uuid4(),
+        host="192.0.2.10",
+        username="admin",
+        password="secret",
+    )
+
+    assert _run_async(conn.connect()) is True
+    assert "socket_timeout" not in captured_kwargs

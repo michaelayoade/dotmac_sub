@@ -3,6 +3,7 @@
 {% block title %}Payment Arrangement Details - Customer Portal{% endblock %}
 
 {% block content %}
+{% set arrangement_currency = arrangement.currency or default_currency|default('NGN') %}
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -111,7 +112,7 @@
                                     {{ installment.due_date.strftime('%b %d, %Y') if installment.due_date else 'N/A' }}
                                 </td>
                                 <td class="px-6 py-4 text-right text-sm font-medium {{ 'text-red-900 dark:text-red-200' if is_overdue else 'text-slate-900 dark:text-white' }}">
-                                    NGN {{ '{:,.2f}'.format(installment.amount or 0) }}
+                                    {{ installment.currency if installment.currency is defined and installment.currency else arrangement_currency }} {{ '{:,.2f}'.format(installment.amount or 0) }}
                                 </td>
                                 <td class="px-6 py-4">
                                     {% set inst_status_class = {
@@ -163,11 +164,11 @@
                 <dl class="space-y-3 text-sm">
                     <div class="flex justify-between">
                         <dt class="text-slate-500 dark:text-slate-400">Total Amount</dt>
-                        <dd class="font-medium text-slate-900 dark:text-white">NGN {{ '{:,.2f}'.format(arrangement.total_amount or 0) }}</dd>
+                        <dd class="font-medium text-slate-900 dark:text-white">{{ arrangement_currency }} {{ '{:,.2f}'.format(arrangement.total_amount or 0) }}</dd>
                     </div>
                     <div class="flex justify-between">
                         <dt class="text-slate-500 dark:text-slate-400">Each Payment</dt>
-                        <dd class="font-medium text-slate-900 dark:text-white">NGN {{ '{:,.2f}'.format(arrangement.installment_amount or 0) }}</dd>
+                        <dd class="font-medium text-slate-900 dark:text-white">{{ arrangement_currency }} {{ '{:,.2f}'.format(arrangement.installment_amount or 0) }}</dd>
                     </div>
                     <div class="flex justify-between">
                         <dt class="text-slate-500 dark:text-slate-400">Payments Made</dt>
@@ -177,11 +178,11 @@
                     {% set amount_remaining = (arrangement.total_amount or 0) - amount_paid %}
                     <div class="flex justify-between pt-3 border-t border-slate-200 dark:border-slate-700">
                         <dt class="text-slate-500 dark:text-slate-400">Amount Paid</dt>
-                        <dd class="font-medium text-green-600 dark:text-green-400">NGN {{ '{:,.2f}'.format(amount_paid) }}</dd>
+                        <dd class="font-medium text-green-600 dark:text-green-400">{{ arrangement_currency }} {{ '{:,.2f}'.format(amount_paid) }}</dd>
                     </div>
                     <div class="flex justify-between">
                         <dt class="font-semibold text-slate-900 dark:text-white">Remaining</dt>
-                        <dd class="font-bold text-primary-600 dark:text-primary-400">NGN {{ '{:,.2f}'.format(amount_remaining) }}</dd>
+                        <dd class="font-bold text-primary-600 dark:text-primary-400">{{ arrangement_currency }} {{ '{:,.2f}'.format(amount_remaining) }}</dd>
                     </div>
                 </dl>
             </div>
@@ -191,7 +192,7 @@
             <div class="rounded-xl border border-primary-200 bg-primary-50 p-6 dark:border-primary-900 dark:bg-primary-900/20">
                 <h3 class="text-sm font-semibold text-primary-900 dark:text-primary-300 mb-4">Next Payment Due</h3>
                 <p class="text-2xl font-bold text-primary-600 dark:text-primary-400">
-                    NGN {{ '{:,.2f}'.format(next_installment.amount or 0) }}
+                    {{ next_installment.currency if next_installment.currency is defined and next_installment.currency else arrangement_currency }} {{ '{:,.2f}'.format(next_installment.amount or 0) }}
                 </p>
                 <p class="text-sm text-primary-700 dark:text-primary-300 mt-1">
                     Due {{ next_installment.due_date.strftime('%B %d, %Y') if next_installment.due_date else 'N/A' }}

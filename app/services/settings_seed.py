@@ -1004,6 +1004,14 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
+        key="suspension_notification_dedupe_hours",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv(
+            "COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"
+        ),
+    )
+    collections_settings.ensure_by_key(
+        db,
         key="prepaid_blocking_time",
         value_type=SettingValueType.string,
         value_text=os.getenv("PREPAID_BLOCKING_TIME", "08:00"),
@@ -1470,6 +1478,12 @@ def seed_billing_settings(db: Session) -> None:
         value_text=auto_suspend_raw,
         value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="autopay_max_consecutive_failures",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES", "3"),
+    )
     prepaid_monthly_invoicing_raw = os.getenv(
         "PREPAID_MONTHLY_INVOICING_ENABLED", "false"
     )
@@ -1514,6 +1528,24 @@ def seed_billing_settings(db: Session) -> None:
         key="dunning_escalation_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DUNNING_ESCALATION_DAYS", "3,7,14,30"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="blocking_period_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_BLOCKING_PERIOD_DAYS", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="deactivation_period_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_DEACTIVATION_PERIOD_DAYS", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="minimum_balance",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_MINIMUM_BALANCE", "0"),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1566,6 +1598,80 @@ def seed_billing_settings(db: Session) -> None:
         key="minimum_invoice_amount",
         value_type=SettingValueType.string,
         value_text=os.getenv("PLAN_CHANGE_MINIMUM_INVOICE_AMOUNT", "0.00"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_min_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_MIN_INSTALLMENTS", "2"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_max_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_MAX_INSTALLMENTS", "24"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_default_overdue_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_DEFAULT_OVERDUE_INSTALLMENTS", "2"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="service_extension_max_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SERVICE_EXTENSION_MAX_DAYS", "30"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_preset_amounts",
+        value_type=SettingValueType.string,
+        value_text=os.getenv(
+            "BILLING_TOPUP_PRESET_AMOUNTS", "1000,2000,5000,10000,20000,50000"
+        ),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_reconciliation_stale_minutes",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_STALE_MINUTES", "15"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_reconciliation_max_age_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_MAX_AGE_DAYS", "7"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="payment_gateway_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS", "30"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="ar_aging_bucket_days",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_AR_AGING_BUCKET_DAYS", "30,60,90"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_scan_min_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_SCAN_MIN_RATIO", "0.5"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_payment_volume_min_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_PAYMENT_VOLUME_MIN_RATIO", "0.4"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_payment_baseline_min_daily",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_PAYMENT_BASELINE_MIN_DAILY", "5.0"),
     )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(

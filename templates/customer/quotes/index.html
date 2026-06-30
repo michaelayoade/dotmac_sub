@@ -1,0 +1,74 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Get a Quote - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Installation Quotes</h1>
+        <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Feasibility, estimate, and deposit for your requested installations. Request a new quote and pay the deposit in the mobile app.</p>
+    </div>
+
+    {% set status_styles = {
+        'draft': 'bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300',
+        'sent': 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300',
+        'accepted': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
+        'rejected': 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300',
+        'expired': 'bg-stone-100 text-stone-500 dark:bg-stone-700 dark:text-stone-400'
+    } %}
+    {% set coverage_labels = {
+        'covered': 'Covered — fibre is nearby',
+        'survey_required': 'Survey required',
+        'out_of_area': 'Outside current coverage'
+    } %}
+
+    {% if quotes.quotes %}
+    <div class="space-y-5">
+        {% for q in quotes.quotes %}
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">{{ coverage_labels.get(q.feasibility.coverage, 'Checking coverage') }}</p>
+                    <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">{{ q.address or 'Installation quote' }}</h2>
+                </div>
+                <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {{ status_styles.get(q.status, 'bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300') }}">{% if q.deposit_paid and q.status != 'accepted' %}Deposit paid{% else %}{{ q.status | replace('_', ' ') | title }}{% endif %}</span>
+            </div>
+
+            <dl class="mt-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                    <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Estimate</dt>
+                    <dd class="mt-0.5 text-sm font-semibold text-stone-900 dark:text-white">{{ q.currency }} {{ q.total }}{% if q.estimate_provisional %} <span class="font-normal text-stone-400">(provisional — survey confirms)</span>{% endif %}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Deposit</dt>
+                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ q.currency }} {{ q.deposit_amount }}{% if q.deposit_paid %} · <span class="font-semibold text-emerald-600 dark:text-emerald-400">paid</span>{% endif %}</dd>
+                </div>
+                {% if q.line_items %}
+                <div class="sm:col-span-2">
+                    <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Breakdown</dt>
+                    <dd class="mt-1 space-y-1">
+                        {% for li in q.line_items %}
+                        <div class="flex justify-between text-sm text-stone-700 dark:text-stone-300">
+                            <span>{{ li.description }}</span>
+                            <span>{{ q.currency }} {{ li.amount }}</span>
+                        </div>
+                        {% endfor %}
+                    </dd>
+                </div>
+                {% endif %}
+                {% if q.status == 'accepted' and q.project_id %}
+                <div class="sm:col-span-2">
+                    <dd class="text-sm text-emerald-700 dark:text-emerald-400">Installation booked — track progress under Installations.</dd>
+                </div>
+                {% endif %}
+            </dl>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="rounded-2xl border border-stone-200 bg-white px-6 py-12 text-center shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <p class="text-sm text-stone-500 dark:text-stone-400">No quotes yet. Open the mobile app and pin your installation address to get an instant feasibility check and estimate.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

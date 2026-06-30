@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from app.models.collections import DunningCase, DunningCaseStatus
+from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.services import collections as collections_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import log_audit_event
@@ -99,6 +99,22 @@ def build_listing_data(
         "status": status,
         "status_counts": status_counts,
         "customer_ref": customer_ref,
+    }
+
+
+def build_detail_data(db, *, case_id: str) -> dict[str, object]:
+    case = collections_service.dunning_cases.get(db, case_id)
+    actions = (
+        db.query(DunningActionLog)
+        .filter(DunningActionLog.case_id == case.id)
+        .order_by(DunningActionLog.executed_at.desc())
+        .limit(100)
+        .all()
+    )
+    return {
+        "case": case,
+        "account": case.subscriber,
+        "actions": actions,
     }
 
 

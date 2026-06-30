@@ -18,6 +18,7 @@ from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_automation as admin_support_automation
 from app.web.admin import system_whats_new as admin_system_whats_new
+from app.web.admin import system as admin_system
 from app.web.admin import usage as admin_usage
 
 
@@ -459,3 +460,86 @@ def test_report_routes_require_domain_permissions():
         "GET",
         "provisioning:read",
     )
+
+
+# --- 2026-06-29 admin-web authz hardening (regression locks) -----------------
+# The build-failing arch test (tests/architecture/test_route_permission_guards.py)
+# only audits /api/v1; these lock the high-sensitivity ADMIN-WEB routes that were
+# found unguarded in the security review.
+
+
+def test_system_secrets_routes_require_secrets_permissions():
+    assert _route_has_permission(
+        admin_system.router, "/system/secrets", "GET", "system:secrets:read"
+    )
+    assert _route_has_permission(
+        admin_system.router,
+        "/system/secrets/{path:path}/save",
+        "POST",
+        "system:secrets:write",
+    )
+    assert _route_has_permission(
+        admin_system.router, "/system/secrets/create", "POST", "system:secrets:write"
+    )
+    assert _route_has_permission(
+        admin_system.router,
+        "/system/secrets/{path:path}/delete",
+        "POST",
+        "system:secrets:write",
+    )
+
+
+def test_system_api_key_mutations_require_settings_write():
+    assert _route_has_permission(
+        admin_system.router, "/system/api-keys", "POST", "system:settings:write"
+    )
+    assert _route_has_permission(
+        admin_system.router,
+        "/system/api-keys/{key_id}/revoke",
+        "POST",
+        "system:settings:write",
+    )
+
+
+def test_system_config_writes_require_settings_write():
+    for path in (
+        "/system/config/billing",
+        "/system/config/direct-bank-transfer",
+        "/system/config/radius/push-reject-rules",
+    ):
+        assert _route_has_permission(
+            admin_system.router, path, "POST", "system:settings:write"
+        ), path
+
+
+def test_integrations_connector_lifecycle_require_permissions():
+    assert _route_has_permission(
+        admin_integrations.router,
+        "/integrations/providers",
+        "POST",
+        "billing:provider:write",
+    )
+    for path in (
+        "/integrations/connectors",
+        "/integrations/register",
+        "/integrations/installed/{connector_id}/uninstall",
+        "/integrations/targets",
+        "/integrations/jobs",
+        "/integrations/hooks/{hook_id}/test",
+    ):
+        assert _route_has_permission(
+            admin_integrations.router, path, "POST", "system:settings:write"
+        ), path
+
+
+def test_catalog_settings_mutations_require_catalog_write():
+    for path in (
+        "/catalog/settings/usage-allowances/{allowance_id}/delete",
+        "/catalog/settings/add-ons/{addon_id}/edit",
+        "/catalog/settings/sla-profiles",
+        "/catalog/settings/policy-sets/{policy_id}/delete",
+        "/catalog/settings/region-zones/bulk-delete",
+    ):
+        assert _route_has_permission(
+            admin_catalog_settings.router, path, "POST", "catalog:write"
+        ), path

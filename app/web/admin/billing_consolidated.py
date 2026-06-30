@@ -2,17 +2,53 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.domain_settings import SettingDomain
+from app.services import settings_spec
 from app.services import web_consolidated_billing as web_consolidated_billing_service
 from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+_CONSOLIDATED_PAYMENT_ERROR = (
+    "Unable to record consolidated payment. Check the amount and account details."
+)
+_CONSOLIDATED_PAYMENT_SUCCESS = "Consolidated payment recorded and distributed."
+
+
+def _default_currency(db: Session) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
+def _consolidated_detail_url(
+    billing_account_id: str,
+    *,
+    payment_note: str | None = None,
+    payment_error: str | None = None,
+) -> str:
+    params = {
+        key: value
+        for key, value in {
+            "payment_note": payment_note,
+            "payment_error": payment_error,
+        }.items()
+        if value
+    }
+    query = urlencode(params)
+    url = f"/admin/billing/consolidated-accounts/{billing_account_id}"
+    if query:
+        return f"{url}?{query}"
+    return url
 
 
 @router.get(
@@ -87,20 +123,33 @@ def consolidated_record_payment(
     request: Request,
     billing_account_id: str,
     amount: str = Form(...),
-    currency: str = Form("NGN"),
+    currency: str | None = Form(None),
     memo: str | None = Form(None),
     collection_account_id: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    web_consolidated_billing_service.record_bulk_payment(
-        db,
-        billing_account_id=billing_account_id,
-        amount=amount,
-        currency=currency,
-        memo=memo,
-        collection_account_id=collection_account_id or None,
-    )
+    try:
+        web_consolidated_billing_service.record_bulk_payment(
+            db,
+            billing_account_id=billing_account_id,
+            amount=amount,
+            currency=(currency or _default_currency(db)).strip().upper(),
+            memo=memo,
+            collection_account_id=collection_account_id or None,
+        )
+    except Exception:
+        db.rollback()
+        return RedirectResponse(
+            url=_consolidated_detail_url(
+                billing_account_id,
+                payment_error=_CONSOLIDATED_PAYMENT_ERROR,
+            ),
+            status_code=303,
+        )
     return RedirectResponse(
-        url=f"/admin/billing/consolidated-accounts/{billing_account_id}",
+        url=_consolidated_detail_url(
+            billing_account_id,
+            payment_note=_CONSOLIDATED_PAYMENT_SUCCESS,
+        ),
         status_code=303,
     )

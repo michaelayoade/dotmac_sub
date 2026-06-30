@@ -21,7 +21,7 @@ def expire_subscriptions() -> dict:
                 "expire_subscriptions skipped: local billing disabled (billing_enabled)"
             )
             return {"skipped": "billing_disabled"}
-        result = subscriptions_service.Subscriptions.expire_subscriptions(session)
+        result = subscriptions_service.expire_subscriptions(session)
         logger.info("Completed expire_subscriptions: %s", result)
         return result
 

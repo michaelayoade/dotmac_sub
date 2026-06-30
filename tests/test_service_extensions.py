@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.catalog import NasVendor, SubscriptionStatus
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.sequence import DocumentSequence  # noqa: F401
 from app.models.service_extension import (
     ServiceExtensionEntry,
@@ -17,10 +18,13 @@ from app.models.service_extension import (
     ServiceExtensionStatus,
 )
 from app.models.subscriber import Subscriber
+from app.models.subscription_engine import SettingValueType
 from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
 from app.services import service_extensions as svc
+from app.services.settings_cache import SettingsCache
+from app.services.settings_spec import get_spec
 from app.web.admin.billing_extensions import (
     _service_extension_failure_diagnostics,
     _subscriber_scope_inputs,
@@ -79,6 +83,41 @@ def test_create_requires_valid_window_and_days(db_session, subscriber, catalog_o
             days=99,  # over MAX
             scope_type=ServiceExtensionScope.network,
         )
+
+
+def test_service_extension_max_days_setting(db_session, subscriber, catalog_offer):
+    spec = get_spec(SettingDomain.billing, "service_extension_max_days")
+    assert spec is not None
+    assert spec.default == 30
+    assert spec.min_value == 1
+    assert spec.max_value == 365
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="service_extension_max_days",
+            value_type=SettingValueType.integer,
+            value_text="3",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    SettingsCache.invalidate(SettingDomain.billing.value, "service_extension_max_days")
+    _sub(db_session, subscriber, catalog_offer)
+
+    assert svc.scope_options(db_session)["max_days"] == 3
+    with pytest.raises(HTTPException) as exc:
+        svc.create_extension(
+            db_session,
+            reason="x",
+            window_start=_WIN_START,
+            window_end=_WIN_END,
+            days=4,
+            scope_type=ServiceExtensionScope.network,
+        )
+
+    assert exc.value.status_code == 400
+    assert "between 1 and 3" in exc.value.detail
 
 
 def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_offer):

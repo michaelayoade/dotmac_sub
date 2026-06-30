@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from typing import cast
+from uuid import uuid4
 
 from app.models.billing import InvoiceStatus
 from app.models.subscriber import Subscriber
@@ -12,6 +13,11 @@ from app.services import billing as billing_service
 from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
+
+
+def new_manual_payment_idempotency_token() -> str:
+    """Return one stable token for a rendered manual-payment form."""
+    return uuid4().hex
 
 
 def account_label(account) -> str:
@@ -233,6 +239,7 @@ def build_create_error_context(
     resolved_invoice,
     invoice_id: str | None,
     payment_method_id: str | None = None,
+    idempotency_token: str | None = None,
 ) -> dict[str, object]:
     selected_account = cast(Subscriber | None, deps.get("selected_account"))
     return {
@@ -255,6 +262,8 @@ def build_create_error_context(
         "show_invoice_typeahead": not bool(selected_account),
         "selected_invoice_id": invoice_id,
         "selected_payment_method_id": payment_method_id,
+        "idempotency_token": idempotency_token
+        or new_manual_payment_idempotency_token(),
     }
 
 
