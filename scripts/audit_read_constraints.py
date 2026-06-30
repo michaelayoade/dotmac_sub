@@ -24,8 +24,15 @@ import sys
 
 NUMERIC_LOWER = {"ge", "gt"}
 ALL_BOUNDS = {
-    "ge", "gt", "le", "lt", "multiple_of", "max_digits",
-    "max_length", "min_length", "pattern",
+    "ge",
+    "gt",
+    "le",
+    "lt",
+    "multiple_of",
+    "max_digits",
+    "max_length",
+    "min_length",
+    "pattern",
 }
 SCHEMA_DIR = "app/schemas"
 MONEY_HINT = re.compile(
@@ -44,9 +51,7 @@ def field_constraints(value: ast.expr) -> dict[str, str]:
     if name != "Field":
         return {}
     return {
-        kw.arg: ast.unparse(kw.value)
-        for kw in value.keywords
-        if kw.arg in ALL_BOUNDS
+        kw.arg: ast.unparse(kw.value) for kw in value.keywords if kw.arg in ALL_BOUNDS
     }
 
 
