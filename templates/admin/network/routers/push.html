@@ -89,11 +89,43 @@
     {# Step 3: Confirm #}
     <div class="animate-fade-in-up" style="animation-delay: 100ms;">
     {% call card("Step 3 — Confirm & Execute", color="emerald") %}
+    <div class="mb-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <label class="flex items-start gap-3 rounded-lg border border-slate-200 bg-white/70 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+            <input type="checkbox" x-model="dryRun"
+                   class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+            <span>
+                <span class="block font-semibold text-slate-800 dark:text-slate-100">Dry-run preview</span>
+                <span class="block text-xs text-slate-500 dark:text-slate-400">Capture pre-change snapshots and validate the planned REST calls without posting changes.</span>
+            </span>
+        </label>
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Failure policy</label>
+            <select x-model="failurePolicy"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="continue">Continue to next router</option>
+                <option value="abort">Abort remaining routers</option>
+            </select>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Applies after a router-level failure. The current router's partial responses are still recorded.</p>
+        </div>
+        <label class="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm dark:border-amber-900/60 dark:bg-amber-900/20">
+            <input type="checkbox" x-model="allowDangerousCommands"
+                   class="mt-0.5 rounded border-amber-300 text-amber-600 focus:ring-amber-500">
+            <span>
+                <span class="block font-semibold text-amber-800 dark:text-amber-200">Allow blocked commands</span>
+                <span class="block text-xs text-amber-700 dark:text-amber-300">Bypass the reset/shutdown/remove command blocklist for this push only.</span>
+            </span>
+        </label>
+    </div>
     <div class="flex items-center justify-between gap-4 flex-wrap">
         <div class="text-sm text-slate-600 dark:text-slate-300 space-y-1">
             <p>
-                <span class="font-semibold" x-text="commandCount()">0</span> command(s) will be pushed to
+                <span class="font-semibold" x-text="commandCount()">0</span> command(s) will be
+                <span class="font-semibold" x-text="dryRun ? 'previewed for' : 'pushed to'">pushed to</span>
                 <span class="font-semibold" x-text="selectedRouters.length">0</span> router(s).
+            </p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+                Failure policy:
+                <span class="font-medium" x-text="failurePolicy === 'abort' ? 'abort remaining routers' : 'continue to next router'"></span>.
             </p>
             <p x-show="selectedRouters.length === 0" class="text-amber-600 dark:text-amber-400 text-xs">
                 Select at least one router.
@@ -107,7 +139,7 @@
                 class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-teal-700 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0">
             <svg x-show="!pushing" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
             <svg x-show="pushing" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-            <span x-text="pushing ? 'Executing...' : 'Execute Push'">Execute Push</span>
+            <span x-text="pushing ? 'Submitting...' : (dryRun ? 'Run Preview' : 'Execute Push')">Execute Push</span>
         </button>
     </div>
     <p id="push-error" class="hidden mt-3 text-sm text-red-600 dark:text-red-400"></p>
@@ -121,6 +153,9 @@ function pushWizard() {
         selectedTemplate: '',
         commands: '',
         selectedRouters: [],
+        dryRun: false,
+        failurePolicy: 'continue',
+        allowDangerousCommands: false,
         pushing: false,
         commandCount() {
             return this.commands.split('\n').filter(l => l.trim()).length;
@@ -140,7 +175,13 @@ function pushWizard() {
         },
         async executePush() {
             const cmds = this.commands.split('\n').filter(l => l.trim());
-            const confirmed = confirm(`Push ${cmds.length} command(s) to ${this.selectedRouters.length} router(s)?`);
+            const mode = this.dryRun ? 'Preview' : 'Push';
+            const target = `${cmds.length} command(s) for ${this.selectedRouters.length} router(s)`;
+            let message = `${mode} ${target}?\nFailure policy: ${this.failurePolicy}.`;
+            if (this.allowDangerousCommands) {
+                message += '\n\nBlocked-command override is enabled for this push.';
+            }
+            const confirmed = confirm(message);
             if (!confirmed) return;
             this.pushing = true;
             document.getElementById('push-error').classList.add('hidden');
@@ -151,7 +192,10 @@ function pushWizard() {
                     body: JSON.stringify({
                         commands: cmds,
                         router_ids: this.selectedRouters,
-                        template_id: this.selectedTemplate || null
+                        template_id: this.selectedTemplate || null,
+                        dry_run: this.dryRun,
+                        failure_policy: this.failurePolicy,
+                        allow_dangerous_commands: this.allowDangerousCommands
                     })
                 });
                 const data = await resp.json();

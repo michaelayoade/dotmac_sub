@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -172,6 +173,9 @@ class RouterConfigPushCreate(BaseModel):
     commands: list[str] = Field(min_length=1)
     variable_values: dict | None = None
     router_ids: list[uuid.UUID] = Field(min_length=1)
+    dry_run: bool = False
+    failure_policy: Literal["continue", "abort"] = "continue"
+    allow_dangerous_commands: bool = False
 
 
 class RouterConfigPushRead(BaseModel):
@@ -181,6 +185,9 @@ class RouterConfigPushRead(BaseModel):
     template_id: uuid.UUID | None
     commands: list
     variable_values: dict | None
+    dry_run: bool
+    failure_policy: str
+    allow_dangerous_commands: bool
     initiated_by: uuid.UUID
     status: str
     created_at: datetime
