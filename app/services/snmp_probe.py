@@ -42,7 +42,9 @@ def probe_snmp_reachability(
     if not binary:
         return SnmpProbeResult(False, False, "snmpget_not_installed")
 
-    host = str(getattr(device, "mgmt_ip", None) or getattr(device, "hostname", "") or "")
+    host = str(
+        getattr(device, "mgmt_ip", None) or getattr(device, "hostname", "") or ""
+    )
     host = host.strip()
     if not host:
         return SnmpProbeResult(False, False, "missing_host")
