@@ -39,7 +39,9 @@ def invoice_generate_batch(
             billing_date=billing_date,
         )
     else:
-        note = "Batch run was not started. Review the preview and confirm before running."
+        note = (
+            "Batch run was not started. Review the preview and confirm before running."
+        )
     query = urlencode({"note": note})
     return RedirectResponse(
         url=f"/admin/billing/invoices/batch?{query}", status_code=303
