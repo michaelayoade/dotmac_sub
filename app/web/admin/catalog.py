@@ -184,7 +184,11 @@ def catalog_offer_edit(
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
-@router.post("/offers/{offer_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/offers/{offer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_offer_edit_post(
     request: Request,
     offer_id: str,
@@ -453,7 +457,11 @@ def catalog_subscription_ipv4_addresses(
     return JSONResponse(payload)
 
 
-@router.post("/subscriptions", response_class=HTMLResponse)
+@router.post(
+    "/subscriptions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_subscription_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
@@ -641,7 +649,11 @@ def catalog_subscription_force_reauth(
     )
 
 
-@router.post("/subscriptions/{subscription_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/subscriptions/{subscription_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_subscription_update(
     request: Request,
     subscription_id: str,

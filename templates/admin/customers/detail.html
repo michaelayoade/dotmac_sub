@@ -1606,8 +1606,9 @@
                                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                                     </div>
                                     <div class="min-w-0">
+                                        {% set ont_display_serial = ont_serial_display_by_id.get(assignment.ont_unit.id | string) if assignment.ont_unit and ont_serial_display_by_id else '' %}
                                         <a href="/admin/network/onts/{{ assignment.ont_unit.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">
-                                            {{ assignment.ont_unit.serial_number if assignment.ont_unit else 'Unknown ONT' }}
+                                            {{ ont_display_serial or (assignment.ont_unit.serial_number if assignment.ont_unit else 'Unknown ONT') }}
                                         </a>
                                         <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                                             {% if assignment.ont_unit and assignment.ont_unit.olt_device %}
@@ -1794,7 +1795,8 @@
                         <div class="mt-2 space-y-2">
                             {% for assignment in ont_assignments[:2] %}
                             <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
-                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ assignment.ont_unit.serial_number if assignment.ont_unit else 'ONT Assignment' }}</p>
+                                {% set ont_display_serial = ont_serial_display_by_id.get(assignment.ont_unit.id | string) if assignment.ont_unit and ont_serial_display_by_id else '' %}
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ ont_display_serial or (assignment.ont_unit.serial_number if assignment.ont_unit else 'ONT Assignment') }}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ 'Active' if assignment.active else 'Inactive' }}{% if assignment.pon_port and assignment.pon_port.name %} · {{ assignment.pon_port.name }}{% endif %}</p>
                             </div>
                             {% endfor %}

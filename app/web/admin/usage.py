@@ -157,7 +157,11 @@ def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(ge
     )
 
 
-@router.post("/charges/bulk-post", response_class=HTMLResponse)
+@router.post(
+    "/charges/bulk-post",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def usage_charges_bulk_post(
     request: Request,
     form: FormData = Depends(parse_form_data),

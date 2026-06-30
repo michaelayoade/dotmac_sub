@@ -368,6 +368,10 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageType,
     PortalOnboardingState,
 )
+from app.models.project_mirror import (  # noqa: F401
+    ProjectMirror,
+    ProjectSyncState,
+)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningRun,
@@ -397,6 +401,10 @@ from app.models.qualification import (  # noqa: F401
     QualificationStatus,
     ServiceQualification,
 )
+from app.models.quote_mirror import (  # noqa: F401
+    QuoteMirror,
+    QuoteSyncState,
+)
 from app.models.radius import (  # noqa: F401
     RadiusClient,
     RadiusServer,
@@ -418,6 +426,10 @@ from app.models.rbac import (  # noqa: F401
     SubscriberRole,
     SystemUserPermission,
     SystemUserRole,
+)
+from app.models.referral import (  # noqa: F401
+    ReferralMirror,
+    ReferralProgramCache,
 )
 from app.models.router_management import (  # noqa: F401
     JumpHost,
@@ -557,4 +569,8 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeer,
     WireGuardPeerStatus,
     WireGuardServer,
+)
+from app.models.work_order_mirror import (  # noqa: F401
+    WorkOrderMirror,
+    WorkOrderSyncState,
 )

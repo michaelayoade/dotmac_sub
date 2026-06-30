@@ -216,6 +216,7 @@ def payment_new(
             "currency_locked": bool(prefill.get("invoice_id")),
             "show_invoice_typeahead": not bool(selected_account),
             "selected_invoice_id": prefill.get("invoice_id"),
+            "idempotency_token": web_billing_payment_forms_service.new_manual_payment_idempotency_token(),
             "balance_value": state["balance_value"],
             "balance_display": state["balance_display"],
         },
@@ -368,6 +369,7 @@ def payment_create(
     collection_account_id: str | None = Form(None),
     payment_method_id: str | None = Form(None),
     memo: str | None = Form(None),
+    idempotency_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     resolved_invoice = None
@@ -385,6 +387,7 @@ def payment_create(
             collection_account_id=collection_account_id,
             payment_method_id=payment_method_id,
             memo=memo,
+            idempotency_token=idempotency_token,
         )
         payment = cast(Payment, result["payment"])
         resolved_invoice = result["resolved_invoice"]
@@ -442,6 +445,7 @@ def payment_create(
             resolved_invoice=resolved_invoice,
             invoice_id=invoice_id,
             payment_method_id=payment_method_id,
+            idempotency_token=idempotency_token,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
 

@@ -253,6 +253,9 @@ def get_billing_config_context(db: Session) -> dict:
         "expiry_reminder_days": "7",
         "invoice_reminder_days": "7,1",
         "dunning_escalation_days": "3,7,14,30",
+        "blocking_period_days": "0",
+        "deactivation_period_days": "0",
+        "minimum_balance": "0",
     }
     for key, value in defaults.items():
         if not billing.get(key):
@@ -260,8 +263,157 @@ def get_billing_config_context(db: Session) -> dict:
     return {"billing": billing}
 
 
+def _normalize_choice(
+    data: dict[str, Any],
+    key: str,
+    label: str,
+    allowed_values: set[str],
+) -> None:
+    value = str(data.get(key) or "").strip().lower()
+    if not value:
+        return
+    if value not in allowed_values:
+        allowed = ", ".join(sorted(allowed_values))
+        raise ValueError(f"{label} must be one of: {allowed}.")
+    data[key] = value
+
+
+def _normalize_bool_setting(data: dict[str, Any], key: str, label: str) -> None:
+    value = str(data.get(key) or "").strip().lower()
+    if not value:
+        return
+    if value not in {"true", "false"}:
+        raise ValueError(f"{label} must be true or false.")
+    data[key] = value
+
+
+def _normalize_int_setting(
+    data: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> None:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a whole number.") from exc
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}.")
+    data[key] = str(parsed)
+
+
+def _normalize_decimal_setting(
+    data: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    minimum: Decimal,
+) -> None:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"{label} must be a valid decimal value.") from exc
+    if parsed < minimum:
+        raise ValueError(f"{label} must be at least {minimum}.")
+    data[key] = format(parsed, "f")
+
+
+def _normalize_csv_days(data: dict[str, Any], key: str, label: str) -> None:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return
+    parts = [part.strip() for part in value.split(",")]
+    if any(not part for part in parts):
+        raise ValueError(f"{label} must be a comma-separated list of day numbers.")
+    normalized: list[str] = []
+    for part in parts:
+        try:
+            parsed = int(part)
+        except ValueError as exc:
+            raise ValueError(
+                f"{label} must be a comma-separated list of day numbers."
+            ) from exc
+        if parsed < 0 or parsed > 3650:
+            raise ValueError(f"{label} values must be between 0 and 3650.")
+        normalized.append(str(parsed))
+    data[key] = ",".join(normalized)
+
+
+def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    for key, label in (
+        ("billing_enabled", "Billing Enabled"),
+        ("use_creation_date", "Use Customer Creation Date"),
+        ("customer_balance_notifications_enabled", "Customer Balance Notifications"),
+        ("auto_suspend_on_overdue", "Auto-Suspend on Overdue"),
+        ("send_billing_notifications", "Send Billing Notifications"),
+        ("proforma_enabled", "Proforma Invoices"),
+        ("zero_total_invoices", "Zero-Total Invoices"),
+        ("invoice_caching", "Invoice PDF Caching"),
+    ):
+        _normalize_bool_setting(normalized, key, label)
+
+    _normalize_choice(
+        normalized,
+        "payment_period",
+        "Payment Period",
+        {"monthly", "quarterly", "annual"},
+    )
+    _normalize_choice(
+        normalized,
+        "proforma_payment_period",
+        "Proforma Payment Period",
+        {"monthly", "quarterly", "annual"},
+    )
+
+    for key, label in (
+        ("billing_day", "Billing Day"),
+        ("prepaid_default_billing_day", "Prepaid Default Billing Day"),
+        ("postpaid_default_billing_day", "Postpaid Default Billing Day"),
+    ):
+        _normalize_int_setting(normalized, key, label, minimum=1, maximum=28)
+
+    for key, label in (
+        ("payment_due_days", "Payment Due Days"),
+        ("suspension_grace_hours", "Suspension Grace Period"),
+        ("expiry_reminder_days", "Expiry Reminder Days"),
+        ("blocking_period_days", "Blocking Period"),
+        ("deactivation_period_days", "Deactivation Period"),
+        ("proforma_generation_day", "Proforma Generation Day"),
+        ("prepaid_default_payment_due_days", "Prepaid Default Payment Due Days"),
+        ("prepaid_default_grace_period_days", "Prepaid Default Grace Period Days"),
+        ("postpaid_default_payment_due_days", "Postpaid Default Payment Due Days"),
+        ("postpaid_default_grace_period_days", "Postpaid Default Grace Period Days"),
+    ):
+        _normalize_int_setting(normalized, key, label, minimum=0, maximum=3650)
+
+    for key, label in (
+        ("minimum_balance", "Minimum Balance"),
+        ("prepaid_default_min_balance", "Prepaid Default Minimum Balance"),
+        ("postpaid_default_min_balance", "Postpaid Default Minimum Balance"),
+    ):
+        _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
+
+    _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
+    _normalize_csv_days(normalized, "dunning_escalation_days", "Dunning Escalation Days")
+    return normalized
+
+
 def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.billing, data, BILLING_KEYS)
+    _save_settings(
+        db,
+        SettingDomain.billing,
+        _normalized_billing_config(data),
+        BILLING_KEYS,
+    )
 
 
 def get_direct_bank_transfer_context(db: Session) -> dict:

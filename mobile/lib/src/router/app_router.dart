@@ -13,7 +13,10 @@ import '../features/auth/profile_screen.dart';
 import '../features/auth/reset_password_screen.dart';
 import '../features/auth/sessions_screen.dart';
 import '../features/profile/contacts_screen.dart';
+import '../features/profile/installation_tracker_screen.dart';
+import '../features/profile/refer_and_earn_screen.dart';
 import '../features/profile/service_location_screen.dart';
+import '../features/profile/work_orders_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
 import '../features/billing/invoices_screen.dart';
 import '../features/billing/transfer_proofs_screen.dart';
@@ -26,6 +29,7 @@ import '../features/home/splash_screen.dart';
 import '../features/reseller/reseller_account_screen.dart';
 import '../features/reseller/reseller_accounts_screen.dart';
 import '../features/reseller/reseller_billing_screen.dart';
+import '../features/reseller/reseller_crm_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
 import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
@@ -36,6 +40,8 @@ import '../features/reseller/reseller_service_requests_screen.dart';
 import '../features/service/add_ons_screen.dart';
 import '../features/service/change_plan_screen.dart';
 import '../features/service/data_bundle_screen.dart';
+import '../features/service/quote_request_screen.dart';
+import '../features/service/quotes_screen.dart';
 import '../features/service/service_detail_screen.dart';
 import '../features/service/service_route.dart';
 import '../features/settings/settings_screen.dart';
@@ -146,21 +152,21 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) =>
             TopUpScreen(saveCardInitial: state.extra == true),
       ),
-      GoRoute(
-        path: '/wallet',
-        builder: (_, __) => const WalletScreen(),
-      ),
+      GoRoute(path: '/wallet', builder: (_, __) => const WalletScreen()),
       // Live chat now lives INSIDE the Support tab (so the bottom bar stays and
       // it's not a detached full-screen page). Keep /chat as a redirect so push
       // notifications and old deep links land on the nested screen.
-      GoRoute(
-        path: '/chat',
-        redirect: (_, __) => '/support/chat',
-      ),
+      GoRoute(path: '/chat', redirect: (_, __) => '/support/chat'),
       GoRoute(
         path: '/pay',
         builder: (_, state) =>
             PaymentWebViewScreen(args: state.extra as CheckoutArgs),
+      ),
+      // Self-serve installation quotes (map-pin → estimate → pay deposit).
+      GoRoute(path: '/quotes', builder: (_, __) => const QuotesScreen()),
+      GoRoute(
+        path: '/quotes/request',
+        builder: (_, __) => const QuoteRequestScreen(),
       ),
       // Reseller portal — a standalone landing (resellers manage many customer
       // accounts), outside the customer bottom-nav shell.
@@ -183,10 +189,7 @@ final routerProvider = Provider<GoRouter>((ref) {
               fallbackRoute: '/reseller',
             ),
           ),
-          GoRoute(
-            path: 'vas',
-            builder: (_, __) => const ResellerVasScreen(),
-          ),
+          GoRoute(path: 'vas', builder: (_, __) => const ResellerVasScreen()),
           GoRoute(
             path: 'fiber-map',
             builder: (_, __) => const ResellerFiberMapScreen(),
@@ -194,6 +197,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'service-requests',
             builder: (_, __) => const ResellerServiceRequestsScreen(),
+          ),
+          GoRoute(
+            path: 'quotes',
+            builder: (_, __) => const ResellerCrmScreen(),
           ),
           GoRoute(
             path: 'profile',
@@ -205,10 +212,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           // Reuses the customer Contacts screen: /me/contacts is self-scoped
           // and works for reseller users (they're Subscribers too).
-          GoRoute(
-            path: 'contacts',
-            builder: (_, __) => const ContactsScreen(),
-          ),
+          GoRoute(path: 'contacts', builder: (_, __) => const ContactsScreen()),
           GoRoute(
             path: 'revenue',
             builder: (_, __) => const ResellerRevenueScreen(),
@@ -229,130 +233,153 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __, navigationShell) =>
             HomeShell(navigationShell: navigationShell),
         branches: [
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/dashboard',
-              builder: (_, __) => const DashboardScreen(),
-              routes: [
-                GoRoute(
-                  path: 'notifications',
-                  builder: (_, __) => const NotificationsScreen(),
-                ),
-              ],
-            ),
-            // Service drill-down + its sub-screens, in the Home branch (it is
-            // entered from the dashboard). The originating screen passes the
-            // Subscription via `extra`; deep links resolve the id from the
-            // subscriptions cache (see ServiceRoute).
-            GoRoute(
-              path: '/service/:id',
-              builder: (_, state) => ServiceRoute(
-                id: state.pathParameters['id']!,
-                initial: state.extra as Subscription?,
-                builder: (s) => ServiceDetailScreen(service: s),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/dashboard',
+                builder: (_, __) => const DashboardScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'notifications',
+                    builder: (_, __) => const NotificationsScreen(),
+                  ),
+                ],
               ),
-              routes: [
-                GoRoute(
-                  path: 'change-plan',
-                  builder: (_, state) => ServiceRoute(
-                    id: state.pathParameters['id']!,
-                    initial: state.extra as Subscription?,
-                    builder: (s) => ChangePlanScreen(service: s),
+              // Service drill-down + its sub-screens, in the Home branch (it is
+              // entered from the dashboard). The originating screen passes the
+              // Subscription via `extra`; deep links resolve the id from the
+              // subscriptions cache (see ServiceRoute).
+              GoRoute(
+                path: '/service/:id',
+                builder: (_, state) => ServiceRoute(
+                  id: state.pathParameters['id']!,
+                  initial: state.extra as Subscription?,
+                  builder: (s) => ServiceDetailScreen(service: s),
+                ),
+                routes: [
+                  GoRoute(
+                    path: 'change-plan',
+                    builder: (_, state) => ServiceRoute(
+                      id: state.pathParameters['id']!,
+                      initial: state.extra as Subscription?,
+                      builder: (s) => ChangePlanScreen(service: s),
+                    ),
                   ),
-                ),
-                GoRoute(
-                  path: 'addons',
-                  builder: (_, state) => ServiceRoute(
-                    id: state.pathParameters['id']!,
-                    initial: state.extra as Subscription?,
-                    builder: (s) => AddOnsScreen(service: s),
+                  GoRoute(
+                    path: 'addons',
+                    builder: (_, state) => ServiceRoute(
+                      id: state.pathParameters['id']!,
+                      initial: state.extra as Subscription?,
+                      builder: (s) => AddOnsScreen(service: s),
+                    ),
                   ),
-                ),
-                GoRoute(
-                  path: 'buy-data',
-                  builder: (_, state) => ServiceRoute(
-                    id: state.pathParameters['id']!,
-                    initial: state.extra as Subscription?,
-                    builder: (s) => DataBundleScreen(service: s),
+                  GoRoute(
+                    path: 'buy-data',
+                    builder: (_, state) => ServiceRoute(
+                      id: state.pathParameters['id']!,
+                      initial: state.extra as Subscription?,
+                      builder: (s) => DataBundleScreen(service: s),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/billing',
-              builder: (_, __) => const InvoicesScreen(),
-              routes: [
-                GoRoute(
-                  path: 'transfer-proofs',
-                  builder: (_, __) => const TransferProofsScreen(),
-                ),
-                GoRoute(
-                  path: 'invoices/:id',
-                  builder: (_, state) => InvoiceDetailScreen(
-                      invoiceId: state.pathParameters['id']!),
-                ),
-              ],
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            // Path kept as /usage so old deep links and notifications keep working;
-            // the tab itself is now the Service tab (plan + data + add-ons + usage).
-            GoRoute(
-                path: '/usage', builder: (_, __) => const ServiceTabScreen()),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/support',
-              builder: (_, __) => const TicketsScreen(),
-              routes: [
-                // Live chat, nested so the bottom nav stays and back returns to
-                // the ticket list.
-                GoRoute(
-                  path: 'chat',
-                  builder: (_, __) => const ChatScreen(),
-                ),
-                GoRoute(
-                  path: 'new',
-                  builder: (_, __) => const CreateTicketScreen(),
-                ),
-                GoRoute(
-                  path: ':id',
-                  builder: (_, state) =>
-                      TicketDetailScreen(ticketId: state.pathParameters['id']!),
-                ),
-              ],
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/profile',
-              builder: (_, __) => const ProfileScreen(),
-              routes: [
-                GoRoute(
-                  path: 'sessions',
-                  builder: (_, __) => const SessionsScreen(),
-                ),
-                GoRoute(
-                  path: 'payment-methods',
-                  builder: (_, __) => const PaymentMethodsScreen(),
-                ),
-                GoRoute(
-                  path: 'settings',
-                  builder: (_, __) => const SettingsScreen(),
-                ),
-                GoRoute(
-                  path: 'service-location',
-                  builder: (_, __) => const ServiceLocationScreen(),
-                ),
-                GoRoute(
-                  path: 'contacts',
-                  builder: (_, __) => const ContactsScreen(),
-                ),
-              ],
-            ),
-          ]),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/billing',
+                builder: (_, __) => const InvoicesScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'transfer-proofs',
+                    builder: (_, __) => const TransferProofsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'invoices/:id',
+                    builder: (_, state) => InvoiceDetailScreen(
+                      invoiceId: state.pathParameters['id']!,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              // Path kept as /usage so old deep links and notifications keep working;
+              // the tab itself is now the Service tab (plan + data + add-ons + usage).
+              GoRoute(
+                path: '/usage',
+                builder: (_, __) => const ServiceTabScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/support',
+                builder: (_, __) => const TicketsScreen(),
+                routes: [
+                  // Live chat, nested so the bottom nav stays and back returns to
+                  // the ticket list.
+                  GoRoute(path: 'chat', builder: (_, __) => const ChatScreen()),
+                  GoRoute(
+                    path: 'new',
+                    builder: (_, __) => const CreateTicketScreen(),
+                  ),
+                  GoRoute(
+                    path: ':id',
+                    builder: (_, state) => TicketDetailScreen(
+                      ticketId: state.pathParameters['id']!,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/profile',
+                builder: (_, __) => const ProfileScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'sessions',
+                    builder: (_, __) => const SessionsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'payment-methods',
+                    builder: (_, __) => const PaymentMethodsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'settings',
+                    builder: (_, __) => const SettingsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'service-location',
+                    builder: (_, __) => const ServiceLocationScreen(),
+                  ),
+                  GoRoute(
+                    path: 'contacts',
+                    builder: (_, __) => const ContactsScreen(),
+                  ),
+                  GoRoute(
+                    path: 'refer-and-earn',
+                    builder: (_, __) => const ReferAndEarnScreen(),
+                  ),
+                  GoRoute(
+                    path: 'installation-progress',
+                    builder: (_, __) => const InstallationTrackerScreen(),
+                  ),
+                  GoRoute(
+                    path: 'technician-visits',
+                    builder: (_, __) => const WorkOrdersScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ],
       ),
     ],

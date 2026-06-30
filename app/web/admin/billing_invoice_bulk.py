@@ -94,7 +94,12 @@ def invoice_bulk_mark_paid(
         invoice_ids_csv=invoice_ids,
     )
     count = len(updated_ids)
-    return JSONResponse({"message": f"Marked {count} invoices as paid", "count": count})
+    total = len(web_billing_invoice_bulk_service.parse_ids_csv(invoice_ids))
+    skipped = max(0, total - count)
+    message = f"Marked {count} invoice{'s' if count != 1 else ''} as paid"
+    if skipped:
+        message += f"; skipped {skipped} (missing, already paid, or not eligible)"
+    return JSONResponse({"message": message, "count": count, "skipped": skipped})
 
 
 @router.post(
