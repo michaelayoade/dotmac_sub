@@ -15,7 +15,12 @@ from pydantic import ValidationError
 
 from app.schemas.billing import (
     CreditNoteCreate,
+    CreditNoteLineCreate,
     CreditNoteUpdate,
+    InvoiceCreate,
+    InvoiceLineCreate,
+    LedgerEntryCreate,
+    PaymentAllocationCreate,
     PaymentCreate,
     PaymentUpdate,
     TaxRateCreate,
@@ -63,3 +68,45 @@ def test_tax_rate_rejects_out_of_range(rate):
 def test_tax_rate_update_rejects_out_of_range():
     with pytest.raises(ValidationError):
         TaxRateUpdate(rate=Decimal("100"))
+
+
+# --- Refactor guard: money bounds moved off the shared *Base onto *Create -----
+# (docs/audit-read-model-constraints.md). The matching *Read models serialize
+# negatives — see test_invoice_read_negative_lines.py. These assert the bounds
+# still reject bad *input* after the move.
+
+
+def test_invoice_create_rejects_negative_total():
+    InvoiceCreate(account_id=uuid4(), total=Decimal("10.00"))  # accepts valid
+    with pytest.raises(ValidationError):
+        InvoiceCreate(account_id=uuid4(), total=Decimal("-1"))
+
+
+def test_invoice_line_create_rejects_negative_and_zero_qty():
+    InvoiceLineCreate(invoice_id=uuid4(), description="ok", amount=Decimal("1"))
+    with pytest.raises(ValidationError):
+        InvoiceLineCreate(invoice_id=uuid4(), description="x", amount=Decimal("-1"))
+    with pytest.raises(ValidationError):
+        InvoiceLineCreate(invoice_id=uuid4(), description="x", quantity=Decimal("0"))
+
+
+def test_credit_note_line_create_rejects_negative():
+    CreditNoteLineCreate(credit_note_id=uuid4(), description="ok", amount=Decimal("1"))
+    with pytest.raises(ValidationError):
+        CreditNoteLineCreate(
+            credit_note_id=uuid4(), description="x", amount=Decimal("-1")
+        )
+
+
+def test_payment_allocation_create_rejects_negative():
+    PaymentAllocationCreate(payment_id=uuid4(), invoice_id=uuid4(), amount=Decimal("1"))
+    with pytest.raises(ValidationError):
+        PaymentAllocationCreate(
+            payment_id=uuid4(), invoice_id=uuid4(), amount=Decimal("-1")
+        )
+
+
+def test_ledger_entry_create_rejects_negative():
+    LedgerEntryCreate(account_id=uuid4(), entry_type="debit", amount=Decimal("1"))
+    with pytest.raises(ValidationError):
+        LedgerEntryCreate(account_id=uuid4(), entry_type="debit", amount=Decimal("-1"))
