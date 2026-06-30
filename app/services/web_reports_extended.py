@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-from sqlalchemy import func, select
+from sqlalchemy import BigInteger, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
@@ -15,6 +17,43 @@ from app.services import subscriber as subscriber_service
 from app.services.common import parse_date_filter as _parse_date
 
 logger = logging.getLogger(__name__)
+
+
+def _bandwidth_total_bps_expr():
+    from app.models.bandwidth import BandwidthSample
+
+    return cast(BandwidthSample.rx_bps, BigInteger) + cast(
+        BandwidthSample.tx_bps,
+        BigInteger,
+    )
+
+
+def _default_report_window(days: int | None = 30) -> tuple[datetime, datetime]:
+    end = datetime.now(UTC)
+    start = end - timedelta(days=days or 30)
+    return start, end
+
+
+def _resolve_report_window(
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    days: int | None = 30,
+) -> tuple[datetime, datetime, str, str]:
+    start, end = _default_report_window(days)
+    parsed_from = _parse_date(date_from)
+    parsed_to = _parse_date(date_to)
+    if parsed_from is not None:
+        start = parsed_from
+    if parsed_to is not None:
+        end = parsed_to + timedelta(days=1)
+    if end <= start:
+        end = start + timedelta(days=1)
+    return start, end, start.date().isoformat(), (end - timedelta(days=1)).date().isoformat()
+
+
+def _gb_from_avg_bps(avg_bps: float | int | Decimal | None, span_seconds: float) -> float:
+    return (float(avg_bps or 0) / 8.0 * span_seconds) / (1024**3)
 
 
 # ---------------------------------------------------------------------------
@@ -481,14 +520,26 @@ def get_new_services_data(
 # ---------------------------------------------------------------------------
 
 
-def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
+def get_bandwidth_report_data(
+    db: Session,
+    *,
+    days: int | None = 30,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    show_chart: bool = False,
+) -> dict:
     """Network usage analytics — total usage, per-plan, top consumers."""
     from app.models.bandwidth import BandwidthSample
     from app.models.catalog import CatalogOffer, Subscription
     from app.models.subscriber import Subscriber
 
-    end = datetime.now(UTC)
-    start = end - timedelta(days=days)
+    start, end, date_from_value, date_to_value = _resolve_report_window(
+        date_from=date_from,
+        date_to=date_to,
+        days=days,
+    )
+    span_seconds = max(0.0, (end - start).total_seconds())
+    total_bps = _bandwidth_total_bps_expr()
 
     # Total bandwidth usage
     row = db.execute(
@@ -502,7 +553,7 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
             ),
         ).where(
             BandwidthSample.sample_at >= start,
-            BandwidthSample.sample_at <= end,
+            BandwidthSample.sample_at < end,
         )
     ).first()
 
@@ -511,8 +562,7 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
     peak_rx = float(row.peak_rx or 0) if row else 0
     peak_tx = float(row.peak_tx or 0) if row else 0
     active_subs = int(row.active_subs or 0) if row else 0
-    span_seconds = max(0.0, (end - start).total_seconds())
-    total_gb = ((avg_rx + avg_tx) / 8.0 * span_seconds) / (1024**3)
+    total_gb = _gb_from_avg_bps(avg_rx + avg_tx, span_seconds)
 
     # Daily usage trend
     bucket = func.date_trunc("day", BandwidthSample.sample_at)
@@ -524,7 +574,7 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
         )
         .where(
             BandwidthSample.sample_at >= start,
-            BandwidthSample.sample_at <= end,
+            BandwidthSample.sample_at < end,
         )
         .group_by(bucket)
         .order_by(bucket)
@@ -537,15 +587,14 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
     top_rows = db.execute(
         select(
             BandwidthSample.subscription_id,
-            func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label(
-                "avg_total"
-            ),
+            func.avg(total_bps).label("avg_total"),
         )
         .where(
             BandwidthSample.sample_at >= start,
+            BandwidthSample.sample_at < end,
         )
         .group_by(BandwidthSample.subscription_id)
-        .order_by(func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).desc())
+        .order_by(func.avg(total_bps).desc())
         .limit(20)
     ).all()
 
@@ -567,7 +616,7 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
             if offer:
                 plan_name = offer.name
         avg_mbps = float(tr.avg_total or 0) / 1_000_000
-        usage_gb = (float(tr.avg_total or 0) / 8.0 * span_seconds) / (1024**3)
+        usage_gb = _gb_from_avg_bps(tr.avg_total, span_seconds)
         top_consumers.append(
             {
                 "subscriber": subscriber_name,
@@ -581,7 +630,8 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
     plan_rows = db.execute(
         select(
             CatalogOffer.name,
-            func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label("avg_bps"),
+            func.avg(total_bps).label("avg_bps"),
+            (func.avg(total_bps) / 8.0 * span_seconds).label("usage_bytes"),
             func.count(func.distinct(BandwidthSample.subscription_id)).label(
                 "sub_count"
             ),
@@ -593,14 +643,18 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
             isouter=True,
         )
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
-        .where(BandwidthSample.sample_at >= start)
+        .where(
+            BandwidthSample.sample_at >= start,
+            BandwidthSample.sample_at < end,
+        )
         .group_by(CatalogOffer.name)
-        .order_by(func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).desc())
+        .order_by((func.avg(total_bps) / 8.0 * span_seconds).desc())
     ).all()
     usage_by_plan = [
         {
             "name": r.name or "Unlinked",
             "avg_mbps": round(float(r.avg_bps or 0) / 1_000_000, 2),
+            "usage_gb": round(float(r.usage_bytes or 0) / (1024**3), 2),
             "subscribers": r.sub_count,
         }
         for r in plan_rows
@@ -608,6 +662,9 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
 
     return {
         "days": days,
+        "date_from": date_from_value,
+        "date_to": date_to_value,
+        "show_chart": show_chart,
         "total_gb": round(total_gb, 2),
         "avg_rx_mbps": round(avg_rx / 1_000_000, 2),
         "avg_tx_mbps": round(avg_tx / 1_000_000, 2),
@@ -617,9 +674,48 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
         "chart_labels": chart_labels,
         "chart_rx": chart_rx,
         "chart_tx": chart_tx,
+        "plan_chart_labels": [row["name"] for row in usage_by_plan[:20]],
+        "plan_chart_values": [row["usage_gb"] for row in usage_by_plan[:20]],
         "top_consumers": top_consumers,
         "usage_by_plan": usage_by_plan,
     }
+
+
+def build_bandwidth_report_export_csv(data: dict) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Bandwidth & Usage Report"])
+    writer.writerow(["date_from", data.get("date_from", "")])
+    writer.writerow(["date_to", data.get("date_to", "")])
+    writer.writerow(["total_usage_gb", data.get("total_gb", 0)])
+    writer.writerow(["active_subscribers", data.get("active_subscribers", 0)])
+    writer.writerow([])
+    writer.writerow(["Usage by Plan"])
+    writer.writerow(["plan", "usage_gb", "avg_mbps", "subscribers"])
+    for row in data.get("usage_by_plan", []):
+        writer.writerow(
+            [
+                row.get("name", ""),
+                row.get("usage_gb", 0),
+                row.get("avg_mbps", 0),
+                row.get("subscribers", 0),
+            ]
+        )
+    writer.writerow([])
+    writer.writerow(["Top Consumers"])
+    writer.writerow(["subscriber", "plan", "usage_gb", "avg_mbps"])
+    for row in data.get("top_consumers", []):
+        writer.writerow(
+            [
+                row.get("subscriber", ""),
+                row.get("plan", ""),
+                row.get("usage_gb", 0),
+                row.get("avg_mbps", 0),
+            ]
+        )
+    content = output.getvalue()
+    output.close()
+    return content
 
 
 # ---------------------------------------------------------------------------
