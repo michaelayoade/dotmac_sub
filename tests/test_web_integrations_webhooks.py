@@ -204,7 +204,9 @@ def test_integrations_webhook_templates_do_not_render_secret_values():
     detail_template = Path(
         "templates/admin/integrations/webhooks/detail.html"
     ).read_text()
-    index_template = Path("templates/admin/integrations/webhooks/index.html").read_text()
+    index_template = Path(
+        "templates/admin/integrations/webhooks/index.html"
+    ).read_text()
 
     assert 'type="password" name="secret"' in new_template
     assert "form.secret" not in new_template
