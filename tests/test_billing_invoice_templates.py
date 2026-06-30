@@ -26,7 +26,8 @@ def test_invoice_edit_form_locks_currency_while_submitting_existing_value():
 def test_invoice_batch_run_button_has_submit_guard():
     template = Path("templates/admin/billing/invoice_batch.html").read_text()
 
-    assert '@submit="if (submitting)' in template
+    assert '@submit="if (submitting || !$refs.confirmed?.checked' in template
+    assert "Run invoice batch for the previewed scope?" in template
     assert 'x-ref="confirmed"' in template
     assert ':disabled="!$refs.confirmed?.checked || submitting"' in template
     assert "submitting: false" in template
