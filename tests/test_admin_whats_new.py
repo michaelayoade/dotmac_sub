@@ -224,4 +224,6 @@ def test_whats_new_status_update_uses_error_query_for_invalid_status(
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/admin/system/whats-new?status_error=invalid"
+    assert (
+        response.headers["location"] == "/admin/system/whats-new?status_error=invalid"
+    )

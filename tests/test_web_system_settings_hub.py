@@ -47,11 +47,7 @@ def test_settings_hub_does_not_include_removed_data_retention_page(db_session):
 
 def test_settings_hub_does_not_include_removed_dead_config_pages(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
-    links = [
-        link
-        for category in context["categories"]
-        for link in category["links"]
-    ]
+    links = [link for category in context["categories"] for link in category["links"]]
 
     removed_urls = {
         "/admin/system/config/data-retention",
@@ -66,7 +62,9 @@ def test_settings_hub_does_not_include_removed_dead_config_pages(db_session):
 
 def test_system_router_does_not_register_removed_dead_config_pages():
     registered_paths = {
-        route.path for route in admin_system.router.routes if isinstance(route, APIRoute)
+        route.path
+        for route in admin_system.router.routes
+        if isinstance(route, APIRoute)
     }
 
     assert "/config/data-retention" not in registered_paths

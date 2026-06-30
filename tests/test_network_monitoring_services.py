@@ -1060,9 +1060,7 @@ def test_save_monitoring_config_uses_typed_settings_for_spec_keys(db_session):
     assert rows["network_health_warn_pct"].value_type == SettingValueType.integer
 
 
-def test_save_monitoring_config_invalidates_spec_setting_cache(
-    db_session, monkeypatch
-):
+def test_save_monitoring_config_invalidates_spec_setting_cache(db_session, monkeypatch):
     from app.services import domain_settings as domain_settings_service
     from app.services.web_system_config import save_monitoring_config
 
