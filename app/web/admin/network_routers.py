@@ -1,15 +1,19 @@
 """Admin web routes for router management."""
 
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.router_management import RouterUpdate
 from app.services import web_network_routers as web_routers_service
 from app.services.auth_dependencies import require_permission
+from app.services.router_management.connection import RouterConnectionService
+from app.services.router_management.inventory import RouterInventory
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -18,6 +22,18 @@ router = APIRouter(
     tags=["web-admin-routers"],
     dependencies=[Depends(require_permission("router:read"))],
 )
+
+
+def _toast_response(message: str, toast_type: str, status_code: int = 204) -> Response:
+    return Response(
+        status_code=status_code,
+        headers={
+            "HX-Trigger": json.dumps(
+                {"showToast": {"message": message, "type": toast_type}},
+                ensure_ascii=True,
+            )
+        },
+    )
 
 
 @router.get("", response_class=HTMLResponse)
@@ -112,6 +128,42 @@ def push_detail(
 ) -> HTMLResponse:
     context = web_routers_service.push_detail_context(request, db, push_id=push_id)
     return templates.TemplateResponse("admin/network/routers/push_detail.html", context)
+
+
+@router.post(
+    "/{router_id}/test-connection",
+    dependencies=[Depends(require_permission("router:read"))],
+)
+def router_test_connection(
+    router_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    router_model = RouterInventory.get(db, router_id)
+    result = RouterConnectionService.test_connection(router_model)
+    return _toast_response(
+        result.message,
+        "success" if result.success else "error",
+        status_code=204 if result.success else 502,
+    )
+
+
+@router.post(
+    "/{router_id}/sync",
+    dependencies=[Depends(require_permission("router:write"))],
+)
+def router_sync_now(
+    router_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    router_model = RouterInventory.get(db, router_id)
+    try:
+        RouterInventory.sync_system_info(db, router_model)
+        RouterInventory.sync_interfaces(db, router_model)
+    except Exception as exc:
+        RouterInventory.update(db, router_model.id, RouterUpdate(status="unreachable"))
+        return _toast_response(f"Router sync failed: {exc}", "error", status_code=502)
+    version = router_model.routeros_version or "unknown version"
+    return _toast_response(f"Router sync complete ({version}).", "success")
 
 
 @router.get("/jump-hosts", response_class=HTMLResponse)
