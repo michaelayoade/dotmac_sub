@@ -19,16 +19,45 @@
         color="blue",
         color2="indigo"
     ) %}
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
             {% for d in [7, 30, 90] %}
             <a href="/admin/reports/bandwidth?days={{ d }}"
                class="rounded-lg px-3 py-2 text-sm font-semibold transition-all
-               {% if days == d %}bg-blue-600 text-white shadow-sm{% else %}border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300{% endif %}">
+               {% if request.query_params.get('days') == d|string %}bg-blue-600 text-white shadow-sm{% else %}border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300{% endif %}">
                 {{ d }}d
             </a>
             {% endfor %}
+            <a href="/admin/reports/bandwidth/export?date_from={{ date_from }}&date_to={{ date_to }}"
+               class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Export CSV
+            </a>
         </div>
     {% endcall %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="GET" action="/admin/reports/bandwidth" class="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
+            <div>
+                <label for="date_from" class="block text-sm font-medium text-slate-700 dark:text-slate-300">From</label>
+                <input id="date_from" type="date" name="date_from" value="{{ date_from }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="date_to" class="block text-sm font-medium text-slate-700 dark:text-slate-300">To</label>
+                <input id="date_to" type="date" name="date_to" value="{{ date_to }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            {% if show_chart %}<input type="hidden" name="show_chart" value="1">{% endif %}
+            <div class="flex items-end gap-2">
+                <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700">Filter</button>
+                <a href="/admin/reports/bandwidth" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
+            </div>
+            <div class="flex items-end">
+                {% if show_chart %}
+                <a href="/admin/reports/bandwidth?date_from={{ date_from }}&date_to={{ date_to }}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Hide chart</a>
+                {% else %}
+                <a href="/admin/reports/bandwidth?date_from={{ date_from }}&date_to={{ date_to }}&show_chart=1" class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">Show chart</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
 
     <!-- KPI Cards -->
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -46,12 +75,12 @@
             color="emerald", color2="teal") }}
     </div>
 
-    <!-- Daily Bandwidth Chart -->
-    {% if chart_labels %}
+    <!-- Usage Chart -->
+    {% if show_chart and plan_chart_labels %}
     <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-        <h2 class="mb-4 text-lg font-display font-bold text-slate-900 dark:text-white">Daily Average Bandwidth (Mbps)</h2>
+        <h2 class="mb-4 text-lg font-display font-bold text-slate-900 dark:text-white">Usage by Plan (GB)</h2>
         <div style="height: 300px;">
-            <canvas id="bandwidthChart"></canvas>
+            <canvas id="planUsageChart"></canvas>
         </div>
     </div>
     {% endif %}
@@ -66,6 +95,7 @@
                     <thead>
                         <tr>
                             <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Plan</th>
+                            <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Usage GB</th>
                             <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Avg Mbps</th>
                             <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscribers</th>
                         </tr>
@@ -74,6 +104,7 @@
                         {% for plan in usage_by_plan %}
                         <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                             <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ plan.name }}</td>
+                            <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ plan.usage_gb }}</td>
                             <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ plan.avg_mbps }}</td>
                             <td class="px-4 py-3 text-right text-sm text-slate-600 dark:text-slate-400">{{ plan.subscribers }}</td>
                         </tr>
@@ -119,30 +150,21 @@
     </div>
 </div>
 
-{% if chart_labels %}
+{% if show_chart and plan_chart_labels %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const ctx = document.getElementById('bandwidthChart').getContext('2d');
+    const ctx = document.getElementById('planUsageChart').getContext('2d');
     new Chart(ctx, {
-        type: 'line',
+        type: 'bar',
         data: {
-            labels: {{ chart_labels | tojson }},
+            labels: {{ plan_chart_labels | tojson }},
             datasets: [
                 {
-                    label: 'Download (Mbps)',
-                    data: {{ chart_rx | tojson }},
-                    borderColor: 'rgb(59, 130, 246)',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    fill: true,
-                    tension: 0.3,
-                },
-                {
-                    label: 'Upload (Mbps)',
-                    data: {{ chart_tx | tojson }},
-                    borderColor: 'rgb(147, 51, 234)',
-                    backgroundColor: 'rgba(147, 51, 234, 0.1)',
-                    fill: true,
-                    tension: 0.3,
+                    label: 'Usage (GB)',
+                    data: {{ plan_chart_values | tojson }},
+                    backgroundColor: 'rgba(37, 99, 235, 0.75)',
+                    borderColor: 'rgb(37, 99, 235)',
+                    borderWidth: 1,
                 }
             ]
         },
@@ -151,8 +173,8 @@ document.addEventListener('DOMContentLoaded', function() {
             maintainAspectRatio: false,
             plugins: { legend: { position: 'top' } },
             scales: {
-                y: { beginAtZero: true, title: { display: true, text: 'Mbps' } },
-                x: { title: { display: true, text: 'Date' } }
+                y: { beginAtZero: true, title: { display: true, text: 'GB' } },
+                x: { title: { display: true, text: 'Plan' } }
             }
         }
     });
