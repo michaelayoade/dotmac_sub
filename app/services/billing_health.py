@@ -373,7 +373,9 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
         """
     no_path = (
         db.execute(
-            text(no_path_sql).bindparams(bindparam("billable_statuses", expanding=True)),
+            text(no_path_sql).bindparams(
+                bindparam("billable_statuses", expanding=True)
+            ),
             {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
         ).scalar()
         or 0
