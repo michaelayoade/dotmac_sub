@@ -94,6 +94,11 @@ _NATIVE_STATUS_MAP = {
 }
 
 NATIVE_EXTERNAL_SYSTEM = "dotmac"
+# The CRM's canonical external_system for every dotmac_sub-backed subscriber.
+# All subscribers (migrated or native) are pushed under this, keyed by our
+# subscriber UUID, so the CRM updates one canonical row instead of keeping a
+# separate splynx-keyed duplicate.
+SELFCARE_EXTERNAL_SYSTEM = "selfcare"
 
 
 def native_status(status: object) -> str:
