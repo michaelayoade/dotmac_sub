@@ -6,8 +6,9 @@ import logging
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import not_, or_
+from sqlalchemy import func, not_, or_
 
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import (
     Subscriber,
@@ -23,6 +24,12 @@ from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
+
+_OPEN_BALANCE_INVOICE_STATUSES = (
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+)
 
 
 def _default_currency(db) -> str:
@@ -44,10 +51,25 @@ def build_accounts_list_data(
     reseller_id: str | None = None,
     search: str | None = None,
     status: str | None = None,
+    balance_filter: str | None = None,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
+    balance_subquery = (
+        db.query(
+            Invoice.account_id.label("account_id"),
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
+        )
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_(_OPEN_BALANCE_INVOICE_STATUSES))
+        .group_by(Invoice.account_id)
+        .subquery()
+    )
+    balance_value = func.coalesce(balance_subquery.c.open_balance, 0)
     base_query = db.query(Subscriber).filter(
         Subscriber.user_type != UserType.system_user
+    )
+    base_query = base_query.outerjoin(
+        balance_subquery, balance_subquery.c.account_id == Subscriber.id
     )
     base_query = base_query.filter(
         not_(subscriber_service.splynx_deleted_import_clause())
@@ -83,29 +105,42 @@ def build_accounts_list_data(
                 Subscriber.account_number.ilike(like),
             )
         )
+    normalized_balance_filter = (balance_filter or "").strip().lower()
+    if normalized_balance_filter == "positive":
+        base_query = base_query.filter(balance_value > 0)
+    elif normalized_balance_filter == "zero":
+        base_query = base_query.filter(balance_value == 0)
+    elif normalized_balance_filter == "credit":
+        base_query = base_query.filter(balance_value < 0)
+    else:
+        normalized_balance_filter = ""
 
     total = base_query.count()
-    summary_accounts = base_query.all()
-    accounts = (
-        base_query.order_by(Subscriber.created_at.desc())
+    summary_rows = base_query.add_columns(balance_value.label("open_balance")).all()
+    account_rows = (
+        base_query.add_columns(balance_value.label("open_balance"))
+        .order_by(Subscriber.created_at.desc())
         .offset(offset)
         .limit(per_page)
         .all()
     )
+    accounts = []
+    for account, open_balance in account_rows:
+        account.balance = Decimal(str(open_balance or 0))
+        accounts.append(account)
     total_pages = (total + per_page - 1) // per_page
     default_currency = _default_currency(db)
     total_balance = sum(
-        Decimal(str(getattr(account, "balance", 0) or 0))
-        for account in summary_accounts
+        Decimal(str(open_balance or 0)) for _, open_balance in summary_rows
     )
     active_count = sum(
         1
-        for account in summary_accounts
+        for account, _ in summary_rows
         if getattr(account, "status", None) == SubscriberStatus.active
     )
     suspended_count = sum(
         1
-        for account in summary_accounts
+        for account, _ in summary_rows
         if getattr(account, "status", None) == SubscriberStatus.suspended
     )
     return {
@@ -118,6 +153,7 @@ def build_accounts_list_data(
         "reseller_id": reseller_id,
         "search": search or "",
         "status_filter": status or "",
+        "balance_filter": normalized_balance_filter,
         "default_currency": default_currency,
         "total_balance": float(total_balance),
         "total_balance_display": _format_money(total_balance, default_currency),
