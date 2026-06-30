@@ -3,9 +3,11 @@ import 'package:dio/dio.dart';
 import '../core/api_exception.dart';
 import '../core/http.dart';
 import '../models/payment_method.dart';
+import '../models/quote.dart';
+import '../models/reseller.dart';
+import '../models/reseller_crm.dart';
 import '../models/vas.dart';
 import '../models/page.dart';
-import '../models/reseller.dart';
 
 /// Wraps the reseller endpoints (app/api/reseller.py, mounted at /api/v1).
 /// Every call is scoped server-side to the authenticated reseller.
@@ -240,6 +242,51 @@ class ResellerRepository {
         .cast<Map<String, dynamic>>()
         .map(ResellerInvoiceSummary.fromJson)
         .toList();
+  }
+
+  // ── Sales/Quotes across the reseller's customers (B3) ──────────────────────
+
+  /// GET /reseller/quotes — self-serve quotes for every managed customer.
+  Future<List<ResellerQuote>> quotes() async {
+    final data = await guard(() => dio.get('/reseller/quotes'));
+    return parseResellerList(
+        data as Map<String, dynamic>, 'quotes', ResellerQuote.fromJson);
+  }
+
+  /// GET /reseller/projects — installations across managed customers.
+  Future<List<ResellerProject>> projects() async {
+    final data = await guard(() => dio.get('/reseller/projects'));
+    return parseResellerList(
+        data as Map<String, dynamic>, 'projects', ResellerProject.fromJson);
+  }
+
+  /// GET /reseller/work-orders — field-service visits across managed customers.
+  Future<List<ResellerWorkOrder>> workOrders() async {
+    final data = await guard(() => dio.get('/reseller/work-orders'));
+    return parseResellerList(data as Map<String, dynamic>, 'work_orders',
+        ResellerWorkOrder.fromJson);
+  }
+
+  /// POST /reseller/accounts/{id}/quote-request — request a map-pinned quote on
+  /// a managed customer's behalf (404 if the account isn't the reseller's).
+  Future<Quote> requestQuoteForAccount(
+    String accountId, {
+    required double latitude,
+    required double longitude,
+    String? address,
+    String? region,
+    String? note,
+  }) async {
+    final data = await guard(
+      () => dio.post('/reseller/accounts/$accountId/quote-request', data: {
+        'latitude': latitude,
+        'longitude': longitude,
+        if (address != null && address.isNotEmpty) 'address': address,
+        if (region != null && region.isNotEmpty) 'region': region,
+        if (note != null && note.isNotEmpty) 'note': note,
+      }),
+    );
+    return Quote.fromJson(data as Map<String, dynamic>);
   }
 }
 

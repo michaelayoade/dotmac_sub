@@ -92,6 +92,7 @@ class _SectionTiles extends StatelessWidget {
   const _SectionTiles();
 
   static const _sections = [
+    (Icons.add_location_alt_outlined, 'Quotes & installs', '/reseller/quotes'),
     (Icons.receipt_long_outlined, 'Billing', '/reseller/billing'),
     (Icons.forum_outlined, 'Live chat', '/reseller/chat'),
     (Icons.bar_chart_outlined, 'Revenue', '/reseller/revenue'),
