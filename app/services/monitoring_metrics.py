@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import (
     DeviceMetric,
+    DeviceStatus,
     MetricType,
     NetworkDevice,
 )
@@ -333,9 +334,8 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
 # ── RouterOS → Monitoring Sync ───────────────────────────────────────────
 
 
-def _router_status_to_monitoring_status(router_status) -> object:
+def _router_status_to_monitoring_status(router_status) -> DeviceStatus:
     """Map RouterOS inventory status to NetworkDevice status."""
-    from app.models.network_monitoring import DeviceStatus
     from app.models.router_management import RouterStatus
 
     if router_status == RouterStatus.online:
