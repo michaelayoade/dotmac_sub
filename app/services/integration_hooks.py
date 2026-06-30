@@ -48,6 +48,7 @@ def _decrypt_auth_secret(auth_config: object, key: str) -> str:
         return ""
     return str(decrypt_credential(str(raw)) or "")
 
+
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
         "template_id": "n8n",

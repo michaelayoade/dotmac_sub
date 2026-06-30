@@ -1339,7 +1339,9 @@ def webhook_test(endpoint_id: str, db: Session = Depends(get_db)):
 @router.post("/webhooks/{endpoint_id}/delete")
 def webhook_delete(endpoint_id: str, db: Session = Depends(get_db)):
     web_integrations_service.delete_webhook_endpoint(db, endpoint_id=endpoint_id)
-    return RedirectResponse(url="/admin/integrations/webhooks?deleted=1", status_code=303)
+    return RedirectResponse(
+        url="/admin/integrations/webhooks?deleted=1", status_code=303
+    )
 
 
 @router.get("/webhooks/{endpoint_id}", response_class=HTMLResponse)
@@ -1607,11 +1609,7 @@ def _build_hook_auth_config(
     preserve_blank_secrets: bool = False,
 ) -> dict | None:
     auth_type_value = (auth_type or "none").strip().lower()
-    existing = (
-        existing_auth_config
-        if isinstance(existing_auth_config, dict)
-        else {}
-    )
+    existing = existing_auth_config if isinstance(existing_auth_config, dict) else {}
     result: dict[str, str] = {}
     if auth_type_value == "bearer":
         if auth_bearer_token and auth_bearer_token.strip():

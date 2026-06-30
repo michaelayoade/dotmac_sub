@@ -1069,7 +1069,9 @@ def create_webhook_endpoint(
         connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
-        secret=encrypt_credential(secret.strip()) if secret and secret.strip() else None,
+        secret=encrypt_credential(secret.strip())
+        if secret and secret.strip()
+        else None,
         is_active=is_active,
         delivery_timeout_seconds=_optional_int(delivery_timeout_seconds),
         max_retries=_optional_int(max_retries),
@@ -1384,8 +1386,7 @@ def build_webhook_detail_data(db, *, endpoint_id: str) -> dict[str, object]:
         "delivered_count": sum(
             1
             for delivery in deliveries
-            if getattr(getattr(delivery, "status", None), "value", None)
-            == "delivered"
+            if getattr(getattr(delivery, "status", None), "value", None) == "delivered"
         ),
     }
     return {

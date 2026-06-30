@@ -155,7 +155,9 @@ def deliver_webhook(self, delivery_id: str):
                 endpoint = delivery.endpoint
                 max_retries = _endpoint_max_retries(endpoint)
                 if delivery.attempt_count < max_retries:
-                    retry_delay = _endpoint_retry_delay(endpoint, delivery.attempt_count)
+                    retry_delay = _endpoint_retry_delay(
+                        endpoint, delivery.attempt_count
+                    )
                     session.commit()
                     raise self.retry(countdown=retry_delay)
                 delivery.status = WebhookDeliveryStatus.failed
@@ -163,7 +165,7 @@ def deliver_webhook(self, delivery_id: str):
 
     except (httpx.RequestError, httpx.TimeoutException) as exc:
         # Network/timeout error - update delivery and retry
-        retry_delay: int | None = None
+        retry_countdown: int | None = None
         try:
             with db_session_adapter.session() as session:
                 delivery = session.get(WebhookDelivery, delivery_id)
@@ -182,13 +184,13 @@ def deliver_webhook(self, delivery_id: str):
                             exc,
                         )
                     else:
-                        retry_delay = _endpoint_retry_delay(
+                        retry_countdown = _endpoint_retry_delay(
                             endpoint, delivery.attempt_count
                         )
         except Exception:
             logger.exception("Failed to update webhook delivery failure state")
-        if retry_delay is not None:
-            raise self.retry(countdown=retry_delay)
+        if retry_countdown is not None:
+            raise self.retry(countdown=retry_countdown)
 
     except Exception as exc:
         logger.exception("Unexpected error delivering webhook %s: %s", delivery_id, exc)
