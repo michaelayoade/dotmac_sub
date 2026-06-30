@@ -463,7 +463,9 @@ def revoke_other_reseller_sessions_for_principal(
 ) -> None:
     """Invalidate a reseller principal's other sessions while keeping this one."""
     current_session = (
-        load_session(_RESELLER_SESSION_PREFIX, current_session_token, _RESELLER_SESSIONS)
+        load_session(
+            _RESELLER_SESSION_PREFIX, current_session_token, _RESELLER_SESSIONS
+        )
         if current_session_token
         else None
     )
@@ -804,7 +806,9 @@ def list_reseller_sessions_for_principal(
                 "token": token,
                 "created_at": active_payload.get("created_at"),
                 "expires_at": active_payload.get("expires_at"),
-                "is_current": bool(current_session_token and token == current_session_token),
+                "is_current": bool(
+                    current_session_token and token == current_session_token
+                ),
                 "remember": bool(active_payload.get("remember")),
                 "username": active_payload.get("username"),
                 "principal_type": active_payload.get("principal_type") or "subscriber",

@@ -160,7 +160,9 @@ def revoke_other_customer_sessions_for_subscriber(
 ) -> None:
     """Invalidate a subscriber's other portal sessions while keeping this one."""
     current_session = (
-        load_session(_CUSTOMER_SESSION_PREFIX, current_session_token, _CUSTOMER_SESSIONS)
+        load_session(
+            _CUSTOMER_SESSION_PREFIX, current_session_token, _CUSTOMER_SESSIONS
+        )
         if current_session_token
         else None
     )
@@ -280,7 +282,9 @@ def list_customer_sessions_for_subscriber(
                 "token": token,
                 "created_at": active_payload.get("created_at"),
                 "expires_at": active_payload.get("expires_at"),
-                "is_current": bool(current_session_token and token == current_session_token),
+                "is_current": bool(
+                    current_session_token and token == current_session_token
+                ),
                 "remember": bool(active_payload.get("remember")),
                 "username": active_payload.get("username"),
             }

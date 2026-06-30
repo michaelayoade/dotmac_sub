@@ -115,7 +115,9 @@ def delete_session(
         try:
             client.delete(f"{prefix}:{session_token}")
             if principal_id:
-                client.srem(_principal_sessions_key(prefix, str(principal_id)), session_token)
+                client.srem(
+                    _principal_sessions_key(prefix, str(principal_id)), session_token
+                )
         except redis.RedisError as exc:
             logger.warning("Session delete failed in Redis: %s", exc)
     if _fallback_enabled():

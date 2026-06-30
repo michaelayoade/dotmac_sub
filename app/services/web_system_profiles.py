@@ -223,7 +223,9 @@ def build_profile_page_state(
             current_session_id,
             principal_type="system_user",
         ).sessions
-    other_session_count = sum(1 for session in active_sessions if not session.is_current)
+    other_session_count = sum(
+        1 for session in active_sessions if not session.is_current
+    )
     return {
         "person": profile_data["person"],
         "credential": profile_data["credential"],

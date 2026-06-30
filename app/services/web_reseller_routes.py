@@ -453,7 +453,9 @@ def reseller_profile_sign_out_other_sessions(request: Request, db: Session):
         current_session_token,
         db=db,
     )
-    return RedirectResponse(url="/reseller/profile?sessions=signed-out", status_code=303)
+    return RedirectResponse(
+        url="/reseller/profile?sessions=signed-out", status_code=303
+    )
 
 
 def reseller_resend_email_verification(request: Request, db: Session):

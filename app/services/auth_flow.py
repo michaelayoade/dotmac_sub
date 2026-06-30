@@ -826,9 +826,9 @@ def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
 MFA_MAX_FAILED_ATTEMPTS = 5
 MFA_LOCKOUT_MINUTES = 15
 MFA_RECOVERY_CODE_COUNT = 10
-MFA_RECOVERY_CODE_ALPHABET = (
-    "23456789" + string.ascii_uppercase.replace("O", "").replace("I", "")
-)
+MFA_RECOVERY_CODE_ALPHABET = "23456789" + string.ascii_uppercase.replace(
+    "O", ""
+).replace("I", "")
 
 
 def _mfa_max_failed_attempts(db: Session | None) -> int:
