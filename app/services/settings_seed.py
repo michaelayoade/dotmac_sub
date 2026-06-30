@@ -1006,9 +1006,7 @@ def seed_collections_settings(db: Session) -> None:
         db,
         key="suspension_notification_dedupe_hours",
         value_type=SettingValueType.integer,
-        value_text=os.getenv(
-            "COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"
-        ),
+        value_text=os.getenv("COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"),
     )
     collections_settings.ensure_by_key(
         db,
