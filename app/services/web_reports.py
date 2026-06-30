@@ -8,6 +8,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus
@@ -214,6 +215,70 @@ def _derive_subscriber_status(subscriber: Subscriber) -> AccountStatus:
     return AccountStatus.active if subscriber.is_active else AccountStatus.canceled
 
 
+def _date_range_values(
+    *, date_from: str | None = None, date_to: str | None = None
+) -> tuple[datetime | None, datetime | None, str, str]:
+    from app.services.common import parse_date_filter
+
+    start = parse_date_filter(date_from)
+    parsed_to = parse_date_filter(date_to)
+    end = parsed_to + timedelta(days=1) if parsed_to else None
+    return start, end, date_from or "", date_to or ""
+
+
+def _filter_subscribers_for_report(
+    subscribers: list[Subscriber],
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+) -> list[Subscriber]:
+    start, end, _, _ = _date_range_values(date_from=date_from, date_to=date_to)
+    status_filter = (status or "").strip().lower()
+    allowed_statuses = {item.value for item in AccountStatus}
+    if status_filter and status_filter not in allowed_statuses:
+        status_filter = ""
+
+    filtered: list[Subscriber] = []
+    for sub in subscribers:
+        derived_status = _derive_subscriber_status(sub)
+        sub.status = derived_status
+        if status_filter and derived_status.value != status_filter:
+            continue
+        created_at = subscriber_service.get_effective_created_at(sub)
+        if start and (created_at is None or created_at < start):
+            continue
+        if end and (created_at is None or created_at >= end):
+            continue
+        filtered.append(sub)
+    return filtered
+
+
+def _load_report_subscribers(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    limit: int = 5000,
+) -> list[Subscriber]:
+    start, end, _, _ = _date_range_values(date_from=date_from, date_to=date_to)
+    stmt = (
+        select(Subscriber)
+        .where(subscriber_service.visible_subscriber_clause())
+        .order_by(Subscriber.created_at.desc())
+        .limit(limit)
+    )
+    if start is not None:
+        stmt = stmt.where(Subscriber.created_at >= start)
+    if end is not None:
+        stmt = stmt.where(Subscriber.created_at < end)
+    status_filter = (status or "").strip().lower()
+    if status_filter in {item.value for item in AccountStatus}:
+        stmt = stmt.where(Subscriber.status == AccountStatus(status_filter))
+    return list(db.scalars(stmt).all())
+
+
 def _invoice_amount_due(invoice: object) -> Decimal | int | float:
     for attr in ("balance_due", "amount_due", "total"):
         value = getattr(invoice, attr, None)
@@ -362,15 +427,18 @@ def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
     return content
 
 
-def get_subscribers_report_data(db: Session) -> dict:
-    all_subscribers = subscriber_service.subscribers.list(
-        db=db,
-        subscriber_type=None,
-        business_account_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+def get_subscribers_report_data(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+) -> dict:
+    all_subscribers = _load_report_subscribers(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
     )
     total_subscribers = len(all_subscribers)
     status_breakdown: dict[str, int] = {}
@@ -416,18 +484,27 @@ def get_subscribers_report_data(db: Session) -> dict:
         "active_rate": active_rate,
         "status_breakdown": status_breakdown,
         "recent_subscribers": recent_subscribers,
+        "customers": all_subscribers[:200],
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "status_filter": status or "",
+        "status_options": [item.value for item in AccountStatus],
     }
 
 
-def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
-    all_subscribers = subscriber_service.subscribers.list(
-        db=db,
-        subscriber_type=None,
-        business_account_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=5000,
-        offset=0,
+def build_subscribers_export_csv(
+    db: Session,
+    days: int | None = None,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+) -> str:
+    all_subscribers = _load_report_subscribers(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
     )
     if days:
         cutoff = datetime.now(UTC) - timedelta(days=days)
