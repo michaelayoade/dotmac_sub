@@ -322,9 +322,7 @@ class TestPaymentArrangements:
         assert exc_info.value.status_code == 400
         assert "invoice" in exc_info.value.detail.lower()
 
-    def test_create_respects_configured_max_installments(
-        self, db_session, subscriber
-    ):
+    def test_create_respects_configured_max_installments(self, db_session, subscriber):
         db_session.add(
             DomainSetting(
                 domain=SettingDomain.billing,

@@ -230,11 +230,14 @@ class UsageChargeBase(BaseModel):
     invoice_line_id: UUID | None = None
     period_start: datetime
     period_end: datetime
-    total_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    included_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    billable_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    unit_price: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # No *Create subclass exists (usage charges are built service-side), so
+    # these bounds only ever reached *Read. Drop them so the read model
+    # serializes stored signed values (usage credits/adjustments).
+    total_gb: Decimal = Decimal("0.0000")
+    included_gb: Decimal = Decimal("0.0000")
+    billable_gb: Decimal = Decimal("0.0000")
+    unit_price: Decimal = Decimal("0.0000")
+    amount: Decimal = Decimal("0.00")
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     status: UsageChargeStatus = UsageChargeStatus.staged
     notes: str | None = None
@@ -244,6 +247,8 @@ class UsageChargeBase(BaseModel):
 class UsageChargeRead(UsageChargeBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Money fields inherit unbounded from UsageChargeBase (no create-side bound
+    # exists to drop).
     id: UUID
     created_at: datetime
     updated_at: datetime

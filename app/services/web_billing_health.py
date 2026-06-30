@@ -51,7 +51,10 @@ def _autopay_task_status(db: Session, now: datetime) -> dict[str, Any]:
         "last_success": last_success,
         "age_seconds": age,
         "stale": bool(values and values["enabled"])
-        and (last_success is None or (interval is not None and age > interval * 3)),
+        and (
+            last_success is None
+            or (interval is not None and age is not None and age > interval * 3)
+        ),
     }
 
 

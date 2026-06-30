@@ -63,7 +63,7 @@ def test_edit_form_state_uses_resolved_payment_due_days(monkeypatch):
     monkeypatch.setattr(
         invoice_forms.billing_service.invoices,
         "get",
-        lambda _db, invoice_id: invoice,
+        lambda db, invoice_id: invoice,
     )
 
     state = invoice_forms.edit_form_state(object(), invoice_id=str(invoice.id))

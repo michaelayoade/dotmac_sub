@@ -1321,6 +1321,13 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
         "nas_commands_sent": 0,
     }
 
+    # Pre-change backup BEFORE the destructive cancel mutations (credential
+    # deactivation + the IP null at the bottom, the R2 "only copy" risk).
+    # Best-effort: capture never raises into the cancel path.
+    from app.services.connectivity_backup import capture_connectivity_state
+
+    capture_connectivity_state(db, subscription.subscriber_id, reason="cancel")
+
     # 1. Disconnect active sessions
     try:
         stats["sessions_disconnected"] = disconnect_subscription_sessions(
@@ -1442,6 +1449,12 @@ def cleanup_subscription_on_suspend(
         "address_list_blocked": 0,
     }
 
+    # Pre-change backup BEFORE the suspend mutations (RadiusUser deactivation +
+    # external RADIUS removal). Best-effort: never raises into the suspend path.
+    from app.services.connectivity_backup import capture_connectivity_state
+
+    capture_connectivity_state(db, subscription.subscriber_id, reason="suspend")
+
     # 1. Disconnect active sessions
     try:
         stats["sessions_disconnected"] = disconnect_subscription_sessions(
@@ -1520,6 +1533,12 @@ def restore_subscription_connectivity(
         "external_radius_synced": 0,
         "address_list_unblocked": 0,
     }
+
+    # Pre-change backup BEFORE the restore mutations (RadiusUser reactivation +
+    # external re-sync). Best-effort: never raises into the restore path.
+    from app.services.connectivity_backup import capture_connectivity_state
+
+    capture_connectivity_state(db, subscription.subscriber_id, reason="restore")
 
     # 1. Reactivate RadiusUser records
     radius_users = (
