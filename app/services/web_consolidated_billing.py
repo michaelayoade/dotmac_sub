@@ -6,7 +6,7 @@ under ``templates/admin/billing/consolidated/``.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy import select
@@ -154,9 +154,16 @@ def record_bulk_payment(
     """Record a bulk payment + auto-allocate FIFO. Returns the Payment.id."""
     from app.schemas.billing import PaymentCreate
 
+    try:
+        payment_amount = Decimal(amount)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Amount must be a valid number") from exc
+    if payment_amount <= 0:
+        raise ValueError("Amount must be greater than 0")
+
     payload = PaymentCreate(
         billing_account_id=UUID(billing_account_id),
-        amount=Decimal(amount),
+        amount=payment_amount,
         currency=currency,
         memo=memo,
         collection_account_id=UUID(collection_account_id)
