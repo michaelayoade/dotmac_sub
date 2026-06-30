@@ -144,9 +144,9 @@ class TestCrmSyncHandler:
         http.assert_not_called()
         enqueue.assert_called_once()
         _, kwargs = enqueue.call_args
-        splynx_id, payload, external_system = kwargs["args"]
-        assert splynx_id == 4242
-        assert external_system == "splynx"
+        external_id, payload, external_system = kwargs["args"]
+        assert external_system == "selfcare"  # canonical keying — no splynx duplicate
+        assert external_id != 4242  # our subscriber UUID, not the legacy splynx id
         assert payload["status"] == "blocked"
         assert payload["name"] == "Jane Doe"
         assert kwargs["source"] == "crm_sync_handler"
@@ -186,9 +186,9 @@ class TestCrmSyncHandler:
         http.assert_not_called()
         enqueue.assert_called_once()
         _, kwargs = enqueue.call_args
-        splynx_id, payload, external_system = kwargs["args"]
-        assert splynx_id == 4242
-        assert external_system == "splynx"
+        external_id, payload, external_system = kwargs["args"]
+        assert external_system == "selfcare"  # canonical keying — no splynx duplicate
+        assert external_id != 4242  # our subscriber UUID, not the legacy splynx id
         assert payload["status"] == "active"
         assert payload["service_name"] == "Fiber 100"
         assert payload["service_speed"] == "100/20 Mbps"
@@ -229,7 +229,7 @@ class TestCrmSyncHandler:
         http.assert_not_called()
 
     def test_native_subscriber_pushes_generic_webhook(self):
-        """Subscribers without an imported id push via the generic 'dotmac' system."""
+        """Every subscriber pushes under the canonical 'selfcare' keying by UUID."""
         sub = _subscriber(splynx_id=None)
         db = MagicMock()
         db.get.return_value = sub
@@ -244,7 +244,7 @@ class TestCrmSyncHandler:
         _, kwargs = enqueue.call_args
         external_id, payload, external_system = kwargs["args"]
         assert external_id == str(sub.id)
-        assert external_system == "dotmac"
+        assert external_system == "selfcare"
         assert payload["status"] == "suspended"  # CRM vocabulary, not source-specific.
         assert "name" not in payload  # not a CRM Subscriber column
 
@@ -264,7 +264,7 @@ class TestCrmSyncHandler:
         _, kwargs = enqueue.call_args
         external_id, payload, external_system = kwargs["args"]
         assert external_id == str(native.id)
-        assert external_system == "dotmac"
+        assert external_system == "selfcare"
         assert payload["status"] == "active"
 
         db.get.return_value = _subscriber()  # has an imported id -> already in CRM
