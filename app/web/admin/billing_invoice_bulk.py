@@ -23,14 +23,13 @@ def invoice_bulk_issue(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
+    result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
         action="issue",
         invoice_ids_csv=invoice_ids,
     )
-    count = len(updated_ids)
-    return JSONResponse({"message": f"Issued {count} invoices", "count": count})
+    return JSONResponse(result.as_response("Issued"))
 
 
 @router.post(
@@ -42,16 +41,13 @@ def invoice_bulk_send(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    queued_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
+    result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
         action="send",
         invoice_ids_csv=invoice_ids,
     )
-    count = len(queued_ids)
-    return JSONResponse(
-        {"message": f"Queued {count} invoice notifications", "count": count}
-    )
+    return JSONResponse(result.as_response("Queued notifications for"))
 
 
 @router.post(
@@ -63,19 +59,13 @@ def invoice_bulk_void(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
+    result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
         action="void",
         invoice_ids_csv=invoice_ids,
     )
-    count = len(updated_ids)
-    total = len([part for part in invoice_ids.split(",") if part.strip()])
-    skipped = max(0, total - count)
-    message = f"Voided {count} invoice{'s' if count != 1 else ''}"
-    if skipped:
-        message += f"; skipped {skipped} (already paid or void)"
-    return JSONResponse({"message": message, "count": count, "skipped": skipped})
+    return JSONResponse(result.as_response("Voided"))
 
 
 @router.post(
@@ -87,19 +77,13 @@ def invoice_bulk_mark_paid(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
+    result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
         action="mark_paid",
         invoice_ids_csv=invoice_ids,
     )
-    count = len(updated_ids)
-    total = len(web_billing_invoice_bulk_service.parse_ids_csv(invoice_ids))
-    skipped = max(0, total - count)
-    message = f"Marked {count} invoice{'s' if count != 1 else ''} as paid"
-    if skipped:
-        message += f"; skipped {skipped} (missing, already paid, or not eligible)"
-    return JSONResponse({"message": message, "count": count, "skipped": skipped})
+    return JSONResponse(result.as_response("Marked paid"))
 
 
 @router.post(
