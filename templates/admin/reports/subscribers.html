@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, status_badge, empty_state, action_button, metric_row, animation_styles %}
 
-{% block title %}Subscriber Growth Report - Admin{% endblock %}
+{% block title %}Customer Report - Admin{% endblock %}
 
 {% block charts_js %}
 <script src="/static/js/vendor/chart.min.js"></script>
@@ -14,13 +14,13 @@
 <div class="relative space-y-8">
     {# Page Header #}
     {% call page_header(
-        title="Subscriber Growth",
-        subtitle="Monitor subscriber acquisition and trends",
+        title="Customer Report",
+        subtitle="Filter customers by date range and account status",
         icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
         color="teal",
         color2="cyan"
     ) %}
-        <form method="GET" action="/admin/reports/subscribers/export" class="flex items-center gap-2">
+        <form method="GET" action="/admin/reports/customers/export" class="flex items-center gap-2">
             <input type="hidden" name="date_from" value="{{ date_from|default('') }}">
             <input type="hidden" name="date_to" value="{{ date_to|default('') }}">
             <input type="hidden" name="status" value="{{ status_filter|default('') }}">
@@ -32,7 +32,7 @@
     {% endcall %}
 
     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 25ms;">
-        <form method="GET" action="/admin/reports/subscribers" class="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+        <form method="GET" action="/admin/reports/customers" class="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
             <div>
                 <label for="date_from" class="block text-sm font-medium text-slate-700 dark:text-slate-300">From</label>
                 <input id="date_from" type="date" name="date_from" value="{{ date_from|default('') }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -52,14 +52,14 @@
             </div>
             <div class="flex items-end gap-2">
                 <button type="submit" class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-700">Filter</button>
-                <a href="/admin/reports/subscribers" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
+                <a href="/admin/reports/customers" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
             </div>
         </form>
     </div>
 
     {# KPI Cards #}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
-        {{ stats_card("Total Subscribers", total_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", change=subscriber_growth|default(0)) }}
+        {{ stats_card("Total Customers", total_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", change=subscriber_growth|default(0)) }}
         {{ stats_card("New This Month", new_this_month|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>', color="emerald", color2="teal") }}
         {{ stats_card("Active", active_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="blue", color2="indigo") }}
         {{ stats_card("Suspended", suspended_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
@@ -67,7 +67,7 @@
 
     {# Growth Trend Chart #}
     <div class="animate-fade-in-up" style="animation-delay: 100ms;">
-    {% call card("Subscriber Growth Trend", color="teal") %}
+    {% call card("Customer Growth Trend", color="teal") %}
         <div class="chart-container" style="min-height: 280px;">
             <canvas id="subscriber-growth-chart"></canvas>
         </div>
@@ -80,7 +80,7 @@
                 labels: {{ growth_data["labels"] | tojson | safe }},
                 datasets: [
                     {
-                        label: 'Total Subscribers',
+                        label: 'Total Customers',
                         data: {{ growth_data["total"] | tojson | safe }},
                         borderColor: '#14b8a6',
                         backgroundColor: 'rgba(20, 184, 166, 0.1)',

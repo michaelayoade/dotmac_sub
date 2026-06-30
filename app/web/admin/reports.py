@@ -27,9 +27,9 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "description": "Revenue metrics and recent payments",
             },
             {
-                "name": "Subscribers",
-                "url": "/admin/reports/subscribers",
-                "description": "Subscriber growth and status breakdown",
+                "name": "Customer Report",
+                "url": "/admin/reports/customers",
+                "description": "Customer totals, status filters, and matching exports",
             },
             {
                 "name": "Churn",
@@ -200,6 +200,11 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
 
 
 @router.get(
+    "/customers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+@router.get(
     "/subscribers",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
@@ -222,7 +227,7 @@ def reports_subscribers(
 
     context = {
         "request": request,
-        "active_page": "reports-subscribers",
+        "active_page": "reports-customers",
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
@@ -235,10 +240,16 @@ def reports_subscribers(
         "status_breakdown": report_data["status_breakdown"],
         "recent_subscribers": report_data["recent_subscribers"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+        "customers": report_data["customers"],
+        "date_from": report_data["date_from"],
+        "date_to": report_data["date_to"],
+        "status_filter": report_data["status_filter"],
+        "status_options": report_data["status_options"],
     }
     return templates.TemplateResponse("admin/reports/subscribers.html", context)
 
 
+@router.get("/customers/export")
 @router.get("/subscribers/export")
 def reports_subscribers_export(
     days: int | None = None,
@@ -257,7 +268,7 @@ def reports_subscribers_export(
     return Response(
         content,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=subscribers.csv"},
+        headers={"Content-Disposition": "attachment; filename=customers.csv"},
     )
 
 
