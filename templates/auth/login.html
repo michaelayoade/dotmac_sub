@@ -226,7 +226,7 @@
                                id="remember"
                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700" />
                         <label for="remember" class="ml-3 text-sm text-slate-600 dark:text-slate-400">
-                            Remember me for 30 days
+                            Remember me for {{ remember_duration_label | default('30 days') }}
                         </label>
                     </div>
 

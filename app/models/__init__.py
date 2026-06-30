@@ -5,7 +5,13 @@ from app.models.analytics import (  # noqa: F401
     KPIConfig,
 )
 from app.models.audit import AuditActorType, AuditEvent  # noqa: F401
-from app.models.auth import ApiKey, MFAMethod, Session, UserCredential  # noqa: F401
+from app.models.auth import (  # noqa: F401
+    ApiKey,
+    MFAMethod,
+    MFARecoveryCode,
+    Session,
+    UserCredential,
+)
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
     BankAccount,

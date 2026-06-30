@@ -139,12 +139,16 @@ def _coerce_spec_form_value(
 # 8.5 System Preferences & Security
 # ---------------------------------------------------------------------------
 PREFERENCE_KEYS = [
-    "force_2fa",
+    "admin_mfa_required",
 ]
 
 
 def get_preferences_context(db: Session) -> dict:
-    return {"preferences": _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)}
+    preferences = _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)
+    if not preferences.get("admin_mfa_required"):
+        legacy = _read_settings(db, SettingDomain.auth, ["force_2fa"])
+        preferences["admin_mfa_required"] = legacy.get("force_2fa", "")
+    return {"preferences": preferences}
 
 
 def save_preferences(db: Session, data: Mapping[str, Any]) -> None:

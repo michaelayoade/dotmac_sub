@@ -52,11 +52,11 @@ def test_portal_config_template_exposes_only_domain_routing_controls():
     assert 'name="mobile_app_google_play_id"' not in template
 
 
-def test_preferences_config_saves_only_consumed_force_2fa(db_session):
+def test_preferences_config_saves_only_consumed_admin_mfa_required(db_session):
     web_system_config_service.save_preferences(
         db_session,
         {
-            "force_2fa": "true",
+            "admin_mfa_required": "true",
             "default_landing_page": "reseller",
             "admin_portal_title": "Unused Title",
             "search_debounce_ms": "750",
@@ -70,24 +70,26 @@ def test_preferences_config_saves_only_consumed_force_2fa(db_session):
         .all()
     }
 
-    assert rows["force_2fa"] == "true"
+    assert rows["admin_mfa_required"] == "true"
+    assert "force_2fa" not in rows
     assert "default_landing_page" not in rows
     assert "admin_portal_title" not in rows
     assert "search_debounce_ms" not in rows
 
-    force_2fa = (
+    admin_mfa_required = (
         db_session.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.auth)
-        .filter(DomainSetting.key == "force_2fa")
+        .filter(DomainSetting.key == "admin_mfa_required")
         .one()
     )
-    assert force_2fa.value_type == SettingValueType.boolean
+    assert admin_mfa_required.value_type == SettingValueType.boolean
 
 
-def test_preferences_template_exposes_only_force_2fa_control():
+def test_preferences_template_exposes_only_admin_mfa_required_control():
     template = Path("templates/admin/system/config/preferences.html").read_text()
 
-    assert 'name="force_2fa"' in template
+    assert 'name="admin_mfa_required"' in template
+    assert 'name="force_2fa"' not in template
     assert 'name="default_landing_page"' not in template
     assert 'name="admin_portal_title"' not in template
     assert 'name="search_debounce_ms"' not in template
