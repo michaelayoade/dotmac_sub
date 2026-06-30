@@ -176,3 +176,19 @@ def test_async_network_actions_have_busy_state_and_visible_results():
     assert 'data-loading-label="Syncing..."' in router_detail
     assert 'data-loading-label="Creating..."' in service_ports
     assert 'data-loading-label="Deleting..."' in service_ports
+
+
+def test_freshness_labels_match_snapshot_data():
+    sessions = Path("templates/admin/network/sessions.html").read_text()
+    monitoring = Path("templates/admin/network/monitoring/index.html").read_text()
+    topology = Path("templates/admin/network/topology/index.html").read_text()
+
+    assert "Live RADIUS active sessions" not in sessions
+    assert "RADIUS active-session snapshot" in sessions
+    assert "snapshot_at.strftime" in sessions
+    assert "Current ONU Status Snapshot" in monitoring
+    assert "ONU Status Trend (24h)" not in monitoring
+    assert "Single snapshot" in monitoring
+    assert ">Links<" in topology
+    assert ">Nodes<" in topology
+    assert "Maintenance" in topology
