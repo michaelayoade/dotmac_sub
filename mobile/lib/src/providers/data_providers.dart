@@ -20,6 +20,7 @@ import '../repositories/catalog_repository.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/contact_repository.dart';
 import '../models/reseller.dart';
+import '../models/reseller_crm.dart';
 import '../models/quote.dart';
 import '../models/service_location.dart';
 import '../repositories/location_repository.dart';
@@ -91,6 +92,25 @@ final resellerDashboardProvider = FutureProvider.autoDispose<ResellerDashboard>(
     return ref.watch(resellerRepositoryProvider).dashboard();
   },
 );
+
+/// Sales/Quotes across the reseller's customers (B3).
+final resellerQuotesProvider =
+    FutureProvider.autoDispose<List<ResellerQuote>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).quotes();
+});
+
+final resellerProjectsProvider =
+    FutureProvider.autoDispose<List<ResellerProject>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).projects();
+});
+
+final resellerWorkOrdersProvider =
+    FutureProvider.autoDispose<List<ResellerWorkOrder>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).workOrders();
+});
 
 /// 12-month revenue summary for the reseller portal.
 final resellerRevenueProvider = FutureProvider.autoDispose<ResellerRevenue>((
