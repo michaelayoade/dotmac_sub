@@ -142,6 +142,8 @@ def create_credit_from_form(
     memo: str | None,
 ):
     credit_amount = parse_decimal(amount, "amount")
+    if credit_amount <= 0:
+        raise ValueError("Amount must be greater than 0")
     payload = CreditNoteCreate(
         account_id=parse_uuid(account_id, "account_id"),
         status=CreditNoteStatus.issued,
