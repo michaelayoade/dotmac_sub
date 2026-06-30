@@ -30,10 +30,13 @@ class InvoiceBase(BaseModel):
     invoice_number: str | None = Field(default=None, max_length=80)
     status: InvoiceStatus = InvoiceStatus.draft
     currency: str = Field(default="NGN", min_length=3, max_length=3)
-    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0)
-    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0)
-    total: Decimal = Field(default=Decimal("0.00"), ge=0)
-    balance_due: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # Money fields are UNBOUNDED on the shared base so response (*Read) models
+    # can serialize stored signed/zero values. The create-side ge=0 bounds live
+    # on *Create only. See docs/audit-read-model-constraints.md (and #560).
+    subtotal: Decimal = Decimal("0.00")
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
+    balance_due: Decimal = Decimal("0.00")
     billing_period_start: datetime | None = None
     billing_period_end: datetime | None = None
     issued_at: datetime | None = None
@@ -45,7 +48,11 @@ class InvoiceBase(BaseModel):
 
 
 class InvoiceCreate(InvoiceBase):
-    pass
+    # Create-side money bounds (kept off the shared base — see InvoiceBase).
+    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0)
+    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0)
+    total: Decimal = Field(default=Decimal("0.00"), ge=0)
+    balance_due: Decimal = Field(default=Decimal("0.00"), ge=0)
 
 
 class InvoiceUpdate(BaseModel):
@@ -78,9 +85,10 @@ class InvoiceLineBase(BaseModel):
     invoice_id: UUID
     subscription_id: UUID | None = None
     description: str = Field(min_length=1, max_length=255)
-    quantity: Decimal = Field(default=Decimal("1.000"), gt=0)
-    unit_price: Decimal = Field(default=Decimal("0.00"), ge=0)
-    amount: Decimal | None = Field(default=None, ge=0)
+    # Bounds are create-only (see InvoiceBase); base stays unbounded for *Read.
+    quantity: Decimal = Decimal("1.000")
+    unit_price: Decimal = Decimal("0.00")
+    amount: Decimal | None = None
     tax_rate_id: UUID | None = None
     tax_application: TaxApplication = TaxApplication.exclusive
     metadata_: str | None = Field(
@@ -91,7 +99,10 @@ class InvoiceLineBase(BaseModel):
 
 
 class InvoiceLineCreate(InvoiceLineBase):
-    pass
+    # Create-side bounds (kept off the shared base — see InvoiceLineBase).
+    quantity: Decimal = Field(default=Decimal("1.000"), gt=0)
+    unit_price: Decimal = Field(default=Decimal("0.00"), ge=0)
+    amount: Decimal | None = Field(default=None, ge=0)
 
 
 class InvoiceLineUpdate(BaseModel):
@@ -113,13 +124,7 @@ class InvoiceLineUpdate(BaseModel):
 class InvoiceLineRead(InvoiceLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    # Read model reflects what's stored — credit/adjustment lines can be
-    # negative (amount/unit_price) or zero-quantity (flat true-ups), so don't
-    # inherit the create-side ge=0/gt=0 constraints (they 500 response
-    # serialization for any invoice carrying such a line).
-    quantity: Decimal = Decimal("1.000")
-    unit_price: Decimal = Decimal("0.00")
-    amount: Decimal | None = None
+    # Money/quantity inherit unbounded from InvoiceLineBase (create-only bounds).
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -131,15 +136,19 @@ class CreditNoteBase(BaseModel):
     credit_number: str | None = Field(default=None, max_length=80)
     status: CreditNoteStatus = CreditNoteStatus.draft
     currency: str = Field(default="NGN", min_length=3, max_length=3)
-    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
-    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
-    total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    # Bounds are create-only (see InvoiceBase); base stays unbounded for *Read.
+    subtotal: Decimal = Decimal("0.00")
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
     memo: str | None = None
     is_active: bool = True
 
 
 class CreditNoteCreate(CreditNoteBase):
-    pass
+    # Create-side bounds (kept off the shared base — see CreditNoteBase).
+    subtotal: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    tax_total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
+    total: Decimal = Field(default=Decimal("0.00"), ge=0, lt=10000000000)
 
 
 class CreditNoteUpdate(BaseModel):
@@ -159,9 +168,10 @@ class CreditNoteLineBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     credit_note_id: UUID
     description: str = Field(min_length=1, max_length=255)
-    quantity: Decimal = Field(default=Decimal("1.000"), gt=0)
-    unit_price: Decimal = Field(default=Decimal("0.00"), ge=0)
-    amount: Decimal | None = Field(default=None, ge=0)
+    # Bounds are create-only (see InvoiceBase); base stays unbounded for *Read.
+    quantity: Decimal = Decimal("1.000")
+    unit_price: Decimal = Decimal("0.00")
+    amount: Decimal | None = None
     tax_rate_id: UUID | None = None
     tax_application: TaxApplication = TaxApplication.exclusive
     metadata_: str | None = Field(
@@ -172,7 +182,10 @@ class CreditNoteLineBase(BaseModel):
 
 
 class CreditNoteLineCreate(CreditNoteLineBase):
-    pass
+    # Create-side bounds (kept off the shared base — see CreditNoteLineBase).
+    quantity: Decimal = Field(default=Decimal("1.000"), gt=0)
+    unit_price: Decimal = Field(default=Decimal("0.00"), ge=0)
+    amount: Decimal | None = Field(default=None, ge=0)
 
 
 class CreditNoteLineUpdate(BaseModel):
@@ -193,12 +206,7 @@ class CreditNoteLineUpdate(BaseModel):
 class CreditNoteLineRead(CreditNoteLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    # Read model reflects stored data: credit-note lines can be negative
-    # (amount/unit_price) or zero-quantity, so don't inherit the create-side
-    # ge=0/gt=0 constraints (#272).
-    quantity: Decimal = Decimal("1.000")
-    unit_price: Decimal = Decimal("0.00")
-    amount: Decimal | None = None
+    # Money/quantity inherit unbounded from CreditNoteLineBase (create-only).
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -207,16 +215,18 @@ class CreditNoteLineRead(CreditNoteLineBase):
 class CreditNoteApplicationBase(BaseModel):
     credit_note_id: UUID
     invoice_id: UUID
-    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # No *Create subclass exists (creation goes via CreditNoteApplyRequest, which
+    # keeps its own gt=0), so this bound only ever reached *Read. Drop it so the
+    # read model serializes stored signed amounts.
+    amount: Decimal = Decimal("0.00")
     memo: str | None = None
 
 
 class CreditNoteApplicationRead(CreditNoteApplicationBase):
     model_config = ConfigDict(from_attributes=True)
 
-    # Read model reflects stored data: don't inherit the create-side ge=0
-    # constraint, which 500s response serialization for negative amounts (#272).
-    amount: Decimal = Decimal("0.00")
+    # amount inherits unbounded from CreditNoteApplicationBase (no create-side
+    # bound exists to drop).
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -314,7 +324,8 @@ class PaymentBase(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
-    amount: Decimal = Field(gt=0, lt=10000000000)
+    # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
+    amount: Decimal
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     status: PaymentStatus = PaymentStatus.pending
     paid_at: datetime | None = None
@@ -332,6 +343,8 @@ class PaymentBase(BaseModel):
 
 
 class PaymentCreate(PaymentBase):
+    # Create-side bound (kept off the shared base — see PaymentBase).
+    amount: Decimal = Field(gt=0, lt=10000000000)
     allocations: list[PaymentAllocationApply] | None = None
 
 
@@ -354,9 +367,7 @@ class PaymentUpdate(BaseModel):
 class PaymentRead(PaymentBase):
     model_config = ConfigDict(from_attributes=True)
 
-    # Read model reflects stored data: refund/reversal/zero payments exist, so
-    # don't inherit the create-side gt=0/lt bounds (they 500 serialization).
-    amount: Decimal = Decimal("0.00")
+    # amount inherits unbounded from PaymentBase (create-only bound).
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -500,7 +511,8 @@ class TopupVerifyResponse(BaseModel):
 class PaymentAllocationBase(BaseModel):
     payment_id: UUID
     invoice_id: UUID
-    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
+    amount: Decimal = Decimal("0.00")
     memo: str | None = None
 
 
@@ -511,17 +523,14 @@ class PaymentAllocationApply(BaseModel):
 
 
 class PaymentAllocationCreate(PaymentAllocationBase):
-    pass
+    # Create-side bound (kept off the shared base — see PaymentAllocationBase).
+    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
 
 
 class PaymentAllocationRead(PaymentAllocationBase):
     model_config = ConfigDict(from_attributes=True)
 
-    # Read model reflects stored data: reversal/clawback allocations are
-    # legitimately negative, so don't inherit the create-side ge=0 constraint
-    # (it 500s response serialization for any invoice carrying such an
-    # allocation — same class of bug fixed for invoice lines in #272).
-    amount: Decimal = Decimal("0.00")
+    # amount inherits unbounded from PaymentAllocationBase (create-only bound).
     id: UUID
     created_at: datetime
 
@@ -625,14 +634,16 @@ class LedgerEntryBase(BaseModel):
     payment_id: UUID | None = None
     entry_type: LedgerEntryType
     source: LedgerSource | None = None
-    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
+    amount: Decimal = Decimal("0.00")
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     memo: str | None = None
     is_active: bool = True
 
 
 class LedgerEntryCreate(LedgerEntryBase):
-    pass
+    # Create-side bound (kept off the shared base — see LedgerEntryBase).
+    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
 
 
 class LedgerEntryUpdate(BaseModel):
@@ -650,10 +661,8 @@ class LedgerEntryUpdate(BaseModel):
 class LedgerEntryRead(LedgerEntryBase):
     model_config = ConfigDict(from_attributes=True)
 
-    # Read model reflects stored data: ledger amounts are inherently signed
-    # (debits/credits/reversals), so don't inherit the create-side ge=0
-    # constraint (it 500s serialization for any negative entry).
-    amount: Decimal = Decimal("0.00")
+    # amount inherits unbounded from LedgerEntryBase (create-only bound);
+    # ledger amounts are inherently signed (debits/credits/reversals).
     id: UUID
     # Real-world date of the entry (invoice issue / payment / imported txn date).
     # NULL for native and unbackfilled rows; clients should prefer it over
@@ -666,13 +675,15 @@ class LedgerEntryRead(LedgerEntryBase):
 class TaxRateBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     code: str | None = Field(default=None, max_length=40)
-    rate: Decimal = Field(default=Decimal("0.0000"), ge=0, lt=100)
+    # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
+    rate: Decimal = Decimal("0.0000")
     is_active: bool = True
     description: str | None = None
 
 
 class TaxRateCreate(TaxRateBase):
-    pass
+    # Create-side bound (kept off the shared base — see TaxRateBase).
+    rate: Decimal = Field(default=Decimal("0.0000"), ge=0, lt=100)
 
 
 class TaxRateUpdate(BaseModel):
@@ -686,9 +697,7 @@ class TaxRateUpdate(BaseModel):
 class TaxRateRead(TaxRateBase):
     model_config = ConfigDict(from_attributes=True)
 
-    # Read model reflects stored data: don't inherit the create-side ge=0/lt=100
-    # bounds (a 100%+ rate would 500 serialization).
-    rate: Decimal = Decimal("0.00")
+    # rate inherits unbounded from TaxRateBase (create-only bound).
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -697,12 +706,8 @@ class TaxRateRead(TaxRateBase):
 class InvoiceRead(InvoiceBase):
     model_config = ConfigDict(from_attributes=True)
 
-    # Read model reflects stored data: a credit-heavy invoice can carry a
-    # negative subtotal/total/balance, so don't inherit the create-side ge=0.
-    subtotal: Decimal = Decimal("0.00")
-    tax_total: Decimal = Decimal("0.00")
-    total: Decimal = Decimal("0.00")
-    balance_due: Decimal = Decimal("0.00")
+    # Money fields inherit unbounded from InvoiceBase (bounds are create-only),
+    # so stored signed/zero values serialize without a per-field override.
     id: UUID
     created_at: datetime
     updated_at: datetime
