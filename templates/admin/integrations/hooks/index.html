@@ -90,7 +90,7 @@
                                     {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="text-slate-600 hover:text-slate-800 dark:text-slate-300">Duplicate</button>
                                 </form>
-                                <form method="post" action="/admin/integrations/hooks/{{ hook.id }}/toggle" class="inline">
+                                <form method="post" action="/admin/integrations/hooks/{{ hook.id }}/toggle" class="inline" onsubmit="return confirm('{{ 'Disable this hook?' if hook.is_enabled else 'Enable this hook?' }}');">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="enabled" value="{{ 'false' if hook.is_enabled else 'true' }}">
                                     <button type="submit" class="text-slate-600 hover:text-slate-800 dark:text-slate-300">

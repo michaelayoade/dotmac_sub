@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from app.services import integration_hooks as hooks_service
 from app.web.admin import integrations as integrations_web
 
 
@@ -25,6 +28,39 @@ def test_build_hook_auth_config_basic():
     assert config == {"username": "user", "password": "pass"}
 
 
+def test_build_hook_auth_config_preserves_blank_existing_secret():
+    config = integrations_web._build_hook_auth_config(
+        auth_type="bearer",
+        auth_bearer_token="",
+        auth_basic_username=None,
+        auth_basic_password=None,
+        auth_hmac_secret=None,
+        auth_config_json='{"header":"X-Token"}',
+        existing_auth_config={"token": "plain:stored-token"},
+        preserve_blank_secrets=True,
+    )
+    assert config == {"token": "plain:stored-token", "header": "X-Token"}
+
+
+def test_public_hook_auth_config_excludes_known_secret_keys():
+    config = hooks_service.public_hook_auth_config(
+        {
+            "token": "plain:token",
+            "password": "plain:password",
+            "secret": "plain:secret",
+            "header": "X-Token",
+        }
+    )
+    assert config == {"header": "X-Token"}
+
+
+def test_hook_index_confirms_enable_disable_toggle():
+    template = Path("templates/admin/integrations/hooks/index.html").read_text()
+
+    assert "Disable this hook?" in template
+    assert "Enable this hook?" in template
+
+
 def test_hook_form_defaults_applies_template():
     template = {
         "title": "n8n Hook",
@@ -35,9 +71,18 @@ def test_hook_form_defaults_applies_template():
         "event_filters_csv": "invoice.created",
         "retry_max": 4,
         "retry_backoff_ms": 750,
+        "timeout_seconds": 9,
     }
     defaults = integrations_web._hook_form_defaults(template=template)
     assert defaults["title"] == "n8n Hook"
     assert defaults["url"] == "https://n8n.example/hook"
     assert defaults["retry_max"] == 4
     assert defaults["retry_backoff_ms"] == 750
+    assert defaults["timeout_seconds"] == 9
+
+
+def test_hook_form_exposes_timeout_control():
+    template = Path("templates/admin/integrations/hooks/form.html").read_text()
+
+    assert 'name="timeout_seconds"' in template
+    assert 'max="300"' in template

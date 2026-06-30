@@ -4,7 +4,107 @@
 **Method:** single-agent read-only review of integrations (connectors/hooks/webhook
 endpoints) + the system webhooks UI. (CRM sync/dead-letters and the WhatsApp *send*
 path are covered in the CRM and Notifications audits.)
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** remediation in progress via draft PR #520. Part of the remaining-module audit series.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #520 (`audit/integrations-webhooks-remediation`)
+
+### Resolved in current draft
+
+- System webhook create/update now persists selected `WebhookEventType`
+  subscriptions instead of rendering a dead checkbox grid.
+- System webhook edit no longer renders the stored encrypted signing secret back
+  into the password field; leaving the field blank preserves the current secret.
+- System webhook event choices now render from the enum-backed event list instead
+  of a hardcoded static subset.
+- Integrations webhook endpoint creation now encrypts signing secrets at rest,
+  the new form uses a password field, failed submissions do not echo the secret,
+  and detail pages show only configured/not-configured state.
+- Connector detail pages now expose the existing Check Connection probe action
+  directly instead of hiding it behind the embedded view.
+- Integrations webhook endpoints now have edit, enable/disable, soft-delete,
+  rotate-secret, and test-delivery actions from the list/detail surfaces.
+- Hook auth secrets now use credential-at-rest wrapping for bearer/basic/HMAC
+  values, execute with decrypted values, and no longer render stored secrets
+  back into the hook edit form.
+- Integrations webhook detail pages now summarize latest delivery, latest
+  failure, and recent delivered/pending/failed outcomes above the delivery log.
+- Installed integration bulk enable/disable, relay toggle, integration
+  enable/disable, and hook enable/disable actions now prompt before changing
+  state.
+- Integration hooks now have a bounded per-hook execution timeout control that
+  drives both HTTP and CLI hook execution while preserving legacy defaults for
+  existing rows.
+- Webhook endpoints now have bounded delivery timeout, max-retry, and retry
+  backoff controls that drive the delivery task while preserving legacy defaults
+  for existing rows.
+
+### Still open
+
+- No UX-polish/control remediation items remain open in this draft. The separate
+  RBAC/security review noted below remains open and should be handled outside
+  this audit track.
+
+### Verification
+
+- `poetry run ruff check app/services/web_system_webhook_forms.py app/web/admin/system.py tests/test_web_system_webhook_forms.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_webhook_forms.py -q`
+  - Result: `3 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py -q`
+  - Result: `9 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
+- `poetry run ruff check app/models/webhook.py app/schemas/webhook.py app/services/web_integrations.py app/web/admin/integrations.py app/tasks/webhooks.py tests/test_web_integrations_webhooks.py tests/test_webhook_tasks.py alembic/versions/187_webhook_endpoint_delivery_controls.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py tests/test_webhook_tasks.py -q`
+  - Result: `10 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
+- `poetry run ruff check app/services/web_integrations.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `7 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
+- `poetry run ruff check tests/test_integration_hooks_web_admin.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_integration_hooks_web_admin.py tests/test_web_integrations_webhooks.py -q`
+  - Result: `14 passed`
+- `poetry run ruff check app/models/integration_hook.py app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py alembic/versions/186_integration_hook_timeout_seconds.py`
+  - Result: passed
+- `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`
+  - Result: `13 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
+- `poetry run ruff check app/services/integration_hooks.py app/web/admin/integrations.py tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py`
+  - Result: passed
+- `poetry run pytest tests/test_integration_hooks_service.py tests/test_integration_hooks_web_admin.py -q`
+  - Result: `11 passed`
+- `poetry run pytest tests/test_credential_key_rotation_service.py -q`
+  - Result: `17 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
+- `poetry run ruff check app/services/web_integrations.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `2 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `3 passed`
+- `poetry run ruff check app/services/web_integrations.py app/web/admin/integrations.py tests/test_web_integrations_webhooks.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_integrations_webhooks.py -q`
+  - Result: `6 passed`
+- `poetry run pytest tests/test_webhook_services.py tests/test_core_services_extra.py tests/test_web_system_webhook_forms.py -q`
+  - Result: `12 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py -q`
+  - Result: `15 passed`
 
 ## What this audit is
 
