@@ -117,7 +117,9 @@ class GeoSync(ListResponseMixin):
             )
         started_at = datetime.now(UTC)
         try:
-            results = GeoSync.run_sync(db, sync_pops, sync_addresses, deactivate_missing)
+            results = GeoSync.run_sync(
+                db, sync_pops, sync_addresses, deactivate_missing
+            )
         except Exception as exc:
             db.rollback()
             record_last_sync_run(

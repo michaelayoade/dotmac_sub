@@ -16,7 +16,9 @@ router = APIRouter(prefix="/legal", tags=["web-admin-legal"])
 
 def _legal_metadata(document, *, extra: dict | None = None) -> dict:
     metadata = {
-        "document_type": getattr(getattr(document, "document_type", None), "value", None),
+        "document_type": getattr(
+            getattr(document, "document_type", None), "value", None
+        ),
         "title": getattr(document, "title", None),
         "slug": getattr(document, "slug", None),
         "version": getattr(document, "version", None),

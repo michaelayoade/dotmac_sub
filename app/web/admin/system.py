@@ -4646,7 +4646,9 @@ def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
             url=f"/admin/system/config/monitoring?error={quote_plus(str(exc))}",
             status_code=303,
         )
-    return RedirectResponse(url="/admin/system/config/monitoring?saved=1", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/config/monitoring?saved=1", status_code=303
+    )
 
 
 # --- 8.25 FUP: REMOVED (inert/dead config; no active enforcement consumer) ---

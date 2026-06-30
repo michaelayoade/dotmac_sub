@@ -7,7 +7,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -61,13 +61,14 @@ def _save_settings(
                 continue
             value = _coerce_spec_form_value(spec, data.get(key))
             value_text, value_json = settings_spec.normalize_for_db(spec, value)
+            setting_value_json = cast(dict | list | bool | int | str | None, value_json)
             spec_updates.append(
                 (
                     key,
                     DomainSettingUpdate(
                         value_type=spec.value_type,
                         value_text=value_text,
-                        value_json=value_json,
+                        value_json=setting_value_json,
                         is_secret=spec.is_secret or key in secret_keys,
                         is_active=True,
                     ),
