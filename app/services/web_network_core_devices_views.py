@@ -32,6 +32,7 @@ from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.models.router_management import Router, RouterStatus
 from app.models.subscriber import SubscriberCategory
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
@@ -232,7 +233,36 @@ def _nas_status_to_monitoring_status(status: NasDeviceStatus | None) -> DeviceSt
     return DeviceStatus.offline
 
 
-def _nas_inventory_stub(device: NasDevice) -> SimpleNamespace:
+def _enum_value(value) -> str | None:
+    if value is None:
+        return None
+    return getattr(value, "value", value)
+
+
+def _router_status_to_live_status(router: Router | None) -> str | None:
+    if router is None:
+        return None
+    status = _enum_value(getattr(router, "status", None))
+    if status == RouterStatus.online.value:
+        return "up"
+    if status in {RouterStatus.offline.value, RouterStatus.unreachable.value}:
+        return "down"
+    if status == RouterStatus.degraded.value:
+        return "problem"
+    return None
+
+
+def _nas_inventory_stub(
+    device: NasDevice,
+    *,
+    linked_device: NetworkDevice | None = None,
+    linked_router: Router | None = None,
+) -> SimpleNamespace:
+    router_live_status = _router_status_to_live_status(linked_router)
+    live_status = getattr(linked_device, "live_status", None) or router_live_status
+    live_status_at = getattr(linked_device, "live_status_at", None) or getattr(
+        linked_router, "last_seen_at", None
+    )
     return SimpleNamespace(
         id=device.id,
         name=device.name,
@@ -243,6 +273,14 @@ def _nas_inventory_stub(device: NasDevice) -> SimpleNamespace:
         serial_number=device.serial_number,
         role=DeviceRole.access,
         status=_nas_status_to_monitoring_status(device.status),
+        live_status=live_status,
+        live_status_at=live_status_at,
+        zabbix_hostid=getattr(linked_device, "zabbix_hostid", None)
+        or device.zabbix_host_id,
+        last_ping_ok=getattr(linked_device, "last_ping_ok", None),
+        last_ping_at=getattr(linked_device, "last_ping_at", None),
+        last_snmp_ok=getattr(linked_device, "last_snmp_ok", None),
+        last_snmp_at=getattr(linked_device, "last_snmp_at", None),
         detail_url=f"/admin/network/nas/devices/{device.id}",
         edit_url=f"/admin/network/nas/{device.id}/edit",
     )
@@ -3004,8 +3042,29 @@ def consolidated_page_data(
             .order_by(NasDevice.name.asc())
         ).all()
     )
+    monitoring_by_id = {device.id: device for device in all_monitoring_devices}
+    nas_ids = [device.id for device in nas_devices]
+    routers_by_nas_id: dict[object, Router] = {}
+    if nas_ids:
+        routers = db.scalars(
+            select(Router).where(
+                Router.is_active.is_(True), Router.nas_device_id.in_(nas_ids)
+            )
+        ).all()
+        routers_by_nas_id = {
+            router.nas_device_id: router for router in routers if router.nas_device_id
+        }
     for nas_device in nas_devices:
-        nas_stub = _nas_inventory_stub(nas_device)
+        linked_device = (
+            monitoring_by_id.get(nas_device.network_device_id)
+            if nas_device.network_device_id
+            else None
+        )
+        nas_stub = _nas_inventory_stub(
+            nas_device,
+            linked_device=linked_device,
+            linked_router=routers_by_nas_id.get(nas_device.id),
+        )
         key = (
             str(getattr(nas_stub, "mgmt_ip", "") or "").strip(),
             str(getattr(nas_stub, "hostname", "") or "").strip(),

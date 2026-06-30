@@ -4,7 +4,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscriber import SubscriberStatus as AccountStatus
@@ -666,7 +666,7 @@ class EnforcementHandler:
         return None
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
-        """Auto-suspend subscriber when invoice is overdue, with grace period warning."""
+        """Handle overdue warnings and non-postpaid auto-suspension."""
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
@@ -733,6 +733,14 @@ class EnforcementHandler:
                             grace_hours,
                         )
                         return
+
+            if subscriber.billing_mode == BillingMode.postpaid:
+                logger.info(
+                    "Skipping direct overdue auto-suspension for postpaid account %s; "
+                    "dunning policy owns postpaid suspension",
+                    account_id,
+                )
+                return
 
             # Shields: customers who have an admin-approved payment plan or a
             # bank-transfer proof awaiting review must not be auto-suspended.

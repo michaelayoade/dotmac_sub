@@ -55,6 +55,9 @@ from app.tasks.monitoring_cleanup import (
     cleanup_old_device_metrics as cleanup_device_metrics,
 )
 from app.tasks.monitoring_cleanup import (
+    sync_inventory_to_monitoring as sync_inventory_devices_to_monitoring,
+)
+from app.tasks.monitoring_cleanup import (
     sync_nas_to_monitoring as sync_nas_devices_to_monitoring,
 )
 from app.tasks.monitoring_coverage import refresh_monitoring_coverage
@@ -263,6 +266,7 @@ __all__ = [
     "refresh_ont_zabbix_snapshot_cache_task",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
+    "sync_inventory_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
     "dispatch_portal_usage_ingestion",

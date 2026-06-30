@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.models.subscriber import SubscriberStatus
@@ -44,3 +45,18 @@ def test_customer_report_filter_uses_created_range_and_current_status():
     )
 
     assert [customer.email for customer in filtered] == ["active@example.test"]
+
+
+def test_customer_report_is_visible_from_reports_hub():
+    route_source = Path("app/web/admin/reports.py").read_text(encoding="utf-8")
+    page_template = Path("templates/admin/reports/subscribers.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"name": "Customer Report"' in route_source
+    assert '"url": "/admin/reports/customers"' in route_source
+    assert '"/customers"' in route_source
+    assert '@router.get("/customers/export")' in route_source
+    assert "Customer Report - Admin" in page_template
+    assert 'action="/admin/reports/customers"' in page_template
+    assert 'action="/admin/reports/customers/export"' in page_template

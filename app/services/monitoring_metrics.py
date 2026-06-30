@@ -207,17 +207,27 @@ def sync_nas_to_monitoring(db: Session, nas_id: str) -> NetworkDevice:
     if not nas:
         raise ValueError(f"NAS device {nas_id} not found")
 
+    mgmt_ip = nas.management_ip or nas.ip_address
+
     # Check if already linked
     if nas.network_device_id:
         existing = db.get(NetworkDevice, nas.network_device_id)
         if existing:
+            if mgmt_ip and existing.mgmt_ip != mgmt_ip:
+                by_ip = db.scalars(
+                    select(NetworkDevice).where(NetworkDevice.mgmt_ip == mgmt_ip)
+                ).first()
+                if by_ip and by_ip.id != existing.id:
+                    nas.network_device_id = by_ip.id
+                    _sync_nas_fields_to_device(nas, by_ip)
+                    db.flush()
+                    return by_ip
             # Update fields from NAS
             _sync_nas_fields_to_device(nas, existing)
             db.flush()
             return existing
 
     # Check if a device already exists with this mgmt IP (dedup)
-    mgmt_ip = nas.management_ip or nas.ip_address
     if mgmt_ip:
         existing = db.scalars(
             select(NetworkDevice).where(NetworkDevice.mgmt_ip == mgmt_ip)
@@ -318,6 +328,151 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
         errors,
     )
     return {"synced": synced, "skipped": skipped, "errors": errors}
+
+
+# ── RouterOS → Monitoring Sync ───────────────────────────────────────────
+
+
+def _router_status_to_monitoring_status(router_status) -> object:
+    """Map RouterOS inventory status to NetworkDevice status."""
+    from app.models.network_monitoring import DeviceStatus
+    from app.models.router_management import RouterStatus
+
+    if router_status == RouterStatus.online:
+        return DeviceStatus.online
+    if router_status == RouterStatus.degraded:
+        return DeviceStatus.degraded
+    if router_status == RouterStatus.maintenance:
+        return DeviceStatus.maintenance
+    return DeviceStatus.offline
+
+
+def sync_router_to_monitoring(db: Session, router_id: str) -> NetworkDevice:
+    """Create or update a NetworkDevice record from a RouterOS Router row."""
+    from app.models.network_monitoring import DeviceRole, DeviceType
+    from app.models.router_management import Router
+
+    router = db.get(Router, router_id)
+    if not router:
+        raise ValueError(f"Router {router_id} not found")
+
+    mgmt_ip = (router.management_ip or "").strip()
+
+    if router.network_device_id:
+        existing = db.get(NetworkDevice, router.network_device_id)
+        if existing:
+            if mgmt_ip and existing.mgmt_ip != mgmt_ip:
+                by_ip = db.scalars(
+                    select(NetworkDevice).where(NetworkDevice.mgmt_ip == mgmt_ip)
+                ).first()
+                if by_ip and by_ip.id != existing.id:
+                    router.network_device_id = by_ip.id
+                    _sync_router_fields_to_device(router, by_ip)
+                    db.flush()
+                    return by_ip
+            _sync_router_fields_to_device(router, existing)
+            db.flush()
+            return existing
+
+    if mgmt_ip:
+        existing = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.mgmt_ip == mgmt_ip)
+        ).first()
+        if existing:
+            router.network_device_id = existing.id
+            _sync_router_fields_to_device(router, existing)
+            db.flush()
+            return existing
+
+    device = NetworkDevice(
+        name=router.name,
+        hostname=router.hostname,
+        mgmt_ip=mgmt_ip or None,
+        vendor="mikrotik",
+        model=router.board_name,
+        serial_number=router.serial_number,
+        device_type=DeviceType.router,
+        role=DeviceRole.edge,
+        status=_router_status_to_monitoring_status(router.status),
+        ping_enabled=True,
+        snmp_enabled=False,
+        notes=f"Auto-created from RouterOS device: {router.name}",
+        is_active=router.is_active,
+    )
+    db.add(device)
+    db.flush()
+
+    router.network_device_id = device.id
+    db.flush()
+
+    logger.info(
+        "Created monitoring device %s from router %s (%s)",
+        device.id,
+        router.name,
+        mgmt_ip,
+    )
+    return device
+
+
+def _sync_router_fields_to_device(router, device: NetworkDevice) -> None:
+    """Copy non-secret RouterOS inventory fields to NetworkDevice."""
+    from app.models.network_monitoring import DeviceType
+
+    device.name = router.name
+    device.hostname = router.hostname or device.hostname
+    device.mgmt_ip = (router.management_ip or "").strip() or device.mgmt_ip
+    device.vendor = device.vendor or "mikrotik"
+    device.model = router.board_name or device.model
+    device.serial_number = router.serial_number or device.serial_number
+    device.device_type = device.device_type or DeviceType.router
+    device.status = _router_status_to_monitoring_status(router.status)
+    device.ping_enabled = True
+    device.is_active = router.is_active
+    if router.location and not device.notes:
+        device.notes = router.location
+
+
+def sync_all_routers_to_monitoring(db: Session) -> dict[str, int]:
+    """Sync all active RouterOS inventory rows to the monitoring system."""
+    from app.models.router_management import Router
+
+    routers = list(db.scalars(select(Router).where(Router.is_active.is_(True))).all())
+
+    synced = 0
+    skipped = 0
+    errors = 0
+
+    for router in routers:
+        if not (router.management_ip or "").strip():
+            skipped += 1
+            continue
+
+        try:
+            with db.begin_nested():
+                sync_router_to_monitoring(db, str(router.id))
+            synced += 1
+        except Exception as exc:
+            errors += 1
+            logger.warning(
+                "Failed to sync router %s to monitoring: %s", router.name, exc
+            )
+
+    db.commit()
+    logger.info(
+        "Router monitoring sync complete: synced=%d skipped=%d errors=%d",
+        synced,
+        skipped,
+        errors,
+    )
+    return {"synced": synced, "skipped": skipped, "errors": errors}
+
+
+def sync_inventory_to_monitoring(db: Session) -> dict[str, dict[str, int]]:
+    """Sync local device inventories that are mirrored into NetworkDevice."""
+    return {
+        "nas": sync_all_nas_to_monitoring(db),
+        "routers": sync_all_routers_to_monitoring(db),
+    }
 
 
 def _latest_metric_value(

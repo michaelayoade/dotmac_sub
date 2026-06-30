@@ -56,6 +56,18 @@ def sync_nas_to_monitoring() -> dict[str, int]:
         return result
 
 
+@celery_app.task(name="app.tasks.monitoring_cleanup.sync_inventory_to_monitoring")
+def sync_inventory_to_monitoring() -> dict[str, dict[str, int]]:
+    """Sync local NAS and RouterOS inventories into network monitoring."""
+    logger.info("Starting local inventory → monitoring sync")
+    with db_session_adapter.session() as db:
+        from app.services.monitoring_metrics import (
+            sync_inventory_to_monitoring as do_sync,
+        )
+
+        return do_sync(db)
+
+
 @celery_app.task(name="app.tasks.monitoring_cleanup.cleanup_old_device_metrics")
 def cleanup_old_device_metrics() -> dict[str, int]:
     """Delete device metrics older than the configured retention period.

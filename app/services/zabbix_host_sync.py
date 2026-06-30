@@ -8,6 +8,7 @@ for OLTs and NAS devices, maintaining consistent monitoring coverage.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -33,6 +34,9 @@ ZABBIX_GROUP_INFRASTRUCTURE = "DotMac/Infrastructure"
 # Template names (must exist in Zabbix)
 ZABBIX_TEMPLATE_OLT_SNMP = "DotMac OLT GPON"
 ZABBIX_TEMPLATE_NAS_SNMP = "DotMac MikroTik NAS"
+
+_HOST_KEY_UNSAFE = re.compile(r"[^a-z0-9._-]+")
+_HOST_KEY_DASHES = re.compile(r"-+")
 
 
 class ZabbixHostSyncResult:
@@ -82,6 +86,14 @@ def _get_template_id(client: ZabbixClient, template_name: str) -> str | None:
     return None
 
 
+def _zabbix_host_key(prefix: str, value: str | None) -> str:
+    """Return a Zabbix-safe technical host key."""
+    normalized = str(value or "").strip().lower()
+    normalized = _HOST_KEY_UNSAFE.sub("-", normalized)
+    normalized = _HOST_KEY_DASHES.sub("-", normalized).strip("-._")
+    return f"{prefix}-{normalized or 'device'}"
+
+
 # Substrings Zabbix returns when an operation references a host id that no
 # longer exists (deleted out-of-band). Used to recover from a stale
 # ``zabbix_host_id`` by recreating the host instead of failing every cycle.
@@ -96,20 +108,30 @@ def _is_missing_host_error(exc: Exception) -> bool:
     return any(marker in message for marker in _MISSING_HOST_MARKERS)
 
 
-def _find_adoptable_host_id(client: ZabbixClient, dotmac_id: str) -> str | None:
+def _find_adoptable_host_id(
+    client: ZabbixClient, dotmac_id: str, interface_ip: str | None = None
+) -> str | None:
     """Return the Zabbix host id already tagged with this device, if unambiguous.
 
     Hosts we create always carry a ``dotmac_id`` tag, so this recovers the id
     when the device lost it (or pre-dates the column) without creating a
-    duplicate. Zero matches means nothing to adopt; more than one is ambiguous,
-    so we decline to guess.
+    duplicate. If no tagged host exists, an exact unique interface-IP match is
+    also adoptable for pre-existing manually-created hosts. Zero matches means
+    nothing to adopt; more than one is ambiguous, so we decline to guess.
     """
     try:
         hosts = client.get_hosts_by_tag("dotmac_id", dotmac_id, limit=2)
     except ZabbixClientError:
-        return None
+        hosts = []
     if len(hosts) != 1:
-        return None
+        if not interface_ip:
+            return None
+        try:
+            hosts = client.get_hosts_by_interface_ip(interface_ip, limit=2)
+        except ZabbixClientError:
+            return None
+        if len(hosts) != 1:
+            return None
     host_id = hosts[0].get("hostid")
     return str(host_id) if host_id else None
 
@@ -142,7 +164,7 @@ def _create_or_update_host(
     """
     host_id = stored_host_id
     if not host_id:
-        host_id = _find_adoptable_host_id(client, dotmac_id)
+        host_id = _find_adoptable_host_id(client, dotmac_id, interface_ip)
         if host_id:
             logger.info(
                 f"zabbix_{log_prefix}_adopted",
@@ -339,7 +361,7 @@ def sync_olt_to_zabbix(
         logger.warning("skip_olt_no_ip", extra={"olt_id": str(olt.id)})
         return None
 
-    host_name = f"olt-{olt.hostname or olt.name}".lower().replace(" ", "-")
+    host_name = _zabbix_host_key("olt", olt.hostname or olt.name)
     display_name = f"OLT: {olt.name}"
 
     try:
@@ -401,7 +423,7 @@ def sync_nas_to_zabbix(
         logger.warning("skip_nas_no_ip", extra={"nas_id": str(nas.id)})
         return None
 
-    host_name = f"nas-{nas.code or nas.name}".lower().replace(" ", "-")
+    host_name = _zabbix_host_key("nas", nas.code or nas.name)
     display_name = f"NAS: {nas.name}"
 
     try:
@@ -450,24 +472,27 @@ def sync_all_olts(db: Session) -> ZabbixHostSyncResult:
     olts = db.scalars(stmt).all()
 
     for olt in olts:
+        olt_id = str(olt.id)
+        olt_name = olt.name
         if not olt.mgmt_ip:
-            result.skipped.append(olt.name)
+            result.skipped.append(olt_name)
             continue
 
         try:
-            had_id = bool(olt.zabbix_host_id)
-            host_id = sync_olt_to_zabbix(db, olt, client=client)
+            with db.begin_nested():
+                had_id = bool(olt.zabbix_host_id)
+                host_id = sync_olt_to_zabbix(db, olt, client=client)
 
             if host_id:
                 if had_id:
-                    result.updated.append(olt.name)
+                    result.updated.append(olt_name)
                 else:
-                    result.created.append(olt.name)
+                    result.created.append(olt_name)
             else:
-                result.skipped.append(olt.name)
+                result.skipped.append(olt_name)
         except Exception as exc:
-            result.failed.append((olt.name, str(exc)))
-            logger.exception("olt_sync_exception", extra={"olt_id": str(olt.id)})
+            result.failed.append((olt_name, str(exc)))
+            logger.exception("olt_sync_exception", extra={"olt_id": olt_id})
 
     return result
 
@@ -484,25 +509,28 @@ def sync_all_nas_devices(db: Session) -> ZabbixHostSyncResult:
     devices = db.scalars(stmt).all()
 
     for nas in devices:
+        nas_id = str(nas.id)
+        nas_name = nas.name
         mgmt_ip = nas.management_ip or nas.ip_address
         if not mgmt_ip:
-            result.skipped.append(nas.name)
+            result.skipped.append(nas_name)
             continue
 
         try:
-            had_id = bool(nas.zabbix_host_id)
-            host_id = sync_nas_to_zabbix(db, nas, client=client)
+            with db.begin_nested():
+                had_id = bool(nas.zabbix_host_id)
+                host_id = sync_nas_to_zabbix(db, nas, client=client)
 
             if host_id:
                 if had_id:
-                    result.updated.append(nas.name)
+                    result.updated.append(nas_name)
                 else:
-                    result.created.append(nas.name)
+                    result.created.append(nas_name)
             else:
-                result.skipped.append(nas.name)
+                result.skipped.append(nas_name)
         except Exception as exc:
-            result.failed.append((nas.name, str(exc)))
-            logger.exception("nas_sync_exception", extra={"nas_id": str(nas.id)})
+            result.failed.append((nas_name, str(exc)))
+            logger.exception("nas_sync_exception", extra={"nas_id": nas_id})
 
     return result
 
@@ -524,29 +552,31 @@ def _disable_stale_hosts(
     """
     disabled = 0
     for device in stale_rows:
+        device_id = str(device.id)
         host_id = device.zabbix_host_id
         if not host_id:
             continue
         try:
-            client.update_host(host_id=host_id, status=1)
-            device.zabbix_last_sync_at = datetime.now(UTC)
-            db.flush()
+            with db.begin_nested():
+                client.update_host(host_id=host_id, status=1)
+                device.zabbix_last_sync_at = datetime.now(UTC)
+                db.flush()
             disabled += 1
             logger.info(
                 "zabbix_host_disabled_stale",
                 extra={
                     "event": "zabbix_host_disabled_stale",
                     "device_type": device_label,
-                    "device_id": str(device.id),
+                    "device_id": device_id,
                     "zabbix_host_id": host_id,
                 },
             )
-        except ZabbixClientError as exc:
+        except Exception as exc:
             logger.warning(
                 "zabbix_host_disable_stale_failed",
                 extra={
                     "device_type": device_label,
-                    "device_id": str(device.id),
+                    "device_id": device_id,
                     "error": str(exc),
                 },
             )
