@@ -180,7 +180,7 @@ def _capture_ip_state(db: Session, subscriber_id: Any) -> dict[str, Any]:
             IPAssignment.id,
             IPAssignment.ip_version,
             IPAssignment.is_active,
-            IPAssignment.allocation_type,
+            IPv4Address.allocation_type,
             IPv4Address.address,
             IPv6Address.address,
         )
