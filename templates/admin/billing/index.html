@@ -91,9 +91,9 @@
     {# ═══ KPI Cards (4 in a row) ═══ #}
     {% set period_labels = {"this_month": "This Month", "last_month": "Last Month", "this_quarter": "This Quarter", "this_year": "Year to Date", "all": "All Time"} %}
     <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card("Payments", "₦" ~ "{:,.0f}".format(stats.payments_amount|default(0)), icon_credit_card(), "emerald", "teal", href="/admin/billing/payments") }}
-        {{ stats_card("Paid Invoices", "₦" ~ "{:,.0f}".format(stats.total_revenue|default(0)), icon_invoice(), "teal", "emerald", href="/admin/billing/invoices?status=paid") }}
-        {{ stats_card("Unpaid", "₦" ~ "{:,.0f}".format(stats.unpaid_invoices_amount|default(0)), icon_invoice(), "amber", "orange", href="/admin/billing/invoices?status=unpaid") }}
+        {{ stats_card("Payments", stats.payments_amount_display|default((default_currency|default('NGN')) ~ " " ~ "{:,.0f}".format(stats.payments_amount|default(0))), icon_credit_card(), "emerald", "teal", href="/admin/billing/payments") }}
+        {{ stats_card("Paid Invoices", stats.total_revenue_display|default((default_currency|default('NGN')) ~ " " ~ "{:,.0f}".format(stats.total_revenue|default(0))), icon_invoice(), "teal", "emerald", href="/admin/billing/invoices?status=paid") }}
+        {{ stats_card("Unpaid", stats.unpaid_invoices_amount_display|default((default_currency|default('NGN')) ~ " " ~ "{:,.0f}".format(stats.unpaid_invoices_amount|default(0))), icon_invoice(), "amber", "orange", href="/admin/billing/invoices?status=unpaid") }}
         <div class="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Key Metrics</p>
             <div class="mt-3 grid grid-cols-2 gap-2">
@@ -237,6 +237,7 @@
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
                     {% for invoice in invoices[:10] %}
+                    {% set invoice_currency = invoice.currency or default_currency|default('NGN') %}
                     <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/30 cursor-pointer" onclick="window.location='/admin/billing/invoices/{{ invoice.id }}'">
                         <td class="px-6 py-3 font-medium text-emerald-600 dark:text-emerald-400">{{ invoice.invoice_number|default('Invoice') }}</td>
                         <td class="px-6 py-3 text-slate-900 dark:text-white">
@@ -244,7 +245,7 @@
                                 {{ invoice.account.name }}
                             {% else %}Account{% endif %}
                         </td>
-                        <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
+                        <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
                         <td class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else '—' }}</td>
                         <td class="px-6 py-3">
                             {% set inv_status = invoice.status|default('draft') %}
