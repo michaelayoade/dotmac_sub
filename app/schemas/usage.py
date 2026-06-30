@@ -244,6 +244,14 @@ class UsageChargeBase(BaseModel):
 class UsageChargeRead(UsageChargeBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: usage credits/adjustments are negative,
+    # so don't inherit the create-side ge=0 constraints (they 500 response
+    # serialization — this is the live /usage-charges 500).
+    total_gb: Decimal = Decimal("0.0000")
+    included_gb: Decimal = Decimal("0.0000")
+    billable_gb: Decimal = Decimal("0.0000")
+    unit_price: Decimal = Decimal("0.0000")
+    amount: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime

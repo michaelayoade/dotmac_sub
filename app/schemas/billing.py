@@ -113,9 +113,11 @@ class InvoiceLineUpdate(BaseModel):
 class InvoiceLineRead(InvoiceLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
-    # Read model reflects what's stored — credit/adjustment lines are
-    # legitimately negative, so don't inherit the create-side ge=0 constraint
-    # (it 500s response serialization for any invoice with a negative line).
+    # Read model reflects what's stored — credit/adjustment lines can be
+    # negative (amount/unit_price) or zero-quantity (flat true-ups), so don't
+    # inherit the create-side ge=0/gt=0 constraints (they 500 response
+    # serialization for any invoice carrying such a line).
+    quantity: Decimal = Decimal("1.000")
     unit_price: Decimal = Decimal("0.00")
     amount: Decimal | None = None
     id: UUID
@@ -191,6 +193,12 @@ class CreditNoteLineUpdate(BaseModel):
 class CreditNoteLineRead(CreditNoteLineBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
+    # Read model reflects stored data: credit-note lines can be negative
+    # (amount/unit_price) or zero-quantity, so don't inherit the create-side
+    # ge=0/gt=0 constraints (#272).
+    quantity: Decimal = Decimal("1.000")
+    unit_price: Decimal = Decimal("0.00")
+    amount: Decimal | None = None
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -206,6 +214,9 @@ class CreditNoteApplicationBase(BaseModel):
 class CreditNoteApplicationRead(CreditNoteApplicationBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: don't inherit the create-side ge=0
+    # constraint, which 500s response serialization for negative amounts (#272).
+    amount: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -343,6 +354,9 @@ class PaymentUpdate(BaseModel):
 class PaymentRead(PaymentBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: refund/reversal/zero payments exist, so
+    # don't inherit the create-side gt=0/lt bounds (they 500 serialization).
+    amount: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -503,6 +517,11 @@ class PaymentAllocationCreate(PaymentAllocationBase):
 class PaymentAllocationRead(PaymentAllocationBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: reversal/clawback allocations are
+    # legitimately negative, so don't inherit the create-side ge=0 constraint
+    # (it 500s response serialization for any invoice carrying such an
+    # allocation — same class of bug fixed for invoice lines in #272).
+    amount: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
 
@@ -631,6 +650,10 @@ class LedgerEntryUpdate(BaseModel):
 class LedgerEntryRead(LedgerEntryBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: ledger amounts are inherently signed
+    # (debits/credits/reversals), so don't inherit the create-side ge=0
+    # constraint (it 500s serialization for any negative entry).
+    amount: Decimal = Decimal("0.00")
     id: UUID
     # Real-world date of the entry (invoice issue / payment / imported txn date).
     # NULL for native and unbackfilled rows; clients should prefer it over
@@ -663,6 +686,9 @@ class TaxRateUpdate(BaseModel):
 class TaxRateRead(TaxRateBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: don't inherit the create-side ge=0/lt=100
+    # bounds (a 100%+ rate would 500 serialization).
+    rate: Decimal = Decimal("0.00")
     id: UUID
     created_at: datetime
     updated_at: datetime
@@ -687,6 +713,12 @@ class InvoiceRead(InvoiceBase):
 class CreditNoteRead(CreditNoteBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Read model reflects stored data: credit notes carry credit (often
+    # negative) amounts, so don't inherit the create-side ge=0/lt constraints
+    # (they 500 response serialization — same fix as InvoiceRead in #272).
+    subtotal: Decimal = Decimal("0.00")
+    tax_total: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
     id: UUID
     applied_total: Decimal
     created_at: datetime
